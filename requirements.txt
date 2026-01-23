@@ -1,0 +1,10 @@
+flask
+gunicorn
+pandas
+requests
+pandas_market_calendars
+pytz
+longport
+schwab-py
+google-cloud-secret-manager
+google-auth
