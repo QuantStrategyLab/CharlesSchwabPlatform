@@ -16,6 +16,47 @@ if str(PLATFORM_KIT_SRC) not in sys.path:
 
 
 def install_stub_modules():
+    flask_module = types.ModuleType("flask")
+
+    class Flask:
+        def __init__(self, _name):
+            self._routes = {}
+
+        def route(self, path, methods=None):
+            def decorator(func):
+                self._routes[(path, tuple(methods or []))] = func
+                return func
+
+            return decorator
+
+        def test_request_context(self, *_args, **_kwargs):
+            class _Context:
+                def __enter__(self_inner):
+                    return self_inner
+
+                def __exit__(self_inner, exc_type, exc, tb):
+                    return False
+
+            return _Context()
+
+        def run(self, *args, **kwargs):
+            return None
+
+    flask_module.Flask = Flask
+
+    requests_module = types.ModuleType("requests")
+    requests_module.post = lambda *args, **kwargs: None
+
+    rebalance_service_module = types.ModuleType("application.rebalance_service")
+    rebalance_service_module.run_strategy_core = lambda *args, **kwargs: None
+
+    cloud_run_module = types.ModuleType("entrypoints.cloud_run")
+    cloud_run_module.is_market_open_today = lambda: True
+
+    strategy_allocation_module = types.ModuleType("strategy.allocation")
+    strategy_allocation_module.get_hybrid_allocation = lambda *args, **kwargs: 0.0
+    strategy_allocation_module.get_income_ratio = lambda *args, **kwargs: 0.0
+
     google_module = types.ModuleType("google")
     google_module.__path__ = []
 
@@ -37,6 +78,11 @@ def install_stub_modules():
     pandas_market_calendars = types.ModuleType("pandas_market_calendars")
 
     modules = {
+        "flask": flask_module,
+        "requests": requests_module,
+        "application.rebalance_service": rebalance_service_module,
+        "entrypoints.cloud_run": cloud_run_module,
+        "strategy.allocation": strategy_allocation_module,
         "google": google_module,
         "google.auth": google_auth_module,
         "google.cloud": google_cloud_module,

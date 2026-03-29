@@ -13,6 +13,7 @@ from quant_platform_kit.schwab import (
     get_client_from_secret,
     submit_equity_order,
 )
+from runtime_config_support import load_platform_runtime_settings
 from strategy.allocation import (
     get_hybrid_allocation as strategy_get_hybrid_allocation,
     get_income_ratio as strategy_get_income_ratio,
@@ -71,9 +72,11 @@ ENTRY_LINE_FLOOR = 1.02
 ENTRY_LINE_CAP = 1.08
 
 # ---------------------------------------------------------------------------
-# Language / i18n
+# Runtime / i18n
 # ---------------------------------------------------------------------------
-NOTIFY_LANG = os.getenv("NOTIFY_LANG", "en")
+RUNTIME_SETTINGS = load_platform_runtime_settings()
+STRATEGY_PROFILE = RUNTIME_SETTINGS.strategy_profile
+NOTIFY_LANG = RUNTIME_SETTINGS.notify_lang
 t = build_translator(NOTIFY_LANG)
 signal_text = build_signal_text(t)
 

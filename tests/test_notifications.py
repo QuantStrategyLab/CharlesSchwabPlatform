@@ -1,12 +1,19 @@
 import unittest
 import sys
+import types
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from notifications.telegram import build_sender, build_signal_text, build_translator
+
+requests_stub = types.ModuleType("requests")
+requests_stub.post = lambda *args, **kwargs: None
+
+with patch.dict(sys.modules, {"requests": requests_stub}):
+    from notifications.telegram import build_sender, build_signal_text, build_translator
 
 
 class FakeRequests:

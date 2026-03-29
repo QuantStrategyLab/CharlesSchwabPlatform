@@ -13,6 +13,7 @@ jobs:
       CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
       CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
       GOOGLE_CLOUD_PROJECT: ${{ vars.GOOGLE_CLOUD_PROJECT }}
+      STRATEGY_PROFILE: ${{ vars.STRATEGY_PROFILE || 'hybrid_growth_income' }}
       INCOME_THRESHOLD_USD: ${{ vars.INCOME_THRESHOLD_USD }}
       QQQI_INCOME_RATIO: ${{ vars.QQQI_INCOME_RATIO }}
       GLOBAL_TELEGRAM_CHAT_ID: ${{ vars.GLOBAL_TELEGRAM_CHAT_ID }}
@@ -85,6 +86,7 @@ jobs:
             "NOTIFY_LANG=${NOTIFY_LANG}"
             "SCHWAB_API_KEY=${SCHWAB_API_KEY}"
             "SCHWAB_APP_SECRET=${SCHWAB_APP_SECRET}"
+            "STRATEGY_PROFILE=${STRATEGY_PROFILE}"
           )
 
           if [ -n "${INCOME_THRESHOLD_USD:-}" ]; then
