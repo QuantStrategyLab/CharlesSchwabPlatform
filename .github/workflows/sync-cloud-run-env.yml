@@ -13,6 +13,9 @@ jobs:
       CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
       CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
       GOOGLE_CLOUD_PROJECT: ${{ vars.GOOGLE_CLOUD_PROJECT }}
+      TELEGRAM_TOKEN_SECRET_NAME: ${{ vars.TELEGRAM_TOKEN_SECRET_NAME }}
+      SCHWAB_API_KEY_SECRET_NAME: ${{ vars.SCHWAB_API_KEY_SECRET_NAME }}
+      SCHWAB_APP_SECRET_SECRET_NAME: ${{ vars.SCHWAB_APP_SECRET_SECRET_NAME }}
       STRATEGY_PROFILE: ${{ vars.STRATEGY_PROFILE || 'hybrid_growth_income' }}
       INCOME_THRESHOLD_USD: ${{ vars.INCOME_THRESHOLD_USD }}
       QQQI_INCOME_RATIO: ${{ vars.QQQI_INCOME_RATIO }}
@@ -40,9 +43,6 @@ jobs:
             GLOBAL_TELEGRAM_CHAT_ID
             NOTIFY_LANG
             GCP_SA_KEY
-            TELEGRAM_TOKEN
-            SCHWAB_API_KEY
-            SCHWAB_APP_SECRET
           )
 
           missing_vars=()
@@ -51,6 +51,18 @@ jobs:
               missing_vars+=("${var_name}")
             fi
           done
+
+          if [ -z "${TELEGRAM_TOKEN_SECRET_NAME:-}" ] && [ -z "${TELEGRAM_TOKEN:-}" ]; then
+            missing_vars+=("TELEGRAM_TOKEN_SECRET_NAME or TELEGRAM_TOKEN")
+          fi
+
+          if [ -z "${SCHWAB_API_KEY_SECRET_NAME:-}" ] && [ -z "${SCHWAB_API_KEY:-}" ]; then
+            missing_vars+=("SCHWAB_API_KEY_SECRET_NAME or SCHWAB_API_KEY")
+          fi
+
+          if [ -z "${SCHWAB_APP_SECRET_SECRET_NAME:-}" ] && [ -z "${SCHWAB_APP_SECRET:-}" ]; then
+            missing_vars+=("SCHWAB_APP_SECRET_SECRET_NAME or SCHWAB_APP_SECRET")
+          fi
 
           if [ "${#missing_vars[@]}" -gt 0 ]; then
             echo "enabled=false" >> "$GITHUB_OUTPUT"
@@ -80,28 +92,66 @@ jobs:
         run: |
           set -euo pipefail
 
-          env_args=(
-            "TELEGRAM_TOKEN=${TELEGRAM_TOKEN}"
+          env_pairs=(
             "GLOBAL_TELEGRAM_CHAT_ID=${GLOBAL_TELEGRAM_CHAT_ID}"
             "NOTIFY_LANG=${NOTIFY_LANG}"
-            "SCHWAB_API_KEY=${SCHWAB_API_KEY}"
-            "SCHWAB_APP_SECRET=${SCHWAB_APP_SECRET}"
             "STRATEGY_PROFILE=${STRATEGY_PROFILE}"
           )
+          secret_pairs=()
+          remove_env_vars=(
+            "TELEGRAM_CHAT_ID"
+          )
+          remove_secret_vars=()
+
+          if [ -n "${TELEGRAM_TOKEN_SECRET_NAME:-}" ]; then
+            secret_pairs+=("TELEGRAM_TOKEN=${TELEGRAM_TOKEN_SECRET_NAME}:latest")
+            remove_env_vars+=("TELEGRAM_TOKEN")
+          else
+            env_pairs+=("TELEGRAM_TOKEN=${TELEGRAM_TOKEN}")
+            remove_secret_vars+=("TELEGRAM_TOKEN")
+          fi
+
+          if [ -n "${SCHWAB_API_KEY_SECRET_NAME:-}" ]; then
+            secret_pairs+=("SCHWAB_API_KEY=${SCHWAB_API_KEY_SECRET_NAME}:latest")
+            remove_env_vars+=("SCHWAB_API_KEY")
+          else
+            env_pairs+=("SCHWAB_API_KEY=${SCHWAB_API_KEY}")
+            remove_secret_vars+=("SCHWAB_API_KEY")
+          fi
+
+          if [ -n "${SCHWAB_APP_SECRET_SECRET_NAME:-}" ]; then
+            secret_pairs+=("SCHWAB_APP_SECRET=${SCHWAB_APP_SECRET_SECRET_NAME}:latest")
+            remove_env_vars+=("SCHWAB_APP_SECRET")
+          else
+            env_pairs+=("SCHWAB_APP_SECRET=${SCHWAB_APP_SECRET}")
+            remove_secret_vars+=("SCHWAB_APP_SECRET")
+          fi
 
           if [ -n "${INCOME_THRESHOLD_USD:-}" ]; then
-            env_args+=("INCOME_THRESHOLD_USD=${INCOME_THRESHOLD_USD}")
+            env_pairs+=("INCOME_THRESHOLD_USD=${INCOME_THRESHOLD_USD}")
           fi
 
           if [ -n "${QQQI_INCOME_RATIO:-}" ]; then
-            env_args+=("QQQI_INCOME_RATIO=${QQQI_INCOME_RATIO}")
+            env_pairs+=("QQQI_INCOME_RATIO=${QQQI_INCOME_RATIO}")
           fi
 
           if [ -n "${GOOGLE_CLOUD_PROJECT:-}" ]; then
-            env_args+=("GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT}")
+            env_pairs+=("GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT}")
           fi
 
-          gcloud run services update "${CLOUD_RUN_SERVICE}" \
-            --region "${CLOUD_RUN_REGION}" \
-            --remove-env-vars "TELEGRAM_CHAT_ID" \
-            --update-env-vars "$(IFS=,; echo "${env_args[*]}")"
+          gcloud_args=(
+            run services update "${CLOUD_RUN_SERVICE}"
+            --region "${CLOUD_RUN_REGION}"
+            --remove-env-vars "$(IFS=,; echo "${remove_env_vars[*]}")"
+            --update-env-vars "$(IFS=,; echo "${env_pairs[*]}")"
+          )
+
+          if [ "${#remove_secret_vars[@]}" -gt 0 ]; then
+            gcloud_args+=(--remove-secrets "$(IFS=,; echo "${remove_secret_vars[*]}")")
+          fi
+
+          if [ "${#secret_pairs[@]}" -gt 0 ]; then
+            gcloud_args+=(--update-secrets "$(IFS=,; echo "${secret_pairs[*]}")")
+          fi
+
+          gcloud "${gcloud_args[@]}"

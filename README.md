@@ -87,9 +87,9 @@ QQQ: 600.64 | MA200: 580.62 | Exit: 558.97
 
 | Variable | Description |
 |----------|-------------|
-| `SCHWAB_API_KEY` | Schwab API key |
-| `SCHWAB_APP_SECRET` | Schwab API secret |
-| `TELEGRAM_TOKEN` | Telegram bot token |
+| `SCHWAB_API_KEY` | Schwab API key; recommended to inject from Secret Manager secret `charles-schwab-api-key` |
+| `SCHWAB_APP_SECRET` | Schwab API secret; recommended to inject from Secret Manager secret `charles-schwab-app-secret` |
+| `TELEGRAM_TOKEN` | Telegram bot token; recommended to inject from Secret Manager secret `charles-schwab-telegram-token` |
 | `GLOBAL_TELEGRAM_CHAT_ID` | Telegram chat ID used by this service. |
 | `GOOGLE_CLOUD_PROJECT` | GCP project ID |
 | `STRATEGY_PROFILE` | Strategy profile selector (default: `hybrid_growth_income`, currently the only supported `us_equity` value) |
@@ -101,6 +101,13 @@ Only `GLOBAL_TELEGRAM_CHAT_ID` and `NOTIFY_LANG` are good candidates for cross-p
 
 The Schwab OAuth token payload is read from Secret Manager secret `schwab_token`.
 
+Recommended Secret Manager runtime secrets in the `charlesschwabquant` project:
+
+- `schwab_token`
+- `charles-schwab-api-key`
+- `charles-schwab-app-secret`
+- `charles-schwab-telegram-token`
+
 ### GitHub-managed Cloud Run env sync
 
 If code deployment still uses Google Cloud Trigger, but you want GitHub to be the single source of truth for runtime env vars, this repo now includes `.github/workflows/sync-cloud-run-env.yml`.
@@ -111,15 +118,18 @@ Recommended setup:
   - `ENABLE_GITHUB_ENV_SYNC` = `true`
   - `CLOUD_RUN_REGION`
   - `CLOUD_RUN_SERVICE`
+  - `TELEGRAM_TOKEN_SECRET_NAME` (recommended: `charles-schwab-telegram-token`)
+  - `SCHWAB_API_KEY_SECRET_NAME` (recommended: `charles-schwab-api-key`)
+  - `SCHWAB_APP_SECRET_SECRET_NAME` (recommended: `charles-schwab-app-secret`)
   - Optional: `STRATEGY_PROFILE` (recommended: `hybrid_growth_income`)
   - Optional: `INCOME_THRESHOLD_USD`
   - Optional: `QQQI_INCOME_RATIO`
   - Optional: `GOOGLE_CLOUD_PROJECT`
 - **Repository Secrets**
   - `GCP_SA_KEY`
-  - `TELEGRAM_TOKEN`
-  - `SCHWAB_API_KEY`
-  - `SCHWAB_APP_SECRET`
+  - Optional fallback only: `TELEGRAM_TOKEN`
+  - Optional fallback only: `SCHWAB_API_KEY`
+  - Optional fallback only: `SCHWAB_APP_SECRET`
 - **Shared Variables already supported**
   - `GLOBAL_TELEGRAM_CHAT_ID`
   - `NOTIFY_LANG`
@@ -132,7 +142,7 @@ Important:
 - `STRATEGY_PROFILE` is kept as the future strategy-switch entry, but today this service only supports `hybrid_growth_income`.
 - The current strategy domain is `us_equity`, and the repo now keeps a thin strategy registry so future expansion can grow by domain + profile instead of mixing strategy and platform in one layer.
 - `INCOME_THRESHOLD_USD` and `QQQI_INCOME_RATIO` are optional in env sync. If you leave them unset, the app keeps using the code defaults (`100000` and `0.5`).
-- `GCP_SA_KEY`, `TELEGRAM_TOKEN`, and the Schwab API credentials remain repository-specific. Across multiple quant repos, only `GLOBAL_TELEGRAM_CHAT_ID` and `NOTIFY_LANG` are good cross-project shared settings.
+- `GCP_SA_KEY` remains repository-specific. The Telegram token and Schwab API credentials should live in Secret Manager and be referenced by the secret-name variables above. Across multiple quant repos, only `GLOBAL_TELEGRAM_CHAT_ID` and `NOTIFY_LANG` are good cross-project shared settings.
 
 ### Deployment unit and naming
 
@@ -223,9 +233,9 @@ QQQ: 600.64 | MA200: 580.62 | Exit: 558.97
 
 | 变量 | 说明 |
 |------|------|
-| `SCHWAB_API_KEY` | Schwab API 密钥 |
-| `SCHWAB_APP_SECRET` | Schwab API 密钥 |
-| `TELEGRAM_TOKEN` | Telegram 机器人 Token |
+| `SCHWAB_API_KEY` | Schwab API 密钥；建议通过 Secret Manager 的 `charles-schwab-api-key` 注入 |
+| `SCHWAB_APP_SECRET` | Schwab API 密钥；建议通过 Secret Manager 的 `charles-schwab-app-secret` 注入 |
+| `TELEGRAM_TOKEN` | Telegram 机器人 Token；建议通过 Secret Manager 的 `charles-schwab-telegram-token` 注入 |
 | `GLOBAL_TELEGRAM_CHAT_ID` | 这个服务使用的 Telegram Chat ID。 |
 | `GOOGLE_CLOUD_PROJECT` | GCP 项目 ID |
 | `STRATEGY_PROFILE` | 策略档位选择（默认: `hybrid_growth_income`，当前仅支持这个 `us_equity` 策略值） |
@@ -237,6 +247,13 @@ QQQ: 600.64 | MA200: 580.62 | Exit: 558.97
 
 Schwab OAuth token payload 当前从 Secret Manager 的 `schwab_token` 里读取。
 
+建议在 `charlesschwabquant` 项目里同时维护这些运行时 secret：
+
+- `schwab_token`
+- `charles-schwab-api-key`
+- `charles-schwab-app-secret`
+- `charles-schwab-telegram-token`
+
 ### GitHub 统一管理 Cloud Run 环境变量
 
 如果代码部署继续走 Google Cloud Trigger，但你想把运行时环境变量统一放在 GitHub 管理，这个仓库现在提供了 `.github/workflows/sync-cloud-run-env.yml`。
@@ -247,15 +264,18 @@ Schwab OAuth token payload 当前从 Secret Manager 的 `schwab_token` 里读取
   - `ENABLE_GITHUB_ENV_SYNC` = `true`
   - `CLOUD_RUN_REGION`
   - `CLOUD_RUN_SERVICE`
+  - `TELEGRAM_TOKEN_SECRET_NAME`（建议：`charles-schwab-telegram-token`）
+  - `SCHWAB_API_KEY_SECRET_NAME`（建议：`charles-schwab-api-key`）
+  - `SCHWAB_APP_SECRET_SECRET_NAME`（建议：`charles-schwab-app-secret`）
   - 可选：`STRATEGY_PROFILE`（建议设为 `hybrid_growth_income`）
   - 可选：`INCOME_THRESHOLD_USD`
   - 可选：`QQQI_INCOME_RATIO`
   - 可选：`GOOGLE_CLOUD_PROJECT`
 - **仓库级 Secrets**
   - `GCP_SA_KEY`
-  - `TELEGRAM_TOKEN`
-  - `SCHWAB_API_KEY`
-  - `SCHWAB_APP_SECRET`
+  - 仅保留为 fallback：`TELEGRAM_TOKEN`
+  - 仅保留为 fallback：`SCHWAB_API_KEY`
+  - 仅保留为 fallback：`SCHWAB_APP_SECRET`
 - **已支持的共享 Variables**
   - `GLOBAL_TELEGRAM_CHAT_ID`
   - `NOTIFY_LANG`
@@ -268,7 +288,7 @@ Schwab OAuth token payload 当前从 Secret Manager 的 `schwab_token` 里读取
 - `STRATEGY_PROFILE` 先保留为未来策略切换入口，但当前这个服务只支持 `hybrid_growth_income`。
 - 当前策略大类是 `us_equity`，仓库里也已经保留了一层很薄的策略注册表，后面可以沿着“策略大类 + 具体策略 + 平台兼容性”继续扩。
 - `INCOME_THRESHOLD_USD` 和 `QQQI_INCOME_RATIO` 在 env-sync 里是可选项。不填时，程序会继续使用代码里的默认值：`100000` 和 `0.5`。
-- `GCP_SA_KEY`、`TELEGRAM_TOKEN`、Schwab API 凭据仍然是这个仓库自己的 secrets。对多个 quant 仓库来说，真正适合跨项目共享的通常只有 `GLOBAL_TELEGRAM_CHAT_ID` 和 `NOTIFY_LANG`。
+- `GCP_SA_KEY` 仍然是这个仓库自己的 secret。Telegram token 和 Schwab API 凭据建议放到 Secret Manager，并通过上面的 secret-name 变量引用。对多个 quant 仓库来说，真正适合跨项目共享的通常只有 `GLOBAL_TELEGRAM_CHAT_ID` 和 `NOTIFY_LANG`。
 
 ### 部署单元和命名建议
 
