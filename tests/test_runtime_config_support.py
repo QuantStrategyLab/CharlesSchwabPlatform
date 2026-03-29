@@ -15,6 +15,7 @@ from runtime_config_support import (  # noqa: E402
     DEFAULT_STRATEGY_PROFILE,
     load_platform_runtime_settings,
 )
+from strategy_registry import SCHWAB_PLATFORM, US_EQUITY_DOMAIN, get_supported_profiles_for_platform
 
 
 class RuntimeConfigSupportTests(unittest.TestCase):
@@ -23,6 +24,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             settings = load_platform_runtime_settings()
 
         self.assertEqual(settings.strategy_profile, DEFAULT_STRATEGY_PROFILE)
+        self.assertEqual(settings.strategy_domain, US_EQUITY_DOMAIN)
         self.assertEqual(settings.notify_lang, DEFAULT_NOTIFY_LANG)
 
     def test_uses_explicit_strategy_profile(self):
@@ -35,6 +37,12 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         with patch.dict(os.environ, {"STRATEGY_PROFILE": "balanced_income"}, clear=True):
             with self.assertRaisesRegex(ValueError, "Unsupported STRATEGY_PROFILE"):
                 load_platform_runtime_settings()
+
+    def test_platform_supported_profiles_are_filtered_by_registry(self):
+        self.assertEqual(
+            get_supported_profiles_for_platform(SCHWAB_PLATFORM),
+            frozenset({DEFAULT_STRATEGY_PROFILE}),
+        )
 
 
 if __name__ == "__main__":

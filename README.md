@@ -92,7 +92,7 @@ QQQ: 600.64 | MA200: 580.62 | Exit: 558.97
 | `TELEGRAM_TOKEN` | Telegram bot token |
 | `GLOBAL_TELEGRAM_CHAT_ID` | Telegram chat ID used by this service. |
 | `GOOGLE_CLOUD_PROJECT` | GCP project ID |
-| `STRATEGY_PROFILE` | Strategy profile selector (default: `hybrid_growth_income`, currently the only supported value) |
+| `STRATEGY_PROFILE` | Strategy profile selector (default: `hybrid_growth_income`, currently the only supported `us_equity` value) |
 | `INCOME_THRESHOLD_USD` | Equity threshold to enable income layer (default 100000) |
 | `QQQI_INCOME_RATIO` | QQQI share of income layer, 0–1 (default 0.5) |
 | `NOTIFY_LANG` | Notification language: `en` (English, default) or `zh` (Chinese) |
@@ -130,6 +130,7 @@ Important:
 
 - The workflow only becomes strict when `ENABLE_GITHUB_ENV_SYNC=true`. If this variable is unset, the sync job is skipped and the old Google Cloud Trigger + manual Cloud Run env setup keeps working.
 - `STRATEGY_PROFILE` is kept as the future strategy-switch entry, but today this service only supports `hybrid_growth_income`.
+- The current strategy domain is `us_equity`, and the repo now keeps a thin strategy registry so future expansion can grow by domain + profile instead of mixing strategy and platform in one layer.
 - `INCOME_THRESHOLD_USD` and `QQQI_INCOME_RATIO` are optional in env sync. If you leave them unset, the app keeps using the code defaults (`100000` and `0.5`).
 - `GCP_SA_KEY`, `TELEGRAM_TOKEN`, and the Schwab API credentials remain repository-specific. Across multiple quant repos, only `GLOBAL_TELEGRAM_CHAT_ID` and `NOTIFY_LANG` are good cross-project shared settings.
 
@@ -227,7 +228,7 @@ QQQ: 600.64 | MA200: 580.62 | Exit: 558.97
 | `TELEGRAM_TOKEN` | Telegram 机器人 Token |
 | `GLOBAL_TELEGRAM_CHAT_ID` | 这个服务使用的 Telegram Chat ID。 |
 | `GOOGLE_CLOUD_PROJECT` | GCP 项目 ID |
-| `STRATEGY_PROFILE` | 策略档位选择（默认: `hybrid_growth_income`，当前仅支持这个值） |
+| `STRATEGY_PROFILE` | 策略档位选择（默认: `hybrid_growth_income`，当前仅支持这个 `us_equity` 策略值） |
 | `INCOME_THRESHOLD_USD` | 收入层启动阈值（默认 100000） |
 | `QQQI_INCOME_RATIO` | QQQI 在收入层中的占比，0–1（默认 0.5） |
 | `NOTIFY_LANG` | 通知语言: `en`（英文，默认）或 `zh`（中文） |
@@ -265,6 +266,7 @@ Schwab OAuth token payload 当前从 Secret Manager 的 `schwab_token` 里读取
 
 - 只有在 `ENABLE_GITHUB_ENV_SYNC=true` 时，这个 workflow 才会严格校验并执行同步。没打开时会直接跳过，不影响原来 Google Cloud Trigger + 手工 Cloud Run env 的老流程。
 - `STRATEGY_PROFILE` 先保留为未来策略切换入口，但当前这个服务只支持 `hybrid_growth_income`。
+- 当前策略大类是 `us_equity`，仓库里也已经保留了一层很薄的策略注册表，后面可以沿着“策略大类 + 具体策略 + 平台兼容性”继续扩。
 - `INCOME_THRESHOLD_USD` 和 `QQQI_INCOME_RATIO` 在 env-sync 里是可选项。不填时，程序会继续使用代码里的默认值：`100000` 和 `0.5`。
 - `GCP_SA_KEY`、`TELEGRAM_TOKEN`、Schwab API 凭据仍然是这个仓库自己的 secrets。对多个 quant 仓库来说，真正适合跨项目共享的通常只有 `GLOBAL_TELEGRAM_CHAT_ID` 和 `NOTIFY_LANG`。
 
