@@ -14,8 +14,8 @@
 
 Automated trading service for Charles Schwab accounts, deployed on GCP Cloud Run. Allocates capital across three layers: **attack (TQQQ)** driven by QQQ MA200 + ATR bands with staged exits, **income (SPYI / QQQI)** when equity exceeds a threshold, and **defense (BOXX)** for idle cash. Each run fetches data, computes targets, places orders, and notifies via Telegram.
 
-The strategy repo now depends on `QuantPlatformKit` for Schwab-specific client bootstrap, account snapshot access, market-data access, and order submission. Cloud Run still deploys this strategy repo only.
-The current `hybrid_growth_income` strategy implementation is sourced from `UsEquityStrategies`.
+This repository uses `QuantPlatformKit` for Schwab client bootstrap, account snapshot access, market data, and order submission. Cloud Run deploys this repository directly.
+The `hybrid_growth_income` strategy implementation is sourced from `UsEquityStrategies`.
 
 ### Logic overview
 
@@ -49,7 +49,7 @@ The current `hybrid_growth_income` strategy implementation is sourced from `UsEq
 
 ### Notifications
 
-Beautiful emoji-formatted Telegram notifications with full i18n support.
+Telegram notifications include structured execution and heartbeat messages, with English and Chinese variants.
 
 **Trade execution:**
 ```
@@ -93,7 +93,7 @@ QQQ: 600.64 | MA200: 580.62 | Exit: 558.97
 | `TELEGRAM_TOKEN` | Telegram bot token; recommended to inject from Secret Manager secret `charles-schwab-telegram-token` |
 | `GLOBAL_TELEGRAM_CHAT_ID` | Telegram chat ID used by this service. |
 | `GOOGLE_CLOUD_PROJECT` | GCP project ID |
-| `STRATEGY_PROFILE` | Strategy profile selector (default: `hybrid_growth_income`, currently the only supported `us_equity` value) |
+| `STRATEGY_PROFILE` | Strategy profile selector (default: `hybrid_growth_income`; supported value: `hybrid_growth_income`) |
 | `INCOME_THRESHOLD_USD` | Equity threshold to enable income layer (default 100000) |
 | `QQQI_INCOME_RATIO` | QQQI share of income layer, 0–1 (default 0.5) |
 | `NOTIFY_LANG` | Notification language: `en` (English, default) or `zh` (Chinese) |
@@ -161,8 +161,8 @@ Deploy as a Cloud Run service and trigger the root URL on a schedule (e.g. once 
 
 基于 Charles Schwab 账户的自动化交易服务，部署在 GCP Cloud Run 上。资金分配为三层：**进攻层 (TQQQ)** 基于 QQQ MA200 + ATR 波段分阶段退出，**收入层 (SPYI / QQQI)** 在资产超过阈值时启用，**防御层 (BOXX)** 管理闲置资金。每次运行获取数据、计算目标、下单并通过 Telegram 通知。
 
-这个策略仓库现在通过 `QuantPlatformKit` 复用 Schwab 的 client 初始化、账户快照、行情读取和下单逻辑。Cloud Run 仍然只部署这个策略仓库本身。
-当前 `hybrid_growth_income` 的策略实现来自 `UsEquityStrategies`。
+这个仓库通过 `QuantPlatformKit` 复用 Schwab client 初始化、账户快照、行情读取和下单逻辑。Cloud Run 直接部署这个仓库。
+`hybrid_growth_income` 策略实现来自 `UsEquityStrategies`。
 
 ### 策略概览
 
@@ -196,7 +196,7 @@ Deploy as a Cloud Run service and trigger the root URL on a schedule (e.g. once 
 
 ### 通知格式
 
-精美的 Emoji 格式 Telegram 通知，支持中英文切换。
+Telegram 通知包含结构化的调仓和心跳消息，支持中英文切换。
 
 **交易执行通知:**
 ```
@@ -240,7 +240,7 @@ QQQ: 600.64 | MA200: 580.62 | Exit: 558.97
 | `TELEGRAM_TOKEN` | Telegram 机器人 Token；建议通过 Secret Manager 的 `charles-schwab-telegram-token` 注入 |
 | `GLOBAL_TELEGRAM_CHAT_ID` | 这个服务使用的 Telegram Chat ID。 |
 | `GOOGLE_CLOUD_PROJECT` | GCP 项目 ID |
-| `STRATEGY_PROFILE` | 策略档位选择（默认: `hybrid_growth_income`，当前仅支持这个 `us_equity` 策略值） |
+| `STRATEGY_PROFILE` | 策略档位选择（默认: `hybrid_growth_income`；当前支持值: `hybrid_growth_income`） |
 | `INCOME_THRESHOLD_USD` | 收入层启动阈值（默认 100000） |
 | `QQQI_INCOME_RATIO` | QQQI 在收入层中的占比，0–1（默认 0.5） |
 | `NOTIFY_LANG` | 通知语言: `en`（英文，默认）或 `zh`（中文） |
@@ -287,8 +287,8 @@ Schwab OAuth token payload 当前从 Secret Manager 的 `schwab_token` 里读取
 注意：
 
 - 只有在 `ENABLE_GITHUB_ENV_SYNC=true` 时，这个 workflow 才会严格校验并执行同步。没打开时会直接跳过，不影响原来 Google Cloud Trigger + 手工 Cloud Run env 的老流程。
-- `STRATEGY_PROFILE` 先保留为未来策略切换入口，但当前这个服务只支持 `hybrid_growth_income`。
-- 当前策略大类是 `us_equity`，仓库里也已经保留了一层很薄的策略注册表，后面可以沿着“策略大类 + 具体策略 + 平台兼容性”继续扩。
+- `STRATEGY_PROFILE` 当前只支持 `hybrid_growth_income`。
+- 当前策略域是 `us_equity`，本地策略注册表只用于域和 profile 校验。
 - `INCOME_THRESHOLD_USD` 和 `QQQI_INCOME_RATIO` 在 env-sync 里是可选项。不填时，程序会继续使用代码里的默认值：`100000` 和 `0.5`。
 - `GCP_SA_KEY` 仍然是这个仓库自己的 secret。Telegram token 和 Schwab API 凭据建议放到 Secret Manager，并通过上面的 secret-name 变量引用。对多个 quant 仓库来说，真正适合跨项目共享的通常只有 `GLOBAL_TELEGRAM_CHAT_ID` 和 `NOTIFY_LANG`。
 
