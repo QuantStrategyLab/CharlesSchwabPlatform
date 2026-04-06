@@ -15,7 +15,7 @@
 Automated trading service for Charles Schwab accounts, deployed on GCP Cloud Run. Allocates capital across three layers: **attack (TQQQ)** driven by QQQ MA200 + ATR bands with staged exits, **income (SPYI / QQQI)** when equity exceeds a threshold, and **defense (BOXX)** for idle cash. Each run fetches data, computes targets, places orders, and notifies via Telegram.
 
 This repository uses `QuantPlatformKit` for Schwab client bootstrap, account snapshot access, market data, and order submission. Cloud Run deploys this repository directly.
-The `hybrid_growth_income` strategy implementation is sourced from `UsEquityStrategies`. Human-readable alias: `qqq_tqqq_growth_income`.
+The `hybrid_growth_income` strategy implementation is sourced from `UsEquityStrategies`.
 
 Full strategy documentation now lives in [`UsEquityStrategies`](https://github.com/QuantStrategyLab/UsEquityStrategies#hybrid_growth_income). The sections below focus on execution-side defaults and runtime behavior.
 This runtime matrix is the authoritative enablement source for Schwab. `UsEquityStrategies` only carries strategy-layer compatibility and metadata.
@@ -23,9 +23,9 @@ This runtime matrix is the authoritative enablement source for Schwab. `UsEquity
 
 **Schwab profile matrix**
 
-| Canonical profile | Display name | Alias | Enabled | Default | Rollback | Domain | Runtime note |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| `hybrid_growth_income` | QQQ/TQQQ Growth Income | `qqq_tqqq_growth_income` | Yes | Yes | Yes | `us_equity` | current Schwab default |
+| Canonical profile | Display name | Enabled | Default | Rollback | Domain | Runtime note |
+| --- | --- | --- | --- | --- | --- | --- |
+| `hybrid_growth_income` | QQQ/TQQQ Growth Income | Yes | Yes | Yes | `us_equity` | current Schwab default |
 
 ### Logic overview
 
@@ -103,7 +103,7 @@ QQQ: 600.64 | MA200: 580.62 | Exit: 558.97
 | `TELEGRAM_TOKEN` | Telegram bot token; recommended to inject from Secret Manager secret `charles-schwab-telegram-token` |
 | `GLOBAL_TELEGRAM_CHAT_ID` | Telegram chat ID used by this service. |
 | `GOOGLE_CLOUD_PROJECT` | GCP project ID |
-| `STRATEGY_PROFILE` | Strategy profile selector (default: `hybrid_growth_income`; supported canonical value: `hybrid_growth_income`; alias: `qqq_tqqq_growth_income`) |
+| `STRATEGY_PROFILE` | Strategy profile selector (default: `hybrid_growth_income`; runtime value: `hybrid_growth_income`) |
 | `INCOME_THRESHOLD_USD` | Equity threshold to enable income layer (default 100000) |
 | `QQQI_INCOME_RATIO` | QQQI share of income layer, 0–1 (default 0.5) |
 | `NOTIFY_LANG` | Notification language: `en` (English, default) or `zh` (Chinese) |
@@ -149,7 +149,7 @@ On every push to `main`, the workflow updates the existing Cloud Run service wit
 Important:
 
 - The workflow only becomes strict when `ENABLE_GITHUB_ENV_SYNC=true`. If this variable is unset, the sync job is skipped and the old Google Cloud Trigger + manual Cloud Run env setup keeps working.
-- `STRATEGY_PROFILE` is kept as the future strategy-switch entry. Today this service only enables canonical `hybrid_growth_income`; the human-readable alias `qqq_tqqq_growth_income` resolves to the same strategy.
+- `STRATEGY_PROFILE` is kept as the future strategy-switch entry. Today this service only enables `hybrid_growth_income`.
 - The current strategy domain is `us_equity`, and the repo now keeps a thin strategy registry so future expansion can grow by domain + profile instead of mixing strategy and platform in one layer.
 - `INCOME_THRESHOLD_USD` and `QQQI_INCOME_RATIO` are optional in env sync. If you leave them unset, the app keeps using the code defaults (`100000` and `0.5`).
 - GitHub now authenticates to Google Cloud with OIDC + Workload Identity Federation. `GCP_SA_KEY` is no longer required for this workflow.
@@ -252,7 +252,7 @@ QQQ: 600.64 | MA200: 580.62 | Exit: 558.97
 | `TELEGRAM_TOKEN` | Telegram 机器人 Token；建议通过 Secret Manager 的 `charles-schwab-telegram-token` 注入 |
 | `GLOBAL_TELEGRAM_CHAT_ID` | 这个服务使用的 Telegram Chat ID。 |
 | `GOOGLE_CLOUD_PROJECT` | GCP 项目 ID |
-| `STRATEGY_PROFILE` | 策略档位选择（默认: `hybrid_growth_income`；当前 canonical 值: `hybrid_growth_income`；alias: `qqq_tqqq_growth_income`） |
+| `STRATEGY_PROFILE` | 策略档位选择（默认: `hybrid_growth_income`；运行时直接用 `hybrid_growth_income`） |
 | `INCOME_THRESHOLD_USD` | 收入层启动阈值（默认 100000） |
 | `QQQI_INCOME_RATIO` | QQQI 在收入层中的占比，0–1（默认 0.5） |
 | `NOTIFY_LANG` | 通知语言: `en`（英文，默认）或 `zh`（中文） |
@@ -298,7 +298,7 @@ Schwab OAuth token payload 当前从 Secret Manager 的 `schwab_token` 里读取
 注意：
 
 - 只有在 `ENABLE_GITHUB_ENV_SYNC=true` 时，这个 workflow 才会严格校验并执行同步。没打开时会直接跳过，不影响原来 Google Cloud Trigger + 手工 Cloud Run env 的老流程。
-- `STRATEGY_PROFILE` 当前只启用 canonical `hybrid_growth_income`；alias `qqq_tqqq_growth_income` 会解析到同一条策略。
+- `STRATEGY_PROFILE` 当前只启用 `hybrid_growth_income`。
 - 当前策略域是 `us_equity`，本地策略注册表只用于域和 profile 校验。
 - `INCOME_THRESHOLD_USD` 和 `QQQI_INCOME_RATIO` 在 env-sync 里是可选项。不填时，程序会继续使用代码里的默认值：`100000` 和 `0.5`。
 - GitHub 现在通过 OIDC + Workload Identity Federation 登录 Google Cloud，这个 workflow 不再需要 `GCP_SA_KEY`。
