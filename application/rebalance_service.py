@@ -130,6 +130,7 @@ def run_strategy_core(
     if trade_logs:
         trade_message = (
             f"{translator('trade_header')}\n"
+            f"{translator('strategy_profile', profile=plan.get('strategy_profile', '<unknown>'))}\n"
             f"📊 {translator('signal_label')}: {plan['sig_display']}\n\n"
             f"{plan['dashboard']}\n"
             f"{plan['separator']}\n"
@@ -146,6 +147,7 @@ def run_strategy_core(
         ]
         no_trade_message = (
             f"{translator('heartbeat_header')}\n"
+            f"{translator('strategy_profile', profile=plan.get('strategy_profile', '<unknown>'))}\n"
             f"💰 {translator('equity')}: ${plan['total_equity']:,.2f}\n"
             f"{plan['separator']}\n"
             + "\n".join(holdings_lines) + "\n"
