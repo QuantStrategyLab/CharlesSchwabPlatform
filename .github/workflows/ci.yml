@@ -57,7 +57,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
           python -m pip install ruff
-          python -m pip install -e external/QuantPlatformKit -e external/UsEquityStrategies
+          python -m pip install --no-deps -e external/QuantPlatformKit -e external/UsEquityStrategies
 
       - name: Run ruff
         run: |
