@@ -36,6 +36,7 @@ class RebalanceServiceTests(unittest.TestCase):
             "QQQI": SimpleNamespace(last_price=50.0, ask_price=50.0),
         }
         plan = {
+            "strategy_profile": "hybrid_growth_income",
             "strategy_symbols": ("TQQQ", "BOXX", "SPYI", "QQQI"),
             "sell_order_symbols": ("TQQQ", "QQQI", "SPYI", "BOXX"),
             "buy_order_symbols": ("QQQI", "SPYI", "TQQQ"),
@@ -56,6 +57,26 @@ class RebalanceServiceTests(unittest.TestCase):
             "exit_line": 360.0,
             "separator": "━━━━━━━━━━━━━━━━━━",
         }
+        translations = {
+            "trade_header": "trade",
+            "heartbeat_header": "heartbeat",
+            "strategy_profile": "strategy={profile}",
+            "signal_label": "signal",
+            "equity": "equity",
+            "buying_power": "buying_power",
+            "market_sell_cmd": "sell",
+            "limit_buy_cmd": "limit buy",
+            "market_buy_cmd": "buy",
+            "submitted": "submitted",
+            "shares": "shares",
+            "no_trades": "no trades",
+            "market_sell": "market_sell",
+            "limit_buy": "limit_buy",
+            "market_buy": "market_buy",
+            "failed": "failed",
+            "buy_label": "buy",
+            "exception": "exception",
+        }
 
         run_strategy_core(
             object(),
@@ -74,25 +95,7 @@ class RebalanceServiceTests(unittest.TestCase):
                 raw_payload={},
             ),
             send_tg_message=sent_messages.append,
-            translator=lambda key, **_kwargs: {
-                "trade_header": "trade",
-                "heartbeat_header": "heartbeat",
-                "signal_label": "signal",
-                "equity": "equity",
-                "buying_power": "buying_power",
-                "market_sell_cmd": "sell",
-                "limit_buy_cmd": "limit buy",
-                "market_buy_cmd": "buy",
-                "submitted": "submitted",
-                "shares": "shares",
-                "no_trades": "no trades",
-                "market_sell": "market_sell",
-                "limit_buy": "limit_buy",
-                "market_buy": "market_buy",
-                "failed": "failed",
-                "buy_label": "buy",
-                "exception": "exception",
-            }.get(key, key),
+            translator=lambda key, **kwargs: translations.get(key, key).format(**kwargs) if kwargs else translations.get(key, key),
             limit_buy_premium=1.005,
             sell_settle_delay_sec=0,
         )
@@ -101,6 +104,7 @@ class RebalanceServiceTests(unittest.TestCase):
         self.assertEqual(observed["snapshot_hash"], "demo")
         self.assertTrue(sent_messages)
         self.assertIn("trade", sent_messages[0])
+        self.assertIn("strategy=hybrid_growth_income", sent_messages[0])
 
 
 if __name__ == "__main__":
