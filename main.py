@@ -15,6 +15,7 @@ from quant_platform_kit.schwab import (
     submit_equity_order,
 )
 from runtime_config_support import load_platform_runtime_settings
+from runtime_logging import RuntimeLogContext, build_run_id, emit_runtime_log
 from strategy_runtime import load_strategy_runtime
 
 app = Flask(__name__)
@@ -30,6 +31,7 @@ def get_project_id():
         return os.getenv("GOOGLE_CLOUD_PROJECT")
 
 PROJECT_ID = get_project_id()
+SERVICE_NAME = os.getenv("SERVICE_NAME") or os.getenv("K_SERVICE") or "charles-schwab-platform"
 APP_KEY = os.getenv("SCHWAB_API_KEY")
 APP_SECRET = os.getenv("SCHWAB_APP_SECRET")
 TG_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -64,6 +66,13 @@ STRATEGY_RUNTIME = load_strategy_runtime(
 STRATEGY_RUNTIME_CONFIG = dict(STRATEGY_RUNTIME.merged_runtime_config)
 MANAGED_SYMBOLS = STRATEGY_RUNTIME.managed_symbols
 BENCHMARK_SYMBOL = STRATEGY_RUNTIME.benchmark_symbol
+RUNTIME_LOG_CONTEXT = RuntimeLogContext(
+    platform="charles_schwab",
+    deploy_target="cloud_run",
+    service_name=SERVICE_NAME,
+    strategy_profile=STRATEGY_PROFILE,
+    project_id=PROJECT_ID,
+)
 
 
 def validate_config():
@@ -79,6 +88,15 @@ validate_config()
 
 
 send_tg_message = build_sender(TG_TOKEN, TG_CHAT_ID)
+
+
+def log_runtime_event(log_context, event, **fields):
+    return emit_runtime_log(
+        log_context,
+        event,
+        printer=lambda line: print(line, flush=True),
+        **fields,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -128,13 +146,42 @@ def run_strategy_core(c, now_ny):
 
 @app.route("/", methods=["POST", "GET"])
 def handle_schwab():
+    log_context = RUNTIME_LOG_CONTEXT.with_run(build_run_id())
     try:
+        log_runtime_event(
+            log_context,
+            "strategy_cycle_received",
+            message="Received strategy execution request",
+        )
         c = get_client_from_secret(PROJECT_ID, SECRET_ID, APP_KEY, APP_SECRET, token_path=TOKEN_PATH)
         if not is_market_open_today():
+            log_runtime_event(
+                log_context,
+                "market_closed",
+                message="Market closed; skip strategy execution",
+            )
             return "Market Closed", 200
+        log_runtime_event(
+            log_context,
+            "strategy_cycle_started",
+            message="Starting strategy execution",
+        )
         run_strategy_core(c, None)
+        log_runtime_event(
+            log_context,
+            "strategy_cycle_completed",
+            message="Strategy execution completed",
+        )
         return "OK", 200
-    except Exception:
+    except Exception as exc:
+        log_runtime_event(
+            log_context,
+            "strategy_cycle_failed",
+            message="Strategy execution failed",
+            severity="ERROR",
+            error_type=type(exc).__name__,
+            error_message=str(exc),
+        )
         send_tg_message(f"{t('error_header')}\n{traceback.format_exc()}")
         return "Error", 500
 

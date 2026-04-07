@@ -153,6 +153,27 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(body, "OK")
         self.assertTrue(observed["called"])
 
+    def test_handle_schwab_emits_structured_runtime_events(self):
+        module = load_module()
+        observed = []
+
+        module.build_run_id = lambda: "run-001"
+        module.emit_runtime_log = lambda context, event, **fields: observed.append((context.run_id, event, fields))
+        module.get_client_from_secret = lambda *args, **kwargs: object()
+        module.is_market_open_today = lambda: True
+        module.run_strategy_core = lambda *_args, **_kwargs: None
+
+        with module.app.test_request_context("/", method="POST"):
+            body, status = module.handle_schwab()
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body, "OK")
+        self.assertEqual(
+            [event for _run_id, event, _fields in observed],
+            ["strategy_cycle_received", "strategy_cycle_started", "strategy_cycle_completed"],
+        )
+        self.assertTrue(all(run_id == "run-001" for run_id, _event, _fields in observed))
+
 
 if __name__ == "__main__":
     unittest.main()
