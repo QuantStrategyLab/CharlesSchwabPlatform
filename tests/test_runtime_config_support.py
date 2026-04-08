@@ -23,6 +23,7 @@ from strategy_registry import (
     US_EQUITY_DOMAIN,
     get_eligible_profiles_for_platform,
     get_platform_profile_matrix,
+    get_platform_profile_status_matrix,
     get_supported_profiles_for_platform,
 )
 
@@ -79,6 +80,34 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(by_profile[DEFAULT_STRATEGY_PROFILE]["display_name"], "TQQQ Growth Income")
         self.assertTrue(by_profile[DEFAULT_STRATEGY_PROFILE]["is_default"])
         self.assertIn("semiconductor_rotation_income", by_profile)
+
+    def test_platform_profile_status_matrix_matches_current_schwab_rollout(self):
+        rows = get_platform_profile_status_matrix()
+        by_profile = {row["canonical_profile"]: row for row in rows}
+
+        self.assertEqual(
+            set(by_profile),
+            {"hybrid_growth_income", "semiconductor_rotation_income"},
+        )
+        self.assertEqual(
+            by_profile["hybrid_growth_income"],
+            {
+                "canonical_profile": "hybrid_growth_income",
+                "display_name": "TQQQ Growth Income",
+                "domain": "us_equity",
+                "eligible": True,
+                "enabled": True,
+                "is_default": True,
+                "is_rollback": True,
+                "platform": "schwab",
+            },
+        )
+        self.assertEqual(
+            by_profile["semiconductor_rotation_income"]["display_name"],
+            "SOXL/SOXX Semiconductor Trend Income",
+        )
+        self.assertTrue(by_profile["semiconductor_rotation_income"]["eligible"])
+        self.assertTrue(by_profile["semiconductor_rotation_income"]["enabled"])
 
 
 
