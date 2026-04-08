@@ -26,6 +26,10 @@ from quant_platform_kit.common.runtime_reports import (
     finalize_runtime_report,
     persist_runtime_report,
 )
+from quant_platform_kit.strategy_contracts import (
+    build_account_state_from_portfolio_snapshot,
+    build_strategy_evaluation_inputs,
+)
 from runtime_config_support import load_platform_runtime_settings
 from runtime_logging import RuntimeLogContext, build_run_id, emit_runtime_log
 from strategy_runtime import load_strategy_runtime
@@ -163,9 +167,9 @@ def persist_execution_report(report):
 # Strategy execution
 # ---------------------------------------------------------------------------
 def fetch_reference_history(client):
-    if "qqq_history" in AVAILABLE_INPUTS:
+    if "benchmark_history" in AVAILABLE_INPUTS or "qqq_history" in AVAILABLE_INPUTS:
         return fetch_default_daily_price_history_candles(client, BENCHMARK_SYMBOL)
-    if "indicators" in AVAILABLE_INPUTS:
+    if "derived_indicators" in AVAILABLE_INPUTS or "indicators" in AVAILABLE_INPUTS:
         return build_semiconductor_indicators(
             client,
             trend_window=int(STRATEGY_RUNTIME_CONFIG.get("trend_ma_window", 150)),
@@ -205,41 +209,29 @@ def build_semiconductor_indicators(client, *, trend_window: int) -> dict[str, di
 
 
 def build_account_state_from_snapshot(snapshot) -> dict[str, object]:
-    available_cash = float(
-        snapshot.metadata.get("cash_available_for_trading", snapshot.buying_power or 0.0) or 0.0
+    return build_account_state_from_portfolio_snapshot(
+        snapshot,
+        strategy_symbols=MANAGED_SYMBOLS,
     )
-    market_values = {symbol: 0.0 for symbol in MANAGED_SYMBOLS}
-    quantities = {symbol: 0 for symbol in MANAGED_SYMBOLS}
-    sellable_quantities = {symbol: 0 for symbol in MANAGED_SYMBOLS}
-    for position in snapshot.positions:
-        if position.symbol not in market_values:
-            continue
-        market_values[position.symbol] = float(position.market_value)
-        quantity = int(position.quantity)
-        quantities[position.symbol] = quantity
-        sellable_quantities[position.symbol] = quantity
-    return {
-        "available_cash": available_cash,
-        "market_values": market_values,
-        "quantities": quantities,
-        "sellable_quantities": sellable_quantities,
-        "total_strategy_equity": float(snapshot.total_equity),
-    }
 
 
 def resolve_rebalance_plan(*, qqq_history, snapshot):
-    evaluation_inputs = {
-        "signal_text_fn": signal_text,
-        "translator": t,
-    }
-    if "qqq_history" in AVAILABLE_INPUTS:
-        evaluation_inputs["qqq_history"] = qqq_history
-    if "indicators" in AVAILABLE_INPUTS:
-        evaluation_inputs["indicators"] = qqq_history
-    if "snapshot" in AVAILABLE_INPUTS:
-        evaluation_inputs["snapshot"] = snapshot
+    account_state = None
     if "account_state" in AVAILABLE_INPUTS:
-        evaluation_inputs["account_state"] = build_account_state_from_snapshot(snapshot)
+        account_state = build_account_state_from_snapshot(snapshot)
+    evaluation_inputs = build_strategy_evaluation_inputs(
+        available_inputs=AVAILABLE_INPUTS,
+        market_inputs={
+            "benchmark_history": qqq_history,
+            "qqq_history": qqq_history,
+            "derived_indicators": qqq_history,
+            "indicators": qqq_history,
+        },
+        portfolio_snapshot=snapshot,
+        account_state=account_state,
+        translator=t,
+        signal_text_fn=signal_text,
+    )
     evaluation = STRATEGY_RUNTIME.evaluate(**evaluation_inputs)
     return map_strategy_decision_to_plan(
         evaluation.decision,

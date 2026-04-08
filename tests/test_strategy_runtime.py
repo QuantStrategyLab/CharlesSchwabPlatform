@@ -16,7 +16,7 @@ class _FakeEntrypoint:
             domain="us_equity",
             display_name="Hybrid Growth Income",
             description="test entrypoint",
-            required_inputs=frozenset({"qqq_history"}),
+            required_inputs=frozenset({"benchmark_history", "portfolio_snapshot"}),
             default_config={
                 "benchmark_symbol": "QQQ",
                 "managed_symbols": ("TQQQ", "BOXX", "SPYI", "QQQI"),
@@ -33,7 +33,7 @@ class StrategyRuntimeTests(unittest.TestCase):
         entrypoint = _FakeEntrypoint()
         runtime = strategy_runtime_module.LoadedStrategyRuntime(
             entrypoint=entrypoint,
-            runtime_adapter=StrategyRuntimeAdapter(portfolio_input_name="snapshot"),
+            runtime_adapter=StrategyRuntimeAdapter(portfolio_input_name="portfolio_snapshot"),
             merged_runtime_config={
                 "benchmark_symbol": "QQQ",
                 "managed_symbols": ("TQQQ", "BOXX", "SPYI", "QQQI"),
@@ -41,8 +41,8 @@ class StrategyRuntimeTests(unittest.TestCase):
         )
 
         result = runtime.evaluate(
-            qqq_history=[{"close": 1.0, "high": 1.0, "low": 1.0}],
-            snapshot=object(),
+            benchmark_history=[{"close": 1.0, "high": 1.0, "low": 1.0}],
+            portfolio_snapshot=object(),
             signal_text_fn=str,
             translator=lambda key, **_kwargs: key,
         )
@@ -59,7 +59,7 @@ class StrategyRuntimeTests(unittest.TestCase):
             with patch.object(
                 strategy_runtime_module,
                 "load_strategy_runtime_adapter_for_profile",
-                return_value=StrategyRuntimeAdapter(portfolio_input_name="snapshot"),
+                return_value=StrategyRuntimeAdapter(portfolio_input_name="portfolio_snapshot"),
             ):
                 runtime = strategy_runtime_module.load_strategy_runtime(
                     "hybrid_growth_income",

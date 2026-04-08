@@ -34,7 +34,16 @@ PLATFORM_CAPABILITY_MATRIX = PlatformCapabilityMatrix(
     platform_id=SCHWAB_PLATFORM,
     supported_domains=PLATFORM_SUPPORTED_DOMAINS[SCHWAB_PLATFORM],
     supported_target_modes=frozenset({"value"}),
-    supported_inputs=frozenset({"qqq_history", "snapshot", "indicators", "account_state"}),
+    supported_inputs=frozenset(
+        {
+            "benchmark_history",
+            "portfolio_snapshot",
+            "derived_indicators",
+            "indicators",
+            "account_state",
+            "snapshot",
+        }
+    ),
     supported_capabilities=frozenset(),
 )
 ELIGIBLE_STRATEGY_PROFILES = derive_eligible_profiles_for_platform(

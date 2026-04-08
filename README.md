@@ -36,7 +36,7 @@ Platform execution no longer depends on `strategy/allocation.py`, hard-coded str
 
 | Canonical profile | Display name | Eligible | Enabled | Default | Rollback | Domain | Runtime note |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `hybrid_growth_income` | QQQ/TQQQ Growth Income | Yes | Yes | Yes | Yes | `us_equity` | current Schwab default |
+| `hybrid_growth_income` | TQQQ Growth Income | Yes | Yes | Yes | Yes | `us_equity` | current Schwab default |
 
 Check the current matrix locally:
 

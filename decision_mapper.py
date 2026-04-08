@@ -4,20 +4,9 @@ from typing import Any
 
 from quant_platform_kit.strategy_contracts import (
     StrategyDecision,
-    build_value_target_execution_annotations,
-    build_value_target_execution_plan,
-    build_value_target_plan_payload,
-    build_value_target_portfolio_plan,
+    build_value_target_portfolio_inputs_from_snapshot,
+    build_value_target_runtime_plan,
 )
-
-
-def _extract_snapshot_positions(snapshot) -> tuple[dict[str, float], dict[str, int]]:
-    market_values: dict[str, float] = {}
-    quantities: dict[str, int] = {}
-    for position in snapshot.positions:
-        market_values[position.symbol] = float(position.market_value)
-        quantities[position.symbol] = int(position.quantity)
-    return market_values, quantities
 
 
 def map_strategy_decision_to_plan(
@@ -26,25 +15,13 @@ def map_strategy_decision_to_plan(
     snapshot,
     strategy_profile: str,
 ) -> dict[str, Any]:
-    execution_plan = build_value_target_execution_plan(
+    portfolio_inputs = build_value_target_portfolio_inputs_from_snapshot(snapshot)
+    plan = build_value_target_runtime_plan(
         decision,
         strategy_profile=strategy_profile,
-    )
-    annotations = build_value_target_execution_annotations(decision)
-    market_values, quantities = _extract_snapshot_positions(snapshot)
-    portfolio_plan = build_value_target_portfolio_plan(
-        execution_plan,
-        market_values=market_values,
-        quantities=quantities,
-        total_equity=float(snapshot.total_equity),
-        liquid_cash=float(snapshot.buying_power or 0.0),
+        portfolio_inputs=portfolio_inputs,
         strategy_symbols_order="risk_safe_income",
         portfolio_rows_layout=("risk_safe", "income"),
-    )
-    plan = build_value_target_plan_payload(
-        strategy_profile=strategy_profile,
-        portfolio_plan=portfolio_plan,
-        annotations=annotations,
         execution_fields=(
             "trade_threshold_value",
             "reserved_cash",
@@ -78,7 +55,7 @@ def map_strategy_decision_to_plan(
             "income_locked_ratio_text": "",
             "active_risk_asset": "",
             "current_min_trade": 0.0,
-            "investable_cash": portfolio_plan.liquid_cash,
+            "investable_cash": portfolio_inputs.liquid_cash,
         },
     )
     plan["account_hash"] = snapshot.metadata["account_hash"]

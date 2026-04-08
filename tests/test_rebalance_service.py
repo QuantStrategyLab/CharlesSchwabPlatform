@@ -106,7 +106,7 @@ class RebalanceServiceTests(unittest.TestCase):
             ),
             send_tg_message=sent_messages.append,
             translator=lambda key, **kwargs: translations.get(key, key).format(**kwargs) if kwargs else translations.get(key, key),
-            strategy_display_name="QQQ/TQQQ Growth Income",
+            strategy_display_name="TQQQ Growth Income",
             limit_buy_premium=1.005,
             sell_settle_delay_sec=0,
         )
@@ -115,7 +115,7 @@ class RebalanceServiceTests(unittest.TestCase):
         self.assertEqual(observed["snapshot_hash"], "demo")
         self.assertTrue(sent_messages)
         self.assertIn("trade", sent_messages[0])
-        self.assertIn("strategy=QQQ/TQQQ Growth Income", sent_messages[0])
+        self.assertIn("strategy=TQQQ Growth Income", sent_messages[0])
 
     def test_run_strategy_core_accepts_normalized_portfolio_and_execution_sections(self):
         sent_messages = []
@@ -199,13 +199,13 @@ class RebalanceServiceTests(unittest.TestCase):
             ),
             send_tg_message=sent_messages.append,
             translator=lambda key, **kwargs: translations.get(key, key).format(**kwargs) if kwargs else translations.get(key, key),
-            strategy_display_name="QQQ/TQQQ Growth Income",
+            strategy_display_name="TQQQ Growth Income",
             limit_buy_premium=1.005,
             sell_settle_delay_sec=0,
         )
 
         self.assertTrue(sent_messages)
-        self.assertIn("strategy=QQQ/TQQQ Growth Income", sent_messages[0])
+        self.assertIn("strategy=TQQQ Growth Income", sent_messages[0])
 
     def test_run_strategy_core_dry_run_skips_submit_and_marks_message(self):
         sent_messages = []
@@ -289,7 +289,7 @@ class RebalanceServiceTests(unittest.TestCase):
             submit_equity_order=fail_submit,
             send_tg_message=sent_messages.append,
             translator=lambda key, **kwargs: translations.get(key, key).format(**kwargs) if kwargs else translations.get(key, key),
-            strategy_display_name="QQQ/TQQQ Growth Income",
+            strategy_display_name="TQQQ Growth Income",
             limit_buy_premium=1.005,
             sell_settle_delay_sec=0,
             dry_run_only=True,

@@ -56,7 +56,7 @@ def install_stub_modules():
     runtime_config_support_module = types.ModuleType("runtime_config_support")
     runtime_config_support_module.load_platform_runtime_settings = lambda: types.SimpleNamespace(
         strategy_profile="hybrid_growth_income",
-        strategy_display_name="QQQ/TQQQ Growth Income",
+        strategy_display_name="TQQQ Growth Income",
         strategy_domain="us_equity",
         notify_lang="en",
         dry_run_only=False,
@@ -70,7 +70,9 @@ def install_stub_modules():
         },
         managed_symbols=("TQQQ", "BOXX", "SPYI", "QQQI"),
         benchmark_symbol="QQQ",
-        runtime_adapter=types.SimpleNamespace(available_inputs=frozenset({"qqq_history", "snapshot"})),
+        runtime_adapter=types.SimpleNamespace(
+            available_inputs=frozenset({"benchmark_history", "portfolio_snapshot"})
+        ),
         evaluate=lambda **_kwargs: None,
     )
 
@@ -204,7 +206,7 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(observed["report"]["strategy_profile"], "hybrid_growth_income")
         self.assertEqual(
             observed["report"]["summary"]["strategy_display_name"],
-            "QQQ/TQQQ Growth Income",
+            "TQQQ Growth Income",
         )
         self.assertEqual(observed["report"]["run_source"], "cloud_run")
         self.assertFalse(observed["report"]["dry_run"])

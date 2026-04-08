@@ -33,7 +33,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             settings = load_platform_runtime_settings()
 
         self.assertEqual(settings.strategy_profile, DEFAULT_STRATEGY_PROFILE)
-        self.assertEqual(settings.strategy_display_name, "QQQ/TQQQ Growth Income")
+        self.assertEqual(settings.strategy_display_name, "TQQQ Growth Income")
         self.assertEqual(settings.strategy_domain, US_EQUITY_DOMAIN)
         self.assertEqual(settings.notify_lang, DEFAULT_NOTIFY_LANG)
         self.assertFalse(settings.dry_run_only)
@@ -76,7 +76,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
     def test_platform_profile_matrix_marks_default(self):
         rows = get_platform_profile_matrix()
         by_profile = {row["canonical_profile"]: row for row in rows}
-        self.assertEqual(by_profile[DEFAULT_STRATEGY_PROFILE]["display_name"], "QQQ/TQQQ Growth Income")
+        self.assertEqual(by_profile[DEFAULT_STRATEGY_PROFILE]["display_name"], "TQQQ Growth Income")
         self.assertTrue(by_profile[DEFAULT_STRATEGY_PROFILE]["is_default"])
         self.assertIn("semiconductor_rotation_income", by_profile)
 
