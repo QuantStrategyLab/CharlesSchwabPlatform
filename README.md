@@ -32,11 +32,17 @@ The mainline runtime now follows one path only:
 Platform execution no longer depends on `strategy/allocation.py`, hard-coded strategy symbol lists, or direct reads of strategy-private config constants.
 
 
-**Schwab profile matrix**
+**Schwab profile status**
 
-| Canonical profile | Display name | Enabled | Default | Rollback | Domain | Runtime note |
-| --- | --- | --- | --- | --- | --- | --- |
-| `hybrid_growth_income` | QQQ/TQQQ Growth Income | Yes | Yes | Yes | `us_equity` | current Schwab default |
+| Canonical profile | Display name | Eligible | Enabled | Default | Rollback | Domain | Runtime note |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| `hybrid_growth_income` | QQQ/TQQQ Growth Income | Yes | Yes | Yes | Yes | `us_equity` | current Schwab default |
+
+Check the current matrix locally:
+
+```bash
+python3 scripts/print_strategy_profile_status.py
+```
 
 ### Logic overview
 
@@ -160,7 +166,7 @@ On every push to `main`, the workflow updates the existing Cloud Run service wit
 Important:
 
 - The workflow only becomes strict when `ENABLE_GITHUB_ENV_SYNC=true`. If this variable is unset, the sync job is skipped and the old Google Cloud Trigger + manual Cloud Run env setup keeps working.
-- `STRATEGY_PROFILE` is kept as the future strategy-switch entry. Today this service only enables `hybrid_growth_income`.
+- `STRATEGY_PROFILE` is driven by the platform capability matrix plus a rollout allowlist. Today both `eligible` and `enabled` still resolve to `hybrid_growth_income`.
 - The current strategy domain is `us_equity`, and the repo now keeps a thin strategy registry so future expansion can grow by domain + profile instead of mixing strategy and platform in one layer.
 - `INCOME_THRESHOLD_USD` and `QQQI_INCOME_RATIO` are optional in env sync. If you leave them unset, the app keeps using the code defaults (`100000` and `0.5`).
 - GitHub now authenticates to Google Cloud with OIDC + Workload Identity Federation. `GCP_SA_KEY` is no longer required for this workflow.
@@ -320,7 +326,7 @@ Schwab OAuth token payload 当前从 Secret Manager 的 `schwab_token` 里读取
 注意：
 
 - 只有在 `ENABLE_GITHUB_ENV_SYNC=true` 时，这个 workflow 才会严格校验并执行同步。没打开时会直接跳过，不影响原来 Google Cloud Trigger + 手工 Cloud Run env 的老流程。
-- `STRATEGY_PROFILE` 当前只启用 `hybrid_growth_income`。
+- `STRATEGY_PROFILE` 现在由平台能力矩阵和 rollout allowlist 一起决定。当前 `eligible` 和 `enabled` 仍然都只落在 `hybrid_growth_income`。
 - 当前策略域是 `us_equity`，本地策略注册表只用于域和 profile 校验。
 - `INCOME_THRESHOLD_USD` 和 `QQQI_INCOME_RATIO` 在 env-sync 里是可选项。不填时，程序会继续使用代码里的默认值：`100000` 和 `0.5`。
 - GitHub 现在通过 OIDC + Workload Identity Federation 登录 Google Cloud，这个 workflow 不再需要 `GCP_SA_KEY`。

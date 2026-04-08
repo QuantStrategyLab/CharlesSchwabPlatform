@@ -68,6 +68,7 @@ def install_stub_modules():
     runtime_config_support_module = types.ModuleType("runtime_config_support")
     runtime_config_support_module.load_platform_runtime_settings = lambda: types.SimpleNamespace(
         strategy_profile="hybrid_growth_income",
+        strategy_display_name="QQQ/TQQQ Growth Income",
         strategy_domain="us_equity",
         notify_lang="en",
         dry_run_only=False,
