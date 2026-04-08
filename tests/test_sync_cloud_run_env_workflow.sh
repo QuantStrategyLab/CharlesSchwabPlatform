@@ -21,7 +21,7 @@ grep -Fq 'GOOGLE_CLOUD_PROJECT: ${{ vars.GOOGLE_CLOUD_PROJECT }}' "$workflow_fil
 grep -Fq 'TELEGRAM_TOKEN_SECRET_NAME: ${{ vars.TELEGRAM_TOKEN_SECRET_NAME }}' "$workflow_file"
 grep -Fq 'SCHWAB_API_KEY_SECRET_NAME: ${{ vars.SCHWAB_API_KEY_SECRET_NAME }}' "$workflow_file"
 grep -Fq 'SCHWAB_APP_SECRET_SECRET_NAME: ${{ vars.SCHWAB_APP_SECRET_SECRET_NAME }}' "$workflow_file"
-grep -Fq "STRATEGY_PROFILE: \${{ vars.STRATEGY_PROFILE || 'hybrid_growth_income' }}" "$workflow_file"
+grep -Fq "STRATEGY_PROFILE: \${{ vars.STRATEGY_PROFILE || 'tqqq_growth_income' }}" "$workflow_file"
 grep -Fq 'SCHWAB_DRY_RUN_ONLY: ${{ vars.SCHWAB_DRY_RUN_ONLY }}' "$workflow_file"
 grep -Fq 'INCOME_THRESHOLD_USD: ${{ vars.INCOME_THRESHOLD_USD }}' "$workflow_file"
 grep -Fq 'QQQI_INCOME_RATIO: ${{ vars.QQQI_INCOME_RATIO }}' "$workflow_file"

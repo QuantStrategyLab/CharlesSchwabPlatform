@@ -80,7 +80,7 @@ strategy_display_name = build_strategy_display_name(t)(
 
 
 def build_strategy_runtime_overrides(profile: str) -> dict[str, float]:
-    if profile == "hybrid_growth_income":
+    if profile == "tqqq_growth_income":
         return {
             "income_threshold_usd": INCOME_THRESHOLD_USD,
             "qqqi_income_ratio": QQQI_INCOME_RATIO,

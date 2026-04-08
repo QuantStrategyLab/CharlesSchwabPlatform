@@ -56,13 +56,13 @@ class RuntimeConfigSupportTests(unittest.TestCase):
     def test_platform_supported_profiles_are_filtered_by_registry(self):
         self.assertEqual(
             get_supported_profiles_for_platform(SCHWAB_PLATFORM),
-            frozenset({DEFAULT_STRATEGY_PROFILE, "semiconductor_rotation_income"}),
+            frozenset({DEFAULT_STRATEGY_PROFILE, "soxl_soxx_trend_income"}),
         )
 
     def test_platform_eligible_profiles_are_exposed_by_capability_matrix(self):
         self.assertEqual(
             get_eligible_profiles_for_platform(SCHWAB_PLATFORM),
-            frozenset({DEFAULT_STRATEGY_PROFILE, "semiconductor_rotation_income"}),
+            frozenset({DEFAULT_STRATEGY_PROFILE, "soxl_soxx_trend_income"}),
         )
 
     def test_accepts_human_readable_alias(self):
@@ -82,7 +82,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         by_profile = {row["canonical_profile"]: row for row in rows}
         self.assertEqual(by_profile[DEFAULT_STRATEGY_PROFILE]["display_name"], "TQQQ Growth Income")
         self.assertTrue(by_profile[DEFAULT_STRATEGY_PROFILE]["is_default"])
-        self.assertIn("semiconductor_rotation_income", by_profile)
+        self.assertIn("soxl_soxx_trend_income", by_profile)
 
     def test_platform_profile_status_matrix_matches_current_schwab_rollout(self):
         rows = get_platform_profile_status_matrix()
@@ -90,12 +90,12 @@ class RuntimeConfigSupportTests(unittest.TestCase):
 
         self.assertEqual(
             set(by_profile),
-            {"hybrid_growth_income", "semiconductor_rotation_income"},
+            {"tqqq_growth_income", "soxl_soxx_trend_income"},
         )
         self.assertEqual(
-            by_profile["hybrid_growth_income"],
+            by_profile["tqqq_growth_income"],
             {
-                "canonical_profile": "hybrid_growth_income",
+                "canonical_profile": "tqqq_growth_income",
                 "display_name": "TQQQ Growth Income",
                 "domain": "us_equity",
                 "eligible": True,
@@ -106,11 +106,11 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             },
         )
         self.assertEqual(
-            by_profile["semiconductor_rotation_income"]["display_name"],
+            by_profile["soxl_soxx_trend_income"]["display_name"],
             "SOXL/SOXX Semiconductor Trend Income",
         )
-        self.assertTrue(by_profile["semiconductor_rotation_income"]["eligible"])
-        self.assertTrue(by_profile["semiconductor_rotation_income"]["enabled"])
+        self.assertTrue(by_profile["soxl_soxx_trend_income"]["eligible"])
+        self.assertTrue(by_profile["soxl_soxx_trend_income"]["enabled"])
 
     def test_print_strategy_profile_status_json_matches_registry(self):
         result = subprocess.run(
@@ -132,7 +132,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
 
         self.assertIn("canonical_profile", result.stdout)
         self.assertIn("display_name", result.stdout)
-        self.assertIn("hybrid_growth_income", result.stdout)
+        self.assertIn("tqqq_growth_income", result.stdout)
         self.assertIn("TQQQ Growth Income", result.stdout)
 
 

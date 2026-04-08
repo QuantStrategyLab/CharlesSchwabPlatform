@@ -18,12 +18,12 @@ from quant_platform_kit.common.strategies import (
 
 SCHWAB_PLATFORM = "schwab"
 
-DEFAULT_STRATEGY_PROFILE = "hybrid_growth_income"
+DEFAULT_STRATEGY_PROFILE = "tqqq_growth_income"
 ROLLBACK_STRATEGY_PROFILE = DEFAULT_STRATEGY_PROFILE
 
 SCHWAB_ROLLOUT_ALLOWLIST = frozenset({
-    "hybrid_growth_income",
-    "semiconductor_rotation_income",
+    "tqqq_growth_income",
+    "soxl_soxx_trend_income",
 })
 
 PLATFORM_SUPPORTED_DOMAINS: dict[str, frozenset[str]] = {
