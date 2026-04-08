@@ -18,6 +18,12 @@ class PlatformRuntimeSettings:
     strategy_profile: str
     strategy_domain: str
     notify_lang: str
+    dry_run_only: bool
+
+
+def resolve_bool_env(raw_value: str | None) -> bool:
+    value = str(raw_value or "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
 
 
 def resolve_strategy_profile(raw_value: str | None = None) -> str:
@@ -36,4 +42,5 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
         strategy_profile=strategy_definition.profile,
         strategy_domain=strategy_definition.domain,
         notify_lang=os.getenv("NOTIFY_LANG", DEFAULT_NOTIFY_LANG),
+        dry_run_only=resolve_bool_env(os.getenv("SCHWAB_DRY_RUN_ONLY")),
     )

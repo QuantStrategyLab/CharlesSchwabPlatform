@@ -205,6 +205,97 @@ class RebalanceServiceTests(unittest.TestCase):
         self.assertTrue(sent_messages)
         self.assertIn("strategy=hybrid_growth_income", sent_messages[0])
 
+    def test_run_strategy_core_dry_run_skips_submit_and_marks_message(self):
+        sent_messages = []
+        snapshot = SimpleNamespace(
+            positions=(
+                SimpleNamespace(symbol="TQQQ", quantity=0, market_value=0.0),
+                SimpleNamespace(symbol="BOXX", quantity=10, market_value=5000.0),
+            ),
+            total_equity=50000.0,
+            buying_power=10000.0,
+            metadata={"account_hash": "demo"},
+        )
+        quote_snapshots = {
+            "TQQQ": SimpleNamespace(last_price=50.0, ask_price=50.1),
+            "BOXX": SimpleNamespace(last_price=100.0, ask_price=100.0),
+        }
+        plan = {
+            "strategy_profile": "hybrid_growth_income",
+            "account_hash": "demo",
+            "allocation": {
+                "target_mode": "value",
+                "strategy_symbols": ("TQQQ", "BOXX"),
+                "risk_symbols": ("TQQQ",),
+                "income_symbols": (),
+                "safe_haven_symbols": ("BOXX",),
+                "targets": {"TQQQ": 20000.0, "BOXX": 15000.0},
+            },
+            "portfolio": {
+                "strategy_symbols": ("TQQQ", "BOXX"),
+                "portfolio_rows": (("TQQQ", "BOXX"),),
+                "market_values": {"TQQQ": 0.0, "BOXX": 5000.0},
+                "quantities": {"TQQQ": 0, "BOXX": 10},
+                "total_equity": 50000.0,
+                "liquid_cash": 10000.0,
+                "cash_sweep_symbol": "BOXX",
+            },
+            "execution": {
+                "trade_threshold_value": 500.0,
+                "reserved_cash": 2500.0,
+                "signal_display": "💎 Trend Hold",
+                "dashboard_text": "",
+                "separator": "━━━━━━━━━━━━━━━━━━",
+                "benchmark_symbol": "QQQ",
+                "benchmark_price": 400.0,
+                "long_trend_value": 380.0,
+                "exit_line": 360.0,
+            },
+        }
+        translations = {
+            "trade_header": "trade",
+            "heartbeat_header": "heartbeat",
+            "strategy_profile": "strategy={profile}",
+            "signal_label": "signal",
+            "equity": "equity",
+            "buying_power": "buying_power",
+            "market_sell_cmd": "sell",
+            "limit_buy_cmd": "limit buy",
+            "market_buy_cmd": "buy",
+            "submitted": "submitted",
+            "shares": "shares",
+            "no_trades": "no trades",
+            "market_sell": "market_sell",
+            "limit_buy": "limit_buy",
+            "market_buy": "market_buy",
+            "failed": "failed",
+            "buy_label": "buy",
+            "exception": "exception",
+            "dry_run_banner": "dry-run only",
+        }
+
+        def fail_submit(*_args, **_kwargs):
+            raise AssertionError("submit_equity_order should not be called in dry-run mode")
+
+        run_strategy_core(
+            object(),
+            None,
+            fetch_reference_history=lambda client: [{"close": 1.0, "high": 1.0, "low": 1.0}],
+            fetch_managed_snapshot=lambda client: snapshot,
+            fetch_managed_quotes=lambda client: quote_snapshots,
+            resolve_rebalance_plan=lambda *, qqq_history, snapshot: plan,
+            submit_equity_order=fail_submit,
+            send_tg_message=sent_messages.append,
+            translator=lambda key, **kwargs: translations.get(key, key).format(**kwargs) if kwargs else translations.get(key, key),
+            limit_buy_premium=1.005,
+            sell_settle_delay_sec=0,
+            dry_run_only=True,
+        )
+
+        self.assertTrue(sent_messages)
+        self.assertIn("dry-run only", sent_messages[0])
+        self.assertIn("DRY_RUN", sent_messages[0])
+
 
 if __name__ == "__main__":
     unittest.main()

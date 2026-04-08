@@ -65,6 +65,14 @@ def install_stub_modules():
         evaluate=lambda **_kwargs: None,
     )
 
+    runtime_config_support_module = types.ModuleType("runtime_config_support")
+    runtime_config_support_module.load_platform_runtime_settings = lambda: types.SimpleNamespace(
+        strategy_profile="hybrid_growth_income",
+        strategy_domain="us_equity",
+        notify_lang="en",
+        dry_run_only=False,
+    )
+
     google_module = types.ModuleType("google")
     google_module.__path__ = []
 
@@ -90,6 +98,7 @@ def install_stub_modules():
         "requests": requests_module,
         "application.rebalance_service": rebalance_service_module,
         "entrypoints.cloud_run": cloud_run_module,
+        "runtime_config_support": runtime_config_support_module,
         "strategy_runtime": strategy_runtime_module,
         "google": google_module,
         "google.auth": google_auth_module,

@@ -39,6 +39,7 @@ def run_strategy_core(
     translator,
     limit_buy_premium,
     sell_settle_delay_sec,
+    dry_run_only=False,
 ):
     del now_ny
 
@@ -83,6 +84,21 @@ def run_strategy_core(
                 order_intent = OrderIntent(symbol=symbol, side="buy", quantity=quantity)
             else:
                 return False
+
+            if dry_run_only:
+                if action_type == "SELL":
+                    trade_logs.append(
+                        f"🧪 DRY_RUN {translator('market_sell_cmd')} {symbol}: {quantity}{translator('shares')}"
+                    )
+                elif action_type == "BUY_LIMIT":
+                    trade_logs.append(
+                        f"🧪 DRY_RUN {translator('limit_buy_cmd')} {symbol} (${price_text}): {quantity}{translator('shares')}"
+                    )
+                elif action_type == "BUY_MARKET":
+                    trade_logs.append(
+                        f"🧪 DRY_RUN {translator('market_buy_cmd')} {symbol}: {quantity}{translator('shares')}"
+                    )
+                return True
 
             report = submit_equity_order(client, plan["account_hash"], order_intent)
             success = report.status == "accepted"
@@ -178,9 +194,11 @@ def run_strategy_core(
         benchmark_line = f"{benchmark_symbol}: {benchmark_price:.2f} | MA200: {long_trend_value:.2f} | Exit: {exit_line:.2f}\n"
 
     if trade_logs:
+        dry_run_line = f"{translator('dry_run_banner')}\n" if dry_run_only else ""
         trade_message = (
             f"{translator('trade_header')}\n"
             f"{translator('strategy_profile', profile=plan.get('strategy_profile', '<unknown>'))}\n"
+            f"{dry_run_line}"
             f"{status_line}"
             f"📊 {translator('signal_label')}: {signal_display}\n\n"
             f"{dashboard_block}"

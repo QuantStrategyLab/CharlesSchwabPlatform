@@ -124,6 +124,7 @@ def build_execution_report(log_context):
         strategy_domain=RUNTIME_SETTINGS.strategy_domain,
         run_id=log_context.run_id,
         run_source="cloud_run",
+        dry_run=RUNTIME_SETTINGS.dry_run_only,
         started_at=datetime.now(timezone.utc),
         summary={
             "managed_symbols": list(MANAGED_SYMBOLS),
@@ -244,6 +245,7 @@ def run_strategy_core(c, now_ny):
         translator=t,
         limit_buy_premium=LIMIT_BUY_PREMIUM,
         sell_settle_delay_sec=SELL_SETTLE_DELAY_SEC,
+        dry_run_only=RUNTIME_SETTINGS.dry_run_only,
     )
 
 

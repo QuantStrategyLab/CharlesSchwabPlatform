@@ -58,6 +58,7 @@ def install_stub_modules():
         strategy_profile="hybrid_growth_income",
         strategy_domain="us_equity",
         notify_lang="en",
+        dry_run_only=False,
     )
 
     strategy_runtime_module = types.ModuleType("strategy_runtime")
@@ -201,6 +202,7 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(observed["report"]["status"], "ok")
         self.assertEqual(observed["report"]["strategy_profile"], "hybrid_growth_income")
         self.assertEqual(observed["report"]["run_source"], "cloud_run")
+        self.assertFalse(observed["report"]["dry_run"])
         self.assertEqual(
             observed["report"]["summary"]["managed_symbols"],
             ["TQQQ", "BOXX", "SPYI", "QQQI"],

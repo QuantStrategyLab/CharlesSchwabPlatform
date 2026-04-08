@@ -35,6 +35,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(settings.strategy_profile, DEFAULT_STRATEGY_PROFILE)
         self.assertEqual(settings.strategy_domain, US_EQUITY_DOMAIN)
         self.assertEqual(settings.notify_lang, DEFAULT_NOTIFY_LANG)
+        self.assertFalse(settings.dry_run_only)
 
     def test_uses_explicit_strategy_profile(self):
         with patch.dict(os.environ, {"STRATEGY_PROFILE": DEFAULT_STRATEGY_PROFILE}, clear=True):
@@ -64,6 +65,12 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             settings = load_platform_runtime_settings()
 
         self.assertEqual(settings.strategy_profile, DEFAULT_STRATEGY_PROFILE)
+
+    def test_reads_schwab_dry_run_only_flag(self):
+        with patch.dict(os.environ, {"SCHWAB_DRY_RUN_ONLY": "true"}, clear=True):
+            settings = load_platform_runtime_settings()
+
+        self.assertTrue(settings.dry_run_only)
 
     def test_platform_profile_matrix_marks_default(self):
         rows = get_platform_profile_matrix()
