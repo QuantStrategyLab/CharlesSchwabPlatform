@@ -1,4 +1,6 @@
+import json
 import os
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -11,6 +13,7 @@ if str(ROOT) not in sys.path:
 QPK_SRC = ROOT.parent / "QuantPlatformKit" / "src"
 if str(QPK_SRC) not in sys.path:
     sys.path.insert(0, str(QPK_SRC))
+SCRIPT_PATH = ROOT / "scripts" / "print_strategy_profile_status.py"
 
 
 from runtime_config_support import (  # noqa: E402
@@ -108,6 +111,29 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         )
         self.assertTrue(by_profile["semiconductor_rotation_income"]["eligible"])
         self.assertTrue(by_profile["semiconductor_rotation_income"]["enabled"])
+
+    def test_print_strategy_profile_status_json_matches_registry(self):
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT_PATH), "--json"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertEqual(json.loads(result.stdout), get_platform_profile_status_matrix())
+
+    def test_print_strategy_profile_status_table_contains_expected_headers(self):
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT_PATH)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        self.assertIn("canonical_profile", result.stdout)
+        self.assertIn("display_name", result.stdout)
+        self.assertIn("hybrid_growth_income", result.stdout)
+        self.assertIn("TQQQ Growth Income", result.stdout)
 
 
 
