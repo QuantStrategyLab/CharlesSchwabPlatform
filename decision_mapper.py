@@ -67,28 +67,5 @@ def map_strategy_decision_to_plan(
             "exit_line": 0.0,
         },
     )
-    risk_symbols = list(portfolio_plan.risk_symbols)
-    income_symbols = list(portfolio_plan.income_symbols)
-    safe_haven_symbols = list(portfolio_plan.safe_haven_symbols)
-    plan.update({
-        "strategy_symbols": portfolio_plan.strategy_symbols,
-        "sell_order_symbols": tuple(risk_symbols + income_symbols + safe_haven_symbols),
-        "buy_order_symbols": tuple(income_symbols + risk_symbols),
-        "cash_sweep_symbol": portfolio_plan.cash_sweep_symbol,
-        "portfolio_rows": portfolio_plan.portfolio_rows,
-        "account_hash": snapshot.metadata["account_hash"],
-        "market_values": dict(portfolio_plan.market_values),
-        "quantities": dict(portfolio_plan.quantities),
-        "total_equity": portfolio_plan.total_equity,
-        "real_buying_power": portfolio_plan.liquid_cash,
-        "reserved": float(annotations.reserved_cash),
-        "threshold": float(annotations.trade_threshold_value),
-        "target_values": dict(portfolio_plan.target_values),
-        "sig_display": annotations.signal_display or "",
-        "dashboard": annotations.dashboard_text or "",
-        "qqq_p": float(annotations.benchmark_price or 0.0),
-        "ma200": float(annotations.long_trend_value or 0.0),
-        "exit_line": float(annotations.exit_line or 0.0),
-        "separator": annotations.separator or "━━━━━━━━━━━━━━━━━━",
-    })
+    plan["account_hash"] = snapshot.metadata["account_hash"]
     return plan
