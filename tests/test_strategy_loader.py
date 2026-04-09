@@ -2,6 +2,19 @@ import unittest
 
 
 class StrategyLoaderTests(unittest.TestCase):
+    def test_load_strategy_entrypoint_resolves_global_etf_rotation(self):
+        try:
+            from strategy_loader import load_strategy_entrypoint_for_profile
+
+            entrypoint = load_strategy_entrypoint_for_profile("global_etf_rotation")
+        except ModuleNotFoundError as exc:
+            if exc.name in {"numpy", "pandas"}:
+                self.skipTest(f"{exc.name} is not installed")
+            raise
+
+        self.assertEqual(entrypoint.manifest.profile, "global_etf_rotation")
+        self.assertEqual(entrypoint.manifest.required_inputs, frozenset({"market_history"}))
+
     def test_load_strategy_entrypoint_resolves_tqqq_growth_income(self):
         try:
             from strategy_loader import load_strategy_entrypoint_for_profile
@@ -37,6 +50,17 @@ class StrategyLoaderTests(unittest.TestCase):
         self.assertEqual(
             adapter.available_inputs,
             frozenset({"benchmark_history", "portfolio_snapshot"}),
+        )
+        self.assertEqual(adapter.portfolio_input_name, "portfolio_snapshot")
+
+    def test_load_strategy_runtime_adapter_supports_global_etf_rotation(self):
+        from strategy_loader import load_strategy_runtime_adapter_for_profile
+
+        adapter = load_strategy_runtime_adapter_for_profile("global_etf_rotation")
+
+        self.assertEqual(
+            adapter.available_inputs,
+            frozenset({"market_history", "portfolio_snapshot"}),
         )
         self.assertEqual(adapter.portfolio_input_name, "portfolio_snapshot")
 

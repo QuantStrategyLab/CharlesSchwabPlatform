@@ -3,6 +3,7 @@ import traceback
 from datetime import datetime, timezone
 from flask import Flask
 import google.auth
+import pandas as pd
 
 from application.rebalance_service import run_strategy_core as run_rebalance_cycle
 from decision_mapper import map_strategy_decision_to_plan
@@ -172,6 +173,8 @@ def persist_execution_report(report):
 def fetch_reference_history(client):
     if "feature_snapshot" in AVAILABLE_INPUTS:
         return {}
+    if "market_history" in AVAILABLE_INPUTS:
+        return build_market_history_loader(client)
     if "benchmark_history" in AVAILABLE_INPUTS or "qqq_history" in AVAILABLE_INPUTS:
         return fetch_default_daily_price_history_candles(client, BENCHMARK_SYMBOL)
     if "derived_indicators" in AVAILABLE_INPUTS or "indicators" in AVAILABLE_INPUTS:
@@ -180,6 +183,23 @@ def fetch_reference_history(client):
             trend_window=int(STRATEGY_RUNTIME_CONFIG.get("trend_ma_window", 150)),
         )
     raise ValueError(f"Unsupported Schwab runtime inputs for {STRATEGY_PROFILE}: {sorted(AVAILABLE_INPUTS)}")
+
+
+def build_market_history_loader(client):
+    def load_market_history(_broker_client, symbol, *_args, **_kwargs):
+        candles = fetch_default_daily_price_history_candles(client, str(symbol).strip().upper())
+        if not candles:
+            return pd.Series(dtype=float)
+        closes = []
+        index = []
+        for candle in candles:
+            if candle.get("datetime") is None:
+                raise ValueError(f"Missing candle datetime for {symbol}: {candle}")
+            closes.append(float(candle["close"]))
+            index.append(pd.to_datetime(int(candle["datetime"]), unit="ms", utc=True))
+        return pd.Series(closes, index=pd.DatetimeIndex(index), dtype=float)
+
+    return load_market_history
 
 
 def fetch_managed_snapshot(client):
@@ -229,6 +249,7 @@ def resolve_rebalance_plan(*, qqq_history, snapshot):
     evaluation_inputs = build_strategy_evaluation_inputs(
         available_inputs=AVAILABLE_INPUTS,
         market_inputs={
+            "market_history": qqq_history,
             "benchmark_history": qqq_history,
             "qqq_history": qqq_history,
             "derived_indicators": qqq_history,

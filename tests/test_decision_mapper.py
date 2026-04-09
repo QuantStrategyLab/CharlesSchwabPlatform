@@ -124,6 +124,41 @@ class DecisionMapperTests(unittest.TestCase):
         self.assertEqual(plan["allocation"]["targets"]["MSFT"], 25000.0)
         self.assertEqual(plan["allocation"]["targets"]["BOXX"], 40000.0)
 
+    def test_translates_weight_targets_for_global_etf_rotation(self):
+        snapshot = SimpleNamespace(
+            total_equity=100000.0,
+            buying_power=15000.0,
+            positions=(
+                SimpleNamespace(symbol="VOO", quantity=10, market_value=10000.0),
+                SimpleNamespace(symbol="BIL", quantity=20, market_value=2000.0),
+            ),
+            metadata={"account_hash": "demo"},
+        )
+        decision = StrategyDecision(
+            positions=(
+                PositionTarget(symbol="VGK", target_weight=0.5),
+                PositionTarget(symbol="EWJ", target_weight=0.3),
+                PositionTarget(symbol="BIL", target_weight=0.2, role="safe_haven"),
+            ),
+            diagnostics={
+                "signal_description": "quarterly",
+                "canary_status": "SPY:✅, EFA:✅",
+            },
+        )
+
+        plan = map_strategy_decision_to_plan(
+            decision,
+            snapshot=snapshot,
+            strategy_profile="global_etf_rotation",
+        )
+
+        self.assertEqual(plan["allocation"]["target_mode"], "value")
+        self.assertEqual(plan["allocation"]["targets"]["VGK"], 50000.0)
+        self.assertEqual(plan["allocation"]["targets"]["EWJ"], 30000.0)
+        self.assertEqual(plan["allocation"]["targets"]["BIL"], 20000.0)
+        self.assertEqual(plan["execution"]["signal_display"], "quarterly")
+        self.assertEqual(plan["execution"]["status_display"], "SPY:✅, EFA:✅")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -22,6 +22,7 @@ DEFAULT_STRATEGY_PROFILE = "tqqq_growth_income"
 ROLLBACK_STRATEGY_PROFILE = DEFAULT_STRATEGY_PROFILE
 
 SCHWAB_ROLLOUT_ALLOWLIST = frozenset({
+    "global_etf_rotation",
     "tqqq_growth_income",
     "soxl_soxx_trend_income",
     "qqq_tech_enhancement",
@@ -38,6 +39,7 @@ PLATFORM_CAPABILITY_MATRIX = PlatformCapabilityMatrix(
     supported_inputs=frozenset(
         {
             "benchmark_history",
+            "market_history",
             "portfolio_snapshot",
             "feature_snapshot",
             "derived_indicators",
