@@ -11,10 +11,19 @@ QPK_SRC = ROOT.parent / "QuantPlatformKit" / "src"
 if str(QPK_SRC) not in sys.path:
     sys.path.insert(0, str(QPK_SRC))
 
+from application import rebalance_service
 from application.rebalance_service import run_strategy_core
+from notifications.telegram import build_translator
 
 
 class RebalanceServiceTests(unittest.TestCase):
+    def test_localize_notification_text_for_snapshot_guard_in_zh(self):
+        localized = rebalance_service._localize_notification_text(
+            "fail_closed | reason=feature_snapshot_path_missing",
+            translator=build_translator("zh"),
+        )
+        assert localized == "关闭执行 | 原因=缺少特征快照路径"
+
     def test_run_strategy_core_uses_managed_wrappers(self):
         sent_messages = []
         observed = {}

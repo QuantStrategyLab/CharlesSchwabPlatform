@@ -6,6 +6,28 @@ import time
 
 from quant_platform_kit.common.models import OrderIntent
 
+_ZH_REASON_REPLACEMENTS = (
+    ("feature snapshot guard blocked execution", "特征快照校验阻止执行"),
+    ("feature snapshot required", "需要特征快照"),
+    ("feature snapshot compute failed", "特征快照计算失败"),
+    ("feature_snapshot_download_failed", "特征快照下载失败"),
+    ("feature_snapshot_compute_failed", "特征快照计算失败"),
+    ("feature_snapshot_path_missing", "缺少特征快照路径"),
+    ("feature_snapshot_missing", "特征快照不存在"),
+    ("feature_snapshot_stale", "特征快照过旧"),
+    ("feature_snapshot_manifest_missing", "缺少快照清单"),
+    ("feature_snapshot_profile_mismatch", "快照策略名不匹配"),
+    ("feature_snapshot_config_name_mismatch", "快照配置名不匹配"),
+    ("feature_snapshot_config_path_mismatch", "快照配置路径不匹配"),
+    ("feature_snapshot_contract_version_mismatch", "快照契约版本不匹配"),
+    ("outside_execution_window", "当前不在执行窗口"),
+    ("insufficient_buying_power", "购买力不足"),
+    ("missing_price", "缺少报价"),
+    ("no_equity", "无净值"),
+    ("fail_closed", "关闭执行"),
+    ("reason=", "原因="),
+)
+
 
 def _plan_portfolio(plan):
     return dict(plan.get("portfolio") or {})
@@ -24,6 +46,21 @@ def _has_benchmark_context(execution):
         float(execution.get(key) or 0.0) > 0.0
         for key in ("benchmark_price", "long_trend_value", "exit_line")
     )
+
+
+def _translator_uses_zh(translator) -> bool:
+    sample = str(translator("no_trades"))
+    return any("\u4e00" <= ch <= "\u9fff" for ch in sample)
+
+
+def _localize_notification_text(text, *, translator):
+    value = str(text or "").strip()
+    if not value or not _translator_uses_zh(translator):
+        return value
+    localized = value
+    for source, target in _ZH_REASON_REPLACEMENTS:
+        localized = localized.replace(source, target)
+    return localized
 
 
 def run_strategy_core(
@@ -178,8 +215,8 @@ def run_strategy_core(
         if quantity > 0:
             execute_fire_forget(cash_sweep_symbol, "BUY_MARKET", quantity)
 
-    signal_display = str(execution["signal_display"])
-    status_display = str(execution.get("status_display") or "")
+    signal_display = _localize_notification_text(execution["signal_display"], translator=translator)
+    status_display = _localize_notification_text(execution.get("status_display"), translator=translator)
     dashboard_text = str(execution["dashboard_text"])
     separator = str(execution["separator"])
     total_equity = float(portfolio["total_equity"])
