@@ -24,6 +24,20 @@ class RebalanceServiceTests(unittest.TestCase):
         )
         assert localized == "关闭执行 | 原因=缺少特征快照路径"
 
+    def test_localize_notification_text_for_qqq_tech_diagnostics_in_zh(self):
+        localized = rebalance_service._localize_notification_text(
+            (
+                "regime=soft_defense breadth=41.2% benchmark_trend=down "
+                "target_stock=60.0% realized_stock=60.0% selected=8 top=CIEN(0.92)"
+            ),
+            translator=build_translator("zh"),
+        )
+
+        assert localized == (
+            "市场阶段=软防御 市场宽度=41.2% 基准趋势=向下 "
+            "目标股票仓位=60.0% 实际股票仓位=60.0% 入选标的数=8 前排标的=CIEN(0.92)"
+        )
+
     def test_run_strategy_core_uses_managed_wrappers(self):
         sent_messages = []
         observed = {}
