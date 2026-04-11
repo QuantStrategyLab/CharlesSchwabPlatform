@@ -26,6 +26,7 @@ SCHWAB_ROLLOUT_ALLOWLIST = frozenset({
     "russell_1000_multi_factor_defensive",
     "tqqq_growth_income",
     "soxl_soxx_trend_income",
+    "tech_communication_pullback_enhancement",
     "qqq_tech_enhancement",
 })
 

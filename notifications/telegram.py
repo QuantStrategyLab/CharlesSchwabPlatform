@@ -49,6 +49,7 @@ I18N = {
         "strategy_name_soxl_soxx_trend_income": "SOXL/SOXX 半导体趋势收益",
         "strategy_name_global_etf_rotation": "全球 ETF 轮动",
         "strategy_name_russell_1000_multi_factor_defensive": "罗素1000多因子",
+        "strategy_name_tech_communication_pullback_enhancement": "科技通信回调增强",
         "strategy_name_qqq_tech_enhancement": "科技通信回调增强",
     },
     "en": {
@@ -85,6 +86,7 @@ I18N = {
         "strategy_name_soxl_soxx_trend_income": "SOXL/SOXX Semiconductor Trend Income",
         "strategy_name_global_etf_rotation": "Global ETF Rotation",
         "strategy_name_russell_1000_multi_factor_defensive": "Russell 1000 Multi-Factor",
+        "strategy_name_tech_communication_pullback_enhancement": "Tech/Communication Pullback Enhancement",
         "strategy_name_qqq_tech_enhancement": "Tech/Communication Pullback Enhancement",
     },
 }

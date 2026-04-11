@@ -91,7 +91,7 @@ class DecisionMapperTests(unittest.TestCase):
         self.assertEqual(plan["execution"]["signal_display"], "hold")
         self.assertEqual(plan["execution"]["dashboard_text"], "dashboard")
 
-    def test_translates_weight_targets_for_qqq_tech_enhancement(self):
+    def test_translates_weight_targets_for_tech_communication_pullback_enhancement(self):
         snapshot = SimpleNamespace(
             total_equity=100000.0,
             buying_power=20000.0,
@@ -116,7 +116,7 @@ class DecisionMapperTests(unittest.TestCase):
         plan = map_strategy_decision_to_plan(
             decision,
             snapshot=snapshot,
-            strategy_profile="qqq_tech_enhancement",
+            strategy_profile="tech_communication_pullback_enhancement",
         )
 
         self.assertEqual(plan["allocation"]["target_mode"], "value")

@@ -1,0 +1,44 @@
+{
+  "role": "tech_communication_pullback_enhancement",
+  "status": "research_only",
+  "strategy": "growth_pullback_systematic_v1",
+  "branch_name": "tech_communication_pullback_enhancement",
+  "name": "tech_communication_pullback_enhancement",
+  "previous_candidate_name": "cash_buffer_a__hb10__base__adv50",
+  "family": "tech_heavy_pullback",
+  "universe": "tech_heavy",
+  "normalization": "universe_cross_sectional",
+  "min_adv20_usd": 50000000.0,
+  "sector_whitelist": [
+    "Information Technology",
+    "Communication"
+  ],
+  "symbol_whitelist": [],
+  "notes": "Sector proxy only: Information Technology + Communication; no sub-industry data available",
+  "score_template": "balanced_pullback",
+  "holdings_count": 8,
+  "single_name_cap": 0.1,
+  "sector_cap": 0.4,
+  "hold_bonus": 0.1,
+  "regime": "qqq_breadth",
+  "benchmark_symbol": "QQQ",
+  "breadth_mode": "broad",
+  "breadth_symbols": [],
+  "breadth_thresholds": {
+    "soft": 0.55,
+    "hard": 0.35
+  },
+  "exposures": {
+    "risk_on": 0.8,
+    "soft_defense": 0.6,
+    "hard_defense": 0.0
+  },
+  "execution_cash_reserve_ratio": 0.0,
+  "residual_proxy": "simple_excess_return_vs_QQQ",
+  "cost_assumption_bps_one_way": 5.0,
+  "branch_role": "cash-buffered parallel branch",
+  "canonicalized_from": "growth_pullback_systematic_v1.4 cash_buffer_refinement",
+  "legacy_names": [
+    "qqq_tech_enhancement"
+  ]
+}

@@ -89,23 +89,23 @@ class StrategyLoaderTests(unittest.TestCase):
         self.assertEqual(adapter.portfolio_input_name, "portfolio_snapshot")
         self.assertEqual(adapter.status_icon, "📏")
 
-    def test_load_strategy_entrypoint_resolves_qqq_tech_enhancement(self):
+    def test_load_strategy_entrypoint_resolves_tech_communication_pullback_enhancement(self):
         try:
             from strategy_loader import load_strategy_entrypoint_for_profile
 
-            entrypoint = load_strategy_entrypoint_for_profile("qqq_tech_enhancement")
+            entrypoint = load_strategy_entrypoint_for_profile("tech_communication_pullback_enhancement")
         except ModuleNotFoundError as exc:
             if exc.name in {"numpy", "pandas"}:
                 self.skipTest(f"{exc.name} is not installed")
             raise
 
-        self.assertEqual(entrypoint.manifest.profile, "qqq_tech_enhancement")
+        self.assertEqual(entrypoint.manifest.profile, "tech_communication_pullback_enhancement")
         self.assertEqual(entrypoint.manifest.required_inputs, frozenset({"feature_snapshot"}))
 
     def test_load_strategy_runtime_adapter_supports_tech_on_schwab(self):
         from strategy_loader import load_strategy_runtime_adapter_for_profile
 
-        adapter = load_strategy_runtime_adapter_for_profile("qqq_tech_enhancement")
+        adapter = load_strategy_runtime_adapter_for_profile("tech_communication_pullback_enhancement")
 
         self.assertEqual(
             adapter.available_inputs,
