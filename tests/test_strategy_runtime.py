@@ -34,7 +34,7 @@ class _TechEntrypoint:
     manifest = StrategyManifest(
         profile="qqq_tech_enhancement",
         domain="us_equity",
-        display_name="QQQ Tech Enhancement",
+        display_name="Tech/Communication Pullback Enhancement",
         description="test entrypoint",
         required_inputs=frozenset({"feature_snapshot"}),
         default_config={"safe_haven": "BOXX", "benchmark_symbol": "QQQ"},
@@ -64,7 +64,7 @@ def _build_runtime_settings(profile: str, *, feature_snapshot_path: str | None =
     return PlatformRuntimeSettings(
         strategy_profile=profile,
         strategy_display_name=(
-            "QQQ Tech Enhancement" if profile == "qqq_tech_enhancement" else "TQQQ Growth Income"
+            "Tech/Communication Pullback Enhancement" if profile == "qqq_tech_enhancement" else "TQQQ Growth Income"
         ),
         strategy_domain="us_equity",
         notify_lang="en",

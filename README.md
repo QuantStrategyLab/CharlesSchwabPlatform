@@ -40,7 +40,7 @@ Platform execution no longer depends on `strategy/allocation.py`, hard-coded str
 | `russell_1000_multi_factor_defensive` | Russell 1000 Multi-Factor | Yes | Yes | No | No | `us_equity` | enabled feature-snapshot stock baseline |
 | `tqqq_growth_income` | TQQQ Growth Income | Yes | Yes | Yes | Yes | `us_equity` | current Schwab default |
 | `soxl_soxx_trend_income` | SOXL/SOXX Semiconductor Trend Income | Yes | Yes | No | No | `us_equity` | enabled value-mode alternative |
-| `qqq_tech_enhancement` | QQQ Tech Enhancement | Yes | Yes | No | No | `us_equity` | enabled feature-snapshot tech branch |
+| `qqq_tech_enhancement` | Tech/Communication Pullback Enhancement | Yes | Yes | No | No | `us_equity` | enabled feature-snapshot tech branch |
 
 Check the current matrix locally:
 
