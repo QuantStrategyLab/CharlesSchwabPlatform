@@ -98,26 +98,38 @@ def run_strategy_core(
 ):
     del now_ny
 
+    reference_history = fetch_reference_history(client)
+
+    def load_plan(current_snapshot):
+        current_plan = resolve_rebalance_plan(
+            qqq_history=reference_history,
+            snapshot=current_snapshot,
+        )
+        current_portfolio = _plan_portfolio(current_plan)
+        current_execution = _plan_execution(current_plan)
+        current_allocation = _plan_allocation(current_plan)
+        if current_allocation.get("target_mode") != "value":
+            raise ValueError("CharlesSchwabPlatform requires allocation.target_mode=value")
+        return current_plan, current_portfolio, current_execution, current_allocation
+
+    def load_quotes(symbols):
+        current_quote_snapshots = fetch_managed_quotes(client)
+        return {
+            symbol: {
+                "lastPrice": current_quote_snapshots[symbol].last_price,
+                "askPrice": (
+                    current_quote_snapshots[symbol].ask_price
+                    or current_quote_snapshots[symbol].last_price
+                ),
+            }
+            for symbol in symbols
+        }
+
     snapshot = fetch_managed_snapshot(client)
-    plan = resolve_rebalance_plan(
-        qqq_history=fetch_reference_history(client),
-        snapshot=snapshot,
-    )
-    portfolio = _plan_portfolio(plan)
-    execution = _plan_execution(plan)
-    allocation = _plan_allocation(plan)
-    if allocation.get("target_mode") != "value":
-        raise ValueError("CharlesSchwabPlatform requires allocation.target_mode=value")
+    plan, portfolio, execution, allocation = load_plan(snapshot)
     strategy_symbols = tuple(allocation["strategy_symbols"])
 
-    quote_snapshots = fetch_managed_quotes(client)
-    quotes = {
-        symbol: {
-            "lastPrice": quote_snapshots[symbol].last_price,
-            "askPrice": quote_snapshots[symbol].ask_price or quote_snapshots[symbol].last_price,
-        }
-        for symbol in strategy_symbols
-    }
+    quotes = load_quotes(strategy_symbols)
     trade_logs = []
 
     def execute_fire_forget(symbol, action_type, quantity, price=None):
@@ -224,11 +236,18 @@ def run_strategy_core(
         target = target_values[symbol]
         if current > (target + threshold):
             quantity = int((current - target) // quotes[symbol]["lastPrice"])
-            execute_fire_forget(symbol, "SELL", quantity)
-            sell_executed = True
+            if execute_fire_forget(symbol, "SELL", quantity):
+                sell_executed = True
 
     if sell_executed:
         time.sleep(sell_settle_delay_sec)
+        snapshot = fetch_managed_snapshot(client)
+        plan, portfolio, execution, allocation = load_plan(snapshot)
+        strategy_symbols = tuple(allocation["strategy_symbols"])
+        quotes = load_quotes(strategy_symbols)
+        market_values = dict(portfolio["market_values"])
+        target_values = dict(allocation["targets"])
+        threshold = float(execution["trade_threshold_value"])
 
     liquid_cash = float(portfolio["liquid_cash"])
     reserved_cash = float(execution["reserved_cash"])
