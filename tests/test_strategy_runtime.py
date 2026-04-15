@@ -60,6 +60,21 @@ class _RussellEntrypoint:
         return StrategyDecision(diagnostics={"signal_description": "broad risk on"})
 
 
+class _DynamicMegaLeveragedEntrypoint:
+    manifest = StrategyManifest(
+        profile="dynamic_mega_leveraged_pullback",
+        domain="us_equity",
+        display_name="Dynamic Mega Leveraged Pullback",
+        description="test entrypoint",
+        required_inputs=frozenset({"feature_snapshot", "market_history", "benchmark_history", "portfolio_snapshot"}),
+        default_config={"safe_haven": "BOXX", "benchmark_symbol": "QQQ"},
+    )
+
+    def evaluate(self, ctx):
+        self.ctx = ctx
+        return StrategyDecision(diagnostics={"signal_description": "leveraged pullback"})
+
+
 def _build_runtime_settings(profile: str, *, feature_snapshot_path: str | None = None) -> PlatformRuntimeSettings:
     return PlatformRuntimeSettings(
         strategy_profile=profile,
@@ -238,6 +253,61 @@ class StrategyRuntimeTests(unittest.TestCase):
         self.assertEqual(entrypoint.ctx.market_data["feature_snapshot"][1]["symbol"], "AAPL")
         self.assertEqual(result.metadata["managed_symbols"], ("AAPL", "MSFT", "BOXX"))
         self.assertEqual(result.metadata["status_icon"], "📏")
+
+    def test_feature_snapshot_runtime_keeps_hybrid_inputs_for_dynamic_mega_leveraged_pullback(self):
+        entrypoint = _DynamicMegaLeveragedEntrypoint()
+        runtime = strategy_runtime_module.LoadedStrategyRuntime(
+            entrypoint=entrypoint,
+            runtime_adapter=StrategyRuntimeAdapter(
+                status_icon="2x",
+                required_feature_columns=frozenset({"symbol", "underlying_symbol", "sector", "candidate_rank", "product_leverage", "product_available"}),
+                managed_symbols_extractor=lambda *_args, **_kwargs: ("AAPU", "BOXX"),
+                portfolio_input_name="portfolio_snapshot",
+            ),
+            runtime_settings=_build_runtime_settings(
+                "dynamic_mega_leveraged_pullback",
+                feature_snapshot_path="gs://bucket/dynamic.csv",
+            ),
+            merged_runtime_config={"safe_haven": "BOXX", "benchmark_symbol": "QQQ"},
+            logger=lambda _message: None,
+        )
+
+        def market_history_loader(*_args, **_kwargs):
+            return [1.0, 2.0, 3.0]
+
+        portfolio = object()
+
+        with patch.object(
+            strategy_runtime_module,
+            "load_feature_snapshot_guarded",
+            return_value=SimpleNamespace(
+                frame=[
+                    {
+                        "symbol": "AAPU",
+                        "underlying_symbol": "AAPL",
+                        "sector": "Technology",
+                        "candidate_rank": 1,
+                        "product_leverage": 2.0,
+                        "product_available": True,
+                    }
+                ],
+                metadata={"snapshot_guard_decision": "proceed", "snapshot_as_of": "2026-04-08"},
+            ),
+        ):
+            result = runtime.evaluate(
+                market_history=market_history_loader,
+                benchmark_history=[{"close": 1.0, "high": 1.0, "low": 1.0}],
+                portfolio_snapshot=portfolio,
+                translator=lambda key, **_kwargs: key,
+                signal_text_fn=str,
+            )
+
+        self.assertEqual(entrypoint.ctx.market_data["feature_snapshot"][0]["symbol"], "AAPU")
+        self.assertIs(entrypoint.ctx.market_data["market_history"], market_history_loader)
+        self.assertEqual(entrypoint.ctx.market_data["benchmark_history"][0]["close"], 1.0)
+        self.assertIs(entrypoint.ctx.portfolio, portfolio)
+        self.assertEqual(result.metadata["managed_symbols"], ("AAPU", "BOXX"))
+        self.assertEqual(result.metadata["status_icon"], "2x")
 
 
 if __name__ == "__main__":

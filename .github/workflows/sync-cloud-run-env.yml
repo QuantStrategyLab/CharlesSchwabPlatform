@@ -38,7 +38,7 @@ jobs:
       SCHWAB_API_KEY: ${{ secrets.SCHWAB_API_KEY }}
       SCHWAB_APP_SECRET: ${{ secrets.SCHWAB_APP_SECRET }}
     steps:
-      - name: Check whether env sync is configured
+      - name: Check whether env sync is enabled
         id: config
         run: |
           set -euo pipefail
@@ -48,6 +48,76 @@ jobs:
             echo "Skipping Cloud Run env sync because ENABLE_GITHUB_ENV_SYNC is not set to true." >&2
             exit 0
           fi
+
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout repository
+        if: steps.config.outputs.enabled == 'true'
+        uses: actions/checkout@v4
+
+      - name: Set up Python for strategy requirement resolution
+        if: steps.config.outputs.enabled == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install strategy status dependencies
+        if: steps.config.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Resolve selected strategy runtime requirements
+        id: strategy_requirements
+        if: steps.config.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+          from us_equity_strategies import resolve_canonical_profile
+
+          profile = os.environ.get("STRATEGY_PROFILE", "").strip().lower()
+          if not profile:
+              raise SystemExit("STRATEGY_PROFILE is required")
+          canonical_profile = resolve_canonical_profile(profile)
+
+          raw_status = subprocess.check_output(
+              [sys.executable, "scripts/print_strategy_profile_status.py", "--json"],
+              text=True,
+          )
+          rows = json.loads(raw_status)
+          selected = next((row for row in rows if row["canonical_profile"] == canonical_profile), None)
+          if selected is None:
+              supported = ", ".join(sorted(row["canonical_profile"] for row in rows))
+              raise SystemExit(f"Unsupported STRATEGY_PROFILE={profile!r}; supported: {supported}")
+          if not selected.get("eligible") or not selected.get("enabled"):
+              raise SystemExit(f"STRATEGY_PROFILE={profile!r} is not eligible/enabled: {selected}")
+
+          output_path = os.environ["GITHUB_OUTPUT"]
+          with open(output_path, "a", encoding="utf-8") as output:
+              output.write(
+                  f"requires_snapshot_artifacts={str(bool(selected.get('requires_snapshot_artifacts'))).lower()}\n"
+              )
+              output.write(
+                  f"requires_snapshot_manifest_path={str(bool(selected.get('requires_snapshot_manifest_path'))).lower()}\n"
+              )
+              output.write(
+                  f"requires_strategy_config_path={str(bool(selected.get('requires_strategy_config_path'))).lower()}\n"
+              )
+          PY
+
+      - name: Validate env sync inputs
+        if: steps.config.outputs.enabled == 'true'
+        env:
+          REQUIRES_SNAPSHOT_ARTIFACTS: ${{ steps.strategy_requirements.outputs.requires_snapshot_artifacts }}
+          REQUIRES_SNAPSHOT_MANIFEST_PATH: ${{ steps.strategy_requirements.outputs.requires_snapshot_manifest_path }}
+          REQUIRES_STRATEGY_CONFIG_PATH: ${{ steps.strategy_requirements.outputs.requires_strategy_config_path }}
+        run: |
+          set -euo pipefail
 
           required_vars=(
             CLOUD_RUN_REGION
@@ -75,22 +145,23 @@ jobs:
             missing_vars+=("SCHWAB_APP_SECRET_SECRET_NAME or SCHWAB_APP_SECRET")
           fi
 
-          if { [ "${STRATEGY_PROFILE:-}" = "tech_communication_pullback_enhancement" ] || [ "${STRATEGY_PROFILE:-}" = "qqq_tech_enhancement" ] || [ "${STRATEGY_PROFILE:-}" = "russell_1000_multi_factor_defensive" ] || [ "${STRATEGY_PROFILE:-}" = "mega_cap_leader_rotation_dynamic_top20" ]; } && [ -z "${SCHWAB_FEATURE_SNAPSHOT_PATH:-}" ]; then
+          if [ "${REQUIRES_SNAPSHOT_ARTIFACTS:-}" = "true" ] && [ -z "${SCHWAB_FEATURE_SNAPSHOT_PATH:-}" ]; then
             missing_vars+=("SCHWAB_FEATURE_SNAPSHOT_PATH")
           fi
 
-          if { [ "${STRATEGY_PROFILE:-}" = "tech_communication_pullback_enhancement" ] || [ "${STRATEGY_PROFILE:-}" = "qqq_tech_enhancement" ] || [ "${STRATEGY_PROFILE:-}" = "mega_cap_leader_rotation_dynamic_top20" ]; } && [ -z "${SCHWAB_FEATURE_SNAPSHOT_MANIFEST_PATH:-}" ]; then
+          if [ "${REQUIRES_SNAPSHOT_MANIFEST_PATH:-}" = "true" ] && [ -z "${SCHWAB_FEATURE_SNAPSHOT_MANIFEST_PATH:-}" ]; then
             missing_vars+=("SCHWAB_FEATURE_SNAPSHOT_MANIFEST_PATH")
           fi
 
+          if [ "${REQUIRES_STRATEGY_CONFIG_PATH:-}" = "true" ] && [ -z "${SCHWAB_STRATEGY_CONFIG_PATH:-}" ]; then
+            missing_vars+=("SCHWAB_STRATEGY_CONFIG_PATH")
+          fi
+
           if [ "${#missing_vars[@]}" -gt 0 ]; then
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
             echo "Cloud Run env sync is enabled, but these values are missing:" >&2
             printf '  - %s\n' "${missing_vars[@]}" >&2
             exit 1
           fi
-
-          echo "enabled=true" >> "$GITHUB_OUTPUT"
 
       - name: Authenticate to Google Cloud
         id: auth
