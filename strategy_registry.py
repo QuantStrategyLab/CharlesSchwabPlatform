@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from us_equity_strategies import get_platform_runtime_adapter, get_strategy_catalog
+from us_equity_strategies import (
+    get_platform_runtime_adapter,
+    get_runtime_enabled_profiles,
+    get_strategy_catalog,
+)
 
 from quant_platform_kit.common.strategies import (
     PlatformCapabilityMatrix,
@@ -21,15 +25,7 @@ SCHWAB_PLATFORM = "schwab"
 DEFAULT_STRATEGY_PROFILE = "tqqq_growth_income"
 ROLLBACK_STRATEGY_PROFILE = DEFAULT_STRATEGY_PROFILE
 
-SCHWAB_ROLLOUT_ALLOWLIST = frozenset({
-    "global_etf_rotation",
-    "mega_cap_leader_rotation_dynamic_top20",
-    "russell_1000_multi_factor_defensive",
-    "tqqq_growth_income",
-    "soxl_soxx_trend_income",
-    "tech_communication_pullback_enhancement",
-    "qqq_tech_enhancement",
-})
+SCHWAB_ROLLOUT_ALLOWLIST = get_runtime_enabled_profiles()
 
 PLATFORM_SUPPORTED_DOMAINS: dict[str, frozenset[str]] = {
     SCHWAB_PLATFORM: frozenset({US_EQUITY_DOMAIN}),

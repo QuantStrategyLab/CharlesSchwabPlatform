@@ -171,10 +171,24 @@ def persist_execution_report(report):
 # Strategy execution
 # ---------------------------------------------------------------------------
 def fetch_reference_history(client):
-    if "feature_snapshot" in AVAILABLE_INPUTS:
+    if "feature_snapshot" in AVAILABLE_INPUTS and not (
+        {"market_history", "benchmark_history", "qqq_history", "derived_indicators", "indicators"}
+        & AVAILABLE_INPUTS
+    ):
         return {}
     if "market_history" in AVAILABLE_INPUTS:
-        return build_market_history_loader(client)
+        market_inputs = {"market_history": build_market_history_loader(client)}
+        if "benchmark_history" in AVAILABLE_INPUTS:
+            market_inputs["benchmark_history"] = fetch_default_daily_price_history_candles(
+                client,
+                BENCHMARK_SYMBOL,
+            )
+        if "qqq_history" in AVAILABLE_INPUTS:
+            market_inputs["qqq_history"] = fetch_default_daily_price_history_candles(
+                client,
+                BENCHMARK_SYMBOL,
+            )
+        return market_inputs
     if "benchmark_history" in AVAILABLE_INPUTS or "qqq_history" in AVAILABLE_INPUTS:
         return fetch_default_daily_price_history_candles(client, BENCHMARK_SYMBOL)
     if "derived_indicators" in AVAILABLE_INPUTS or "indicators" in AVAILABLE_INPUTS:
@@ -246,15 +260,20 @@ def resolve_rebalance_plan(*, qqq_history, snapshot):
     account_state = None
     if "account_state" in AVAILABLE_INPUTS:
         account_state = build_account_state_from_snapshot(snapshot)
+    market_inputs = {
+        "market_history": qqq_history,
+        "benchmark_history": qqq_history,
+        "qqq_history": qqq_history,
+        "derived_indicators": qqq_history,
+        "indicators": qqq_history,
+    }
+    if isinstance(qqq_history, dict) and any(
+        key in qqq_history for key in ("market_history", "benchmark_history", "qqq_history")
+    ):
+        market_inputs.update(qqq_history)
     evaluation_inputs = build_strategy_evaluation_inputs(
         available_inputs=AVAILABLE_INPUTS,
-        market_inputs={
-            "market_history": qqq_history,
-            "benchmark_history": qqq_history,
-            "qqq_history": qqq_history,
-            "derived_indicators": qqq_history,
-            "indicators": qqq_history,
-        },
+        market_inputs=market_inputs,
         portfolio_snapshot=snapshot,
         account_state=account_state,
         translator=t,
