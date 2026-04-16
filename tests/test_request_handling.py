@@ -243,7 +243,7 @@ class RequestHandlingTests(unittest.TestCase):
             if symbol == "SOXL":
                 return [{"close": 100.0 + idx} for idx in range(160)]
             if symbol == "SOXX":
-                return [{"close": 210.0 + idx} for idx in range(20)]
+                return [{"close": 210.0 + idx} for idx in range(160)]
             raise AssertionError(f"unexpected symbol {symbol}")
 
         module.fetch_default_daily_price_history_candles = fake_history
@@ -252,7 +252,10 @@ class RequestHandlingTests(unittest.TestCase):
 
         self.assertEqual(indicators["soxl"]["price"], 259.0)
         self.assertAlmostEqual(indicators["soxl"]["ma_trend"], sum(100.0 + idx for idx in range(10, 160)) / 150)
-        self.assertEqual(indicators["soxx"]["price"], 229.0)
+        self.assertEqual(indicators["soxx"]["price"], 369.0)
+        self.assertAlmostEqual(indicators["soxx"]["ma_trend"], sum(210.0 + idx for idx in range(10, 160)) / 150)
+        self.assertAlmostEqual(indicators["soxx"]["ma20"], sum(210.0 + idx for idx in range(140, 160)) / 20)
+        self.assertGreater(indicators["soxx"]["ma20_slope"], 0.0)
 
 
 if __name__ == "__main__":

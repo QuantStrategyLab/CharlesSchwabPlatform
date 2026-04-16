@@ -244,18 +244,28 @@ def build_semiconductor_indicators(client, *, trend_window: int) -> dict[str, di
         raise RuntimeError(
             f"SOXL history has {len(soxl_history)} candles; need at least {trend_window}"
         )
-    if not soxx_history:
-        raise RuntimeError("SOXX history response is empty")
+    if len(soxx_history) < trend_window:
+        raise RuntimeError(
+            f"SOXX history has {len(soxx_history)} candles; need at least {trend_window}"
+        )
 
     soxl_closes = [float(candle["close"]) for candle in soxl_history[-trend_window:]]
-    soxx_close = float(soxx_history[-1]["close"])
+    soxx_all_closes = [float(candle["close"]) for candle in soxx_history]
+    soxx_trend_closes = soxx_all_closes[-trend_window:]
+    soxx_ma20_closes = soxx_all_closes[-20:]
+    previous_soxx_ma20_closes = soxx_all_closes[-21:-1]
+    soxx_ma20 = sum(soxx_ma20_closes) / 20
+    previous_soxx_ma20 = sum(previous_soxx_ma20_closes) / 20 if len(previous_soxx_ma20_closes) == 20 else soxx_ma20
     return {
         "soxl": {
             "price": soxl_closes[-1],
             "ma_trend": sum(soxl_closes) / trend_window,
         },
         "soxx": {
-            "price": soxx_close,
+            "price": soxx_all_closes[-1],
+            "ma_trend": sum(soxx_trend_closes) / trend_window,
+            "ma20": soxx_ma20,
+            "ma20_slope": soxx_ma20 - previous_soxx_ma20,
         },
     }
 
