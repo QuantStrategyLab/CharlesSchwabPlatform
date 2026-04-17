@@ -13,7 +13,9 @@ requests_stub = types.ModuleType("requests")
 requests_stub.post = lambda *args, **kwargs: None
 
 with patch.dict(sys.modules, {"requests": requests_stub}):
-    from notifications.telegram import build_sender, build_signal_text, build_translator
+    from notifications.telegram import build_sender, build_signal_text, build_strategy_display_name, build_translator
+
+from strategy_registry import SUPPORTED_STRATEGY_PROFILES
 
 
 class FakeRequests:
@@ -29,6 +31,25 @@ class NotificationTests(unittest.TestCase):
     def test_build_translator_supports_chinese(self):
         translate = build_translator("zh")
         self.assertEqual(translate("equity"), "净值")
+        self.assertEqual(translate("market_status_blend_gate_risk_on", asset="SOXX+SOXL"), "🚀 风险开启（SOXX+SOXL）")
+        self.assertEqual(
+            translate(
+                "signal_blend_gate_risk_on",
+                trend_symbol="SOXX",
+                window=140,
+                soxl_ratio="70.0%",
+                soxx_ratio="20.0%",
+            ),
+            "SOXX 站上 140 日门槛线，持有 SOXL 70.0% + SOXX 20.0%",
+        )
+
+    def test_supported_strategy_profiles_have_translated_names(self):
+        zh_name = build_strategy_display_name(build_translator("zh"))
+        en_name = build_strategy_display_name(build_translator("en"))
+
+        for profile in SUPPORTED_STRATEGY_PROFILES:
+            self.assertNotEqual(zh_name(profile), profile)
+            self.assertNotEqual(en_name(profile), profile)
 
     def test_build_signal_text_formats_icon_and_label(self):
         signal_text = build_signal_text(build_translator("en"))
