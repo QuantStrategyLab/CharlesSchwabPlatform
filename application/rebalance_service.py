@@ -224,6 +224,8 @@ def _build_compact_trade_message(
     strategy_display_name,
     dry_run_only,
     extra_notification_block,
+    dashboard_text,
+    separator,
     status_display,
     signal_display,
     trade_logs,
@@ -236,6 +238,10 @@ def _build_compact_trade_message(
         lines.append(translator("dry_run_banner"))
     if extra_notification_block:
         lines.extend(line for line in extra_notification_block.splitlines() if line.strip())
+    dashboard = str(dashboard_text or "").strip()
+    if dashboard:
+        lines.append(separator)
+        lines.extend(line for line in dashboard.splitlines() if line.strip())
     status_summary = _first_detail_line(status_display)
     if status_summary:
         lines.append(f"📊 {status_summary}")
@@ -253,6 +259,8 @@ def _build_compact_heartbeat_message(
     dry_run_only,
     extra_notification_block,
     total_equity,
+    dashboard_text,
+    separator,
     status_display,
     signal_display,
 ) -> str:
@@ -265,6 +273,10 @@ def _build_compact_heartbeat_message(
         lines.append(translator("dry_run_banner"))
     if extra_notification_block:
         lines.extend(line for line in extra_notification_block.splitlines() if line.strip())
+    dashboard = str(dashboard_text or "").strip()
+    if dashboard:
+        lines.append(separator)
+        lines.extend(line for line in dashboard.splitlines() if line.strip())
     status_summary = _first_detail_line(status_display)
     if status_summary:
         lines.append(f"📊 {status_summary}")
@@ -600,6 +612,8 @@ def run_strategy_core(
             strategy_display_name=strategy_display_name,
             dry_run_only=dry_run_only,
             extra_notification_block=extra_notification_block,
+            dashboard_text=dashboard_text,
+            separator=separator,
             status_display=status_display,
             signal_display=signal_display,
             trade_logs=trade_logs,
@@ -608,14 +622,20 @@ def run_strategy_core(
         send_tg_message(compact_trade_message)
     else:
         holdings_lines = _format_holdings_lines(portfolio_rows, market_values, translator=translator)
+        if dashboard_block:
+            portfolio_block = dashboard_block
+        else:
+            portfolio_block = (
+                f"💰 {translator('equity')}: ${total_equity:,.2f}\n"
+                f"{separator}\n"
+                + "\n".join(holdings_lines) + "\n"
+                f"{separator}\n"
+            )
         detailed_no_trade_message = (
             f"{translator('heartbeat_header')}\n"
             f"{translator('strategy_label', name=strategy_display_name)}\n"
             f"{extra_notification_block}"
-            f"💰 {translator('equity')}: ${total_equity:,.2f}\n"
-            f"{separator}\n"
-            + "\n".join(holdings_lines) + "\n"
-            f"{separator}\n"
+            f"{portfolio_block}"
             f"{status_line}"
             f"{heartbeat_signal_block}\n"
             f"{benchmark_block}"
@@ -628,6 +648,8 @@ def run_strategy_core(
             dry_run_only=dry_run_only,
             extra_notification_block=extra_notification_block,
             total_equity=total_equity,
+            dashboard_text=dashboard_text,
+            separator=separator,
             status_display=status_display,
             signal_display=signal_display,
         )

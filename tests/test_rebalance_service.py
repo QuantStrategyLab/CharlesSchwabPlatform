@@ -275,6 +275,7 @@ class RebalanceServiceTests(unittest.TestCase):
 
         self.assertTrue(sent_messages)
         self.assertIn("strategy=TQQQ Growth Income", sent_messages[0])
+        self.assertIn("dashboard", sent_messages[0])
 
     def test_run_strategy_core_adds_plugin_context_to_heartbeat(self):
         sent_messages = []
@@ -315,7 +316,7 @@ class RebalanceServiceTests(unittest.TestCase):
                 "trade_threshold_value": 500.0,
                 "reserved_cash": 0.0,
                 "signal_display": "Hold",
-                "dashboard_text": "",
+                "dashboard_text": "strategy dashboard",
                 "separator": "-----",
                 "benchmark_symbol": "QQQ",
                 "benchmark_price": 0.0,
@@ -360,6 +361,7 @@ class RebalanceServiceTests(unittest.TestCase):
             "Plugin crisis_response_shadow [shadow] no_action -> monitor",
             sent_messages[0],
         )
+        self.assertIn("strategy dashboard", sent_messages[0])
         self.assertIn("no trades", sent_messages[0])
 
     def test_run_strategy_core_refreshes_buying_power_after_sell_before_buying(self):
