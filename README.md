@@ -128,6 +128,7 @@ Important:
 - The current strategy domain is `us_equity`, and the repo now keeps a thin strategy registry so future expansion can grow by domain + profile instead of mixing strategy and platform in one layer.
 - `INCOME_THRESHOLD_USD`, `QQQI_INCOME_RATIO`, and `DUAL_DRIVE_UNLEVERED_SYMBOL` are optional in env sync. Leave them unset to inherit the `UsEquityStrategies` profile defaults; the current `tqqq_growth_income` live default is the no-income QQQ/TQQQ dual-drive mode. Set `DUAL_DRIVE_UNLEVERED_SYMBOL=QQQM` when the Schwab account should trade QQQM instead of whole-share QQQ.
 - GitHub now authenticates to Google Cloud with OIDC + Workload Identity Federation. `GCP_SA_KEY` is no longer required for this workflow.
+- If you deploy with `gcloud run deploy --source` or a Cloud Run source trigger, also grant `roles/storage.objectViewer` on `gs://run-sources-<project>-<region>` to the build service account, the deploy service account, and the default compute service account. Without that bucket access, source deploy fails before Cloud Build starts with `storage.objects.get` denied.
 - The Telegram token and Schwab API credentials should live in Secret Manager and be referenced by the secret-name variables above. Across multiple quant repos, only `GLOBAL_TELEGRAM_CHAT_ID` and `NOTIFY_LANG` are good cross-project shared settings.
 
 ### Deployment unit and naming
@@ -238,6 +239,7 @@ Schwab OAuth token payload 当前从 Secret Manager 的 `schwab_token` 里读取
 - 当前策略域是 `us_equity`，本地策略注册表只用于域和 profile 校验。
 - `INCOME_THRESHOLD_USD`、`QQQI_INCOME_RATIO` 和 `DUAL_DRIVE_UNLEVERED_SYMBOL` 在 env-sync 里是可选项。不填时会继承 `UsEquityStrategies` 的 profile 默认值；当前 `tqqq_growth_income` 实盘默认是不带收入层的 QQQ/TQQQ 双轮模式。Schwab 小账户需要用 QQQM 替代整股 QQQ 时，设置 `DUAL_DRIVE_UNLEVERED_SYMBOL=QQQM`。
 - GitHub 现在通过 OIDC + Workload Identity Federation 登录 Google Cloud，这个 workflow 不再需要 `GCP_SA_KEY`。
+- 如果你用 `gcloud run deploy --source` 或 Cloud Run source trigger 部署，还要确保 `gs://run-sources-<project>-<region>` 这个 staging bucket 给 build service account、deploy service account、默认 compute service account 都加上 `roles/storage.objectViewer`。少了这层权限，会在 Cloud Build 启动前直接报 `storage.objects.get denied`。
 - Telegram token 和 Schwab API 凭据建议放到 Secret Manager，并通过上面的 secret-name 变量引用。对多个 quant 仓库来说，真正适合跨项目共享的通常只有 `GLOBAL_TELEGRAM_CHAT_ID` 和 `NOTIFY_LANG`。
 
 ### 部署单元和命名建议
