@@ -72,10 +72,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             frozenset(
                 {
                     SAMPLE_STRATEGY_PROFILE,
-                    "dynamic_mega_leveraged_pullback",
                     "global_etf_rotation",
-                    "mega_cap_leader_rotation_aggressive",
-                    "mega_cap_leader_rotation_dynamic_top20",
                     "mega_cap_leader_rotation_top50_balanced",
                     "russell_1000_multi_factor_defensive",
                     "soxl_soxx_trend_income",
@@ -157,7 +154,6 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIn("global_etf_rotation", by_profile)
         self.assertIn("russell_1000_multi_factor_defensive", by_profile)
         self.assertIn("tech_communication_pullback_enhancement", by_profile)
-        self.assertIn("mega_cap_leader_rotation_dynamic_top20", by_profile)
         self.assertIn("mega_cap_leader_rotation_top50_balanced", by_profile)
 
     def test_platform_profile_status_matrix_matches_current_schwab_rollout(self):
@@ -218,7 +214,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             "Mega Cap Leader Rotation Dynamic Top20",
         )
         self.assertTrue(by_profile["mega_cap_leader_rotation_dynamic_top20"]["eligible"])
-        self.assertTrue(by_profile["mega_cap_leader_rotation_dynamic_top20"]["enabled"])
+        self.assertFalse(by_profile["mega_cap_leader_rotation_dynamic_top20"]["enabled"])
         self.assertEqual(
             by_profile["mega_cap_leader_rotation_top50_balanced"]["display_name"],
             "Mega Cap Leader Rotation Top50 Balanced",
@@ -230,7 +226,9 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             "Dynamic Mega Leveraged Pullback",
         )
         self.assertTrue(by_profile["dynamic_mega_leveraged_pullback"]["eligible"])
-        self.assertTrue(by_profile["dynamic_mega_leveraged_pullback"]["enabled"])
+        self.assertFalse(by_profile["dynamic_mega_leveraged_pullback"]["enabled"])
+        self.assertTrue(by_profile["mega_cap_leader_rotation_aggressive"]["eligible"])
+        self.assertFalse(by_profile["mega_cap_leader_rotation_aggressive"]["enabled"])
 
     def test_print_strategy_profile_status_json_matches_registry(self):
         result = subprocess.run(
@@ -267,21 +265,13 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(by_profile["tech_communication_pullback_enhancement"]["input_mode"], "feature_snapshot")
         self.assertTrue(by_profile["tech_communication_pullback_enhancement"]["requires_snapshot_artifacts"])
         self.assertTrue(by_profile["tech_communication_pullback_enhancement"]["requires_strategy_config_path"])
-        self.assertEqual(by_profile["mega_cap_leader_rotation_dynamic_top20"]["profile_group"], "snapshot_backed")
-        self.assertEqual(by_profile["mega_cap_leader_rotation_dynamic_top20"]["input_mode"], "feature_snapshot")
-        self.assertTrue(by_profile["mega_cap_leader_rotation_dynamic_top20"]["requires_snapshot_artifacts"])
-        self.assertFalse(by_profile["mega_cap_leader_rotation_dynamic_top20"]["requires_strategy_config_path"])
+        self.assertFalse(by_profile["mega_cap_leader_rotation_dynamic_top20"]["enabled"])
+        self.assertFalse(by_profile["mega_cap_leader_rotation_aggressive"]["enabled"])
+        self.assertFalse(by_profile["dynamic_mega_leveraged_pullback"]["enabled"])
         self.assertEqual(by_profile["mega_cap_leader_rotation_top50_balanced"]["profile_group"], "snapshot_backed")
         self.assertEqual(by_profile["mega_cap_leader_rotation_top50_balanced"]["input_mode"], "feature_snapshot")
         self.assertTrue(by_profile["mega_cap_leader_rotation_top50_balanced"]["requires_snapshot_artifacts"])
         self.assertFalse(by_profile["mega_cap_leader_rotation_top50_balanced"]["requires_strategy_config_path"])
-        self.assertEqual(by_profile["dynamic_mega_leveraged_pullback"]["profile_group"], "snapshot_backed")
-        self.assertEqual(
-            by_profile["dynamic_mega_leveraged_pullback"]["input_mode"],
-            "feature_snapshot+market_history+benchmark_history+portfolio_snapshot",
-        )
-        self.assertTrue(by_profile["dynamic_mega_leveraged_pullback"]["requires_snapshot_artifacts"])
-        self.assertFalse(by_profile["dynamic_mega_leveraged_pullback"]["requires_strategy_config_path"])
         self.assertFalse(
             by_profile["russell_1000_multi_factor_defensive"]["requires_strategy_config_path"]
         )
@@ -369,27 +359,15 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(settings.strategy_config_source, "env")
 
 
-    def test_print_strategy_switch_env_plan_for_mega_cap_dynamic_top20(self):
+    def test_print_strategy_switch_env_plan_rejects_archived_mega_cap_dynamic_top20(self):
         result = subprocess.run(
             [sys.executable, str(SWITCH_PLAN_SCRIPT_PATH), "--profile", "mega_cap_leader_rotation_dynamic_top20", "--json"],
-            check=True,
             capture_output=True,
             text=True,
         )
 
-        plan = json.loads(result.stdout)
-        self.assertEqual(plan["canonical_profile"], "mega_cap_leader_rotation_dynamic_top20")
-        self.assertEqual(plan["profile_group"], "snapshot_backed")
-        self.assertEqual(plan["input_mode"], "feature_snapshot")
-        self.assertTrue(plan["requires_snapshot_artifacts"])
-        self.assertFalse(plan["requires_strategy_config_path"])
-        self.assertEqual(plan["set_env"]["SCHWAB_FEATURE_SNAPSHOT_PATH"], "<required>")
-        self.assertEqual(plan["set_env"]["SCHWAB_FEATURE_SNAPSHOT_MANIFEST_PATH"], "<required>")
-        self.assertIn("SCHWAB_STRATEGY_CONFIG_PATH", plan["remove_if_present"])
-        self.assertEqual(
-            plan["hints"]["feature_snapshot_filename"],
-            "mega_cap_leader_rotation_dynamic_top20_feature_snapshot_latest.csv",
-        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Unsupported STRATEGY_PROFILE", result.stderr)
 
     def test_print_strategy_switch_env_plan_for_mega_cap_top50_balanced(self):
         result = subprocess.run(
@@ -412,31 +390,15 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             "mega_cap_leader_rotation_top50_balanced_feature_snapshot_latest.csv",
         )
 
-    def test_print_strategy_switch_env_plan_for_dynamic_mega_leveraged_pullback(self):
+    def test_print_strategy_switch_env_plan_rejects_archived_dynamic_mega_leveraged_pullback(self):
         result = subprocess.run(
             [sys.executable, str(SWITCH_PLAN_SCRIPT_PATH), "--profile", "dynamic_mega_leveraged_pullback", "--json"],
-            check=True,
             capture_output=True,
             text=True,
         )
 
-        plan = json.loads(result.stdout)
-        self.assertEqual(plan["canonical_profile"], "dynamic_mega_leveraged_pullback")
-        self.assertEqual(plan["profile_group"], "snapshot_backed")
-        self.assertEqual(
-            plan["input_mode"],
-            "feature_snapshot+market_history+benchmark_history+portfolio_snapshot",
-        )
-        self.assertTrue(plan["requires_snapshot_artifacts"])
-        self.assertFalse(plan["requires_strategy_config_path"])
-        self.assertEqual(plan["set_env"]["SCHWAB_FEATURE_SNAPSHOT_PATH"], "<required>")
-        self.assertEqual(plan["set_env"]["SCHWAB_FEATURE_SNAPSHOT_MANIFEST_PATH"], "<required>")
-        self.assertIn("SCHWAB_DRY_RUN_ONLY", plan["optional_env"])
-        self.assertIn("SCHWAB_STRATEGY_CONFIG_PATH", plan["remove_if_present"])
-        self.assertEqual(
-            plan["hints"]["feature_snapshot_filename"],
-            "dynamic_mega_leveraged_pullback_feature_snapshot_latest.csv",
-        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Unsupported STRATEGY_PROFILE", result.stderr)
 
 
 
