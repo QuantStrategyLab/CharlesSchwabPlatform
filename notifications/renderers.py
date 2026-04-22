@@ -105,6 +105,23 @@ def _localize_notification_text(text, *, translator):
     return localized
 
 
+def _localize_timing_contract(contract: str, *, translator) -> str:
+    value = str(contract or "").strip()
+    if not value:
+        return ""
+    if value == "same_trading_day":
+        return "当日执行" if _translator_uses_zh(translator) else "same trading day"
+    if value == "next_trading_day":
+        return "次一交易日执行" if _translator_uses_zh(translator) else "next trading day"
+    match = re.fullmatch(r"next_(\d+)_trading_days", value)
+    if match:
+        count = int(match.group(1))
+        if _translator_uses_zh(translator):
+            return f"{count}个交易日后执行"
+        return f"next {count} trading days"
+    return _localize_notification_text(value, translator=translator)
+
+
 def _split_detail_segment(text: str) -> list[str]:
     value = str(text or "").strip()
     if not value:
@@ -196,12 +213,13 @@ def _build_timing_audit_lines(execution, *, translator) -> list[str]:
     if not signal_date and not effective_date and not contract:
         return []
     label = "⏱ 执行时点" if _translator_uses_zh(translator) else "⏱ Timing"
+    localized_contract = _localize_timing_contract(contract, translator=translator)
     if signal_date and effective_date:
         value = f"{signal_date} -> {effective_date}"
     else:
-        value = signal_date or effective_date or contract
-    if contract and contract not in value:
-        value = f"{value} ({contract})" if value else contract
+        value = signal_date or effective_date or localized_contract
+    if localized_contract and localized_contract not in value:
+        value = f"{value} ({localized_contract})" if value else localized_contract
     return [f"{label}: {value}"]
 
 
