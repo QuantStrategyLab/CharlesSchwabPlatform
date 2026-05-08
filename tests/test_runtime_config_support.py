@@ -46,6 +46,8 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(settings.strategy_domain, US_EQUITY_DOMAIN)
         self.assertEqual(settings.notify_lang, DEFAULT_NOTIFY_LANG)
         self.assertFalse(settings.dry_run_only)
+        self.assertEqual(settings.runtime_target.platform_id, "schwab")
+        self.assertEqual(settings.runtime_target.execution_mode, "live")
         self.assertEqual(settings.reserved_cash_floor_usd, DEFAULT_RESERVED_CASH_FLOOR_USD)
         self.assertEqual(settings.reserved_cash_ratio, DEFAULT_RESERVED_CASH_RATIO)
         self.assertIsNone(settings.feature_snapshot_path)
@@ -53,6 +55,28 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIsNone(settings.strategy_config_path)
         self.assertIsNone(settings.strategy_config_source)
         self.assertIsNone(settings.strategy_plugin_mounts_json)
+
+    def test_defaults_prefers_runtime_target_json(self):
+        with patch.dict(
+            os.environ,
+            {
+                "STRATEGY_PROFILE": SAMPLE_STRATEGY_PROFILE,
+                "RUNTIME_TARGET_JSON": (
+                    '{"platform_id":"schwab","strategy_profile":"global_etf_rotation",'
+                    '"dry_run_only":true,"service_name":"charles-schwab-quant-service",'
+                    '"execution_mode":"paper"}'
+                ),
+            },
+            clear=True,
+        ):
+            settings = load_platform_runtime_settings()
+
+        self.assertEqual(settings.strategy_profile, "global_etf_rotation")
+        self.assertEqual(settings.runtime_target.strategy_profile, "global_etf_rotation")
+        self.assertEqual(settings.runtime_target.platform_id, "schwab")
+        self.assertTrue(settings.runtime_target.dry_run_only)
+        self.assertEqual(settings.runtime_target.execution_mode, "paper")
+        self.assertEqual(settings.runtime_target.service_name, "charles-schwab-quant-service")
 
     def test_requires_strategy_profile(self):
         with patch.dict(os.environ, {}, clear=True):
@@ -76,6 +100,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             frozenset(
                 {
                     SAMPLE_STRATEGY_PROFILE,
+                    "global_etf_confidence_vol_gate",
                     "global_etf_rotation",
                     "mega_cap_leader_rotation_top50_balanced",
                     "russell_1000_multi_factor_defensive",
@@ -91,6 +116,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             frozenset(
                 {
                     SAMPLE_STRATEGY_PROFILE,
+                    "global_etf_confidence_vol_gate",
                     "global_etf_rotation",
                     "mega_cap_leader_rotation_top50_balanced",
                     "russell_1000_multi_factor_defensive",
@@ -192,6 +218,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             set(by_profile),
             {
                 "tqqq_growth_income",
+                "global_etf_confidence_vol_gate",
                 "global_etf_rotation",
                 "mega_cap_leader_rotation_top50_balanced",
                 "russell_1000_multi_factor_defensive",
@@ -318,6 +345,10 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(plan["canonical_profile"], "global_etf_rotation")
         self.assertTrue(plan["eligible"])
         self.assertTrue(plan["enabled"])
+        self.assertEqual(plan["runtime_target"]["platform_id"], "schwab")
+        self.assertEqual(plan["runtime_target"]["strategy_profile"], "global_etf_rotation")
+        self.assertEqual(plan["runtime_target"]["service_name"], "charles-schwab-quant-service")
+        self.assertEqual(plan["runtime_target"]["execution_mode"], "live")
         self.assertEqual(plan["profile_group"], "direct_runtime_inputs")
         self.assertEqual(plan["input_mode"], "market_history")
         self.assertFalse(plan["requires_snapshot_artifacts"])

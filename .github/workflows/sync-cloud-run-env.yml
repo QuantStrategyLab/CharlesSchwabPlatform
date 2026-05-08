@@ -113,6 +113,18 @@ jobs:
               output.write(
                   f"config_source_policy={str(selected.get('config_source_policy') or 'none')}\n"
               )
+              dry_run_only = os.environ.get("SCHWAB_DRY_RUN_ONLY", "").strip().lower() == "true"
+              runtime_target = {
+                  "platform_id": "schwab",
+                  "strategy_profile": canonical_profile,
+                  "dry_run_only": dry_run_only,
+                  "deployment_selector": None,
+                  "account_selector": [],
+                  "account_scope": None,
+                  "service_name": os.environ.get("CLOUD_RUN_SERVICE", "").strip() or None,
+                  "execution_mode": "paper" if dry_run_only else "live",
+              }
+              output.write(f"runtime_target_json={json.dumps(runtime_target, sort_keys=True)}\n")
           PY
 
       - name: Validate env sync inputs
@@ -122,6 +134,7 @@ jobs:
           REQUIRES_SNAPSHOT_MANIFEST_PATH: ${{ steps.strategy_requirements.outputs.requires_snapshot_manifest_path }}
           REQUIRES_STRATEGY_CONFIG_PATH: ${{ steps.strategy_requirements.outputs.requires_strategy_config_path }}
           CONFIG_SOURCE_POLICY: ${{ steps.strategy_requirements.outputs.config_source_policy }}
+          RUNTIME_TARGET_JSON: ${{ steps.strategy_requirements.outputs.runtime_target_json }}
         run: |
           set -euo pipefail
 
@@ -163,6 +176,10 @@ jobs:
             && [ "${CONFIG_SOURCE_POLICY:-}" = "env_only" ] \
             && [ -z "${SCHWAB_STRATEGY_CONFIG_PATH:-}" ]; then
             missing_vars+=("SCHWAB_STRATEGY_CONFIG_PATH")
+          fi
+
+          if [ -z "${RUNTIME_TARGET_JSON:-}" ]; then
+            missing_vars+=("RUNTIME_TARGET_JSON")
           fi
 
           if [ "${#missing_vars[@]}" -gt 0 ]; then
@@ -219,6 +236,7 @@ jobs:
             "GLOBAL_TELEGRAM_CHAT_ID=${GLOBAL_TELEGRAM_CHAT_ID}"
             "NOTIFY_LANG=${NOTIFY_LANG}"
             "STRATEGY_PROFILE=${STRATEGY_PROFILE}"
+            "RUNTIME_TARGET_JSON=${RUNTIME_TARGET_JSON}"
           )
           secret_pairs=()
           remove_env_vars=(

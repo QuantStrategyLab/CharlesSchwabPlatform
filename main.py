@@ -209,6 +209,7 @@ def build_composer():
         env_reader=os.getenv,
         sleeper=time.sleep,
         printer=print,
+        runtime_target=RUNTIME_SETTINGS.runtime_target,
     )
 
 

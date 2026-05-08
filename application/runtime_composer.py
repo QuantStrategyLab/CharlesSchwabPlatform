@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from application.runtime_dependencies import SchwabRebalanceConfig, SchwabRebalanceRuntime
 from application.runtime_notification_adapters import build_runtime_notification_adapters
 from application.runtime_reporting_adapters import build_runtime_reporting_adapters
+from quant_platform_kit.common import build_runtime_assembly, build_runtime_context_fields
+from quant_platform_kit.common.runtime_target import RuntimeTarget
 from notifications.telegram import build_sender
 
 
@@ -48,6 +50,8 @@ class SchwabRuntimeComposer:
     sender_builder: Callable[..., Callable[[str], None]] = build_sender
     notification_builder: Callable[..., Any] = build_runtime_notification_adapters
     reporting_builder: Callable[..., Any] = build_runtime_reporting_adapters
+    runtime_target: RuntimeTarget | None = None
+    extra_reporting_fields: dict[str, Any] = field(default_factory=dict)
 
     def send_tg_message(self, message: str) -> None:
         sender = self.sender_builder(self.tg_token, self.tg_chat_id)
@@ -60,17 +64,24 @@ class SchwabRuntimeComposer:
         )
 
     def build_reporting_adapters(self):
-        return self.reporting_builder(
+        runtime_assembly = build_runtime_assembly(
             platform="charles_schwab",
             deploy_target="cloud_run",
             service_name=self.service_name,
             strategy_profile=self.strategy_profile,
-            strategy_domain=self.strategy_domain,
+            runtime_target=self.runtime_target,
             project_id=self.project_id,
-            extra_context_fields={
-                "strategy_display_name": self.strategy_display_name,
-                "strategy_display_name_localized": self.strategy_display_name_localized,
-            },
+            extra_context_fields=build_runtime_context_fields(
+                {
+                    "strategy_display_name": self.strategy_display_name,
+                    "strategy_display_name_localized": self.strategy_display_name_localized,
+                    **dict(self.extra_reporting_fields),
+                },
+            ),
+        )
+        return self.reporting_builder(
+            runtime_assembly=runtime_assembly,
+            strategy_domain=self.strategy_domain,
             managed_symbols=self.managed_symbols,
             benchmark_symbol=self.benchmark_symbol,
             strategy_display_name=self.strategy_display_name,
@@ -169,6 +180,8 @@ def build_runtime_composer(
     env_reader: Callable[[str, str], str | None],
     sleeper: Callable[[float], None] | None = None,
     printer: Callable[..., Any] = print,
+    extra_reporting_fields: dict[str, Any] | None = None,
+    runtime_target: RuntimeTarget | None = None,
 ) -> SchwabRuntimeComposer:
     return SchwabRuntimeComposer(
         project_id=project_id,
@@ -202,4 +215,6 @@ def build_runtime_composer(
         env_reader=env_reader,
         sleeper=sleeper,
         printer=printer,
+        runtime_target=runtime_target,
+        extra_reporting_fields=dict(extra_reporting_fields or {}),
     )

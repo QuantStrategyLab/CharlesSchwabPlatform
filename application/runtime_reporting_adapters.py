@@ -7,7 +7,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from quant_platform_kit.common import RuntimeAssembly
 from quant_platform_kit.strategy_contracts import build_execution_timing_metadata
+from quant_platform_kit.common.runtime_target import RuntimeTarget
 from runtime_logging import RuntimeLogContext
 
 
@@ -17,12 +19,9 @@ def _utcnow() -> datetime:
 
 @dataclass(frozen=True)
 class SchwabRuntimeReportingAdapters:
-    platform: str
-    deploy_target: str
-    service_name: str
-    strategy_profile: str
+    runtime_assembly: RuntimeAssembly
     strategy_domain: str | None
-    project_id: str | None
+    runtime_target: RuntimeTarget | None = None
     extra_context_fields: Mapping[str, Any] = field(default_factory=dict)
     managed_symbols: tuple[str, ...] = ()
     benchmark_symbol: str = ""
@@ -51,14 +50,10 @@ class SchwabRuntimeReportingAdapters:
             raise ValueError(f"Missing reporting adapter dependencies: {', '.join(missing)}")
 
     def build_log_context(self) -> RuntimeLogContext:
-        return RuntimeLogContext(
-            platform=self.platform,
-            deploy_target=self.deploy_target,
-            service_name=self.service_name,
-            strategy_profile=self.strategy_profile,
-            project_id=self.project_id,
-            extra_fields=dict(self.extra_context_fields),
-        ).with_run(self.run_id_builder())
+        return self.runtime_assembly.with_overrides(
+            runtime_target=self.runtime_target,
+            extra_context_fields=self.extra_context_fields,
+        ).build_log_context(run_id=self.run_id_builder())
 
     def build_report(self, log_context: RuntimeLogContext) -> dict[str, Any]:
         started_at = self.clock()
@@ -67,15 +62,15 @@ class SchwabRuntimeReportingAdapters:
             signal_effective_after_trading_days=self.signal_effective_after_trading_days,
         )
         return self.report_builder(
-            platform=log_context.platform,
-            deploy_target=log_context.deploy_target,
-            service_name=log_context.service_name,
-            strategy_profile=self.strategy_profile,
-            strategy_domain=self.strategy_domain,
-            run_id=log_context.run_id,
-            run_source="cloud_run",
-            dry_run=self.dry_run,
-            started_at=started_at,
+            **self.runtime_assembly.with_overrides(
+                runtime_target=self.runtime_target,
+                extra_context_fields=self.extra_context_fields,
+            ).build_report_base_kwargs(
+                run_id=log_context.run_id,
+                dry_run=self.dry_run,
+                started_at=started_at,
+                strategy_domain=self.strategy_domain,
+            ),
             summary={
                 "managed_symbols": list(self.managed_symbols),
                 "benchmark_symbol": self.benchmark_symbol,
@@ -102,7 +97,7 @@ class SchwabRuntimeReportingAdapters:
             report,
             base_dir=self.report_base_dir,
             gcs_prefix_uri=self.report_gcs_prefix_uri,
-            gcp_project_id=self.project_id,
+            gcp_project_id=self.runtime_assembly.project_id,
         )
         if isinstance(persisted, str):
             return persisted
@@ -111,12 +106,9 @@ class SchwabRuntimeReportingAdapters:
 
 def build_runtime_reporting_adapters(
     *,
-    platform: str,
-    deploy_target: str,
-    service_name: str,
-    strategy_profile: str,
+    runtime_assembly: RuntimeAssembly,
     strategy_domain: str | None,
-    project_id: str | None,
+    runtime_target: RuntimeTarget | None = None,
     extra_context_fields: Mapping[str, Any] | None = None,
     managed_symbols: tuple[str, ...],
     benchmark_symbol: str,
@@ -134,12 +126,9 @@ def build_runtime_reporting_adapters(
     clock: Callable[[], datetime] = _utcnow,
 ) -> SchwabRuntimeReportingAdapters:
     return SchwabRuntimeReportingAdapters(
-        platform=platform,
-        deploy_target=deploy_target,
-        service_name=service_name,
-        strategy_profile=strategy_profile,
+        runtime_assembly=runtime_assembly,
         strategy_domain=strategy_domain,
-        project_id=project_id,
+        runtime_target=runtime_target,
         extra_context_fields=dict(extra_context_fields or {}),
         managed_symbols=tuple(managed_symbols),
         benchmark_symbol=str(benchmark_symbol or ""),

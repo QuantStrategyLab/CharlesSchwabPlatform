@@ -13,12 +13,14 @@
 ## English
 
 Automated trading service for Charles Schwab accounts, deployed on GCP Cloud Run. This repository runs shared `us_equity` strategy profiles from `UsEquityStrategies`; strategy logic, cadence, asset universes, parameters, and research/backtest notes live in that strategy repository.
+The runtime now carries a structured `RuntimeTarget` / `RUNTIME_TARGET_JSON` alongside the compatibility `STRATEGY_PROFILE` selector.
 
 This repository uses `QuantPlatformKit` for Schwab client bootstrap, account snapshot access, market data, and order submission. Cloud Run deploys this repository directly.
 The Schwab runtime can execute the six current `runtime_enabled` `us_equity` profiles from `UsEquityStrategies`.
 
 Full strategy documentation now lives in [`UsEquityStrategies`](https://github.com/QuantStrategyLab/UsEquityStrategies). The sections below focus on Schwab runtime behavior, profile enablement, deployment, and credentials.
 This runtime matrix is the authoritative enablement source for Schwab. `UsEquityStrategies` carries strategy-layer logic, cadence, compatibility, and metadata.
+`STRATEGY_PROFILE` remains the compatibility selector for strategy routing, while `RuntimeTarget` describes the running service identity.
 
 ### Execution boundary
 
@@ -205,7 +207,7 @@ Schwab OAuth token payload 当前从 Secret Manager 的 `schwab_token` 里读取
 
 ### GitHub 统一管理 Cloud Run 环境变量
 
-如果代码部署继续走 Google Cloud Trigger，但你想把运行时环境变量统一放在 GitHub 管理，这个仓库现在提供了 `.github/workflows/sync-cloud-run-env.yml`。
+如果代码部署继续走 Google Cloud Trigger，但你想把运行时环境变量统一放在 GitHub 管理，这个仓库现在提供了 `.github/workflows/sync-cloud-run-env.yml`。这个 workflow 现在也会发出 `RUNTIME_TARGET_JSON`，让控制面带上结构化运行目标，而不是只看 `STRATEGY_PROFILE`。
 
 推荐配置方式：
 
@@ -236,8 +238,8 @@ Schwab OAuth token payload 当前从 Secret Manager 的 `schwab_token` 里读取
 注意：
 
 - 只有在 `ENABLE_GITHUB_ENV_SYNC=true` 时，这个 workflow 才会严格校验并执行同步。没打开时会直接跳过，不影响原来 Google Cloud Trigger + 手工 Cloud Run env 的老流程。打开后，它会通过 `scripts/print_strategy_profile_status.py --json` 动态解析目标策略需要的 snapshot/config 输入，不再维护硬编码策略名列表。
-- `STRATEGY_PROFILE` 现在由平台能力矩阵和从 `runtime_enabled` 策略元数据派生的 rollout allowlist 一起决定。当前 `enabled` 包含 6 条 live `us_equity` 策略：`global_etf_rotation`、`mega_cap_leader_rotation_top50_balanced`、`russell_1000_multi_factor_defensive`、`tqqq_growth_income`、`soxl_soxx_trend_income` 和 `tech_communication_pullback_enhancement`；research-only 存档 profile 仍保留能力矩阵兼容性，但不会启用。
-- 当前策略域是 `us_equity`，本地策略注册表只用于域和 profile 校验。
+- `STRATEGY_PROFILE` 现在由平台能力矩阵和从 `runtime_enabled` 策略元数据派生的 rollout allowlist 一起决定。当前 `enabled` 包含 6 条 live `us_equity` 策略：`global_etf_rotation`、`mega_cap_leader_rotation_top50_balanced`、`russell_1000_multi_factor_defensive`、`tqqq_growth_income`、`soxl_soxx_trend_income` 和 `tech_communication_pullback_enhancement`；research-only 存档 profile 仍保留能力矩阵兼容性，但不会启用。`RUNTIME_TARGET_JSON` 则表示实际运行目标，`STRATEGY_PROFILE` 继续只负责兼容选择策略实现。
+- 当前策略域是 `us_equity`，本地策略注册表只用于域和 profile 校验；结构化运行目标会通过 `RUNTIME_TARGET_JSON` 往下传。
 - `INCOME_THRESHOLD_USD`、`QQQI_INCOME_RATIO` 和 `DUAL_DRIVE_UNLEVERED_SYMBOL` 在 env-sync 里是可选项。不填时会继承 `UsEquityStrategies` 的 profile 默认值；当前 `tqqq_growth_income` 实盘默认是不带收入层的 QQQ/TQQQ 双轮模式。Schwab 小账户需要用 QQQM 替代整股 QQQ 时，设置 `DUAL_DRIVE_UNLEVERED_SYMBOL=QQQM`。
 - GitHub 现在通过 OIDC + Workload Identity Federation 登录 Google Cloud，这个 workflow 不再需要 `GCP_SA_KEY`。
 - 如果你用 `gcloud run deploy --source` 或 Cloud Run source trigger 部署，还要确保 `gs://run-sources-<project>-<region>` 这个 staging bucket 给 build service account、deploy service account、默认 compute service account 都加上 `roles/storage.objectViewer`。少了这层权限，会在 Cloud Build 启动前直接报 `storage.objects.get denied`。
