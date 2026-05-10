@@ -13,7 +13,7 @@
 ## English
 
 Automated trading service for Charles Schwab accounts, deployed on GCP Cloud Run. This repository runs shared `us_equity` strategy profiles from `UsEquityStrategies`; strategy logic, cadence, asset universes, parameters, and research/backtest notes live in that strategy repository.
-The runtime now carries a structured `RuntimeTarget` / `RUNTIME_TARGET_JSON` alongside the compatibility `STRATEGY_PROFILE` selector.
+The runtime now carries a structured `RuntimeTarget` / `RUNTIME_TARGET_JSON` alongside the compatibility `STRATEGY_PROFILE` selector. Strategy-owned defaults come from `UsEquityStrategies`; platform variables are only explicit overrides.
 
 This repository uses `QuantPlatformKit` for Schwab client bootstrap, account snapshot access, market data, and order submission. Cloud Run deploys this repository directly.
 The Schwab runtime can execute the six current `runtime_enabled` `us_equity` profiles from `UsEquityStrategies`.
@@ -74,9 +74,9 @@ Each HTTP request runs one broker execution cycle. The Cloud Scheduler cron shou
 | `SCHWAB_STRATEGY_PLUGIN_MOUNTS_JSON` | Optional Schwab-side strategy plugin mount JSON. Prefer this Schwab-specific variable; `STRATEGY_PLUGIN_MOUNTS_JSON` is only a shared fallback. |
 | `SCHWAB_MIN_RESERVED_CASH_USD` | Optional platform cash-reserve floor in USD. Default policy: keep `150 USD` or `3% of total equity`, whichever is larger. Runtime formula: `max(floor, ratio * total_equity)`. |
 | `SCHWAB_RESERVED_CASH_RATIO` | Optional platform cash-reserve ratio. Default policy: keep `150 USD` or `3% of total equity`, whichever is larger. Runtime formula: `max(floor, ratio * total_equity)`. |
-| `INCOME_THRESHOLD_USD` | Optional override for the strategy income-layer threshold. Leave unset to use the `UsEquityStrategies` live default, which disables the income layer for normal account sizes. |
-| `QQQI_INCOME_RATIO` | Optional override for QQQI share of the income layer, 0–1. Only relevant when the income layer is enabled. |
-| `DUAL_DRIVE_UNLEVERED_SYMBOL` | Optional `tqqq_growth_income` override for the tradable unlevered growth sleeve. Leave unset for `QQQ`; set to `QQQM` for smaller Schwab accounts while retaining `QQQ` as the signal source. |
+| `INCOME_THRESHOLD_USD` | Optional strategy override for the income-layer threshold. Leave unset to use the `UsEquityStrategies` live default, which disables the income layer for normal account sizes. |
+| `QQQI_INCOME_RATIO` | Optional strategy override for QQQI share of the income layer, 0–1. Only relevant when the income layer is enabled. |
+| `DUAL_DRIVE_UNLEVERED_SYMBOL` | Optional strategy override for the tradable unlevered growth sleeve. Leave unset for `QQQ`; set to `QQQM` only when the deployment intentionally uses QQQM instead of QQQ. |
 | `NOTIFY_LANG` | Notification language: `en` (English, default) or `zh` (Chinese) |
 
 Strategy plugin mount JSON belongs to platform/deployment configuration, not strategy code. It decides which plugin artifacts this runtime reads, and must not set `mode`; the plugin artifact is self-identifying and carries the effective mode. Invalid plugin mount config is recorded in the runtime report diagnostics and does not block the base strategy cycle.
@@ -108,9 +108,9 @@ Recommended setup:
   - `STRATEGY_PROFILE` (set explicitly to one enabled profile: `global_etf_rotation`, `mega_cap_leader_rotation_top50_balanced`, `russell_1000_multi_factor_defensive`, `tqqq_growth_income`, `soxl_soxx_trend_income`, or `tech_communication_pullback_enhancement`)
   - Optional: `SCHWAB_FEATURE_SNAPSHOT_PATH`, `SCHWAB_FEATURE_SNAPSHOT_MANIFEST_PATH`, `SCHWAB_STRATEGY_CONFIG_PATH` for feature-snapshot profiles
   - Optional: `SCHWAB_STRATEGY_PLUGIN_MOUNTS_JSON` for strategy plugin artifact mounts. Do not include `mode` in this platform mount JSON.
-  - Optional: `INCOME_THRESHOLD_USD`
-  - Optional: `QQQI_INCOME_RATIO`
-  - Optional: `DUAL_DRIVE_UNLEVERED_SYMBOL`
+  - Optional: `INCOME_THRESHOLD_USD` (strategy override only)
+  - Optional: `QQQI_INCOME_RATIO` (strategy override only)
+  - Optional: `DUAL_DRIVE_UNLEVERED_SYMBOL` (strategy override only)
   - Optional: `GOOGLE_CLOUD_PROJECT`
 - **Repository Secrets**
   - Optional fallback only: `TELEGRAM_TOKEN`
@@ -127,7 +127,7 @@ Important:
 - The workflow only becomes strict when `ENABLE_GITHUB_ENV_SYNC=true`. If this variable is unset, the sync job is skipped and the old Google Cloud Trigger + manual Cloud Run env setup keeps working. When enabled, it resolves the selected profile's snapshot/config requirements from `scripts/print_strategy_profile_status.py --json` instead of a hard-coded strategy-name list.
 - `STRATEGY_PROFILE` is driven by the platform capability matrix plus a rollout allowlist derived from `runtime_enabled` strategy metadata. Today `enabled` includes six live `us_equity` profiles: `global_etf_rotation`, `mega_cap_leader_rotation_top50_balanced`, `russell_1000_multi_factor_defensive`, `tqqq_growth_income`, `soxl_soxx_trend_income`, and `tech_communication_pullback_enhancement`; archived research-only profiles remain eligible in the capability matrix but are not enabled.
 - The current strategy domain is `us_equity`, and the repo now keeps a thin strategy registry so future expansion can grow by domain + profile instead of mixing strategy and platform in one layer.
-- `INCOME_THRESHOLD_USD`, `QQQI_INCOME_RATIO`, and `DUAL_DRIVE_UNLEVERED_SYMBOL` are optional in env sync. Leave them unset to inherit the `UsEquityStrategies` profile defaults; the current `tqqq_growth_income` live default is the no-income QQQ/TQQQ dual-drive mode. Set `DUAL_DRIVE_UNLEVERED_SYMBOL=QQQM` when the Schwab account should trade QQQM instead of whole-share QQQ.
+- `INCOME_THRESHOLD_USD`, `QQQI_INCOME_RATIO`, and `DUAL_DRIVE_UNLEVERED_SYMBOL` are optional env-sync overrides, not platform defaults. Leave them unset to inherit the `UsEquityStrategies` profile defaults; the current `tqqq_growth_income` live default is the no-income QQQ/TQQQ dual-drive mode. Set `DUAL_DRIVE_UNLEVERED_SYMBOL=QQQM` only when the deployment intentionally uses QQQM instead of whole-share QQQ.
 - GitHub now authenticates to Google Cloud with OIDC + Workload Identity Federation. `GCP_SA_KEY` is no longer required for this workflow.
 - If you deploy with `gcloud run deploy --source` or a Cloud Run source trigger, also grant `roles/storage.objectViewer` on `gs://run-sources-<project>-<region>` to the build service account, the deploy service account, and the default compute service account. Without that bucket access, source deploy fails before Cloud Build starts with `storage.objects.get` denied.
 - The Telegram token and Schwab API credentials should live in Secret Manager and be referenced by the secret-name variables above. Across multiple quant repos, only `GLOBAL_TELEGRAM_CHAT_ID` and `NOTIFY_LANG` are good cross-project shared settings.
@@ -221,9 +221,9 @@ Schwab OAuth token payload 当前从 Secret Manager 的 `schwab_token` 里读取
   - `STRATEGY_PROFILE`（显式设置为任一已启用 profile：`global_etf_rotation`、`mega_cap_leader_rotation_top50_balanced`、`russell_1000_multi_factor_defensive`、`tqqq_growth_income`、`soxl_soxx_trend_income` 或 `tech_communication_pullback_enhancement`）
   - 可选：`SCHWAB_FEATURE_SNAPSHOT_PATH`、`SCHWAB_FEATURE_SNAPSHOT_MANIFEST_PATH`、`SCHWAB_STRATEGY_CONFIG_PATH`，用于 feature-snapshot 策略
   - 可选：`SCHWAB_STRATEGY_PLUGIN_MOUNTS_JSON`，用于策略插件 artifact 挂载。不要在这个平台挂载 JSON 里放 `mode`
-  - 可选：`INCOME_THRESHOLD_USD`
-  - 可选：`QQQI_INCOME_RATIO`
-  - 可选：`DUAL_DRIVE_UNLEVERED_SYMBOL`
+  - 可选：`INCOME_THRESHOLD_USD`（仅策略 override）
+  - 可选：`QQQI_INCOME_RATIO`（仅策略 override）
+  - 可选：`DUAL_DRIVE_UNLEVERED_SYMBOL`（仅策略 override）
   - 可选：`GOOGLE_CLOUD_PROJECT`
 - **仓库级 Secrets**
   - 仅保留为 fallback：`TELEGRAM_TOKEN`
@@ -240,7 +240,7 @@ Schwab OAuth token payload 当前从 Secret Manager 的 `schwab_token` 里读取
 - 只有在 `ENABLE_GITHUB_ENV_SYNC=true` 时，这个 workflow 才会严格校验并执行同步。没打开时会直接跳过，不影响原来 Google Cloud Trigger + 手工 Cloud Run env 的老流程。打开后，它会通过 `scripts/print_strategy_profile_status.py --json` 动态解析目标策略需要的 snapshot/config 输入，不再维护硬编码策略名列表。
 - `STRATEGY_PROFILE` 现在由平台能力矩阵和从 `runtime_enabled` 策略元数据派生的 rollout allowlist 一起决定。当前 `enabled` 包含 6 条 live `us_equity` 策略：`global_etf_rotation`、`mega_cap_leader_rotation_top50_balanced`、`russell_1000_multi_factor_defensive`、`tqqq_growth_income`、`soxl_soxx_trend_income` 和 `tech_communication_pullback_enhancement`；research-only 存档 profile 仍保留能力矩阵兼容性，但不会启用。`RUNTIME_TARGET_JSON` 则表示实际运行目标，`STRATEGY_PROFILE` 继续只负责兼容选择策略实现。
 - 当前策略域是 `us_equity`，本地策略注册表只用于域和 profile 校验；结构化运行目标会通过 `RUNTIME_TARGET_JSON` 往下传。
-- `INCOME_THRESHOLD_USD`、`QQQI_INCOME_RATIO` 和 `DUAL_DRIVE_UNLEVERED_SYMBOL` 在 env-sync 里是可选项。不填时会继承 `UsEquityStrategies` 的 profile 默认值；当前 `tqqq_growth_income` 实盘默认是不带收入层的 QQQ/TQQQ 双轮模式。Schwab 小账户需要用 QQQM 替代整股 QQQ 时，设置 `DUAL_DRIVE_UNLEVERED_SYMBOL=QQQM`。
+- `INCOME_THRESHOLD_USD`、`QQQI_INCOME_RATIO` 和 `DUAL_DRIVE_UNLEVERED_SYMBOL` 在 env-sync 里是可选 override，不是平台默认值来源。不填时会继承 `UsEquityStrategies` 的 profile 默认值；当前 `tqqq_growth_income` 实盘默认是不带收入层的 QQQ/TQQQ 双轮模式。只有在明确要用 QQQM 替代整股 QQQ 时，才设置 `DUAL_DRIVE_UNLEVERED_SYMBOL=QQQM`。
 - GitHub 现在通过 OIDC + Workload Identity Federation 登录 Google Cloud，这个 workflow 不再需要 `GCP_SA_KEY`。
 - 如果你用 `gcloud run deploy --source` 或 Cloud Run source trigger 部署，还要确保 `gs://run-sources-<project>-<region>` 这个 staging bucket 给 build service account、deploy service account、默认 compute service account 都加上 `roles/storage.objectViewer`。少了这层权限，会在 Cloud Build 启动前直接报 `storage.objects.get denied`。
 - Telegram token 和 Schwab API 凭据建议放到 Secret Manager，并通过上面的 secret-name 变量引用。对多个 quant 仓库来说，真正适合跨项目共享的通常只有 `GLOBAL_TELEGRAM_CHAT_ID` 和 `NOTIFY_LANG`。

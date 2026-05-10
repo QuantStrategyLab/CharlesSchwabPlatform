@@ -10,7 +10,7 @@ from quant_platform_kit.common.runtime_config import (
 )
 from quant_platform_kit.common.runtime_target import (
     RuntimeTarget,
-    resolve_runtime_identity_from_env,
+    resolve_runtime_target_from_env,
 )
 from strategy_registry import (
     SCHWAB_PLATFORM,
@@ -66,16 +66,9 @@ def resolve_strategy_profile(raw_value: str | None = None) -> str:
 
 
 def load_platform_runtime_settings() -> PlatformRuntimeSettings:
-    resolved_identity = resolve_runtime_identity_from_env(
-        os.environ,
-        platform_id=SCHWAB_PLATFORM,
-        default_strategy_profile=os.getenv("STRATEGY_PROFILE"),
-        dry_run_only=resolve_bool_value(os.getenv("SCHWAB_DRY_RUN_ONLY")),
-        deployment_selector=os.getenv("SERVICE_NAME") or os.getenv("K_SERVICE"),
-        service_name=os.getenv("SERVICE_NAME") or os.getenv("K_SERVICE"),
-    )
+    runtime_target = resolve_runtime_target_from_env(env=os.environ, expected_platform_id=SCHWAB_PLATFORM)
     strategy_definition = resolve_strategy_definition(
-        resolved_identity.strategy_profile,
+        runtime_target.strategy_profile,
         platform_id=SCHWAB_PLATFORM,
     )
     strategy_metadata = resolve_strategy_metadata(
@@ -112,5 +105,5 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
             os.getenv("SCHWAB_STRATEGY_PLUGIN_MOUNTS_JSON")
             or os.getenv("STRATEGY_PLUGIN_MOUNTS_JSON")
         ),
-        runtime_target=resolved_identity.runtime_target,
+        runtime_target=runtime_target,
     )

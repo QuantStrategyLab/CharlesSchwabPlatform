@@ -57,7 +57,9 @@ def build_switch_plan(profile: str) -> dict[str, object]:
         service_name="charles-schwab-quant-service",
     )
 
-    set_env: dict[str, str] = {"STRATEGY_PROFILE": definition.profile}
+    set_env: dict[str, str] = {
+        "RUNTIME_TARGET_JSON": json.dumps(runtime_target.to_dict(), separators=(",", ":"))
+    }
     keep_env: list[str] = []
     optional_env = [
         "SCHWAB_DRY_RUN_ONLY",
@@ -66,7 +68,7 @@ def build_switch_plan(profile: str) -> dict[str, object]:
     ]
     remove_if_present: list[str] = []
     notes = [
-        "Schwab has a single service identity, so strategy switching mainly changes STRATEGY_PROFILE and any snapshot-config envs.",
+        "Schwab has a single service identity, so strategy switching mainly changes the structured runtime target and any snapshot-config envs.",
     ]
 
     if requires_feature_snapshot:

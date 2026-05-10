@@ -36,9 +36,40 @@ from strategy_registry import (
 SAMPLE_STRATEGY_PROFILE = "tqqq_growth_income"
 
 
+def runtime_target_json(
+    strategy_profile: str,
+    *,
+    dry_run_only: bool = False,
+    platform_id: str = "schwab",
+    deployment_selector: str | None = "schwab",
+    account_selector: list[str] | tuple[str, ...] | None = None,
+    account_scope: str | None = "schwab",
+    service_name: str | None = None,
+) -> str:
+    payload: dict[str, object] = {
+        "platform_id": platform_id,
+        "strategy_profile": strategy_profile,
+        "dry_run_only": dry_run_only,
+    }
+    if deployment_selector is not None:
+        payload["deployment_selector"] = deployment_selector
+    if account_selector is not None:
+        payload["account_selector"] = list(account_selector)
+    if account_scope is not None:
+        payload["account_scope"] = account_scope
+    if service_name is not None:
+        payload["service_name"] = service_name
+    payload["execution_mode"] = "paper" if dry_run_only else "live"
+    return json.dumps(payload, separators=(",", ":"))
+
+
 class RuntimeConfigSupportTests(unittest.TestCase):
     def test_defaults_with_explicit_strategy_profile(self):
-        with patch.dict(os.environ, {"STRATEGY_PROFILE": SAMPLE_STRATEGY_PROFILE}, clear=True):
+        with patch.dict(
+            os.environ,
+            {"RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE)},
+            clear=True,
+        ):
             settings = load_platform_runtime_settings()
 
         self.assertEqual(settings.strategy_profile, SAMPLE_STRATEGY_PROFILE)
@@ -60,7 +91,6 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "STRATEGY_PROFILE": SAMPLE_STRATEGY_PROFILE,
                 "RUNTIME_TARGET_JSON": (
                     '{"platform_id":"schwab","strategy_profile":"global_etf_rotation",'
                     '"dry_run_only":true,"service_name":"charles-schwab-quant-service",'
@@ -80,17 +110,25 @@ class RuntimeConfigSupportTests(unittest.TestCase):
 
     def test_requires_strategy_profile(self):
         with patch.dict(os.environ, {}, clear=True):
-            with self.assertRaisesRegex(EnvironmentError, "STRATEGY_PROFILE is required"):
+            with self.assertRaisesRegex(EnvironmentError, "RUNTIME_TARGET_JSON is required"):
                 load_platform_runtime_settings()
 
     def test_uses_explicit_strategy_profile(self):
-        with patch.dict(os.environ, {"STRATEGY_PROFILE": SAMPLE_STRATEGY_PROFILE}, clear=True):
+        with patch.dict(
+            os.environ,
+            {"RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE)},
+            clear=True,
+        ):
             settings = load_platform_runtime_settings()
 
         self.assertEqual(settings.strategy_profile, SAMPLE_STRATEGY_PROFILE)
 
     def test_rejects_unknown_strategy_profile(self):
-        with patch.dict(os.environ, {"STRATEGY_PROFILE": "balanced_income"}, clear=True):
+        with patch.dict(
+            os.environ,
+            {"RUNTIME_TARGET_JSON": runtime_target_json("balanced_income")},
+            clear=True,
+        ):
             with self.assertRaisesRegex(ValueError, "Unsupported STRATEGY_PROFILE"):
                 load_platform_runtime_settings()
 
@@ -127,14 +165,24 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         )
 
     def test_rejects_human_readable_alias(self):
-        with patch.dict(os.environ, {"STRATEGY_PROFILE": "qqq_tqqq_growth_income"}, clear=True):
+        with patch.dict(
+            os.environ,
+            {"RUNTIME_TARGET_JSON": runtime_target_json("qqq_tqqq_growth_income")},
+            clear=True,
+        ):
             with self.assertRaises(ValueError):
                 load_platform_runtime_settings()
 
     def test_reads_schwab_dry_run_only_flag(self):
         with patch.dict(
             os.environ,
-            {"STRATEGY_PROFILE": SAMPLE_STRATEGY_PROFILE, "SCHWAB_DRY_RUN_ONLY": "true"},
+            {
+                "RUNTIME_TARGET_JSON": runtime_target_json(
+                    SAMPLE_STRATEGY_PROFILE,
+                    dry_run_only=True,
+                ),
+                "SCHWAB_DRY_RUN_ONLY": "true",
+            },
             clear=True,
         ):
             settings = load_platform_runtime_settings()
@@ -145,7 +193,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "STRATEGY_PROFILE": SAMPLE_STRATEGY_PROFILE,
+                "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
                 "SCHWAB_MIN_RESERVED_CASH_USD": "80",
                 "SCHWAB_RESERVED_CASH_RATIO": "0.025",
             },
@@ -160,7 +208,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "STRATEGY_PROFILE": SAMPLE_STRATEGY_PROFILE,
+                "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
                 "SCHWAB_RESERVED_CASH_RATIO": "1.25",
             },
             clear=True,
@@ -172,7 +220,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "STRATEGY_PROFILE": SAMPLE_STRATEGY_PROFILE,
+                "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
                 "STRATEGY_PLUGIN_MOUNTS_JSON": '{"strategy_plugins":[]}',
             },
             clear=True,
@@ -185,7 +233,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "STRATEGY_PROFILE": SAMPLE_STRATEGY_PROFILE,
+                "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
                 "STRATEGY_PLUGIN_MOUNTS_JSON": '{"strategy_plugins":[{"plugin":"global"}]}',
                 "SCHWAB_STRATEGY_PLUGIN_MOUNTS_JSON": '{"strategy_plugins":[{"plugin":"schwab"}]}',
             },
@@ -353,7 +401,10 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(plan["input_mode"], "market_history")
         self.assertFalse(plan["requires_snapshot_artifacts"])
         self.assertFalse(plan["requires_strategy_config_path"])
-        self.assertEqual(plan["set_env"]["STRATEGY_PROFILE"], "global_etf_rotation")
+        self.assertEqual(
+            json.loads(plan["set_env"]["RUNTIME_TARGET_JSON"])["strategy_profile"],
+            "global_etf_rotation",
+        )
         self.assertIn("SCHWAB_MIN_RESERVED_CASH_USD", plan["optional_env"])
         self.assertIn("SCHWAB_RESERVED_CASH_RATIO", plan["optional_env"])
         self.assertIn("SCHWAB_FEATURE_SNAPSHOT_PATH", plan["remove_if_present"])
@@ -382,7 +433,9 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "STRATEGY_PROFILE": "tech_communication_pullback_enhancement",
+                "RUNTIME_TARGET_JSON": runtime_target_json(
+                    "tech_communication_pullback_enhancement"
+                ),
                 "SCHWAB_FEATURE_SNAPSHOT_PATH": "gs://bucket/tech.csv",
                 "SCHWAB_FEATURE_SNAPSHOT_MANIFEST_PATH": "gs://bucket/tech.csv.manifest.json",
                 "SCHWAB_STRATEGY_CONFIG_PATH": "/workspace/configs/tech.json",
