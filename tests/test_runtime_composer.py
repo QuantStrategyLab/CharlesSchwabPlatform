@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from quant_platform_kit.common import build_runtime_target  # noqa: E402
 from application.runtime_composer import SchwabRuntimeComposer
 
 
@@ -39,6 +40,12 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders():
         benchmark_symbol="QQQ",
         signal_effective_after_trading_days=1,
         dry_run_only=True,
+        runtime_target=build_runtime_target(
+            platform_id="charles_schwab",
+            strategy_profile="tqqq_growth_income",
+            dry_run_only=True,
+            service_name="charles-schwab-platform",
+        ),
         limit_buy_premium=1.005,
         sell_settle_delay_sec=3.0,
         post_sell_refresh_attempts=5,
@@ -88,6 +95,9 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders():
     assert observed["notification_builder"]["send_message"]
     assert observed["reporting_builder"]["managed_symbols"] == ("TQQQ", "BOXX", "SPYI", "QQQI")
     assert observed["reporting_builder"]["signal_effective_after_trading_days"] == 1
+    assert observed["reporting_builder"]["runtime_assembly"].runtime_target.platform_id == "charles_schwab"
+    assert observed["reporting_builder"]["runtime_assembly"].runtime_target.strategy_profile == "tqqq_growth_income"
+    assert observed["reporting_builder"]["runtime_assembly"].runtime_target.execution_mode == "paper"
     assert runtime.fetch_reference_history() == ("reference-history", ("market-data-port", "client"))
     assert runtime.portfolio_port == ("portfolio-port", "client")
     assert runtime.execution_port_factory("hash-1") == ("execution-port", "client", "hash-1")

@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-import requests
-
-
 SIGNAL_ICONS = {
     "hold": "💎",
     "entry": "🚀",
@@ -206,7 +203,10 @@ def build_strategy_display_name(translate_fn):
     return strategy_display_name
 
 
-def build_sender(token, chat_id, *, requests_module=requests):
+def build_sender(token, chat_id, *, requests_module=None):
+    if requests_module is None:
+        import requests as requests_module
+
     def send_tg_message(message):
         if not token or not chat_id:
             return

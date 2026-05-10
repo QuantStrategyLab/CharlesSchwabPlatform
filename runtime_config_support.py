@@ -8,6 +8,10 @@ from quant_platform_kit.common.runtime_config import (
     resolve_bool_value,
     resolve_strategy_runtime_path_settings,
 )
+from quant_platform_kit.common.runtime_target import (
+    RuntimeTarget,
+    resolve_runtime_target_from_env,
+)
 from strategy_registry import (
     SCHWAB_PLATFORM,
     resolve_strategy_definition,
@@ -16,7 +20,7 @@ from strategy_registry import (
 from us_equity_strategies import get_strategy_catalog
 
 DEFAULT_NOTIFY_LANG = "en"
-DEFAULT_RESERVED_CASH_FLOOR_USD = 300.0
+DEFAULT_RESERVED_CASH_FLOOR_USD = 150.0
 DEFAULT_RESERVED_CASH_RATIO = 0.03
 
 
@@ -34,6 +38,7 @@ class PlatformRuntimeSettings:
     strategy_config_path: str | None = None
     strategy_config_source: str | None = None
     strategy_plugin_mounts_json: str | None = None
+    runtime_target: RuntimeTarget | None = None
 
 
 def _resolve_non_negative_float_env(name: str, *, default: float) -> float:
@@ -61,8 +66,9 @@ def resolve_strategy_profile(raw_value: str | None = None) -> str:
 
 
 def load_platform_runtime_settings() -> PlatformRuntimeSettings:
+    runtime_target = resolve_runtime_target_from_env(env=os.environ, expected_platform_id=SCHWAB_PLATFORM)
     strategy_definition = resolve_strategy_definition(
-        os.getenv("STRATEGY_PROFILE"),
+        runtime_target.strategy_profile,
         platform_id=SCHWAB_PLATFORM,
     )
     strategy_metadata = resolve_strategy_metadata(
@@ -99,4 +105,5 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
             os.getenv("SCHWAB_STRATEGY_PLUGIN_MOUNTS_JSON")
             or os.getenv("STRATEGY_PLUGIN_MOUNTS_JSON")
         ),
+        runtime_target=runtime_target,
     )

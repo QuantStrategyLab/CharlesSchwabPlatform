@@ -24,12 +24,13 @@ jobs:
       TELEGRAM_TOKEN_SECRET_NAME: ${{ vars.TELEGRAM_TOKEN_SECRET_NAME }}
       SCHWAB_API_KEY_SECRET_NAME: ${{ vars.SCHWAB_API_KEY_SECRET_NAME }}
       SCHWAB_APP_SECRET_SECRET_NAME: ${{ vars.SCHWAB_APP_SECRET_SECRET_NAME }}
-      STRATEGY_PROFILE: ${{ vars.STRATEGY_PROFILE || 'tqqq_growth_income' }}
+      RUNTIME_TARGET_JSON: ${{ vars.RUNTIME_TARGET_JSON }}
       SCHWAB_DRY_RUN_ONLY: ${{ vars.SCHWAB_DRY_RUN_ONLY }}
       SCHWAB_FEATURE_SNAPSHOT_PATH: ${{ vars.SCHWAB_FEATURE_SNAPSHOT_PATH }}
       SCHWAB_FEATURE_SNAPSHOT_MANIFEST_PATH: ${{ vars.SCHWAB_FEATURE_SNAPSHOT_MANIFEST_PATH }}
       SCHWAB_STRATEGY_CONFIG_PATH: ${{ vars.SCHWAB_STRATEGY_CONFIG_PATH }}
       SCHWAB_STRATEGY_PLUGIN_MOUNTS_JSON: ${{ vars.SCHWAB_STRATEGY_PLUGIN_MOUNTS_JSON }}
+      # Optional strategy overrides; leave unset to inherit the UsEquityStrategies profile defaults.
       INCOME_THRESHOLD_USD: ${{ vars.INCOME_THRESHOLD_USD }}
       QQQI_INCOME_RATIO: ${{ vars.QQQI_INCOME_RATIO }}
       DUAL_DRIVE_UNLEVERED_SYMBOL: ${{ vars.DUAL_DRIVE_UNLEVERED_SYMBOL }}
@@ -82,9 +83,13 @@ jobs:
           import sys
           from us_equity_strategies import resolve_canonical_profile
 
-          profile = os.environ.get("STRATEGY_PROFILE", "").strip().lower()
+          raw_runtime_target = os.environ.get("RUNTIME_TARGET_JSON", "").strip()
+          if not raw_runtime_target:
+              raise SystemExit("RUNTIME_TARGET_JSON is required")
+          runtime_target = json.loads(raw_runtime_target)
+          profile = str(runtime_target.get("strategy_profile") or "").strip().lower()
           if not profile:
-              raise SystemExit("STRATEGY_PROFILE is required")
+              raise SystemExit("RUNTIME_TARGET_JSON.strategy_profile is required")
           canonical_profile = resolve_canonical_profile(profile)
 
           raw_status = subprocess.check_output(
@@ -113,6 +118,7 @@ jobs:
               output.write(
                   f"config_source_policy={str(selected.get('config_source_policy') or 'none')}\n"
               )
+              output.write(f"runtime_target_json={json.dumps(runtime_target, sort_keys=True)}\n")
           PY
 
       - name: Validate env sync inputs
@@ -122,6 +128,7 @@ jobs:
           REQUIRES_SNAPSHOT_MANIFEST_PATH: ${{ steps.strategy_requirements.outputs.requires_snapshot_manifest_path }}
           REQUIRES_STRATEGY_CONFIG_PATH: ${{ steps.strategy_requirements.outputs.requires_strategy_config_path }}
           CONFIG_SOURCE_POLICY: ${{ steps.strategy_requirements.outputs.config_source_policy }}
+          RUNTIME_TARGET_JSON: ${{ steps.strategy_requirements.outputs.runtime_target_json }}
         run: |
           set -euo pipefail
 
@@ -163,6 +170,10 @@ jobs:
             && [ "${CONFIG_SOURCE_POLICY:-}" = "env_only" ] \
             && [ -z "${SCHWAB_STRATEGY_CONFIG_PATH:-}" ]; then
             missing_vars+=("SCHWAB_STRATEGY_CONFIG_PATH")
+          fi
+
+          if [ -z "${RUNTIME_TARGET_JSON:-}" ]; then
+            missing_vars+=("RUNTIME_TARGET_JSON")
           fi
 
           if [ "${#missing_vars[@]}" -gt 0 ]; then
@@ -212,13 +223,15 @@ jobs:
 
       - name: Sync Cloud Run environment
         if: steps.config.outputs.enabled == 'true'
+        env:
+          RUNTIME_TARGET_JSON: ${{ steps.strategy_requirements.outputs.runtime_target_json }}
         run: |
           set -euo pipefail
 
           env_pairs=(
             "GLOBAL_TELEGRAM_CHAT_ID=${GLOBAL_TELEGRAM_CHAT_ID}"
             "NOTIFY_LANG=${NOTIFY_LANG}"
-            "STRATEGY_PROFILE=${STRATEGY_PROFILE}"
+            "RUNTIME_TARGET_JSON=${RUNTIME_TARGET_JSON}"
           )
           secret_pairs=()
           remove_env_vars=(

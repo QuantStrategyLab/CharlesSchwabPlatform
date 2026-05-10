@@ -74,7 +74,7 @@ def install_stub_modules():
         strategy_domain="us_equity",
         notify_lang="en",
         dry_run_only=False,
-        reserved_cash_floor_usd=300.0,
+        reserved_cash_floor_usd=150.0,
         reserved_cash_ratio=0.03,
     )
 

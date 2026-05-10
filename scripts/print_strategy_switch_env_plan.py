@@ -15,6 +15,7 @@ for candidate in (ROOT, QPK_SRC, UES_SRC):
     if candidate_str not in sys.path:
         sys.path.insert(0, candidate_str)
 
+from quant_platform_kit.common.runtime_target import build_runtime_target  # noqa: E402
 from quant_platform_kit.common.strategies import derive_strategy_artifact_paths  # noqa: E402
 from strategy_registry import (  # noqa: E402
     SCHWAB_PLATFORM,
@@ -47,8 +48,18 @@ def build_switch_plan(profile: str) -> dict[str, object]:
     )
     requires_strategy_config_path = bool(runtime_requirements["requires_strategy_config_path"])
     config_source_policy = str(runtime_requirements.get("config_source_policy") or "none")
+    runtime_target = build_runtime_target(
+        platform_id=SCHWAB_PLATFORM,
+        strategy_profile=definition.profile,
+        dry_run_only=False,
+        deployment_selector=None,
+        account_scope=None,
+        service_name="charles-schwab-quant-service",
+    )
 
-    set_env: dict[str, str] = {"STRATEGY_PROFILE": definition.profile}
+    set_env: dict[str, str] = {
+        "RUNTIME_TARGET_JSON": json.dumps(runtime_target.to_dict(), separators=(",", ":"))
+    }
     keep_env: list[str] = []
     optional_env = [
         "SCHWAB_DRY_RUN_ONLY",
@@ -57,7 +68,7 @@ def build_switch_plan(profile: str) -> dict[str, object]:
     ]
     remove_if_present: list[str] = []
     notes = [
-        "Schwab has a single service identity, so strategy switching mainly changes STRATEGY_PROFILE and any snapshot-config envs.",
+        "Schwab has a single service identity, so strategy switching mainly changes the structured runtime target and any snapshot-config envs.",
     ]
 
     if requires_feature_snapshot:
@@ -104,6 +115,7 @@ def build_switch_plan(profile: str) -> dict[str, object]:
         **runtime_requirements,
         "required_inputs": sorted(definition.required_inputs),
         "target_mode": definition.target_mode,
+        "runtime_target": runtime_target.to_dict(),
         "set_env": set_env,
         "keep_env": keep_env,
         "optional_env": sorted(optional_env),
@@ -123,6 +135,7 @@ def _print_plan(plan: dict[str, object]) -> None:
     print(f"requires_snapshot_artifacts: {plan['requires_snapshot_artifacts']}")
     print(f"requires_strategy_config_path: {plan['requires_strategy_config_path']}")
     print(f"target_mode: {plan['target_mode']}")
+    print(f"runtime_target: {json.dumps(plan['runtime_target'], sort_keys=True)}")
     print("\nset_env:")
     for key, value in plan["set_env"].items():
         print(f"  {key}={value}")

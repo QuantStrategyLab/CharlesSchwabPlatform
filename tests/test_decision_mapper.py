@@ -109,13 +109,13 @@ class DecisionMapperTests(unittest.TestCase):
             strategy_profile="tech_communication_pullback_enhancement",
             runtime_metadata={
                 "schwab_execution_policy": {
-                    "reserved_cash_floor_usd": 300.0,
+                    "reserved_cash_floor_usd": 150.0,
                     "reserved_cash_ratio": 0.03,
                 }
             },
         )
 
-        self.assertEqual(plan["execution"]["reserved_cash"], 300.0)
+        self.assertEqual(plan["execution"]["reserved_cash"], 150.0)
 
     def test_platform_reserved_cash_floor_can_raise_strategy_reserve(self):
         snapshot = SimpleNamespace(
@@ -140,7 +140,7 @@ class DecisionMapperTests(unittest.TestCase):
             strategy_profile="tqqq_growth_income",
             runtime_metadata={
                 "schwab_execution_policy": {
-                    "reserved_cash_floor_usd": 300.0,
+                    "reserved_cash_floor_usd": 150.0,
                     "reserved_cash_ratio": 0.03,
                 }
             },
