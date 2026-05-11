@@ -379,10 +379,9 @@ class RequestHandlingTests(unittest.TestCase):
         lines = module.build_strategy_plugin_notification_lines((signal,))
 
         self.assertEqual(len(lines), 1)
-        self.assertIn("插件：危机响应观察", lines[0])
-        self.assertIn("模式：影子观察", lines[0])
-        self.assertIn("路由：不操作", lines[0])
-        self.assertIn("建议：仅观察", lines[0])
+        self.assertIn("插件：危机观察通知", lines[0])
+        self.assertIn("状态：未触发危机", lines[0])
+        self.assertIn("提醒：仅通知", lines[0])
 
     def test_strategy_plugin_notification_line_renders_triggered_shadow_signal(self):
         module = load_module(notify_lang="zh")
@@ -396,8 +395,8 @@ class RequestHandlingTests(unittest.TestCase):
         lines = module.build_strategy_plugin_notification_lines((signal,))
 
         self.assertEqual(len(lines), 1)
-        self.assertIn("路由：真危机", lines[0])
-        self.assertIn("建议：防守", lines[0])
+        self.assertIn("状态：真危机", lines[0])
+        self.assertIn("提醒：防守", lines[0])
 
     def test_handle_schwab_reports_plugin_config_error_without_blocking_strategy(self):
         mount_config = json.dumps(
