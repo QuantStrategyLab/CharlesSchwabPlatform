@@ -1,0 +1,71 @@
+name: Auto Merge Dependabot PR
+
+"on":
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+jobs:
+  auto-merge:
+    if: github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.head_branch, 'dependabot/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Resolve Dependabot PR
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH_NAME="${{ github.event.workflow_run.head_branch }}"
+          PR_NUMBER=$(gh pr list --state open --head "${BRANCH_NAME}" --json number --jq '.[0].number // empty')
+          if [ -z "${PR_NUMBER}" ]; then
+            echo "No open Dependabot PR found for ${BRANCH_NAME}." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: Evaluate merge eligibility
+        id: merge_guard
+        if: steps.pr.outputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr view "${{ steps.pr.outputs.pr_number }}" --json number,isDraft,author,url,labels > pr.json
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          pr = json.loads(Path("pr.json").read_text(encoding="utf-8"))
+          author = (pr.get("author") or {}).get("login")
+          labels = {item.get("name", "") for item in pr.get("labels", [])}
+          should_merge = author == "dependabot[bot]" and not pr.get("isDraft")
+          reason = "ready" if should_merge else "not_dependabot_or_draft"
+
+          summary_lines = [
+              "## Auto-Merge Gate",
+              f"- PR: {pr['url']}",
+              f"- Author: `{author or '<unknown>'}`",
+              f"- Draft: `{ 'yes' if pr.get('isDraft') else 'no' }`",
+              f"- Dependabot label: `{ 'yes' if 'dependencies' in labels else 'no' }`",
+              f"- Final merge decision: `{ 'merge' if should_merge else 'skip' }`",
+              f"- Reason: `{reason}`",
+          ]
+          Path("pr-summary.md").write_text("\n".join(summary_lines).strip() + "\n", encoding="utf-8")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              print(f"should_merge={'true' if should_merge else 'false'}", file=output)
+              print(f"reason={reason}", file=output)
+          PY
+
+      - name: Append merge summary
+        if: steps.pr.outputs.pr_number != ''
+        run: cat pr-summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Merge Dependabot PR
+        if: steps.merge_guard.outputs.should_merge == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr merge "${{ steps.pr.outputs.pr_number }}" --rebase --delete-branch
