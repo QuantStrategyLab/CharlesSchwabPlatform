@@ -20,7 +20,7 @@ from strategy_registry import (
 from us_equity_strategies import get_strategy_catalog
 
 DEFAULT_NOTIFY_LANG = "en"
-DEFAULT_RESERVED_CASH_FLOOR_USD = 150.0
+DEFAULT_RESERVED_CASH_FLOOR_USD = 0.0
 DEFAULT_RESERVED_CASH_RATIO = 0.03
 
 

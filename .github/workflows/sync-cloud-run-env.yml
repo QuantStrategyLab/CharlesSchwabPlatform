@@ -30,6 +30,8 @@ jobs:
       SCHWAB_FEATURE_SNAPSHOT_MANIFEST_PATH: ${{ vars.SCHWAB_FEATURE_SNAPSHOT_MANIFEST_PATH }}
       SCHWAB_STRATEGY_CONFIG_PATH: ${{ vars.SCHWAB_STRATEGY_CONFIG_PATH }}
       SCHWAB_STRATEGY_PLUGIN_MOUNTS_JSON: ${{ vars.SCHWAB_STRATEGY_PLUGIN_MOUNTS_JSON }}
+      SCHWAB_MIN_RESERVED_CASH_USD: ${{ vars.SCHWAB_MIN_RESERVED_CASH_USD }}
+      SCHWAB_RESERVED_CASH_RATIO: ${{ vars.SCHWAB_RESERVED_CASH_RATIO }}
       # Optional strategy overrides; leave unset to inherit the UsEquityStrategies profile defaults.
       INCOME_THRESHOLD_USD: ${{ vars.INCOME_THRESHOLD_USD }}
       QQQI_INCOME_RATIO: ${{ vars.QQQI_INCOME_RATIO }}
@@ -285,6 +287,18 @@ jobs:
             env_pairs+=("SCHWAB_STRATEGY_PLUGIN_MOUNTS_JSON=${SCHWAB_STRATEGY_PLUGIN_MOUNTS_JSON}")
           else
             remove_env_vars+=("SCHWAB_STRATEGY_PLUGIN_MOUNTS_JSON")
+          fi
+
+          if [ -n "${SCHWAB_MIN_RESERVED_CASH_USD:-}" ]; then
+            env_pairs+=("SCHWAB_MIN_RESERVED_CASH_USD=${SCHWAB_MIN_RESERVED_CASH_USD}")
+          else
+            remove_env_vars+=("SCHWAB_MIN_RESERVED_CASH_USD")
+          fi
+
+          if [ -n "${SCHWAB_RESERVED_CASH_RATIO:-}" ]; then
+            env_pairs+=("SCHWAB_RESERVED_CASH_RATIO=${SCHWAB_RESERVED_CASH_RATIO}")
+          else
+            remove_env_vars+=("SCHWAB_RESERVED_CASH_RATIO")
           fi
 
           if [ -n "${INCOME_THRESHOLD_USD:-}" ]; then
