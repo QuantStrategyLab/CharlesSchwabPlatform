@@ -39,6 +39,7 @@ class SchwabRuntimeComposer:
     sell_settle_delay_sec: float
     post_sell_refresh_attempts: int
     post_sell_refresh_interval_sec: float
+    safe_haven_cash_substitute_threshold_usd: float
     broker_adapters: Any
     strategy_adapters: Any
     client_builder: Callable[..., Any]
@@ -137,6 +138,7 @@ class SchwabRuntimeComposer:
             dry_run_only=self.dry_run_only,
             post_sell_refresh_attempts=self.post_sell_refresh_attempts,
             post_sell_refresh_interval_sec=self.post_sell_refresh_interval_sec,
+            safe_haven_cash_substitute_threshold_usd=self.safe_haven_cash_substitute_threshold_usd,
             sleeper=self.sleeper,
             extra_notification_lines=self.strategy_adapters.build_strategy_plugin_notification_lines(
                 strategy_plugin_signals
@@ -177,6 +179,7 @@ def build_runtime_composer(
     sell_settle_delay_sec: float,
     post_sell_refresh_attempts: int,
     post_sell_refresh_interval_sec: float,
+    safe_haven_cash_substitute_threshold_usd: float,
     broker_adapters: Any,
     strategy_adapters: Any,
     client_builder: Callable[..., Any],
@@ -212,6 +215,7 @@ def build_runtime_composer(
         sell_settle_delay_sec=float(sell_settle_delay_sec),
         post_sell_refresh_attempts=int(post_sell_refresh_attempts),
         post_sell_refresh_interval_sec=float(post_sell_refresh_interval_sec),
+        safe_haven_cash_substitute_threshold_usd=float(safe_haven_cash_substitute_threshold_usd),
         broker_adapters=broker_adapters,
         strategy_adapters=strategy_adapters,
         client_builder=client_builder,

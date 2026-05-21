@@ -22,6 +22,7 @@ from us_equity_strategies import get_strategy_catalog
 DEFAULT_NOTIFY_LANG = "en"
 DEFAULT_RESERVED_CASH_FLOOR_USD = 0.0
 DEFAULT_RESERVED_CASH_RATIO = 0.03
+DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD = 1000.0
 
 
 @dataclass(frozen=True)
@@ -33,6 +34,7 @@ class PlatformRuntimeSettings:
     dry_run_only: bool
     reserved_cash_floor_usd: float = DEFAULT_RESERVED_CASH_FLOOR_USD
     reserved_cash_ratio: float = DEFAULT_RESERVED_CASH_RATIO
+    safe_haven_cash_substitute_threshold_usd: float = DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD
     feature_snapshot_path: str | None = None
     feature_snapshot_manifest_path: str | None = None
     strategy_config_path: str | None = None
@@ -96,6 +98,10 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
         reserved_cash_ratio=_resolve_ratio_env(
             "SCHWAB_RESERVED_CASH_RATIO",
             default=DEFAULT_RESERVED_CASH_RATIO,
+        ),
+        safe_haven_cash_substitute_threshold_usd=_resolve_non_negative_float_env(
+            "SCHWAB_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD",
+            default=DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
         ),
         feature_snapshot_path=runtime_paths.feature_snapshot_path,
         feature_snapshot_manifest_path=runtime_paths.feature_snapshot_manifest_path,

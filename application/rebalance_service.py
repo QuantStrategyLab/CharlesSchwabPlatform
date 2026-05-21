@@ -352,6 +352,7 @@ def run_strategy_core(
         post_sell_refresh_attempts=config.post_sell_refresh_attempts,
         post_sell_refresh_interval_sec=config.post_sell_refresh_interval_sec,
         sleeper=sleeper_fn,
+        safe_haven_cash_substitute_threshold_usd=config.safe_haven_cash_substitute_threshold_usd,
         publish_order_issue=lambda message: notification_publisher.publish(
             RenderedNotification(
                 detailed_text=message,
