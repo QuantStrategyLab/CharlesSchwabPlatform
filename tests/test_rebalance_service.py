@@ -21,6 +21,69 @@ from quant_platform_kit.common.port_adapters import CallableExecutionPort, Calla
 
 
 class RebalanceServiceTests(unittest.TestCase):
+    def test_sell_uses_position_quantity_when_market_value_is_stale_below_quote(self):
+        submitted_orders = []
+        plan = {
+            "account_hash": "demo",
+            "allocation": {
+                "target_mode": "value",
+                "strategy_symbols": ("SOXL", "SOXX", "BOXX"),
+                "risk_symbols": ("SOXL", "SOXX"),
+                "income_symbols": (),
+                "safe_haven_symbols": ("BOXX",),
+                "targets": {"SOXL": 0.0, "SOXX": 0.0, "BOXX": 0.0},
+            },
+            "portfolio": {
+                "market_values": {"SOXL": 524.10, "SOXX": 0.0, "BOXX": 0.0},
+                "quantities": {"SOXL": 3, "SOXX": 0, "BOXX": 0},
+                "liquid_cash": 0.0,
+                "cash_sweep_symbol": "BOXX",
+            },
+            "execution": {
+                "trade_threshold_value": 10.0,
+                "reserved_cash": 0.0,
+            },
+        }
+
+        execute_rebalance_cycle(
+            client=object(),
+            plan=plan,
+            portfolio=plan["portfolio"],
+            execution=plan["execution"],
+            allocation=plan["allocation"],
+            fetch_managed_snapshot=lambda _client: None,
+            market_data_port=CallableMarketDataPort(
+                quote_loader=lambda symbol: QuoteSnapshot(
+                    symbol=symbol,
+                    as_of="2026-05-21",
+                    last_price={"SOXL": 175.42, "SOXX": 524.0, "BOXX": 100.0}[symbol],
+                    ask_price={"SOXL": 175.42, "SOXX": 524.0, "BOXX": 100.0}[symbol],
+                )
+            ),
+            load_plan=lambda _snapshot: (plan, plan["portfolio"], plan["execution"], plan["allocation"]),
+            execution_port=CallableExecutionPort(
+                lambda order_intent: (
+                    submitted_orders.append(order_intent),
+                    ExecutionReport(
+                        symbol=order_intent.symbol,
+                        side=order_intent.side,
+                        quantity=order_intent.quantity,
+                        status="accepted",
+                        broker_order_id="schwab-order-1",
+                    ),
+                )[-1]
+            ),
+            translator=build_translator("en"),
+            limit_buy_premium=1.0,
+            sell_settle_delay_sec=0,
+            publish_order_issue=lambda _message: None,
+        )
+
+        self.assertEqual(len(submitted_orders), 1)
+        self.assertEqual(submitted_orders[0].symbol, "SOXL")
+        self.assertEqual(submitted_orders[0].side, "sell")
+        self.assertEqual(submitted_orders[0].quantity, 3)
+
     def test_safe_haven_target_below_cash_substitute_threshold_stays_cash(self):
         submitted_orders = []
         plan = {

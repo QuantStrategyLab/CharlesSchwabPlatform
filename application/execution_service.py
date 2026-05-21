@@ -134,6 +134,17 @@ def execute_rebalance_cycle(
     quotes = load_quotes(strategy_symbols)
     trade_logs: list[str] = []
 
+    def sell_order_quantity(symbol, current_value, target_value, price):
+        if price <= 0:
+            return 0
+        value_based_quantity = int((current_value - target_value) // price)
+        held_quantity = int(quantities.get(symbol, 0) or 0)
+        if held_quantity <= 0:
+            return max(0, value_based_quantity)
+        position_value = held_quantity * price
+        quantity_from_position = int(max(0.0, position_value - target_value) / price + 1e-9)
+        return min(held_quantity, max(quantity_from_position, value_based_quantity))
+
     def execute_fire_forget(symbol, action_type, quantity, price=None):
         if quantity <= 0:
             return False
@@ -283,7 +294,7 @@ def execute_rebalance_cycle(
         current = market_values[symbol]
         target = target_values[symbol]
         if current > (target + threshold):
-            quantity = int((current - target) // quotes[symbol]["lastPrice"])
+            quantity = sell_order_quantity(symbol, current, target, quotes[symbol]["lastPrice"])
             if symbol == cash_sweep_symbol:
                 quantity = cash_sweep_sale_quantity_to_fund_buy(quantity, funding_buy_candidates)
                 if quantity <= 0:
