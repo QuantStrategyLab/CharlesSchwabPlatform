@@ -12,6 +12,7 @@ if str(QPK_SRC) not in sys.path:
     sys.path.insert(0, str(QPK_SRC))
 
 from application import rebalance_service
+from application.execution_service import execute_rebalance_cycle
 from application.rebalance_service import run_strategy_core
 from application.runtime_dependencies import SchwabRebalanceConfig, SchwabRebalanceRuntime
 from notifications.telegram import build_translator
@@ -20,6 +21,58 @@ from quant_platform_kit.common.port_adapters import CallableExecutionPort, Calla
 
 
 class RebalanceServiceTests(unittest.TestCase):
+    def test_safe_haven_target_below_cash_substitute_threshold_stays_cash(self):
+        submitted_orders = []
+        plan = {
+            "account_hash": "demo",
+            "allocation": {
+                "target_mode": "value",
+                "strategy_symbols": ("BOXX",),
+                "risk_symbols": (),
+                "income_symbols": (),
+                "safe_haven_symbols": ("BOXX",),
+                "targets": {"BOXX": 750.0},
+            },
+            "portfolio": {
+                "market_values": {"BOXX": 0.0},
+                "quantities": {"BOXX": 0},
+                "liquid_cash": 750.0,
+                "cash_sweep_symbol": "BOXX",
+            },
+            "execution": {
+                "trade_threshold_value": 10.0,
+                "reserved_cash": 0.0,
+            },
+        }
+
+        result = execute_rebalance_cycle(
+            client=object(),
+            plan=plan,
+            portfolio=plan["portfolio"],
+            execution=plan["execution"],
+            allocation=plan["allocation"],
+            fetch_managed_snapshot=lambda _client: None,
+            market_data_port=CallableMarketDataPort(
+                quote_loader=lambda symbol: QuoteSnapshot(
+                    symbol=symbol,
+                    as_of="2026-04-21",
+                    last_price=100.0,
+                    ask_price=100.0,
+                )
+            ),
+            load_plan=lambda _snapshot: (plan, plan["portfolio"], plan["execution"], plan["allocation"]),
+            execution_port=CallableExecutionPort(lambda order_intent: submitted_orders.append(order_intent)),
+            translator=build_translator("en"),
+            limit_buy_premium=1.0,
+            sell_settle_delay_sec=0,
+            publish_order_issue=lambda _message: None,
+            safe_haven_cash_substitute_threshold_usd=1000.0,
+        )
+
+        self.assertEqual(submitted_orders, [])
+        self.assertEqual(result.allocation["targets"]["BOXX"], 0.0)
+        self.assertFalse(result.trade_logs)
+
     def test_run_strategy_core_supports_execution_port_runtime_path(self):
         sent_messages = []
         observed_orders = []
@@ -609,9 +662,9 @@ class RebalanceServiceTests(unittest.TestCase):
             positions=(
                 SimpleNamespace(symbol="TQQQ", quantity=9, market_value=500.0),
                 SimpleNamespace(symbol="QQQ", quantity=0, market_value=0.0),
-                SimpleNamespace(symbol="BOXX", quantity=5, market_value=600.0),
+                SimpleNamespace(symbol="BOXX", quantity=5, market_value=500.0),
             ),
-            total_equity=1200.0,
+            total_equity=1100.0,
             buying_power=80.0,
             metadata={"account_hash": "demo"},
         )
@@ -634,9 +687,9 @@ class RebalanceServiceTests(unittest.TestCase):
             "portfolio": {
                 "strategy_symbols": ("TQQQ", "QQQ", "BOXX"),
                 "portfolio_rows": (("TQQQ", "QQQ", "BOXX"),),
-                "market_values": {"TQQQ": 500.0, "QQQ": 0.0, "BOXX": 600.0},
+                "market_values": {"TQQQ": 500.0, "QQQ": 0.0, "BOXX": 500.0},
                 "quantities": {"TQQQ": 9, "QQQ": 0, "BOXX": 5},
-                "total_equity": 1200.0,
+                "total_equity": 1100.0,
                 "liquid_cash": 80.0,
                 "cash_sweep_symbol": "BOXX",
             },
@@ -715,9 +768,9 @@ class RebalanceServiceTests(unittest.TestCase):
             "portfolio": {
                 "strategy_symbols": ("TQQQ", "QQQM", "BOXX"),
                 "portfolio_rows": (("TQQQ", "QQQM", "BOXX"),),
-                "market_values": {"TQQQ": 500.0, "QQQM": 0.0, "BOXX": 600.0},
+                "market_values": {"TQQQ": 500.0, "QQQM": 0.0, "BOXX": 500.0},
                 "quantities": {"TQQQ": 9, "QQQM": 0, "BOXX": 5},
-                "total_equity": 1200.0,
+                "total_equity": 1100.0,
                 "liquid_cash": 80.0,
                 "cash_sweep_symbol": "BOXX",
             },

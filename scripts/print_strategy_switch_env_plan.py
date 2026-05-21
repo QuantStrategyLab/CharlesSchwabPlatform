@@ -65,6 +65,7 @@ def build_switch_plan(profile: str) -> dict[str, object]:
         "SCHWAB_DRY_RUN_ONLY",
         "SCHWAB_MIN_RESERVED_CASH_USD",
         "SCHWAB_RESERVED_CASH_RATIO",
+        "SCHWAB_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD",
     ]
     remove_if_present: list[str] = []
     notes = [

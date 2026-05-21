@@ -46,8 +46,51 @@ class ExecutionCycleResult:
     trade_logs: tuple[str, ...]
 
 
+DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD = 1000.0
+
+
 def _noop_sleep(_seconds):
     return None
+
+
+def _safe_haven_cash_symbols(*, portfolio: dict, allocation: dict) -> tuple[str, ...]:
+    symbols: list[str] = []
+    for symbol in allocation.get("safe_haven_symbols", ()):
+        normalized = str(symbol or "").strip().upper()
+        if normalized:
+            symbols.append(normalized)
+    cash_sweep_symbol = str(portfolio.get("cash_sweep_symbol") or "").strip().upper()
+    if cash_sweep_symbol:
+        symbols.append(cash_sweep_symbol)
+    return tuple(dict.fromkeys(symbols))
+
+
+def _apply_safe_haven_cash_substitution(
+    *,
+    plan,
+    portfolio,
+    allocation,
+    threshold_usd,
+) -> tuple[dict, dict]:
+    threshold = max(0.0, float(threshold_usd or 0.0))
+    target_values = {
+        str(symbol).strip().upper(): float(value or 0.0)
+        for symbol, value in dict(allocation.get("targets") or {}).items()
+    }
+    if threshold <= 0.0:
+        return dict(plan or {}), {**dict(allocation or {}), "targets": target_values}
+
+    changed = False
+    for symbol in _safe_haven_cash_symbols(portfolio=portfolio, allocation=allocation):
+        target_value = float(target_values.get(symbol, 0.0) or 0.0)
+        if 0.0 < target_value < threshold:
+            target_values[symbol] = 0.0
+            changed = True
+    adjusted_allocation = {**dict(allocation or {}), "targets": target_values}
+    adjusted_plan = dict(plan or {})
+    if changed:
+        adjusted_plan["allocation"] = adjusted_allocation
+    return adjusted_plan, adjusted_allocation
 
 
 def execute_rebalance_cycle(
@@ -70,6 +113,7 @@ def execute_rebalance_cycle(
     post_sell_refresh_interval_sec=0.0,
     sleeper=_noop_sleep,
     publish_order_issue,
+    safe_haven_cash_substitute_threshold_usd=DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
 ) -> ExecutionCycleResult:
     def load_quotes(symbols):
         quotes = {}
@@ -187,6 +231,12 @@ def execute_rebalance_cycle(
 
     market_values = dict(portfolio["market_values"])
     quantities = dict(portfolio["quantities"])
+    plan, allocation = _apply_safe_haven_cash_substitution(
+        plan=plan,
+        portfolio=portfolio,
+        allocation=allocation,
+        threshold_usd=safe_haven_cash_substitute_threshold_usd,
+    )
     target_values = dict(allocation["targets"])
     threshold = float(execution["trade_threshold_value"])
     cash_sweep_symbol = str(portfolio["cash_sweep_symbol"])
@@ -327,6 +377,12 @@ def execute_rebalance_cycle(
                     break
             post_sell_buying_power_released = best_buying_power > previous_buying_power
             plan, portfolio, execution, allocation = best_refreshed_state
+            plan, allocation = _apply_safe_haven_cash_substitution(
+                plan=plan,
+                portfolio=portfolio,
+                allocation=allocation,
+                threshold_usd=safe_haven_cash_substitute_threshold_usd,
+            )
             strategy_symbols = tuple(allocation["strategy_symbols"])
             quotes = load_quotes(strategy_symbols)
             market_values = dict(portfolio["market_values"])
@@ -353,6 +409,13 @@ def execute_rebalance_cycle(
     if (
         not cash_sweep_sold_this_cycle
         and estimated_buying_power > quotes[cash_sweep_symbol]["lastPrice"] * 2
+        and (
+            max(0.0, float(safe_haven_cash_substitute_threshold_usd or 0.0)) <= 0.0
+            or estimated_buying_power >= max(
+                0.0,
+                float(safe_haven_cash_substitute_threshold_usd or 0.0),
+            )
+        )
     ):
         quantity = int(estimated_buying_power // quotes[cash_sweep_symbol]["lastPrice"])
         if quantity > 0:

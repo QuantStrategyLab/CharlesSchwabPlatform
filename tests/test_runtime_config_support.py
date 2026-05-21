@@ -21,6 +21,7 @@ from runtime_config_support import (  # noqa: E402
     DEFAULT_NOTIFY_LANG,
     DEFAULT_RESERVED_CASH_FLOOR_USD,
     DEFAULT_RESERVED_CASH_RATIO,
+    DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
     load_platform_runtime_settings,
 )
 from strategy_registry import (
@@ -97,6 +98,10 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(settings.runtime_target.execution_mode, "live")
         self.assertEqual(settings.reserved_cash_floor_usd, DEFAULT_RESERVED_CASH_FLOOR_USD)
         self.assertEqual(settings.reserved_cash_ratio, DEFAULT_RESERVED_CASH_RATIO)
+        self.assertEqual(
+            settings.safe_haven_cash_substitute_threshold_usd,
+            DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
+        )
         self.assertIsNone(settings.feature_snapshot_path)
         self.assertIsNone(settings.feature_snapshot_manifest_path)
         self.assertIsNone(settings.strategy_config_path)
@@ -195,6 +200,19 @@ class RuntimeConfigSupportTests(unittest.TestCase):
 
         self.assertEqual(settings.reserved_cash_floor_usd, 80.0)
         self.assertEqual(settings.reserved_cash_ratio, 0.025)
+
+    def test_reads_safe_haven_cash_substitute_threshold_override(self):
+        with patch.dict(
+            os.environ,
+            {
+                "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
+                "SCHWAB_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD": "750",
+            },
+            clear=True,
+        ):
+            settings = load_platform_runtime_settings()
+
+        self.assertEqual(settings.safe_haven_cash_substitute_threshold_usd, 750.0)
 
     def test_rejects_invalid_reserved_cash_ratio(self):
         with patch.dict(
@@ -395,6 +413,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         )
         self.assertIn("SCHWAB_MIN_RESERVED_CASH_USD", plan["optional_env"])
         self.assertIn("SCHWAB_RESERVED_CASH_RATIO", plan["optional_env"])
+        self.assertIn("SCHWAB_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD", plan["optional_env"])
         self.assertIn("SCHWAB_FEATURE_SNAPSHOT_PATH", plan["remove_if_present"])
 
     def test_print_strategy_switch_env_plan_for_tech_communication_pullback_enhancement(self):

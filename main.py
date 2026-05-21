@@ -82,6 +82,7 @@ LIMIT_BUY_PREMIUM = 1.005
 SELL_SETTLE_DELAY_SEC = 3
 POST_SELL_REFRESH_ATTEMPTS = 5
 POST_SELL_REFRESH_INTERVAL_SEC = 1
+DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD = 1000.0
 
 RUNTIME_SETTINGS = load_platform_runtime_settings()
 STRATEGY_PROFILE = RUNTIME_SETTINGS.strategy_profile
@@ -176,6 +177,16 @@ def build_strategy_adapters():
     )
 
 
+def _safe_haven_cash_substitute_threshold_usd() -> float:
+    return float(
+        getattr(
+            RUNTIME_SETTINGS,
+            "safe_haven_cash_substitute_threshold_usd",
+            DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
+        )
+    )
+
+
 def build_composer(*, dry_run_only_override: bool | None = None):
     effective_dry_run_only = RUNTIME_SETTINGS.dry_run_only if dry_run_only_override is None else bool(dry_run_only_override)
     return build_runtime_composer(
@@ -200,6 +211,7 @@ def build_composer(*, dry_run_only_override: bool | None = None):
         sell_settle_delay_sec=SELL_SETTLE_DELAY_SEC,
         post_sell_refresh_attempts=POST_SELL_REFRESH_ATTEMPTS,
         post_sell_refresh_interval_sec=POST_SELL_REFRESH_INTERVAL_SEC,
+        safe_haven_cash_substitute_threshold_usd=_safe_haven_cash_substitute_threshold_usd(),
         broker_adapters=build_broker_adapters(),
         strategy_adapters=build_strategy_adapters(),
         client_builder=get_client_from_secret,

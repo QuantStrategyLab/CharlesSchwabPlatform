@@ -50,6 +50,7 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders():
         sell_settle_delay_sec=3.0,
         post_sell_refresh_attempts=5,
         post_sell_refresh_interval_sec=1.0,
+        safe_haven_cash_substitute_threshold_usd=1000.0,
         broker_adapters=SimpleNamespace(
             build_market_data_port=lambda client: ("market-data-port", client),
             build_portfolio_port=lambda client: ("portfolio-port", client),
@@ -105,5 +106,6 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders():
     assert config.extra_notification_lines == ("plugin-line",)
     assert config.strategy_display_name == "TQQQ 增长收益"
     assert config.dry_run_only is True
+    assert config.safe_haven_cash_substitute_threshold_usd == 1000.0
     assert reporting_adapters == "reporting-adapters"
     assert built_client[0][:4] == ("project-1", "schwab_token", "app-key", "app-secret")
