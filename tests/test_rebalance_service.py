@@ -113,6 +113,7 @@ class RebalanceServiceTests(unittest.TestCase):
         self.assertEqual(observed_orders[0].order_type, "limit")
         self.assertTrue(sent_messages)
         self.assertIn("trade", sent_messages[0].lower())
+        self.assertIn("🆔 Account: demo", sent_messages[0])
         self.assertIn("2026-04-21 -> 2026-04-22", sent_messages[0])
 
     def test_localize_notification_text_for_snapshot_guard_in_zh(self):

@@ -168,10 +168,19 @@ def _render_extra_notification_block(extra_notification_lines) -> str:
     return f"{block}\n"
 
 
+def _format_account_line(account_label, *, translator) -> str:
+    value = str(account_label or "").strip()
+    if not value:
+        return ""
+    label = "账户" if _translator_uses_zh(translator) else "Account"
+    return f"🆔 {label}: {value}"
+
+
 def _build_compact_trade_message(
     *,
     translator,
     strategy_display_name,
+    account_label,
     dry_run_only,
     extra_notification_block,
     dashboard_text,
@@ -185,43 +194,9 @@ def _build_compact_trade_message(
         translator("trade_header"),
         translator("strategy_label", name=strategy_display_name),
     ]
-    if dry_run_only:
-        lines.append(translator("dry_run_banner"))
-    if extra_notification_block:
-        lines.extend(line for line in extra_notification_block.splitlines() if line.strip())
-    dashboard = str(dashboard_text or "").strip()
-    if dashboard:
-        lines.append(separator)
-        lines.extend(line for line in dashboard.splitlines() if line.strip())
-    lines.extend(timing_lines)
-    status_summary = _first_detail_line(status_display)
-    if status_summary:
-        lines.append(f"📊 {status_summary}")
-    signal_summary = _first_detail_line(signal_display)
-    if signal_summary:
-        lines.append(f"📊 {translator('signal_label')}: {signal_summary}")
-    lines.extend(str(log).strip() for log in trade_logs if str(log).strip())
-    return "\n".join(lines)
-
-
-def _build_compact_heartbeat_message(
-    *,
-    translator,
-    strategy_display_name,
-    dry_run_only,
-    extra_notification_block,
-    total_equity,
-    dashboard_text,
-    separator,
-    status_display,
-    signal_display,
-    timing_lines,
-) -> str:
-    lines = [
-        translator("heartbeat_header"),
-        translator("strategy_label", name=strategy_display_name),
-        f"💰 {translator('equity')}: ${total_equity:,.2f}",
-    ]
+    account_line = _format_account_line(account_label, translator=translator)
+    if account_line:
+        lines.append(account_line)
     if dry_run_only:
         lines.append(translator("dry_run_banner"))
     if extra_notification_block:
@@ -237,6 +212,50 @@ def _build_compact_heartbeat_message(
     signal_summary = _first_detail_line(signal_display)
     if signal_summary:
         lines.append(f"🎯 {translator('signal_label')}: {signal_summary}")
+    if trade_logs:
+        lines.append(separator)
+    lines.extend(str(log).strip() for log in trade_logs if str(log).strip())
+    return "\n".join(lines)
+
+
+def _build_compact_heartbeat_message(
+    *,
+    translator,
+    strategy_display_name,
+    account_label,
+    dry_run_only,
+    extra_notification_block,
+    total_equity,
+    dashboard_text,
+    separator,
+    status_display,
+    signal_display,
+    timing_lines,
+) -> str:
+    lines = [
+        translator("heartbeat_header"),
+        translator("strategy_label", name=strategy_display_name),
+        f"💰 {translator('equity')}: ${total_equity:,.2f}",
+    ]
+    account_line = _format_account_line(account_label, translator=translator)
+    if account_line:
+        lines.append(account_line)
+    if dry_run_only:
+        lines.append(translator("dry_run_banner"))
+    if extra_notification_block:
+        lines.extend(line for line in extra_notification_block.splitlines() if line.strip())
+    dashboard = str(dashboard_text or "").strip()
+    if dashboard:
+        lines.append(separator)
+        lines.extend(line for line in dashboard.splitlines() if line.strip())
+    lines.extend(timing_lines)
+    status_summary = _first_detail_line(status_display)
+    if status_summary:
+        lines.append(f"📊 {status_summary}")
+    signal_summary = _first_detail_line(signal_display)
+    if signal_summary:
+        lines.append(f"🎯 {translator('signal_label')}: {signal_summary}")
+    lines.append(separator)
     lines.append(translator("no_trades"))
     return "\n".join(lines)
 
@@ -249,6 +268,7 @@ def render_trade_notification(
     extra_notification_lines,
     execution,
     trade_logs,
+    account_label="",
 ) -> RenderedNotification:
     signal_display = _localize_notification_text(execution["signal_display"], translator=translator)
     status_display = _localize_notification_text(execution.get("status_display"), translator=translator)
@@ -258,12 +278,13 @@ def render_trade_notification(
     separator = str(execution["separator"])
     status_line = "\n".join(_split_labeled_text(f"📊 {status_display}")) + "\n" if status_display else ""
     dashboard_block = f"{dashboard_text}\n{separator}\n" if dashboard_text else ""
-    trade_signal_lines = _format_label_value_lines(f"📊 {translator('signal_label')}", signal_display)
+    trade_signal_lines = _format_label_value_lines(f"🎯 {translator('signal_label')}", signal_display)
     trade_signal_block = "\n".join(trade_signal_lines)
     dry_run_line = f"{translator('dry_run_banner')}\n" if dry_run_only else ""
     detailed_text = (
         f"{translator('trade_header')}\n"
         f"{translator('strategy_label', name=strategy_display_name)}\n"
+        f"{_format_account_line(account_label, translator=translator) + chr(10) if account_label else ''}"
         f"{dry_run_line}"
         f"{extra_notification_block}"
         f"{chr(10).join(timing_lines) + chr(10) if timing_lines else ''}"
@@ -275,6 +296,7 @@ def render_trade_notification(
     compact_text = _build_compact_trade_message(
         translator=translator,
         strategy_display_name=strategy_display_name,
+        account_label=account_label,
         dry_run_only=dry_run_only,
         extra_notification_block=extra_notification_block,
         dashboard_text=dashboard_text,
@@ -295,6 +317,7 @@ def render_heartbeat_notification(
     extra_notification_lines,
     execution,
     portfolio,
+    account_label="",
 ) -> RenderedNotification:
     signal_display = _localize_notification_text(execution["signal_display"], translator=translator)
     status_display = _localize_notification_text(execution.get("status_display"), translator=translator)
@@ -324,6 +347,7 @@ def render_heartbeat_notification(
     detailed_text = (
         f"{translator('heartbeat_header')}\n"
         f"{translator('strategy_label', name=strategy_display_name)}\n"
+        f"{_format_account_line(account_label, translator=translator) + chr(10) if account_label else ''}"
         f"{extra_notification_block}"
         f"{portfolio_block}"
         f"{chr(10).join(timing_lines) + chr(10) if timing_lines else ''}"
@@ -336,6 +360,7 @@ def render_heartbeat_notification(
     compact_text = _build_compact_heartbeat_message(
         translator=translator,
         strategy_display_name=strategy_display_name,
+        account_label=account_label,
         dry_run_only=dry_run_only,
         extra_notification_block=extra_notification_block,
         total_equity=total_equity,
