@@ -372,6 +372,7 @@ def run_strategy_core(
                 extra_notification_lines=config.extra_notification_lines,
                 execution=execution,
                 trade_logs=trade_logs,
+                account_label=plan.get("account_hash", ""),
             )
         )
     else:
@@ -383,5 +384,6 @@ def run_strategy_core(
                 extra_notification_lines=config.extra_notification_lines,
                 execution=execution,
                 portfolio=portfolio,
+                account_label=plan.get("account_hash", ""),
             )
         )

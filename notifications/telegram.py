@@ -13,7 +13,7 @@ SIGNAL_ICONS = {
 
 I18N = {
     "zh": {
-        "trade_header": "🔔 【交易执行报告】",
+        "trade_header": "🔔 【调仓指令】",
         "heartbeat_header": "💓 【心跳检测】",
         "error_header": "🚨 【策略异常】",
         "strategy_label": "🧭 策略: {name}",
