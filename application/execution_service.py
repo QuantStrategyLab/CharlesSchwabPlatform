@@ -33,6 +33,42 @@ except ImportError:  # pragma: no cover - compatibility with older pinned shared
             if current_buying_power + sweep_capacity >= quote_price:
                 return True
         return False
+try:
+    from quant_platform_kit.common.small_account_compatibility import (
+        project_unbuyable_value_targets_to_cash,
+    )
+except ImportError:  # pragma: no cover - compatibility with older pinned shared wheels
+    def project_unbuyable_value_targets_to_cash(
+        target_values,
+        prices,
+        *,
+        symbols=None,
+        quantity_step=1.0,
+    ):
+        adjusted = {
+            str(symbol or "").strip().upper(): float(value or 0.0)
+            for symbol, value in dict(target_values or {}).items()
+        }
+        step = max(0.0, float(quantity_step or 0.0))
+        if step <= 0.0:
+            return adjusted, ()
+        candidate_symbols = (
+            tuple(adjusted)
+            if symbols is None
+            else tuple(dict.fromkeys(str(symbol or "").strip().upper() for symbol in symbols))
+        )
+        normalized_prices = {
+            str(symbol or "").strip().upper(): float(price or 0.0)
+            for symbol, price in dict(prices or {}).items()
+        }
+        substituted = []
+        for symbol in candidate_symbols:
+            target_value = max(0.0, float(adjusted.get(symbol, 0.0) or 0.0))
+            price = max(0.0, float(normalized_prices.get(symbol, 0.0) or 0.0))
+            if price > 0.0 and 0.0 < target_value < (price * step):
+                adjusted[symbol] = 0.0
+                substituted.append(symbol)
+        return adjusted, tuple(dict.fromkeys(substituted))
 from quant_platform_kit.common.models import OrderIntent
 from quant_platform_kit.common.quantity import format_quantity
 
@@ -89,6 +125,45 @@ def _apply_safe_haven_cash_substitution(
     adjusted_allocation = {**dict(allocation or {}), "targets": target_values}
     adjusted_plan = dict(plan or {})
     if changed:
+        adjusted_plan["allocation"] = adjusted_allocation
+    return adjusted_plan, adjusted_allocation
+
+
+def _apply_small_account_whole_share_compatibility(
+    *,
+    plan,
+    allocation,
+    quotes,
+) -> tuple[dict, dict]:
+    target_values = dict(allocation.get("targets") or {})
+    candidate_symbols = tuple(
+        dict.fromkeys(
+            tuple(allocation.get("risk_symbols", ()))
+            + tuple(allocation.get("income_symbols", ()))
+        )
+    )
+    if not candidate_symbols:
+        safe_haven_symbols = set(allocation.get("safe_haven_symbols", ()))
+        candidate_symbols = tuple(
+            symbol for symbol in target_values if symbol not in safe_haven_symbols
+        )
+    quote_prices = {
+        str(symbol).strip().upper(): float(
+            quote.get("askPrice") or quote.get("lastPrice") or 0.0
+        )
+        for symbol, quote in dict(quotes or {}).items()
+    }
+    adjusted_targets, substituted = project_unbuyable_value_targets_to_cash(
+        target_values,
+        quote_prices,
+        symbols=candidate_symbols,
+        quantity_step=1.0,
+    )
+    adjusted_allocation = {**dict(allocation or {}), "targets": adjusted_targets}
+    if substituted:
+        adjusted_allocation["small_account_whole_share_substituted_symbols"] = substituted
+    adjusted_plan = dict(plan or {})
+    if substituted:
         adjusted_plan["allocation"] = adjusted_allocation
     return adjusted_plan, adjusted_allocation
 
@@ -248,6 +323,11 @@ def execute_rebalance_cycle(
         allocation=allocation,
         threshold_usd=safe_haven_cash_substitute_threshold_usd,
     )
+    plan, allocation = _apply_small_account_whole_share_compatibility(
+        plan=plan,
+        allocation=allocation,
+        quotes=quotes,
+    )
     target_values = dict(allocation["targets"])
     threshold = float(execution["trade_threshold_value"])
     cash_sweep_symbol = str(portfolio["cash_sweep_symbol"])
@@ -396,6 +476,11 @@ def execute_rebalance_cycle(
             )
             strategy_symbols = tuple(allocation["strategy_symbols"])
             quotes = load_quotes(strategy_symbols)
+            plan, allocation = _apply_small_account_whole_share_compatibility(
+                plan=plan,
+                allocation=allocation,
+                quotes=quotes,
+            )
             market_values = dict(portfolio["market_values"])
             target_values = dict(allocation["targets"])
             threshold = float(execution["trade_threshold_value"])
