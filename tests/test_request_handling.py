@@ -69,8 +69,6 @@ def install_stub_modules(strategy_plugin_mounts_json=None, notify_lang="en"):
         reserved_cash_floor_usd=150.0,
         reserved_cash_ratio=0.03,
         strategy_plugin_mounts_json=strategy_plugin_mounts_json,
-        crisis_alert_email_to=(),
-        crisis_alert_email_from=None,
         crisis_alert_smtp_host=None,
         crisis_alert_smtp_port=587,
         crisis_alert_smtp_username=None,

@@ -109,8 +109,6 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIsNone(settings.strategy_plugin_mounts_json)
         self.assertEqual(settings.crisis_alert_google_voice_to, ())
         self.assertIsNone(settings.crisis_alert_smtp_from)
-        self.assertEqual(settings.crisis_alert_email_to, ())
-        self.assertIsNone(settings.crisis_alert_email_from)
         self.assertIsNone(settings.crisis_alert_smtp_host)
         self.assertEqual(settings.crisis_alert_smtp_port, 587)
         self.assertIsNone(settings.crisis_alert_smtp_username)
@@ -272,9 +270,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             {
                 "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
                 "CRISIS_ALERT_GOOGLE_VOICE_TO": "gateway@txt.voice.google.com",
-                "CRISIS_ALERT_EMAIL_TO": "risk@example.com;ops@example.com,risk@example.com",
                 "CRISIS_ALERT_SMTP_FROM": "smtp-from@example.com",
-                "CRISIS_ALERT_EMAIL_FROM": "bot@example.com",
                 "CRISIS_ALERT_SMTP_HOST": "smtp.example.com",
                 "CRISIS_ALERT_SMTP_PORT": "465",
                 "CRISIS_ALERT_SMTP_USERNAME": "bot",
@@ -288,8 +284,6 @@ class RuntimeConfigSupportTests(unittest.TestCase):
 
         self.assertEqual(settings.crisis_alert_google_voice_to, ("gateway@txt.voice.google.com",))
         self.assertEqual(settings.crisis_alert_smtp_from, "smtp-from@example.com")
-        self.assertEqual(settings.crisis_alert_email_to, ("risk@example.com", "ops@example.com"))
-        self.assertEqual(settings.crisis_alert_email_from, "bot@example.com")
         self.assertEqual(settings.crisis_alert_smtp_host, "smtp.example.com")
         self.assertEqual(settings.crisis_alert_smtp_port, 465)
         self.assertEqual(settings.crisis_alert_smtp_username, "bot")

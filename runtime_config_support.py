@@ -42,8 +42,6 @@ class PlatformRuntimeSettings:
     strategy_plugin_mounts_json: str | None = None
     crisis_alert_google_voice_to: tuple[str, ...] = ()
     crisis_alert_smtp_from: str | None = None
-    crisis_alert_email_to: tuple[str, ...] = ()
-    crisis_alert_email_from: str | None = None
     crisis_alert_smtp_host: str | None = None
     crisis_alert_smtp_port: int = 587
     crisis_alert_smtp_username: str | None = None
@@ -164,12 +162,7 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
             or os.getenv("STRATEGY_PLUGIN_MOUNTS_JSON")
         ),
         crisis_alert_google_voice_to=_split_env_list(os.getenv("CRISIS_ALERT_GOOGLE_VOICE_TO")),
-        crisis_alert_smtp_from=_first_non_empty(
-            os.getenv("CRISIS_ALERT_SMTP_FROM"),
-            os.getenv("CRISIS_ALERT_EMAIL_FROM"),
-        ),
-        crisis_alert_email_to=_split_env_list(os.getenv("CRISIS_ALERT_EMAIL_TO")),
-        crisis_alert_email_from=_first_non_empty(os.getenv("CRISIS_ALERT_EMAIL_FROM")),
+        crisis_alert_smtp_from=_first_non_empty(os.getenv("CRISIS_ALERT_SMTP_FROM")),
         crisis_alert_smtp_host=_first_non_empty(os.getenv("CRISIS_ALERT_SMTP_HOST")),
         crisis_alert_smtp_port=_resolve_positive_int_env("CRISIS_ALERT_SMTP_PORT", default=587),
         crisis_alert_smtp_username=_first_non_empty(os.getenv("CRISIS_ALERT_SMTP_USERNAME")),
