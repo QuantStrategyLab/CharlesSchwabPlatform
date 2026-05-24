@@ -33,6 +33,14 @@ jobs:
       SCHWAB_MIN_RESERVED_CASH_USD: ${{ vars.SCHWAB_MIN_RESERVED_CASH_USD }}
       SCHWAB_RESERVED_CASH_RATIO: ${{ vars.SCHWAB_RESERVED_CASH_RATIO }}
       SCHWAB_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD: ${{ vars.SCHWAB_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD }}
+      CRISIS_ALERT_EMAIL_TO: ${{ vars.CRISIS_ALERT_EMAIL_TO }}
+      CRISIS_ALERT_EMAIL_FROM: ${{ vars.CRISIS_ALERT_EMAIL_FROM }}
+      CRISIS_ALERT_SMTP_HOST: ${{ vars.CRISIS_ALERT_SMTP_HOST }}
+      CRISIS_ALERT_SMTP_PORT: ${{ vars.CRISIS_ALERT_SMTP_PORT }}
+      CRISIS_ALERT_SMTP_USERNAME: ${{ vars.CRISIS_ALERT_SMTP_USERNAME }}
+      CRISIS_ALERT_SMTP_PASSWORD_SECRET_NAME: ${{ vars.CRISIS_ALERT_SMTP_PASSWORD_SECRET_NAME }}
+      CRISIS_ALERT_SMTP_STARTTLS: ${{ vars.CRISIS_ALERT_SMTP_STARTTLS }}
+      CRISIS_ALERT_SMTP_SSL: ${{ vars.CRISIS_ALERT_SMTP_SSL }}
       # Optional strategy overrides; leave unset to inherit the UsEquityStrategies profile defaults.
       INCOME_THRESHOLD_USD: ${{ vars.INCOME_THRESHOLD_USD }}
       QQQI_INCOME_RATIO: ${{ vars.QQQI_INCOME_RATIO }}
@@ -43,6 +51,7 @@ jobs:
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
       SCHWAB_API_KEY: ${{ secrets.SCHWAB_API_KEY }}
       SCHWAB_APP_SECRET: ${{ secrets.SCHWAB_APP_SECRET }}
+      CRISIS_ALERT_SMTP_PASSWORD: ${{ secrets.CRISIS_ALERT_SMTP_PASSWORD }}
     steps:
       - name: Check whether env sync is enabled
         id: config
@@ -266,6 +275,16 @@ jobs:
             remove_secret_vars+=("SCHWAB_APP_SECRET")
           fi
 
+          if [ -n "${CRISIS_ALERT_SMTP_PASSWORD_SECRET_NAME:-}" ]; then
+            secret_pairs+=("CRISIS_ALERT_SMTP_PASSWORD=${CRISIS_ALERT_SMTP_PASSWORD_SECRET_NAME}:latest")
+          elif [ -n "${CRISIS_ALERT_SMTP_PASSWORD:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_SMTP_PASSWORD=${CRISIS_ALERT_SMTP_PASSWORD}")
+            remove_secret_vars+=("CRISIS_ALERT_SMTP_PASSWORD")
+          else
+            remove_env_vars+=("CRISIS_ALERT_SMTP_PASSWORD")
+            remove_secret_vars+=("CRISIS_ALERT_SMTP_PASSWORD")
+          fi
+
           if [ -n "${SCHWAB_FEATURE_SNAPSHOT_PATH:-}" ]; then
             env_pairs+=("SCHWAB_FEATURE_SNAPSHOT_PATH=${SCHWAB_FEATURE_SNAPSHOT_PATH}")
           else
@@ -306,6 +325,48 @@ jobs:
             env_pairs+=("SCHWAB_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD=${SCHWAB_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD}")
           else
             remove_env_vars+=("SCHWAB_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD")
+          fi
+
+          if [ -n "${CRISIS_ALERT_EMAIL_TO:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_EMAIL_TO=${CRISIS_ALERT_EMAIL_TO}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_EMAIL_TO")
+          fi
+
+          if [ -n "${CRISIS_ALERT_EMAIL_FROM:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_EMAIL_FROM=${CRISIS_ALERT_EMAIL_FROM}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_EMAIL_FROM")
+          fi
+
+          if [ -n "${CRISIS_ALERT_SMTP_HOST:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_SMTP_HOST=${CRISIS_ALERT_SMTP_HOST}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_SMTP_HOST")
+          fi
+
+          if [ -n "${CRISIS_ALERT_SMTP_PORT:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_SMTP_PORT=${CRISIS_ALERT_SMTP_PORT}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_SMTP_PORT")
+          fi
+
+          if [ -n "${CRISIS_ALERT_SMTP_USERNAME:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_SMTP_USERNAME=${CRISIS_ALERT_SMTP_USERNAME}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_SMTP_USERNAME")
+          fi
+
+          if [ -n "${CRISIS_ALERT_SMTP_STARTTLS:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_SMTP_STARTTLS=${CRISIS_ALERT_SMTP_STARTTLS}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_SMTP_STARTTLS")
+          fi
+
+          if [ -n "${CRISIS_ALERT_SMTP_SSL:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_SMTP_SSL=${CRISIS_ALERT_SMTP_SSL}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_SMTP_SSL")
           fi
 
           if [ -n "${INCOME_THRESHOLD_USD:-}" ]; then

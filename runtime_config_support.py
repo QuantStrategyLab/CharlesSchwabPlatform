@@ -40,6 +40,14 @@ class PlatformRuntimeSettings:
     strategy_config_path: str | None = None
     strategy_config_source: str | None = None
     strategy_plugin_mounts_json: str | None = None
+    crisis_alert_email_to: tuple[str, ...] = ()
+    crisis_alert_email_from: str | None = None
+    crisis_alert_smtp_host: str | None = None
+    crisis_alert_smtp_port: int = 587
+    crisis_alert_smtp_username: str | None = None
+    crisis_alert_smtp_password: str | None = None
+    crisis_alert_smtp_starttls: bool = True
+    crisis_alert_smtp_ssl: bool = False
     runtime_target: RuntimeTarget | None = None
 
 
@@ -58,6 +66,45 @@ def _resolve_ratio_env(name: str, *, default: float) -> float:
     if value > 1.0:
         raise ValueError(f"{name} must be in [0,1], got {value}")
     return value
+
+
+def _first_non_empty(raw_value: str | None) -> str | None:
+    value = str(raw_value or "").strip()
+    return value or None
+
+
+def _resolve_bool_env(name: str, *, default: bool) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None or raw_value.strip() == "":
+        return bool(default)
+    return resolve_bool_value(raw_value)
+
+
+def _resolve_positive_int_env(name: str, *, default: int) -> int:
+    raw_value = os.getenv(name)
+    if raw_value is None or raw_value.strip() == "":
+        return int(default)
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{name} must be a positive integer, got {raw_value!r}") from None
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer, got {raw_value!r}")
+    return value
+
+
+def _split_env_list(raw_value: str | None) -> tuple[str, ...]:
+    if raw_value is None:
+        return ()
+    items = []
+    seen = set()
+    for value in str(raw_value).replace(";", ",").replace("\n", ",").split(","):
+        item = value.strip()
+        if not item or item in seen:
+            continue
+        items.append(item)
+        seen.add(item)
+    return tuple(items)
 
 
 def resolve_strategy_profile(raw_value: str | None = None) -> str:
@@ -111,5 +158,13 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
             os.getenv("SCHWAB_STRATEGY_PLUGIN_MOUNTS_JSON")
             or os.getenv("STRATEGY_PLUGIN_MOUNTS_JSON")
         ),
+        crisis_alert_email_to=_split_env_list(os.getenv("CRISIS_ALERT_EMAIL_TO")),
+        crisis_alert_email_from=_first_non_empty(os.getenv("CRISIS_ALERT_EMAIL_FROM")),
+        crisis_alert_smtp_host=_first_non_empty(os.getenv("CRISIS_ALERT_SMTP_HOST")),
+        crisis_alert_smtp_port=_resolve_positive_int_env("CRISIS_ALERT_SMTP_PORT", default=587),
+        crisis_alert_smtp_username=_first_non_empty(os.getenv("CRISIS_ALERT_SMTP_USERNAME")),
+        crisis_alert_smtp_password=_first_non_empty(os.getenv("CRISIS_ALERT_SMTP_PASSWORD")),
+        crisis_alert_smtp_starttls=_resolve_bool_env("CRISIS_ALERT_SMTP_STARTTLS", default=True),
+        crisis_alert_smtp_ssl=_resolve_bool_env("CRISIS_ALERT_SMTP_SSL", default=False),
         runtime_target=runtime_target,
     )
