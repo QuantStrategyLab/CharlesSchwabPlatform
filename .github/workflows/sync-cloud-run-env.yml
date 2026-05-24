@@ -34,9 +34,7 @@ jobs:
       SCHWAB_RESERVED_CASH_RATIO: ${{ vars.SCHWAB_RESERVED_CASH_RATIO }}
       SCHWAB_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD: ${{ vars.SCHWAB_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD }}
       CRISIS_ALERT_GOOGLE_VOICE_TO: ${{ vars.CRISIS_ALERT_GOOGLE_VOICE_TO }}
-      CRISIS_ALERT_EMAIL_TO: ${{ vars.CRISIS_ALERT_EMAIL_TO }}
       CRISIS_ALERT_SMTP_FROM: ${{ vars.CRISIS_ALERT_SMTP_FROM }}
-      CRISIS_ALERT_EMAIL_FROM: ${{ vars.CRISIS_ALERT_EMAIL_FROM }}
       CRISIS_ALERT_SMTP_HOST: ${{ vars.CRISIS_ALERT_SMTP_HOST }}
       CRISIS_ALERT_SMTP_PORT: ${{ vars.CRISIS_ALERT_SMTP_PORT }}
       CRISIS_ALERT_SMTP_USERNAME: ${{ vars.CRISIS_ALERT_SMTP_USERNAME }}
@@ -335,22 +333,10 @@ jobs:
             remove_env_vars+=("CRISIS_ALERT_GOOGLE_VOICE_TO")
           fi
 
-          if [ -n "${CRISIS_ALERT_EMAIL_TO:-}" ]; then
-            env_pairs+=("CRISIS_ALERT_EMAIL_TO=${CRISIS_ALERT_EMAIL_TO}")
-          else
-            remove_env_vars+=("CRISIS_ALERT_EMAIL_TO")
-          fi
-
           if [ -n "${CRISIS_ALERT_SMTP_FROM:-}" ]; then
             env_pairs+=("CRISIS_ALERT_SMTP_FROM=${CRISIS_ALERT_SMTP_FROM}")
           else
             remove_env_vars+=("CRISIS_ALERT_SMTP_FROM")
-          fi
-
-          if [ -n "${CRISIS_ALERT_EMAIL_FROM:-}" ]; then
-            env_pairs+=("CRISIS_ALERT_EMAIL_FROM=${CRISIS_ALERT_EMAIL_FROM}")
-          else
-            remove_env_vars+=("CRISIS_ALERT_EMAIL_FROM")
           fi
 
           if [ -n "${CRISIS_ALERT_SMTP_HOST:-}" ]; then
