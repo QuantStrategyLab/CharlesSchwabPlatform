@@ -69,6 +69,14 @@ def install_stub_modules(strategy_plugin_mounts_json=None, notify_lang="en"):
         reserved_cash_floor_usd=150.0,
         reserved_cash_ratio=0.03,
         strategy_plugin_mounts_json=strategy_plugin_mounts_json,
+        crisis_alert_email_to=(),
+        crisis_alert_email_from=None,
+        crisis_alert_smtp_host=None,
+        crisis_alert_smtp_port=587,
+        crisis_alert_smtp_username=None,
+        crisis_alert_smtp_password=None,
+        crisis_alert_smtp_starttls=True,
+        crisis_alert_smtp_ssl=False,
         runtime_target=None,
     )
 
@@ -180,6 +188,33 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(body, "OK")
         self.assertTrue(observed["called"])
+
+    def test_handle_schwab_sends_escalated_strategy_plugin_alert(self):
+        module = load_module()
+        signal = types.SimpleNamespace(
+            plugin="crisis_response_shadow",
+            effective_mode="shadow",
+            canonical_route="true_crisis",
+            suggested_action="defend",
+            would_trade_if_enabled=True,
+            as_of="2026-05-24",
+        )
+        observed = {"alerts": []}
+
+        module.get_client_from_secret = lambda *args, **kwargs: object()
+        module.is_market_open_today = lambda: True
+        module.load_strategy_plugin_signals = lambda: ((signal,), None)
+        module.attach_strategy_plugin_report = lambda *args, **kwargs: None
+        module.send_crisis_alert_email = lambda alert_message: observed["alerts"].append(alert_message) or True
+        module.run_strategy_core = lambda *_args, **_kwargs: None
+
+        with module.app.test_request_context("/", method="POST"):
+            body, status = module.handle_schwab()
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body, "OK")
+        self.assertEqual(len(observed["alerts"]), 1)
+        self.assertIn("Crisis", observed["alerts"][0].subject)
 
     def test_handle_schwab_precheck_uses_dry_run_override(self):
         module = load_module()
