@@ -107,6 +107,8 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIsNone(settings.strategy_config_path)
         self.assertIsNone(settings.strategy_config_source)
         self.assertIsNone(settings.strategy_plugin_mounts_json)
+        self.assertEqual(settings.crisis_alert_google_voice_to, ())
+        self.assertIsNone(settings.crisis_alert_smtp_from)
         self.assertEqual(settings.crisis_alert_email_to, ())
         self.assertIsNone(settings.crisis_alert_email_from)
         self.assertIsNone(settings.crisis_alert_smtp_host)
@@ -264,12 +266,14 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             '{"strategy_plugins":[{"plugin":"schwab"}]}',
         )
 
-    def test_reads_crisis_alert_email_config(self):
+    def test_reads_crisis_alert_google_voice_config(self):
         with patch.dict(
             os.environ,
             {
                 "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
+                "CRISIS_ALERT_GOOGLE_VOICE_TO": "gateway@txt.voice.google.com",
                 "CRISIS_ALERT_EMAIL_TO": "risk@example.com;ops@example.com,risk@example.com",
+                "CRISIS_ALERT_SMTP_FROM": "smtp-from@example.com",
                 "CRISIS_ALERT_EMAIL_FROM": "bot@example.com",
                 "CRISIS_ALERT_SMTP_HOST": "smtp.example.com",
                 "CRISIS_ALERT_SMTP_PORT": "465",
@@ -282,6 +286,8 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         ):
             settings = load_platform_runtime_settings()
 
+        self.assertEqual(settings.crisis_alert_google_voice_to, ("gateway@txt.voice.google.com",))
+        self.assertEqual(settings.crisis_alert_smtp_from, "smtp-from@example.com")
         self.assertEqual(settings.crisis_alert_email_to, ("risk@example.com", "ops@example.com"))
         self.assertEqual(settings.crisis_alert_email_from, "bot@example.com")
         self.assertEqual(settings.crisis_alert_smtp_host, "smtp.example.com")
