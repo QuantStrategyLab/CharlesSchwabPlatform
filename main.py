@@ -16,7 +16,11 @@ from notifications.telegram import (
     build_strategy_display_name,
     build_translator,
 )
-from quant_platform_kit.notifications.email import send_smtp_email
+from quant_platform_kit.notifications.strategy_plugin_email import (
+    StrategyPluginEmailAlertMarkerStore,
+    build_strategy_plugin_alert_context_label as build_email_alert_context_label,
+    publish_strategy_plugin_email_alerts,
+)
 from quant_platform_kit.schwab import (
     fetch_account_snapshot,
     fetch_default_daily_price_history_candles,
@@ -89,14 +93,6 @@ RUNTIME_SETTINGS = load_platform_runtime_settings()
 STRATEGY_PROFILE = RUNTIME_SETTINGS.strategy_profile
 STRATEGY_DISPLAY_NAME = RUNTIME_SETTINGS.strategy_display_name
 NOTIFY_LANG = RUNTIME_SETTINGS.notify_lang
-CRISIS_ALERT_EMAIL_TO = getattr(RUNTIME_SETTINGS, "crisis_alert_email_to", ())
-CRISIS_ALERT_EMAIL_FROM = getattr(RUNTIME_SETTINGS, "crisis_alert_email_from", None)
-CRISIS_ALERT_SMTP_HOST = getattr(RUNTIME_SETTINGS, "crisis_alert_smtp_host", None)
-CRISIS_ALERT_SMTP_PORT = getattr(RUNTIME_SETTINGS, "crisis_alert_smtp_port", 587)
-CRISIS_ALERT_SMTP_USERNAME = getattr(RUNTIME_SETTINGS, "crisis_alert_smtp_username", None)
-CRISIS_ALERT_SMTP_PASSWORD = getattr(RUNTIME_SETTINGS, "crisis_alert_smtp_password", None)
-CRISIS_ALERT_SMTP_STARTTLS = getattr(RUNTIME_SETTINGS, "crisis_alert_smtp_starttls", True)
-CRISIS_ALERT_SMTP_SSL = getattr(RUNTIME_SETTINGS, "crisis_alert_smtp_ssl", False)
 t = build_translator(NOTIFY_LANG)
 signal_text = build_signal_text(t)
 strategy_display_name = build_strategy_display_name(t)(
@@ -280,29 +276,41 @@ def build_strategy_plugin_alert_messages(signals):
     return build_strategy_adapters().build_strategy_plugin_alert_messages(signals)
 
 
-def send_crisis_alert_email(alert_message) -> bool:
-    return send_smtp_email(
-        subject=alert_message.subject,
-        body=alert_message.body,
-        smtp_host=CRISIS_ALERT_SMTP_HOST,
-        smtp_port=CRISIS_ALERT_SMTP_PORT,
-        sender=CRISIS_ALERT_EMAIL_FROM,
-        recipients=CRISIS_ALERT_EMAIL_TO,
-        username=CRISIS_ALERT_SMTP_USERNAME,
-        password=CRISIS_ALERT_SMTP_PASSWORD,
-        use_starttls=CRISIS_ALERT_SMTP_STARTTLS,
-        use_ssl=CRISIS_ALERT_SMTP_SSL,
+def build_strategy_plugin_alert_store():
+    return StrategyPluginEmailAlertMarkerStore(
+        local_dir=os.getenv("STRATEGY_PLUGIN_ALERT_STATE_DIR") or "/tmp/quant_strategy_plugin_alerts",
+        gcs_prefix_uri=os.getenv("STRATEGY_PLUGIN_ALERT_STATE_GCS_URI") or os.getenv("EXECUTION_REPORT_GCS_URI"),
+        gcp_project_id=PROJECT_ID,
     )
 
 
-def publish_strategy_plugin_alerts(signals) -> int:
-    sent_count = 0
-    for alert_message in build_strategy_plugin_alert_messages(signals):
-        if send_crisis_alert_email(alert_message):
-            sent_count += 1
-    if sent_count:
-        print(f"strategy_plugin_alert_email_sent count={sent_count}", flush=True)
-    return sent_count
+def build_strategy_plugin_alert_context_label() -> str:
+    return build_email_alert_context_label(
+        platform_id="schwab",
+        strategy_profile=STRATEGY_PROFILE,
+        service_name=SERVICE_NAME,
+        runtime_target=RUNTIME_SETTINGS.runtime_target,
+    )
+
+
+def attach_strategy_plugin_alert_email_result(report, result) -> None:
+    report.setdefault("summary", {})["strategy_plugin_alert_email_sent_count"] = result.sent_count
+    report.setdefault("diagnostics", {}).update(result.to_report_fields())
+
+
+def publish_strategy_plugin_alerts(signals, *, report=None):
+    result = publish_strategy_plugin_email_alerts(
+        signals,
+        email_settings=RUNTIME_SETTINGS,
+        translator=t,
+        strategy_label=STRATEGY_PROFILE,
+        context_label=build_strategy_plugin_alert_context_label(),
+        alert_store=build_strategy_plugin_alert_store(),
+        log_message=print,
+    )
+    if report is not None:
+        attach_strategy_plugin_alert_email_result(report, result)
+    return result
 
 
 def persist_execution_report(report, *, dry_run_only_override: bool | None = None):
@@ -399,7 +407,7 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
             execution_window="precheck" if dry_run_only_override else "execution",
         )
         if dry_run_only_override is None:
-            publish_strategy_plugin_alerts(strategy_plugin_signals)
+            publish_strategy_plugin_alerts(strategy_plugin_signals, report=report)
         run_strategy_core(
             client,
             None,

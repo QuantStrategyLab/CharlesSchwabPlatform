@@ -205,7 +205,21 @@ class RequestHandlingTests(unittest.TestCase):
         module.is_market_open_today = lambda: True
         module.load_strategy_plugin_signals = lambda: ((signal,), None)
         module.attach_strategy_plugin_report = lambda *args, **kwargs: None
-        module.send_crisis_alert_email = lambda alert_message: observed["alerts"].append(alert_message) or True
+
+        def fake_publish(signals, **kwargs):
+            observed["alerts"].append((tuple(signals), kwargs))
+            return types.SimpleNamespace(
+                sent_count=1,
+                to_report_fields=lambda: {
+                    "strategy_plugin_alert_email_attempted_count": 1,
+                    "strategy_plugin_alert_email_sent_count": 1,
+                    "strategy_plugin_alert_email_skipped_count": 0,
+                    "strategy_plugin_alert_email_failed_count": 0,
+                    "strategy_plugin_alert_email_deliveries": [],
+                },
+            )
+
+        module.publish_strategy_plugin_email_alerts = fake_publish
         module.run_strategy_core = lambda *_args, **_kwargs: None
 
         with module.app.test_request_context("/", method="POST"):
@@ -214,7 +228,8 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(body, "OK")
         self.assertEqual(len(observed["alerts"]), 1)
-        self.assertIn("Crisis", observed["alerts"][0].subject)
+        self.assertEqual(observed["alerts"][0][0], (signal,))
+        self.assertIn("schwab", observed["alerts"][0][1]["context_label"])
 
     def test_handle_schwab_precheck_uses_dry_run_override(self):
         module = load_module()
