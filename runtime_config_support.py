@@ -40,6 +40,8 @@ class PlatformRuntimeSettings:
     strategy_config_path: str | None = None
     strategy_config_source: str | None = None
     strategy_plugin_mounts_json: str | None = None
+    crisis_alert_google_voice_to: tuple[str, ...] = ()
+    crisis_alert_smtp_from: str | None = None
     crisis_alert_email_to: tuple[str, ...] = ()
     crisis_alert_email_from: str | None = None
     crisis_alert_smtp_host: str | None = None
@@ -68,9 +70,12 @@ def _resolve_ratio_env(name: str, *, default: float) -> float:
     return value
 
 
-def _first_non_empty(raw_value: str | None) -> str | None:
-    value = str(raw_value or "").strip()
-    return value or None
+def _first_non_empty(*raw_values: str | None) -> str | None:
+    for raw_value in raw_values:
+        value = str(raw_value or "").strip()
+        if value:
+            return value
+    return None
 
 
 def _resolve_bool_env(name: str, *, default: bool) -> bool:
@@ -157,6 +162,11 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
         strategy_plugin_mounts_json=(
             os.getenv("SCHWAB_STRATEGY_PLUGIN_MOUNTS_JSON")
             or os.getenv("STRATEGY_PLUGIN_MOUNTS_JSON")
+        ),
+        crisis_alert_google_voice_to=_split_env_list(os.getenv("CRISIS_ALERT_GOOGLE_VOICE_TO")),
+        crisis_alert_smtp_from=_first_non_empty(
+            os.getenv("CRISIS_ALERT_SMTP_FROM"),
+            os.getenv("CRISIS_ALERT_EMAIL_FROM"),
         ),
         crisis_alert_email_to=_split_env_list(os.getenv("CRISIS_ALERT_EMAIL_TO")),
         crisis_alert_email_from=_first_non_empty(os.getenv("CRISIS_ALERT_EMAIL_FROM")),
