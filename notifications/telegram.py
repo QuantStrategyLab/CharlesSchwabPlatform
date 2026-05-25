@@ -82,7 +82,7 @@ I18N = {
         "strategy_plugin_alert_strategy": "策略：{strategy}",
         "strategy_plugin_alert_plugin": "插件：{plugin}",
         "strategy_plugin_alert_status": "状态：{route}",
-        "strategy_plugin_alert_action": "提醒：{action}",
+        "strategy_plugin_alert_action": "人工处理建议：{action}",
         "strategy_plugin_alert_mode": "模式：{mode}",
         "strategy_plugin_alert_as_of": "信号时间：{as_of}",
         "strategy_plugin_name_crisis_response_shadow": "危机观察通知",
