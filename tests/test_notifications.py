@@ -49,12 +49,12 @@ class NotificationTests(unittest.TestCase):
             translate(
                 "blend_gate_reason_volatility_delever",
                 symbol="SOXX",
-                window=20,
+                window=10,
                 volatility="55.0%",
                 threshold="50.0%",
                 redirect_symbol="SOXX",
             ),
-            "SOXX 20 日年化波动率 55.0% 高于 50.0%，SOXL 转向 SOXX",
+            "SOXX 10 日年化波动率 55.0% 高于 50.0%，SOXL 转向 SOXX",
         )
         self.assertEqual(
             translate(
