@@ -40,14 +40,9 @@ class PlatformRuntimeSettings:
     strategy_config_path: str | None = None
     strategy_config_source: str | None = None
     strategy_plugin_mounts_json: str | None = None
-    crisis_alert_google_voice_to: tuple[str, ...] = ()
-    crisis_alert_smtp_from: str | None = None
-    crisis_alert_smtp_host: str | None = None
-    crisis_alert_smtp_port: int = 587
-    crisis_alert_smtp_username: str | None = None
-    crisis_alert_smtp_password: str | None = None
-    crisis_alert_smtp_starttls: bool = True
-    crisis_alert_smtp_ssl: bool = False
+    crisis_alert_google_voice_gateway: tuple[str, ...] = ()
+    crisis_alert_google_voice_gmail_user: str | None = None
+    crisis_alert_google_voice_gmail_app_password: str | None = None
     runtime_target: RuntimeTarget | None = None
 
 
@@ -74,26 +69,6 @@ def _first_non_empty(*raw_values: str | None) -> str | None:
         if value:
             return value
     return None
-
-
-def _resolve_bool_env(name: str, *, default: bool) -> bool:
-    raw_value = os.getenv(name)
-    if raw_value is None or raw_value.strip() == "":
-        return bool(default)
-    return resolve_bool_value(raw_value)
-
-
-def _resolve_positive_int_env(name: str, *, default: int) -> int:
-    raw_value = os.getenv(name)
-    if raw_value is None or raw_value.strip() == "":
-        return int(default)
-    try:
-        value = int(raw_value)
-    except (TypeError, ValueError):
-        raise ValueError(f"{name} must be a positive integer, got {raw_value!r}") from None
-    if value <= 0:
-        raise ValueError(f"{name} must be a positive integer, got {raw_value!r}")
-    return value
 
 
 def _split_env_list(raw_value: str | None) -> tuple[str, ...]:
@@ -161,13 +136,10 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
             os.getenv("SCHWAB_STRATEGY_PLUGIN_MOUNTS_JSON")
             or os.getenv("STRATEGY_PLUGIN_MOUNTS_JSON")
         ),
-        crisis_alert_google_voice_to=_split_env_list(os.getenv("CRISIS_ALERT_GOOGLE_VOICE_TO")),
-        crisis_alert_smtp_from=_first_non_empty(os.getenv("CRISIS_ALERT_SMTP_FROM")),
-        crisis_alert_smtp_host=_first_non_empty(os.getenv("CRISIS_ALERT_SMTP_HOST")),
-        crisis_alert_smtp_port=_resolve_positive_int_env("CRISIS_ALERT_SMTP_PORT", default=587),
-        crisis_alert_smtp_username=_first_non_empty(os.getenv("CRISIS_ALERT_SMTP_USERNAME")),
-        crisis_alert_smtp_password=_first_non_empty(os.getenv("CRISIS_ALERT_SMTP_PASSWORD")),
-        crisis_alert_smtp_starttls=_resolve_bool_env("CRISIS_ALERT_SMTP_STARTTLS", default=True),
-        crisis_alert_smtp_ssl=_resolve_bool_env("CRISIS_ALERT_SMTP_SSL", default=False),
+        crisis_alert_google_voice_gateway=_split_env_list(os.getenv("CRISIS_ALERT_GOOGLE_VOICE_GATEWAY")),
+        crisis_alert_google_voice_gmail_user=_first_non_empty(os.getenv("CRISIS_ALERT_GOOGLE_VOICE_GMAIL_USER")),
+        crisis_alert_google_voice_gmail_app_password=_first_non_empty(
+            os.getenv("CRISIS_ALERT_GOOGLE_VOICE_GMAIL_APP_PASSWORD")
+        ),
         runtime_target=runtime_target,
     )
