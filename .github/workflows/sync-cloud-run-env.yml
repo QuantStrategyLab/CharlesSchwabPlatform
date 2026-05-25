@@ -57,6 +57,12 @@ jobs:
       CRISIS_ALERT_PUSH_PRIORITY: ${{ vars.CRISIS_ALERT_PUSH_PRIORITY }}
       CRISIS_ALERT_PUSH_TAGS: ${{ vars.CRISIS_ALERT_PUSH_TAGS }}
       CRISIS_ALERT_PUSH_BODY_MAX_CHARS: ${{ vars.CRISIS_ALERT_PUSH_BODY_MAX_CHARS }}
+      CRISIS_ALERT_TELEGRAM_CHAT_IDS: ${{ vars.CRISIS_ALERT_TELEGRAM_CHAT_IDS }}
+      CRISIS_ALERT_TELEGRAM_BOT_TOKEN_SECRET_NAME: ${{ vars.CRISIS_ALERT_TELEGRAM_BOT_TOKEN_SECRET_NAME }}
+      CRISIS_ALERT_TELEGRAM_API_BASE_URL: ${{ vars.CRISIS_ALERT_TELEGRAM_API_BASE_URL }}
+      CRISIS_ALERT_TELEGRAM_PARSE_MODE: ${{ vars.CRISIS_ALERT_TELEGRAM_PARSE_MODE }}
+      CRISIS_ALERT_TELEGRAM_DISABLE_WEB_PAGE_PREVIEW: ${{ vars.CRISIS_ALERT_TELEGRAM_DISABLE_WEB_PAGE_PREVIEW }}
+      CRISIS_ALERT_TELEGRAM_BODY_MAX_CHARS: ${{ vars.CRISIS_ALERT_TELEGRAM_BODY_MAX_CHARS }}
       # Optional strategy overrides; leave unset to inherit the UsEquityStrategies profile defaults.
       INCOME_THRESHOLD_USD: ${{ vars.INCOME_THRESHOLD_USD }}
       QQQI_INCOME_RATIO: ${{ vars.QQQI_INCOME_RATIO }}
@@ -71,6 +77,7 @@ jobs:
       CRISIS_ALERT_SMS_AUTH_TOKEN: ${{ secrets.CRISIS_ALERT_SMS_AUTH_TOKEN }}
       CRISIS_ALERT_PUSH_APP_TOKEN: ${{ secrets.CRISIS_ALERT_PUSH_APP_TOKEN }}
       CRISIS_ALERT_PUSH_ACCESS_TOKEN: ${{ secrets.CRISIS_ALERT_PUSH_ACCESS_TOKEN }}
+      CRISIS_ALERT_TELEGRAM_BOT_TOKEN: ${{ secrets.CRISIS_ALERT_TELEGRAM_BOT_TOKEN }}
     steps:
       - name: Check whether env sync is enabled
         id: config
@@ -359,6 +366,17 @@ jobs:
             remove_secret_vars+=("CRISIS_ALERT_PUSH_ACCESS_TOKEN")
           fi
 
+          if [ -n "${CRISIS_ALERT_TELEGRAM_BOT_TOKEN_SECRET_NAME:-}" ]; then
+            secret_pairs+=("CRISIS_ALERT_TELEGRAM_BOT_TOKEN=${CRISIS_ALERT_TELEGRAM_BOT_TOKEN_SECRET_NAME}:latest")
+            remove_env_vars+=("CRISIS_ALERT_TELEGRAM_BOT_TOKEN")
+          elif [ -n "${CRISIS_ALERT_TELEGRAM_BOT_TOKEN:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_TELEGRAM_BOT_TOKEN=${CRISIS_ALERT_TELEGRAM_BOT_TOKEN}")
+            remove_secret_vars+=("CRISIS_ALERT_TELEGRAM_BOT_TOKEN")
+          else
+            remove_env_vars+=("CRISIS_ALERT_TELEGRAM_BOT_TOKEN")
+            remove_secret_vars+=("CRISIS_ALERT_TELEGRAM_BOT_TOKEN")
+          fi
+
           if [ -n "${SCHWAB_FEATURE_SNAPSHOT_PATH:-}" ]; then
             env_pairs+=("SCHWAB_FEATURE_SNAPSHOT_PATH=${SCHWAB_FEATURE_SNAPSHOT_PATH}")
           else
@@ -519,6 +537,36 @@ jobs:
             env_pairs+=("CRISIS_ALERT_PUSH_BODY_MAX_CHARS=${CRISIS_ALERT_PUSH_BODY_MAX_CHARS}")
           else
             remove_env_vars+=("CRISIS_ALERT_PUSH_BODY_MAX_CHARS")
+          fi
+
+          if [ -n "${CRISIS_ALERT_TELEGRAM_CHAT_IDS:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_TELEGRAM_CHAT_IDS=${CRISIS_ALERT_TELEGRAM_CHAT_IDS}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_TELEGRAM_CHAT_IDS")
+          fi
+
+          if [ -n "${CRISIS_ALERT_TELEGRAM_API_BASE_URL:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_TELEGRAM_API_BASE_URL=${CRISIS_ALERT_TELEGRAM_API_BASE_URL}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_TELEGRAM_API_BASE_URL")
+          fi
+
+          if [ -n "${CRISIS_ALERT_TELEGRAM_PARSE_MODE:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_TELEGRAM_PARSE_MODE=${CRISIS_ALERT_TELEGRAM_PARSE_MODE}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_TELEGRAM_PARSE_MODE")
+          fi
+
+          if [ -n "${CRISIS_ALERT_TELEGRAM_DISABLE_WEB_PAGE_PREVIEW:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_TELEGRAM_DISABLE_WEB_PAGE_PREVIEW=${CRISIS_ALERT_TELEGRAM_DISABLE_WEB_PAGE_PREVIEW}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_TELEGRAM_DISABLE_WEB_PAGE_PREVIEW")
+          fi
+
+          if [ -n "${CRISIS_ALERT_TELEGRAM_BODY_MAX_CHARS:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_TELEGRAM_BODY_MAX_CHARS=${CRISIS_ALERT_TELEGRAM_BODY_MAX_CHARS}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_TELEGRAM_BODY_MAX_CHARS")
           fi
 
           if [ -n "${INCOME_THRESHOLD_USD:-}" ]; then
