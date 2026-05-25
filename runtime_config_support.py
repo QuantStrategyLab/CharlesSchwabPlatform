@@ -40,7 +40,7 @@ class PlatformRuntimeSettings:
     strategy_config_path: str | None = None
     strategy_config_source: str | None = None
     strategy_plugin_mounts_json: str | None = None
-    crisis_alert_google_voice_gateway: tuple[str, ...] = ()
+    crisis_alert_google_voice_recipients: tuple[str, ...] = ()
     crisis_alert_google_voice_gmail_user: str | None = None
     crisis_alert_google_voice_gmail_app_password: str | None = None
     runtime_target: RuntimeTarget | None = None
@@ -136,7 +136,7 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
             os.getenv("SCHWAB_STRATEGY_PLUGIN_MOUNTS_JSON")
             or os.getenv("STRATEGY_PLUGIN_MOUNTS_JSON")
         ),
-        crisis_alert_google_voice_gateway=_split_env_list(os.getenv("CRISIS_ALERT_GOOGLE_VOICE_GATEWAY")),
+        crisis_alert_google_voice_recipients=_split_env_list(os.getenv("CRISIS_ALERT_GOOGLE_VOICE_RECIPIENTS")),
         crisis_alert_google_voice_gmail_user=_first_non_empty(os.getenv("CRISIS_ALERT_GOOGLE_VOICE_GMAIL_USER")),
         crisis_alert_google_voice_gmail_app_password=_first_non_empty(
             os.getenv("CRISIS_ALERT_GOOGLE_VOICE_GMAIL_APP_PASSWORD")
