@@ -107,6 +107,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIsNone(settings.strategy_config_path)
         self.assertIsNone(settings.strategy_config_source)
         self.assertIsNone(settings.strategy_plugin_mounts_json)
+        self.assertEqual(settings.crisis_alert_channels, ())
         self.assertEqual(settings.crisis_alert_email_recipients, ())
         self.assertIsNone(settings.crisis_alert_email_sender_email)
         self.assertIsNone(settings.crisis_alert_email_sender_password)
@@ -121,6 +122,15 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIsNone(settings.crisis_alert_sms_messaging_service_id)
         self.assertIsNone(settings.crisis_alert_sms_api_base_url)
         self.assertIsNone(settings.crisis_alert_sms_body_max_chars)
+        self.assertEqual(settings.crisis_alert_push_recipients, ())
+        self.assertIsNone(settings.crisis_alert_push_provider)
+        self.assertIsNone(settings.crisis_alert_push_app_token)
+        self.assertIsNone(settings.crisis_alert_push_access_token)
+        self.assertIsNone(settings.crisis_alert_push_api_base_url)
+        self.assertIsNone(settings.crisis_alert_push_device)
+        self.assertIsNone(settings.crisis_alert_push_priority)
+        self.assertIsNone(settings.crisis_alert_push_tags)
+        self.assertIsNone(settings.crisis_alert_push_body_max_chars)
 
     def test_defaults_prefers_runtime_target_json(self):
         with patch.dict(
@@ -319,6 +329,37 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(settings.crisis_alert_sms_messaging_service_id, "MG123")
         self.assertEqual(settings.crisis_alert_sms_api_base_url, "https://twilio.example.test")
         self.assertEqual(settings.crisis_alert_sms_body_max_chars, "160")
+
+    def test_reads_crisis_alert_channels_and_push_config(self):
+        with patch.dict(
+            os.environ,
+            {
+                "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
+                "CRISIS_ALERT_CHANNELS": "email;push",
+                "CRISIS_ALERT_PUSH_RECIPIENTS": "risk-topic; backup-topic",
+                "CRISIS_ALERT_PUSH_PROVIDER": "ntfy",
+                "CRISIS_ALERT_PUSH_APP_TOKEN": "app-token",
+                "CRISIS_ALERT_PUSH_ACCESS_TOKEN": "access-token",
+                "CRISIS_ALERT_PUSH_API_BASE_URL": "https://ntfy.example.test",
+                "CRISIS_ALERT_PUSH_DEVICE": "iphone",
+                "CRISIS_ALERT_PUSH_PRIORITY": "5",
+                "CRISIS_ALERT_PUSH_TAGS": "warning",
+                "CRISIS_ALERT_PUSH_BODY_MAX_CHARS": "300",
+            },
+            clear=True,
+        ):
+            settings = load_platform_runtime_settings()
+
+        self.assertEqual(settings.crisis_alert_channels, ("email", "push"))
+        self.assertEqual(settings.crisis_alert_push_recipients, ("risk-topic", "backup-topic"))
+        self.assertEqual(settings.crisis_alert_push_provider, "ntfy")
+        self.assertEqual(settings.crisis_alert_push_app_token, "app-token")
+        self.assertEqual(settings.crisis_alert_push_access_token, "access-token")
+        self.assertEqual(settings.crisis_alert_push_api_base_url, "https://ntfy.example.test")
+        self.assertEqual(settings.crisis_alert_push_device, "iphone")
+        self.assertEqual(settings.crisis_alert_push_priority, "5")
+        self.assertEqual(settings.crisis_alert_push_tags, "warning")
+        self.assertEqual(settings.crisis_alert_push_body_max_chars, "300")
 
     def test_platform_profile_matrix_exposes_profiles_without_selection_roles(self):
         rows = get_platform_profile_matrix()

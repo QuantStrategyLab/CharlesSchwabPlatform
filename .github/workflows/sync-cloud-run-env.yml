@@ -33,6 +33,7 @@ jobs:
       SCHWAB_MIN_RESERVED_CASH_USD: ${{ vars.SCHWAB_MIN_RESERVED_CASH_USD }}
       SCHWAB_RESERVED_CASH_RATIO: ${{ vars.SCHWAB_RESERVED_CASH_RATIO }}
       SCHWAB_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD: ${{ vars.SCHWAB_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD }}
+      CRISIS_ALERT_CHANNELS: ${{ vars.CRISIS_ALERT_CHANNELS }}
       CRISIS_ALERT_EMAIL_RECIPIENTS: ${{ vars.CRISIS_ALERT_EMAIL_RECIPIENTS }}
       CRISIS_ALERT_EMAIL_SENDER_EMAIL: ${{ vars.CRISIS_ALERT_EMAIL_SENDER_EMAIL }}
       CRISIS_ALERT_EMAIL_SENDER_PASSWORD_SECRET_NAME: ${{ vars.CRISIS_ALERT_EMAIL_SENDER_PASSWORD_SECRET_NAME }}
@@ -47,6 +48,15 @@ jobs:
       CRISIS_ALERT_SMS_MESSAGING_SERVICE_ID: ${{ vars.CRISIS_ALERT_SMS_MESSAGING_SERVICE_ID }}
       CRISIS_ALERT_SMS_API_BASE_URL: ${{ vars.CRISIS_ALERT_SMS_API_BASE_URL }}
       CRISIS_ALERT_SMS_BODY_MAX_CHARS: ${{ vars.CRISIS_ALERT_SMS_BODY_MAX_CHARS }}
+      CRISIS_ALERT_PUSH_RECIPIENTS: ${{ vars.CRISIS_ALERT_PUSH_RECIPIENTS }}
+      CRISIS_ALERT_PUSH_PROVIDER: ${{ vars.CRISIS_ALERT_PUSH_PROVIDER }}
+      CRISIS_ALERT_PUSH_APP_TOKEN_SECRET_NAME: ${{ vars.CRISIS_ALERT_PUSH_APP_TOKEN_SECRET_NAME }}
+      CRISIS_ALERT_PUSH_ACCESS_TOKEN_SECRET_NAME: ${{ vars.CRISIS_ALERT_PUSH_ACCESS_TOKEN_SECRET_NAME }}
+      CRISIS_ALERT_PUSH_API_BASE_URL: ${{ vars.CRISIS_ALERT_PUSH_API_BASE_URL }}
+      CRISIS_ALERT_PUSH_DEVICE: ${{ vars.CRISIS_ALERT_PUSH_DEVICE }}
+      CRISIS_ALERT_PUSH_PRIORITY: ${{ vars.CRISIS_ALERT_PUSH_PRIORITY }}
+      CRISIS_ALERT_PUSH_TAGS: ${{ vars.CRISIS_ALERT_PUSH_TAGS }}
+      CRISIS_ALERT_PUSH_BODY_MAX_CHARS: ${{ vars.CRISIS_ALERT_PUSH_BODY_MAX_CHARS }}
       # Optional strategy overrides; leave unset to inherit the UsEquityStrategies profile defaults.
       INCOME_THRESHOLD_USD: ${{ vars.INCOME_THRESHOLD_USD }}
       QQQI_INCOME_RATIO: ${{ vars.QQQI_INCOME_RATIO }}
@@ -59,6 +69,8 @@ jobs:
       SCHWAB_APP_SECRET: ${{ secrets.SCHWAB_APP_SECRET }}
       CRISIS_ALERT_EMAIL_SENDER_PASSWORD: ${{ secrets.CRISIS_ALERT_EMAIL_SENDER_PASSWORD }}
       CRISIS_ALERT_SMS_AUTH_TOKEN: ${{ secrets.CRISIS_ALERT_SMS_AUTH_TOKEN }}
+      CRISIS_ALERT_PUSH_APP_TOKEN: ${{ secrets.CRISIS_ALERT_PUSH_APP_TOKEN }}
+      CRISIS_ALERT_PUSH_ACCESS_TOKEN: ${{ secrets.CRISIS_ALERT_PUSH_ACCESS_TOKEN }}
     steps:
       - name: Check whether env sync is enabled
         id: config
@@ -325,6 +337,28 @@ jobs:
             remove_secret_vars+=("CRISIS_ALERT_SMS_AUTH_TOKEN")
           fi
 
+          if [ -n "${CRISIS_ALERT_PUSH_APP_TOKEN_SECRET_NAME:-}" ]; then
+            secret_pairs+=("CRISIS_ALERT_PUSH_APP_TOKEN=${CRISIS_ALERT_PUSH_APP_TOKEN_SECRET_NAME}:latest")
+            remove_env_vars+=("CRISIS_ALERT_PUSH_APP_TOKEN")
+          elif [ -n "${CRISIS_ALERT_PUSH_APP_TOKEN:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_PUSH_APP_TOKEN=${CRISIS_ALERT_PUSH_APP_TOKEN}")
+            remove_secret_vars+=("CRISIS_ALERT_PUSH_APP_TOKEN")
+          else
+            remove_env_vars+=("CRISIS_ALERT_PUSH_APP_TOKEN")
+            remove_secret_vars+=("CRISIS_ALERT_PUSH_APP_TOKEN")
+          fi
+
+          if [ -n "${CRISIS_ALERT_PUSH_ACCESS_TOKEN_SECRET_NAME:-}" ]; then
+            secret_pairs+=("CRISIS_ALERT_PUSH_ACCESS_TOKEN=${CRISIS_ALERT_PUSH_ACCESS_TOKEN_SECRET_NAME}:latest")
+            remove_env_vars+=("CRISIS_ALERT_PUSH_ACCESS_TOKEN")
+          elif [ -n "${CRISIS_ALERT_PUSH_ACCESS_TOKEN:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_PUSH_ACCESS_TOKEN=${CRISIS_ALERT_PUSH_ACCESS_TOKEN}")
+            remove_secret_vars+=("CRISIS_ALERT_PUSH_ACCESS_TOKEN")
+          else
+            remove_env_vars+=("CRISIS_ALERT_PUSH_ACCESS_TOKEN")
+            remove_secret_vars+=("CRISIS_ALERT_PUSH_ACCESS_TOKEN")
+          fi
+
           if [ -n "${SCHWAB_FEATURE_SNAPSHOT_PATH:-}" ]; then
             env_pairs+=("SCHWAB_FEATURE_SNAPSHOT_PATH=${SCHWAB_FEATURE_SNAPSHOT_PATH}")
           else
@@ -365,6 +399,12 @@ jobs:
             env_pairs+=("SCHWAB_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD=${SCHWAB_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD}")
           else
             remove_env_vars+=("SCHWAB_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD")
+          fi
+
+          if [ -n "${CRISIS_ALERT_CHANNELS:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_CHANNELS=${CRISIS_ALERT_CHANNELS}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_CHANNELS")
           fi
 
           if [ -n "${CRISIS_ALERT_EMAIL_RECIPIENTS:-}" ]; then
@@ -437,6 +477,48 @@ jobs:
             env_pairs+=("CRISIS_ALERT_SMS_BODY_MAX_CHARS=${CRISIS_ALERT_SMS_BODY_MAX_CHARS}")
           else
             remove_env_vars+=("CRISIS_ALERT_SMS_BODY_MAX_CHARS")
+          fi
+
+          if [ -n "${CRISIS_ALERT_PUSH_RECIPIENTS:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_PUSH_RECIPIENTS=${CRISIS_ALERT_PUSH_RECIPIENTS}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_PUSH_RECIPIENTS")
+          fi
+
+          if [ -n "${CRISIS_ALERT_PUSH_PROVIDER:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_PUSH_PROVIDER=${CRISIS_ALERT_PUSH_PROVIDER}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_PUSH_PROVIDER")
+          fi
+
+          if [ -n "${CRISIS_ALERT_PUSH_API_BASE_URL:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_PUSH_API_BASE_URL=${CRISIS_ALERT_PUSH_API_BASE_URL}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_PUSH_API_BASE_URL")
+          fi
+
+          if [ -n "${CRISIS_ALERT_PUSH_DEVICE:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_PUSH_DEVICE=${CRISIS_ALERT_PUSH_DEVICE}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_PUSH_DEVICE")
+          fi
+
+          if [ -n "${CRISIS_ALERT_PUSH_PRIORITY:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_PUSH_PRIORITY=${CRISIS_ALERT_PUSH_PRIORITY}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_PUSH_PRIORITY")
+          fi
+
+          if [ -n "${CRISIS_ALERT_PUSH_TAGS:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_PUSH_TAGS=${CRISIS_ALERT_PUSH_TAGS}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_PUSH_TAGS")
+          fi
+
+          if [ -n "${CRISIS_ALERT_PUSH_BODY_MAX_CHARS:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_PUSH_BODY_MAX_CHARS=${CRISIS_ALERT_PUSH_BODY_MAX_CHARS}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_PUSH_BODY_MAX_CHARS")
           fi
 
           if [ -n "${INCOME_THRESHOLD_USD:-}" ]; then
