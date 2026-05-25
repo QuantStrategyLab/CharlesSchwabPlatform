@@ -16,14 +16,10 @@ from notifications.telegram import (
     build_strategy_display_name,
     build_translator,
 )
-from quant_platform_kit.notifications.strategy_plugin_email import (
-    StrategyPluginEmailAlertMarkerStore,
-    build_strategy_plugin_alert_context_label as build_email_alert_context_label,
-    publish_strategy_plugin_email_alerts,
-)
-from quant_platform_kit.notifications.strategy_plugin_sms import (
-    StrategyPluginSmsAlertMarkerStore,
-    publish_strategy_plugin_sms_alerts,
+from quant_platform_kit.notifications.strategy_plugin_alerts import (
+    StrategyPluginAlertStateSettings,
+    build_strategy_plugin_alert_context_label as build_alert_context_label,
+    publish_strategy_plugin_alerts as dispatch_strategy_plugin_alerts,
 )
 from quant_platform_kit.schwab import (
     fetch_account_snapshot,
@@ -280,24 +276,14 @@ def build_strategy_plugin_alert_messages(signals):
     return build_strategy_adapters().build_strategy_plugin_alert_messages(signals)
 
 
-def build_strategy_plugin_alert_store():
-    return StrategyPluginEmailAlertMarkerStore(
-        local_dir=os.getenv("STRATEGY_PLUGIN_ALERT_STATE_DIR") or "/tmp/quant_strategy_plugin_alerts",
-        gcs_prefix_uri=os.getenv("STRATEGY_PLUGIN_ALERT_STATE_GCS_URI") or os.getenv("EXECUTION_REPORT_GCS_URI"),
-        gcp_project_id=PROJECT_ID,
-    )
-
-
-def build_strategy_plugin_sms_alert_store():
-    return StrategyPluginSmsAlertMarkerStore(
-        local_dir=os.getenv("STRATEGY_PLUGIN_ALERT_STATE_DIR") or "/tmp/quant_strategy_plugin_alerts",
-        gcs_prefix_uri=os.getenv("STRATEGY_PLUGIN_ALERT_STATE_GCS_URI") or os.getenv("EXECUTION_REPORT_GCS_URI"),
+def build_strategy_plugin_alert_state_settings():
+    return StrategyPluginAlertStateSettings.from_env(
         gcp_project_id=PROJECT_ID,
     )
 
 
 def build_strategy_plugin_alert_context_label() -> str:
-    return build_email_alert_context_label(
+    return build_alert_context_label(
         platform_id="schwab",
         strategy_profile=STRATEGY_PROFILE,
         service_name=SERVICE_NAME,
@@ -305,39 +291,19 @@ def build_strategy_plugin_alert_context_label() -> str:
     )
 
 
-def attach_strategy_plugin_alert_email_result(report, result) -> None:
-    report.setdefault("summary", {})["strategy_plugin_alert_email_sent_count"] = result.sent_count
-    report.setdefault("diagnostics", {}).update(result.to_report_fields())
-
-
-def attach_strategy_plugin_alert_sms_result(report, result) -> None:
-    report.setdefault("summary", {})["strategy_plugin_alert_sms_sent_count"] = result.sent_count
-    report.setdefault("diagnostics", {}).update(result.to_report_fields())
-
-
 def publish_strategy_plugin_alerts(signals, *, report=None):
-    email_result = publish_strategy_plugin_email_alerts(
+    result = dispatch_strategy_plugin_alerts(
         signals,
-        email_settings=RUNTIME_SETTINGS,
+        notification_settings=RUNTIME_SETTINGS,
         translator=t,
         strategy_label=STRATEGY_PROFILE,
         context_label=build_strategy_plugin_alert_context_label(),
-        alert_store=build_strategy_plugin_alert_store(),
-        log_message=print,
-    )
-    sms_result = publish_strategy_plugin_sms_alerts(
-        signals,
-        sms_settings=RUNTIME_SETTINGS,
-        translator=t,
-        strategy_label=STRATEGY_PROFILE,
-        context_label=build_strategy_plugin_alert_context_label(),
-        alert_store=build_strategy_plugin_sms_alert_store(),
+        state_settings=build_strategy_plugin_alert_state_settings(),
         log_message=print,
     )
     if report is not None:
-        attach_strategy_plugin_alert_email_result(report, email_result)
-        attach_strategy_plugin_alert_sms_result(report, sms_result)
-    return email_result
+        result.attach_to_report(report)
+    return result
 
 
 def persist_execution_report(report, *, dry_run_only_override: bool | None = None):
