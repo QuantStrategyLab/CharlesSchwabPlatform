@@ -16,10 +16,10 @@ from notifications.telegram import (
     build_strategy_display_name,
     build_translator,
 )
-from quant_platform_kit.notifications.strategy_plugin_google_voice import (
-    StrategyPluginGoogleVoiceAlertMarkerStore,
-    build_strategy_plugin_alert_context_label as build_google_voice_alert_context_label,
-    publish_strategy_plugin_google_voice_alerts,
+from quant_platform_kit.notifications.strategy_plugin_email import (
+    StrategyPluginEmailAlertMarkerStore,
+    build_strategy_plugin_alert_context_label as build_email_alert_context_label,
+    publish_strategy_plugin_email_alerts,
 )
 from quant_platform_kit.schwab import (
     fetch_account_snapshot,
@@ -277,7 +277,7 @@ def build_strategy_plugin_alert_messages(signals):
 
 
 def build_strategy_plugin_alert_store():
-    return StrategyPluginGoogleVoiceAlertMarkerStore(
+    return StrategyPluginEmailAlertMarkerStore(
         local_dir=os.getenv("STRATEGY_PLUGIN_ALERT_STATE_DIR") or "/tmp/quant_strategy_plugin_alerts",
         gcs_prefix_uri=os.getenv("STRATEGY_PLUGIN_ALERT_STATE_GCS_URI") or os.getenv("EXECUTION_REPORT_GCS_URI"),
         gcp_project_id=PROJECT_ID,
@@ -285,7 +285,7 @@ def build_strategy_plugin_alert_store():
 
 
 def build_strategy_plugin_alert_context_label() -> str:
-    return build_google_voice_alert_context_label(
+    return build_email_alert_context_label(
         platform_id="schwab",
         strategy_profile=STRATEGY_PROFILE,
         service_name=SERVICE_NAME,
@@ -293,15 +293,15 @@ def build_strategy_plugin_alert_context_label() -> str:
     )
 
 
-def attach_strategy_plugin_alert_google_voice_result(report, result) -> None:
-    report.setdefault("summary", {})["strategy_plugin_alert_google_voice_sent_count"] = result.sent_count
+def attach_strategy_plugin_alert_email_result(report, result) -> None:
+    report.setdefault("summary", {})["strategy_plugin_alert_email_sent_count"] = result.sent_count
     report.setdefault("diagnostics", {}).update(result.to_report_fields())
 
 
 def publish_strategy_plugin_alerts(signals, *, report=None):
-    result = publish_strategy_plugin_google_voice_alerts(
+    result = publish_strategy_plugin_email_alerts(
         signals,
-        google_voice_settings=RUNTIME_SETTINGS,
+        email_settings=RUNTIME_SETTINGS,
         translator=t,
         strategy_label=STRATEGY_PROFILE,
         context_label=build_strategy_plugin_alert_context_label(),
@@ -309,7 +309,7 @@ def publish_strategy_plugin_alerts(signals, *, report=None):
         log_message=print,
     )
     if report is not None:
-        attach_strategy_plugin_alert_google_voice_result(report, result)
+        attach_strategy_plugin_alert_email_result(report, result)
     return result
 
 
