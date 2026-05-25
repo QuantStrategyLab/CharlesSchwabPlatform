@@ -40,6 +40,7 @@ class PlatformRuntimeSettings:
     strategy_config_path: str | None = None
     strategy_config_source: str | None = None
     strategy_plugin_mounts_json: str | None = None
+    crisis_alert_channels: tuple[str, ...] = ()
     crisis_alert_email_recipients: tuple[str, ...] = ()
     crisis_alert_email_sender_email: str | None = None
     crisis_alert_email_sender_password: str | None = None
@@ -54,6 +55,15 @@ class PlatformRuntimeSettings:
     crisis_alert_sms_messaging_service_id: str | None = None
     crisis_alert_sms_api_base_url: str | None = None
     crisis_alert_sms_body_max_chars: str | None = None
+    crisis_alert_push_recipients: tuple[str, ...] = ()
+    crisis_alert_push_provider: str | None = None
+    crisis_alert_push_app_token: str | None = None
+    crisis_alert_push_access_token: str | None = None
+    crisis_alert_push_api_base_url: str | None = None
+    crisis_alert_push_device: str | None = None
+    crisis_alert_push_priority: str | None = None
+    crisis_alert_push_tags: str | None = None
+    crisis_alert_push_body_max_chars: str | None = None
     runtime_target: RuntimeTarget | None = None
 
 
@@ -147,6 +157,7 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
             os.getenv("SCHWAB_STRATEGY_PLUGIN_MOUNTS_JSON")
             or os.getenv("STRATEGY_PLUGIN_MOUNTS_JSON")
         ),
+        crisis_alert_channels=_split_env_list(os.getenv("CRISIS_ALERT_CHANNELS")),
         crisis_alert_email_recipients=_split_env_list(os.getenv("CRISIS_ALERT_EMAIL_RECIPIENTS")),
         crisis_alert_email_sender_email=_first_non_empty(os.getenv("CRISIS_ALERT_EMAIL_SENDER_EMAIL")),
         crisis_alert_email_sender_password=_first_non_empty(
@@ -168,6 +179,17 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
         crisis_alert_sms_api_base_url=_first_non_empty(os.getenv("CRISIS_ALERT_SMS_API_BASE_URL")),
         crisis_alert_sms_body_max_chars=_first_non_empty(
             os.getenv("CRISIS_ALERT_SMS_BODY_MAX_CHARS")
+        ),
+        crisis_alert_push_recipients=_split_env_list(os.getenv("CRISIS_ALERT_PUSH_RECIPIENTS")),
+        crisis_alert_push_provider=_first_non_empty(os.getenv("CRISIS_ALERT_PUSH_PROVIDER")),
+        crisis_alert_push_app_token=_first_non_empty(os.getenv("CRISIS_ALERT_PUSH_APP_TOKEN")),
+        crisis_alert_push_access_token=_first_non_empty(os.getenv("CRISIS_ALERT_PUSH_ACCESS_TOKEN")),
+        crisis_alert_push_api_base_url=_first_non_empty(os.getenv("CRISIS_ALERT_PUSH_API_BASE_URL")),
+        crisis_alert_push_device=_first_non_empty(os.getenv("CRISIS_ALERT_PUSH_DEVICE")),
+        crisis_alert_push_priority=_first_non_empty(os.getenv("CRISIS_ALERT_PUSH_PRIORITY")),
+        crisis_alert_push_tags=_first_non_empty(os.getenv("CRISIS_ALERT_PUSH_TAGS")),
+        crisis_alert_push_body_max_chars=_first_non_empty(
+            os.getenv("CRISIS_ALERT_PUSH_BODY_MAX_CHARS")
         ),
         runtime_target=runtime_target,
     )
