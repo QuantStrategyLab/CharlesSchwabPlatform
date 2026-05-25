@@ -39,6 +39,14 @@ jobs:
       CRISIS_ALERT_EMAIL_SMTP_HOST: ${{ vars.CRISIS_ALERT_EMAIL_SMTP_HOST }}
       CRISIS_ALERT_EMAIL_SMTP_PORT: ${{ vars.CRISIS_ALERT_EMAIL_SMTP_PORT }}
       CRISIS_ALERT_EMAIL_SMTP_SECURITY: ${{ vars.CRISIS_ALERT_EMAIL_SMTP_SECURITY }}
+      CRISIS_ALERT_SMS_RECIPIENTS: ${{ vars.CRISIS_ALERT_SMS_RECIPIENTS }}
+      CRISIS_ALERT_SMS_PROVIDER: ${{ vars.CRISIS_ALERT_SMS_PROVIDER }}
+      CRISIS_ALERT_SMS_ACCOUNT_ID: ${{ vars.CRISIS_ALERT_SMS_ACCOUNT_ID }}
+      CRISIS_ALERT_SMS_AUTH_TOKEN_SECRET_NAME: ${{ vars.CRISIS_ALERT_SMS_AUTH_TOKEN_SECRET_NAME }}
+      CRISIS_ALERT_SMS_SENDER: ${{ vars.CRISIS_ALERT_SMS_SENDER }}
+      CRISIS_ALERT_SMS_MESSAGING_SERVICE_ID: ${{ vars.CRISIS_ALERT_SMS_MESSAGING_SERVICE_ID }}
+      CRISIS_ALERT_SMS_API_BASE_URL: ${{ vars.CRISIS_ALERT_SMS_API_BASE_URL }}
+      CRISIS_ALERT_SMS_BODY_MAX_CHARS: ${{ vars.CRISIS_ALERT_SMS_BODY_MAX_CHARS }}
       # Optional strategy overrides; leave unset to inherit the UsEquityStrategies profile defaults.
       INCOME_THRESHOLD_USD: ${{ vars.INCOME_THRESHOLD_USD }}
       QQQI_INCOME_RATIO: ${{ vars.QQQI_INCOME_RATIO }}
@@ -50,6 +58,7 @@ jobs:
       SCHWAB_API_KEY: ${{ secrets.SCHWAB_API_KEY }}
       SCHWAB_APP_SECRET: ${{ secrets.SCHWAB_APP_SECRET }}
       CRISIS_ALERT_EMAIL_SENDER_PASSWORD: ${{ secrets.CRISIS_ALERT_EMAIL_SENDER_PASSWORD }}
+      CRISIS_ALERT_SMS_AUTH_TOKEN: ${{ secrets.CRISIS_ALERT_SMS_AUTH_TOKEN }}
     steps:
       - name: Check whether env sync is enabled
         id: config
@@ -305,6 +314,17 @@ jobs:
             remove_secret_vars+=("CRISIS_ALERT_EMAIL_SENDER_PASSWORD")
           fi
 
+          if [ -n "${CRISIS_ALERT_SMS_AUTH_TOKEN_SECRET_NAME:-}" ]; then
+            secret_pairs+=("CRISIS_ALERT_SMS_AUTH_TOKEN=${CRISIS_ALERT_SMS_AUTH_TOKEN_SECRET_NAME}:latest")
+            remove_env_vars+=("CRISIS_ALERT_SMS_AUTH_TOKEN")
+          elif [ -n "${CRISIS_ALERT_SMS_AUTH_TOKEN:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_SMS_AUTH_TOKEN=${CRISIS_ALERT_SMS_AUTH_TOKEN}")
+            remove_secret_vars+=("CRISIS_ALERT_SMS_AUTH_TOKEN")
+          else
+            remove_env_vars+=("CRISIS_ALERT_SMS_AUTH_TOKEN")
+            remove_secret_vars+=("CRISIS_ALERT_SMS_AUTH_TOKEN")
+          fi
+
           if [ -n "${SCHWAB_FEATURE_SNAPSHOT_PATH:-}" ]; then
             env_pairs+=("SCHWAB_FEATURE_SNAPSHOT_PATH=${SCHWAB_FEATURE_SNAPSHOT_PATH}")
           else
@@ -375,6 +395,48 @@ jobs:
             env_pairs+=("CRISIS_ALERT_EMAIL_SMTP_SECURITY=${CRISIS_ALERT_EMAIL_SMTP_SECURITY}")
           else
             remove_env_vars+=("CRISIS_ALERT_EMAIL_SMTP_SECURITY")
+          fi
+
+          if [ -n "${CRISIS_ALERT_SMS_RECIPIENTS:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_SMS_RECIPIENTS=${CRISIS_ALERT_SMS_RECIPIENTS}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_SMS_RECIPIENTS")
+          fi
+
+          if [ -n "${CRISIS_ALERT_SMS_PROVIDER:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_SMS_PROVIDER=${CRISIS_ALERT_SMS_PROVIDER}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_SMS_PROVIDER")
+          fi
+
+          if [ -n "${CRISIS_ALERT_SMS_ACCOUNT_ID:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_SMS_ACCOUNT_ID=${CRISIS_ALERT_SMS_ACCOUNT_ID}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_SMS_ACCOUNT_ID")
+          fi
+
+          if [ -n "${CRISIS_ALERT_SMS_SENDER:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_SMS_SENDER=${CRISIS_ALERT_SMS_SENDER}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_SMS_SENDER")
+          fi
+
+          if [ -n "${CRISIS_ALERT_SMS_MESSAGING_SERVICE_ID:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_SMS_MESSAGING_SERVICE_ID=${CRISIS_ALERT_SMS_MESSAGING_SERVICE_ID}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_SMS_MESSAGING_SERVICE_ID")
+          fi
+
+          if [ -n "${CRISIS_ALERT_SMS_API_BASE_URL:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_SMS_API_BASE_URL=${CRISIS_ALERT_SMS_API_BASE_URL}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_SMS_API_BASE_URL")
+          fi
+
+          if [ -n "${CRISIS_ALERT_SMS_BODY_MAX_CHARS:-}" ]; then
+            env_pairs+=("CRISIS_ALERT_SMS_BODY_MAX_CHARS=${CRISIS_ALERT_SMS_BODY_MAX_CHARS}")
+          else
+            remove_env_vars+=("CRISIS_ALERT_SMS_BODY_MAX_CHARS")
           fi
 
           if [ -n "${INCOME_THRESHOLD_USD:-}" ]; then

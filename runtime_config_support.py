@@ -46,6 +46,14 @@ class PlatformRuntimeSettings:
     crisis_alert_email_smtp_host: str | None = None
     crisis_alert_email_smtp_port: str | None = None
     crisis_alert_email_smtp_security: str | None = None
+    crisis_alert_sms_recipients: tuple[str, ...] = ()
+    crisis_alert_sms_provider: str | None = None
+    crisis_alert_sms_account_id: str | None = None
+    crisis_alert_sms_auth_token: str | None = None
+    crisis_alert_sms_sender: str | None = None
+    crisis_alert_sms_messaging_service_id: str | None = None
+    crisis_alert_sms_api_base_url: str | None = None
+    crisis_alert_sms_body_max_chars: str | None = None
     runtime_target: RuntimeTarget | None = None
 
 
@@ -148,6 +156,18 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
         crisis_alert_email_smtp_port=_first_non_empty(os.getenv("CRISIS_ALERT_EMAIL_SMTP_PORT")),
         crisis_alert_email_smtp_security=_first_non_empty(
             os.getenv("CRISIS_ALERT_EMAIL_SMTP_SECURITY")
+        ),
+        crisis_alert_sms_recipients=_split_env_list(os.getenv("CRISIS_ALERT_SMS_RECIPIENTS")),
+        crisis_alert_sms_provider=_first_non_empty(os.getenv("CRISIS_ALERT_SMS_PROVIDER")),
+        crisis_alert_sms_account_id=_first_non_empty(os.getenv("CRISIS_ALERT_SMS_ACCOUNT_ID")),
+        crisis_alert_sms_auth_token=_first_non_empty(os.getenv("CRISIS_ALERT_SMS_AUTH_TOKEN")),
+        crisis_alert_sms_sender=_first_non_empty(os.getenv("CRISIS_ALERT_SMS_SENDER")),
+        crisis_alert_sms_messaging_service_id=_first_non_empty(
+            os.getenv("CRISIS_ALERT_SMS_MESSAGING_SERVICE_ID")
+        ),
+        crisis_alert_sms_api_base_url=_first_non_empty(os.getenv("CRISIS_ALERT_SMS_API_BASE_URL")),
+        crisis_alert_sms_body_max_chars=_first_non_empty(
+            os.getenv("CRISIS_ALERT_SMS_BODY_MAX_CHARS")
         ),
         runtime_target=runtime_target,
     )

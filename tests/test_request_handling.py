@@ -72,6 +72,9 @@ def install_stub_modules(strategy_plugin_mounts_json=None, notify_lang="en"):
         crisis_alert_email_recipients=(),
         crisis_alert_email_sender_email=None,
         crisis_alert_email_sender_password=None,
+        crisis_alert_sms_recipients=(),
+        crisis_alert_sms_account_id=None,
+        crisis_alert_sms_auth_token=None,
         runtime_target=None,
     )
 
@@ -194,15 +197,15 @@ class RequestHandlingTests(unittest.TestCase):
             would_trade_if_enabled=True,
             as_of="2026-05-24",
         )
-        observed = {"alerts": []}
+        observed = {"email_alerts": [], "sms_alerts": []}
 
         module.get_client_from_secret = lambda *args, **kwargs: object()
         module.is_market_open_today = lambda: True
         module.load_strategy_plugin_signals = lambda: ((signal,), None)
         module.attach_strategy_plugin_report = lambda *args, **kwargs: None
 
-        def fake_publish(signals, **kwargs):
-            observed["alerts"].append((tuple(signals), kwargs))
+        def fake_email_publish(signals, **kwargs):
+            observed["email_alerts"].append((tuple(signals), kwargs))
             return types.SimpleNamespace(
                 sent_count=1,
                 to_report_fields=lambda: {
@@ -214,7 +217,21 @@ class RequestHandlingTests(unittest.TestCase):
                 },
             )
 
-        module.publish_strategy_plugin_email_alerts = fake_publish
+        def fake_sms_publish(signals, **kwargs):
+            observed["sms_alerts"].append((tuple(signals), kwargs))
+            return types.SimpleNamespace(
+                sent_count=1,
+                to_report_fields=lambda: {
+                    "strategy_plugin_alert_sms_attempted_count": 1,
+                    "strategy_plugin_alert_sms_sent_count": 1,
+                    "strategy_plugin_alert_sms_skipped_count": 0,
+                    "strategy_plugin_alert_sms_failed_count": 0,
+                    "strategy_plugin_alert_sms_deliveries": [],
+                },
+            )
+
+        module.publish_strategy_plugin_email_alerts = fake_email_publish
+        module.publish_strategy_plugin_sms_alerts = fake_sms_publish
         module.run_strategy_core = lambda *_args, **_kwargs: None
 
         with module.app.test_request_context("/", method="POST"):
@@ -222,9 +239,12 @@ class RequestHandlingTests(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertEqual(body, "OK")
-        self.assertEqual(len(observed["alerts"]), 1)
-        self.assertEqual(observed["alerts"][0][0], (signal,))
-        self.assertIn("schwab", observed["alerts"][0][1]["context_label"])
+        self.assertEqual(len(observed["email_alerts"]), 1)
+        self.assertEqual(len(observed["sms_alerts"]), 1)
+        self.assertEqual(observed["email_alerts"][0][0], (signal,))
+        self.assertEqual(observed["sms_alerts"][0][0], (signal,))
+        self.assertIn("schwab", observed["email_alerts"][0][1]["context_label"])
+        self.assertIn("schwab", observed["sms_alerts"][0][1]["context_label"])
 
     def test_handle_schwab_precheck_uses_dry_run_override(self):
         module = load_module()
