@@ -113,6 +113,14 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIsNone(settings.crisis_alert_email_smtp_host)
         self.assertIsNone(settings.crisis_alert_email_smtp_port)
         self.assertIsNone(settings.crisis_alert_email_smtp_security)
+        self.assertEqual(settings.crisis_alert_sms_recipients, ())
+        self.assertIsNone(settings.crisis_alert_sms_provider)
+        self.assertIsNone(settings.crisis_alert_sms_account_id)
+        self.assertIsNone(settings.crisis_alert_sms_auth_token)
+        self.assertIsNone(settings.crisis_alert_sms_sender)
+        self.assertIsNone(settings.crisis_alert_sms_messaging_service_id)
+        self.assertIsNone(settings.crisis_alert_sms_api_base_url)
+        self.assertIsNone(settings.crisis_alert_sms_body_max_chars)
 
     def test_defaults_prefers_runtime_target_json(self):
         with patch.dict(
@@ -284,6 +292,33 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(settings.crisis_alert_email_smtp_host, "smtp.example.com")
         self.assertEqual(settings.crisis_alert_email_smtp_port, "587")
         self.assertEqual(settings.crisis_alert_email_smtp_security, "starttls")
+
+    def test_reads_crisis_alert_sms_config(self):
+        with patch.dict(
+            os.environ,
+            {
+                "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
+                "CRISIS_ALERT_SMS_RECIPIENTS": "+15165480265;(516) 548-0265",
+                "CRISIS_ALERT_SMS_PROVIDER": "twilio",
+                "CRISIS_ALERT_SMS_ACCOUNT_ID": "AC123",
+                "CRISIS_ALERT_SMS_AUTH_TOKEN": "secret",
+                "CRISIS_ALERT_SMS_SENDER": "+15551234567",
+                "CRISIS_ALERT_SMS_MESSAGING_SERVICE_ID": "MG123",
+                "CRISIS_ALERT_SMS_API_BASE_URL": "https://twilio.example.test",
+                "CRISIS_ALERT_SMS_BODY_MAX_CHARS": "160",
+            },
+            clear=True,
+        ):
+            settings = load_platform_runtime_settings()
+
+        self.assertEqual(settings.crisis_alert_sms_recipients, ("+15165480265", "(516) 548-0265"))
+        self.assertEqual(settings.crisis_alert_sms_provider, "twilio")
+        self.assertEqual(settings.crisis_alert_sms_account_id, "AC123")
+        self.assertEqual(settings.crisis_alert_sms_auth_token, "secret")
+        self.assertEqual(settings.crisis_alert_sms_sender, "+15551234567")
+        self.assertEqual(settings.crisis_alert_sms_messaging_service_id, "MG123")
+        self.assertEqual(settings.crisis_alert_sms_api_base_url, "https://twilio.example.test")
+        self.assertEqual(settings.crisis_alert_sms_body_max_chars, "160")
 
     def test_platform_profile_matrix_exposes_profiles_without_selection_roles(self):
         rows = get_platform_profile_matrix()
