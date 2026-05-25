@@ -70,8 +70,8 @@ def install_stub_modules(strategy_plugin_mounts_json=None, notify_lang="en"):
         reserved_cash_ratio=0.03,
         strategy_plugin_mounts_json=strategy_plugin_mounts_json,
         crisis_alert_google_voice_recipients=(),
-        crisis_alert_google_voice_gmail_user=None,
-        crisis_alert_google_voice_gmail_app_password=None,
+        crisis_alert_google_voice_sender_email=None,
+        crisis_alert_google_voice_sender_password=None,
         runtime_target=None,
     )
 
