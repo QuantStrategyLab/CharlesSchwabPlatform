@@ -534,7 +534,7 @@ class RequestHandlingTests(unittest.TestCase):
 
         self.assertEqual(len(lines), 1)
         self.assertIn("插件：危机观察通知", lines[0])
-        self.assertIn("状态：未触发危机", lines[0])
+        self.assertIn("状态：未触发", lines[0])
         self.assertIn("提醒：仅通知", lines[0])
 
     def test_strategy_plugin_notification_line_renders_triggered_shadow_signal(self):
