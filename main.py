@@ -349,6 +349,7 @@ def resolve_rebalance_plan(*, qqq_history, snapshot):
 
 
 def run_strategy_core(c, now_ny, *, strategy_plugin_signals=(), dry_run_only_override: bool | None = None):
+    del strategy_plugin_signals
     composer = build_composer(dry_run_only_override=dry_run_only_override)
     return run_rebalance_cycle(
         c,
@@ -357,7 +358,7 @@ def run_strategy_core(c, now_ny, *, strategy_plugin_signals=(), dry_run_only_ove
             c,
             silent_cycle_notifications=bool(dry_run_only_override),
         ),
-        config=composer.build_rebalance_config(strategy_plugin_signals=strategy_plugin_signals),
+        config=composer.build_rebalance_config(),
     )
 
 
