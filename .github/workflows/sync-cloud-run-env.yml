@@ -163,6 +163,7 @@ jobs:
 
           output_path = os.environ["GITHUB_OUTPUT"]
           with open(output_path, "a", encoding="utf-8") as output:
+              output.write(f"canonical_profile={canonical_profile}\n")
               output.write(
                   f"requires_snapshot_artifacts={str(bool(selected.get('requires_snapshot_artifacts'))).lower()}\n"
               )
@@ -326,6 +327,7 @@ jobs:
       - name: Sync Cloud Run environment
         if: steps.config.outputs.env_sync_enabled == 'true'
         env:
+          STRATEGY_PROFILE: ${{ steps.strategy_requirements.outputs.canonical_profile }}
           RUNTIME_TARGET_JSON: ${{ steps.strategy_requirements.outputs.runtime_target_json }}
         run: |
           set -euo pipefail
@@ -333,6 +335,7 @@ jobs:
           env_pairs=(
             "GLOBAL_TELEGRAM_CHAT_ID=${GLOBAL_TELEGRAM_CHAT_ID}"
             "NOTIFY_LANG=${NOTIFY_LANG}"
+            "STRATEGY_PROFILE=${STRATEGY_PROFILE}"
             "RUNTIME_TARGET_JSON=${RUNTIME_TARGET_JSON}"
           )
           secret_pairs=()
