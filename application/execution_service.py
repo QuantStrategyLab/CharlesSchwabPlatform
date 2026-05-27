@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 try:
@@ -35,14 +36,22 @@ except ImportError:  # pragma: no cover - compatibility with older pinned shared
         return False
 try:
     from quant_platform_kit.common.small_account_compatibility import (
-        project_unbuyable_value_targets_to_cash,
+        apply_small_account_cash_compatibility,
+        format_small_account_cash_substitution_notes,
     )
 except ImportError:  # pragma: no cover - compatibility with older pinned shared wheels
-    def project_unbuyable_value_targets_to_cash(
+    @dataclass(frozen=True)
+    class _SmallAccountCashCompatibilityResult:
+        targets: dict
+        whole_share_substituted_symbols: tuple[str, ...]
+        safe_haven_cash_substituted_symbols: tuple[str, ...]
+        cash_substitution_notes: tuple[dict, ...]
+
+    def _project_unbuyable_value_targets_to_cash(
         target_values,
         prices,
         *,
-        symbols=None,
+        candidate_symbols=None,
         quantity_step=1.0,
     ):
         adjusted = {
@@ -52,23 +61,140 @@ except ImportError:  # pragma: no cover - compatibility with older pinned shared
         step = max(0.0, float(quantity_step or 0.0))
         if step <= 0.0:
             return adjusted, ()
-        candidate_symbols = (
+        normalized_candidates = (
             tuple(adjusted)
-            if symbols is None
-            else tuple(dict.fromkeys(str(symbol or "").strip().upper() for symbol in symbols))
+            if candidate_symbols is None
+            else tuple(dict.fromkeys(str(symbol or "").strip().upper() for symbol in candidate_symbols))
         )
         normalized_prices = {
             str(symbol or "").strip().upper(): float(price or 0.0)
             for symbol, price in dict(prices or {}).items()
         }
         substituted = []
-        for symbol in candidate_symbols:
+        for symbol in normalized_candidates:
             target_value = max(0.0, float(adjusted.get(symbol, 0.0) or 0.0))
             price = max(0.0, float(normalized_prices.get(symbol, 0.0) or 0.0))
             if price > 0.0 and 0.0 < target_value < (price * step):
                 adjusted[symbol] = 0.0
                 substituted.append(symbol)
         return adjusted, tuple(dict.fromkeys(substituted))
+
+    def apply_small_account_cash_compatibility(
+        target_values,
+        prices,
+        *,
+        candidate_symbols=None,
+        safe_haven_cash_symbols=(),
+        quantity_step=1.0,
+        cash_substitute_limit_usd=2000.0,
+    ):
+        adjusted_targets, substituted = _project_unbuyable_value_targets_to_cash(
+            target_values,
+            prices,
+            candidate_symbols=candidate_symbols,
+            quantity_step=quantity_step,
+        )
+        normalized_candidates = (
+            tuple(adjusted_targets)
+            if candidate_symbols is None
+            else tuple(dict.fromkeys(str(symbol or "").strip().upper() for symbol in candidate_symbols))
+        )
+        remaining_non_safe_targets = [
+            symbol
+            for symbol in normalized_candidates
+            if float(adjusted_targets.get(str(symbol or "").strip().upper(), 0.0) or 0.0) > 0.0
+        ]
+        safe_haven_symbols = tuple(
+            dict.fromkeys(
+                str(symbol or "").strip().upper()
+                for symbol in safe_haven_cash_symbols
+                if str(symbol or "").strip()
+            )
+        )
+        safe_haven_substituted = []
+        if (
+            substituted
+            and not remaining_non_safe_targets
+            and _positive_target_total(adjusted_targets) <= max(0.0, float(cash_substitute_limit_usd or 0.0))
+        ):
+            for symbol in safe_haven_symbols:
+                if float(adjusted_targets.get(symbol, 0.0) or 0.0) > 0.0:
+                    adjusted_targets[symbol] = 0.0
+                    safe_haven_substituted.append(symbol)
+        normalized_targets = {
+            str(symbol or "").strip().upper(): float(value or 0.0)
+            for symbol, value in dict(target_values or {}).items()
+        }
+        normalized_prices = {
+            str(symbol or "").strip().upper(): float(price or 0.0)
+            for symbol, price in dict(prices or {}).items()
+        }
+        notes = []
+        if safe_haven_substituted:
+            for symbol in substituted:
+                target_value = max(0.0, float(normalized_targets.get(symbol, 0.0) or 0.0))
+                price = max(0.0, float(normalized_prices.get(symbol, 0.0) or 0.0))
+                if target_value <= 0.0 or price <= 0.0:
+                    continue
+                notes.append(
+                    {
+                        "symbol": symbol,
+                        "target_value": target_value,
+                        "price": price,
+                        "cash_symbols": tuple(safe_haven_substituted),
+                    }
+                )
+        return _SmallAccountCashCompatibilityResult(
+            targets=adjusted_targets,
+            whole_share_substituted_symbols=substituted,
+            safe_haven_cash_substituted_symbols=tuple(safe_haven_substituted),
+            cash_substitution_notes=tuple(notes),
+        )
+
+    def format_small_account_cash_substitution_notes(
+        notes,
+        *,
+        translator,
+        wrapper_key="buy_deferred",
+        detail_key="buy_deferred_small_account_cash_substitution",
+        cash_label_key="cash_label",
+        symbol_suffix=".US",
+    ):
+        messages = []
+        seen_keys = set()
+        for note in tuple(notes or ()):
+            if not isinstance(note, Mapping):
+                continue
+            symbol = str(note.get("symbol") or "").strip().upper()
+            if not symbol:
+                continue
+            target_value = max(0.0, float(note.get("target_value") or 0.0))
+            price = max(0.0, float(note.get("price") or 0.0))
+            if target_value <= 0.0 or price <= 0.0:
+                continue
+            cash_symbols = tuple(
+                dict.fromkeys(
+                    str(cash_symbol or "").strip().upper()
+                    for cash_symbol in tuple(note.get("cash_symbols") or ())
+                    if str(cash_symbol or "").strip()
+                )
+            )
+            cash_symbols_text = ", ".join(f"{cash_symbol}{symbol_suffix}" for cash_symbol in cash_symbols)
+            if not cash_symbols_text:
+                cash_symbols_text = translator(cash_label_key)
+            note_key = (symbol, f"{target_value:.2f}", cash_symbols_text)
+            if note_key in seen_keys:
+                continue
+            seen_keys.add(note_key)
+            detail = translator(
+                detail_key,
+                symbol=f"{symbol}{symbol_suffix}",
+                diff=f"{target_value:.2f}",
+                price=f"{price:.2f}",
+                cash_symbols=cash_symbols_text,
+            )
+            messages.append(translator(wrapper_key, detail=detail))
+        return tuple(messages)
 from quant_platform_kit.common.models import OrderIntent
 from quant_platform_kit.common.quantity import format_quantity
 
@@ -170,36 +296,29 @@ def _apply_small_account_whole_share_compatibility(
         )
         for symbol, quote in dict(quotes or {}).items()
     }
-    adjusted_targets, substituted = project_unbuyable_value_targets_to_cash(
-        target_values,
-        quote_prices,
-        symbols=candidate_symbols,
-        quantity_step=1.0,
-    )
     safe_haven_symbols = _safe_haven_cash_symbols(
         portfolio=dict((plan or {}).get("portfolio") or {}),
         allocation=allocation,
     )
-    remaining_non_safe_targets = [
-        symbol
-        for symbol in candidate_symbols
-        if float(adjusted_targets.get(str(symbol or "").strip().upper(), 0.0) or 0.0) > 0.0
-    ]
-    safe_haven_substituted: list[str] = []
-    if (
-        substituted
-        and not remaining_non_safe_targets
-        and _positive_target_total(adjusted_targets) <= SMALL_ACCOUNT_SAFE_HAVEN_CASH_SUBSTITUTE_LIMIT_USD
-    ):
-        for symbol in safe_haven_symbols:
-            if float(adjusted_targets.get(symbol, 0.0) or 0.0) > 0.0:
-                adjusted_targets[symbol] = 0.0
-                safe_haven_substituted.append(symbol)
+    compatibility = apply_small_account_cash_compatibility(
+        target_values,
+        quote_prices,
+        candidate_symbols=candidate_symbols,
+        safe_haven_cash_symbols=safe_haven_symbols,
+        quantity_step=1.0,
+        cash_substitute_limit_usd=SMALL_ACCOUNT_SAFE_HAVEN_CASH_SUBSTITUTE_LIMIT_USD,
+    )
+    adjusted_targets = compatibility.targets
+    substituted = compatibility.whole_share_substituted_symbols
+    safe_haven_substituted = compatibility.safe_haven_cash_substituted_symbols
     adjusted_allocation = {**dict(allocation or {}), "targets": adjusted_targets}
+    adjusted_allocation.pop("small_account_whole_share_cash_notes", None)
     if substituted:
         adjusted_allocation["small_account_whole_share_substituted_symbols"] = substituted
     if safe_haven_substituted:
         adjusted_allocation["small_account_safe_haven_cash_substituted_symbols"] = tuple(safe_haven_substituted)
+    if compatibility.cash_substitution_notes:
+        adjusted_allocation["small_account_whole_share_cash_notes"] = tuple(compatibility.cash_substitution_notes)
     adjusted_plan = dict(plan or {})
     if substituted or safe_haven_substituted:
         adjusted_plan["allocation"] = adjusted_allocation
@@ -246,6 +365,17 @@ def execute_rebalance_cycle(
     strategy_symbols = tuple(allocation["strategy_symbols"])
     quotes = load_quotes(strategy_symbols)
     trade_logs: list[str] = []
+    small_account_cash_note_messages: set[str] = set()
+
+    def append_small_account_cash_notes(current_allocation):
+        for message in format_small_account_cash_substitution_notes(
+            dict(current_allocation or {}).get("small_account_whole_share_cash_notes") or (),
+            translator=translator,
+        ):
+            if message in small_account_cash_note_messages:
+                continue
+            small_account_cash_note_messages.add(message)
+            trade_logs.append(message)
 
     def sell_order_quantity(symbol, current_value, target_value, price):
         if price <= 0:
@@ -366,6 +496,7 @@ def execute_rebalance_cycle(
         allocation=allocation,
         quotes=quotes,
     )
+    append_small_account_cash_notes(allocation)
     target_values = dict(allocation["targets"])
     threshold = float(execution["trade_threshold_value"])
     cash_sweep_symbol = str(portfolio["cash_sweep_symbol"])
@@ -519,6 +650,7 @@ def execute_rebalance_cycle(
                 allocation=allocation,
                 quotes=quotes,
             )
+            append_small_account_cash_notes(allocation)
             market_values = dict(portfolio["market_values"])
             target_values = dict(allocation["targets"])
             threshold = float(execution["trade_threshold_value"])
