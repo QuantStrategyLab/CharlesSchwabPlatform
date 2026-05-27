@@ -181,4 +181,28 @@ def map_strategy_decision_to_plan(
         ),
     )
     plan["account_hash"] = snapshot.metadata["account_hash"]
+    execution = plan.setdefault("execution", {})
+    for field_name in (
+        "allocation_mode",
+        "trend_entry_buffer",
+        "trend_mid_buffer",
+        "trend_exit_buffer",
+        "blend_tier",
+        "base_blend_tier",
+        "overlay_trigger_count",
+        "overlay_trigger_reasons",
+        "trend_symbol",
+        "trend_price",
+        "trend_ma",
+        "trend_ma20",
+        "trend_ma20_slope",
+        "trend_rsi14",
+        "trend_rsi14_dynamic_threshold",
+        "trend_rsi14_effective_threshold",
+        "trend_bb_upper",
+        "blend_gate_volatility_delever_metric",
+        "blend_gate_volatility_delever_triggered",
+    ):
+        if field_name in diagnostics:
+            execution[field_name] = diagnostics[field_name]
     return plan

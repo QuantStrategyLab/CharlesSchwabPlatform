@@ -306,6 +306,47 @@ def publish_strategy_plugin_alerts(signals, *, report=None):
     return result
 
 
+def _signal_diagnostics_from_result(result) -> dict[str, object]:
+    execution = dict(getattr(result, "execution", {}) or {})
+    allocation = dict(getattr(result, "allocation", {}) or {})
+    diagnostics: dict[str, object] = {}
+    for field_name in (
+        "signal_display",
+        "status_display",
+        "benchmark_symbol",
+        "benchmark_price",
+        "long_trend_value",
+        "exit_line",
+        "active_risk_asset",
+        "allocation_mode",
+        "trend_entry_buffer",
+        "trend_mid_buffer",
+        "trend_exit_buffer",
+        "blend_tier",
+        "base_blend_tier",
+        "overlay_trigger_count",
+        "overlay_trigger_reasons",
+        "trend_symbol",
+        "trend_price",
+        "trend_ma",
+        "trend_ma20",
+        "trend_ma20_slope",
+        "trend_rsi14",
+        "trend_rsi14_dynamic_threshold",
+        "trend_rsi14_effective_threshold",
+        "trend_bb_upper",
+        "blend_gate_volatility_delever_metric",
+        "blend_gate_volatility_delever_triggered",
+    ):
+        value = execution.get(field_name)
+        if value is None or value == "":
+            continue
+        diagnostics[field_name] = value
+    if allocation.get("targets"):
+        diagnostics["targets"] = dict(allocation["targets"])
+    return diagnostics
+
+
 def persist_execution_report(report, *, dry_run_only_override: bool | None = None):
     return build_composer(dry_run_only_override=dry_run_only_override).build_reporting_adapters().persist_execution_report(report)
 
@@ -402,13 +443,26 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
         )
         if dry_run_only_override is None:
             publish_strategy_plugin_alerts(strategy_plugin_signals, report=report)
-        run_strategy_core(
+        execution_result = run_strategy_core(
             client,
             None,
             strategy_plugin_signals=strategy_plugin_signals,
             dry_run_only_override=dry_run_only_override,
         )
-        finalize_runtime_report(report, status="ok")
+        signal_diagnostics = _signal_diagnostics_from_result(execution_result)
+        if signal_diagnostics:
+            log_runtime_event(
+                log_context,
+                "strategy_signal_diagnostics",
+                message="Strategy signal diagnostics",
+                execution_window="precheck" if dry_run_only_override else "execution",
+                **signal_diagnostics,
+            )
+        finalize_runtime_report(
+            report,
+            status="ok",
+            diagnostics={"signal": signal_diagnostics} if signal_diagnostics else None,
+        )
         log_runtime_event(
             log_context,
             "strategy_cycle_completed",
