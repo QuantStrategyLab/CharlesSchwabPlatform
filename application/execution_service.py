@@ -83,6 +83,7 @@ class ExecutionCycleResult:
 
 
 DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD = 1000.0
+SMALL_ACCOUNT_SAFE_HAVEN_CASH_SUBSTITUTE_LIMIT_USD = 2000.0
 
 
 def _noop_sleep(_seconds):
@@ -99,6 +100,16 @@ def _safe_haven_cash_symbols(*, portfolio: dict, allocation: dict) -> tuple[str,
     if cash_sweep_symbol:
         symbols.append(cash_sweep_symbol)
     return tuple(dict.fromkeys(symbols))
+
+
+def _positive_target_total(targets: dict) -> float:
+    total = 0.0
+    for value in dict(targets or {}).values():
+        try:
+            total += max(0.0, float(value or 0.0))
+        except (TypeError, ValueError):
+            continue
+    return total
 
 
 def _apply_safe_haven_cash_substitution(
@@ -138,14 +149,20 @@ def _apply_small_account_whole_share_compatibility(
     target_values = dict(allocation.get("targets") or {})
     candidate_symbols = tuple(
         dict.fromkeys(
-            tuple(allocation.get("risk_symbols", ()))
+            str(symbol or "").strip().upper()
+            for symbol in tuple(allocation.get("risk_symbols", ()))
             + tuple(allocation.get("income_symbols", ()))
+            if str(symbol or "").strip()
         )
     )
     if not candidate_symbols:
-        safe_haven_symbols = set(allocation.get("safe_haven_symbols", ()))
+        safe_haven_symbols = set(
+            _safe_haven_cash_symbols(portfolio=dict((plan or {}).get("portfolio") or {}), allocation=allocation)
+        )
         candidate_symbols = tuple(
-            symbol for symbol in target_values if symbol not in safe_haven_symbols
+            str(symbol or "").strip().upper()
+            for symbol in target_values
+            if str(symbol or "").strip().upper() not in safe_haven_symbols
         )
     quote_prices = {
         str(symbol).strip().upper(): float(
@@ -159,11 +176,32 @@ def _apply_small_account_whole_share_compatibility(
         symbols=candidate_symbols,
         quantity_step=1.0,
     )
+    safe_haven_symbols = _safe_haven_cash_symbols(
+        portfolio=dict((plan or {}).get("portfolio") or {}),
+        allocation=allocation,
+    )
+    remaining_non_safe_targets = [
+        symbol
+        for symbol in candidate_symbols
+        if float(adjusted_targets.get(str(symbol or "").strip().upper(), 0.0) or 0.0) > 0.0
+    ]
+    safe_haven_substituted: list[str] = []
+    if (
+        substituted
+        and not remaining_non_safe_targets
+        and _positive_target_total(adjusted_targets) <= SMALL_ACCOUNT_SAFE_HAVEN_CASH_SUBSTITUTE_LIMIT_USD
+    ):
+        for symbol in safe_haven_symbols:
+            if float(adjusted_targets.get(symbol, 0.0) or 0.0) > 0.0:
+                adjusted_targets[symbol] = 0.0
+                safe_haven_substituted.append(symbol)
     adjusted_allocation = {**dict(allocation or {}), "targets": adjusted_targets}
     if substituted:
         adjusted_allocation["small_account_whole_share_substituted_symbols"] = substituted
+    if safe_haven_substituted:
+        adjusted_allocation["small_account_safe_haven_cash_substituted_symbols"] = tuple(safe_haven_substituted)
     adjusted_plan = dict(plan or {})
-    if substituted:
+    if substituted or safe_haven_substituted:
         adjusted_plan["allocation"] = adjusted_allocation
     return adjusted_plan, adjusted_allocation
 
@@ -502,8 +540,16 @@ def execute_rebalance_cycle(
                         buy_executed = True
                         estimated_buying_power -= quantity * limit_price
 
+    cash_sweep_substituted_to_cash = bool(
+        allocation.get("small_account_safe_haven_cash_substituted_symbols")
+    )
     if (
         not cash_sweep_sold_this_cycle
+        and cash_sweep_symbol
+        and (
+            float(target_values.get(cash_sweep_symbol, 0.0) or 0.0) > 0.0
+            or not cash_sweep_substituted_to_cash
+        )
         and estimated_buying_power > quotes[cash_sweep_symbol]["lastPrice"] * 2
         and (
             max(0.0, float(safe_haven_cash_substitute_threshold_usd or 0.0)) <= 0.0

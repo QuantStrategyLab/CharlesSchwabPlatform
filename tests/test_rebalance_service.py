@@ -197,6 +197,134 @@ class RebalanceServiceTests(unittest.TestCase):
         self.assertTrue(any("Market Sell SOXX: 1 shares" in log for log in result.trade_logs))
         self.assertTrue(any("Limit Buy SOXL ($191.15): 2 shares" in log for log in result.trade_logs))
 
+    def test_cash_sweep_rebuy_skips_when_only_risk_target_is_unbuyable(self):
+        submitted_orders = []
+        plan = {
+            "account_hash": "demo",
+            "allocation": {
+                "target_mode": "value",
+                "strategy_symbols": ("SOXL", "SOXX", "BOXX"),
+                "risk_symbols": ("SOXL", "SOXX"),
+                "income_symbols": (),
+                "safe_haven_symbols": ("BOXX",),
+                "targets": {"SOXL": 0.0, "SOXX": 194.10, "BOXX": 1099.90},
+            },
+            "portfolio": {
+                "market_values": {"SOXL": 0.0, "SOXX": 0.0, "BOXX": 0.0},
+                "quantities": {"SOXL": 0, "SOXX": 0, "BOXX": 0},
+                "liquid_cash": 1294.00,
+                "cash_sweep_symbol": "BOXX",
+            },
+            "execution": {
+                "trade_threshold_value": 100.0,
+                "reserved_cash": 38.82,
+            },
+        }
+        prices = {"SOXL": 175.0, "SOXX": 525.0, "BOXX": 116.83}
+
+        result = execute_rebalance_cycle(
+            client=object(),
+            plan=plan,
+            portfolio=plan["portfolio"],
+            execution=plan["execution"],
+            allocation=plan["allocation"],
+            fetch_managed_snapshot=lambda _client: None,
+            market_data_port=CallableMarketDataPort(
+                quote_loader=lambda symbol: QuoteSnapshot(
+                    symbol=symbol,
+                    as_of="2026-05-26",
+                    last_price=prices[symbol],
+                    ask_price=prices[symbol],
+                )
+            ),
+            load_plan=lambda _snapshot: (plan, plan["portfolio"], plan["execution"], plan["allocation"]),
+            execution_port=CallableExecutionPort(
+                lambda order_intent: (
+                    submitted_orders.append(order_intent),
+                    ExecutionReport(
+                        symbol=order_intent.symbol,
+                        side=order_intent.side,
+                        quantity=order_intent.quantity,
+                        status="accepted",
+                        broker_order_id="schwab-order-1",
+                    ),
+                )[-1]
+            ),
+            translator=build_translator("en"),
+            limit_buy_premium=1.0,
+            sell_settle_delay_sec=0,
+            publish_order_issue=lambda _message: None,
+            safe_haven_cash_substitute_threshold_usd=1000.0,
+        )
+
+        self.assertEqual(submitted_orders, [])
+        self.assertEqual(result.allocation["targets"]["SOXX"], 0.0)
+        self.assertEqual(result.allocation["targets"]["BOXX"], 0.0)
+
+    def test_large_safe_haven_target_survives_unbuyable_risk_target(self):
+        submitted_orders = []
+        plan = {
+            "account_hash": "demo",
+            "allocation": {
+                "target_mode": "value",
+                "strategy_symbols": ("SOXX", "BOXX"),
+                "risk_symbols": ("SOXX",),
+                "income_symbols": (),
+                "safe_haven_symbols": ("BOXX",),
+                "targets": {"SOXX": 194.10, "BOXX": 49500.0},
+            },
+            "portfolio": {
+                "market_values": {"SOXX": 0.0, "BOXX": 0.0},
+                "quantities": {"SOXX": 0, "BOXX": 0},
+                "liquid_cash": 50000.0,
+                "cash_sweep_symbol": "BOXX",
+            },
+            "execution": {
+                "trade_threshold_value": 100.0,
+                "reserved_cash": 0.0,
+            },
+        }
+        prices = {"SOXX": 525.0, "BOXX": 100.0}
+
+        result = execute_rebalance_cycle(
+            client=object(),
+            plan=plan,
+            portfolio=plan["portfolio"],
+            execution=plan["execution"],
+            allocation=plan["allocation"],
+            fetch_managed_snapshot=lambda _client: None,
+            market_data_port=CallableMarketDataPort(
+                quote_loader=lambda symbol: QuoteSnapshot(
+                    symbol=symbol,
+                    as_of="2026-05-26",
+                    last_price=prices[symbol],
+                    ask_price=prices[symbol],
+                )
+            ),
+            load_plan=lambda _snapshot: (plan, plan["portfolio"], plan["execution"], plan["allocation"]),
+            execution_port=CallableExecutionPort(
+                lambda order_intent: (
+                    submitted_orders.append(order_intent),
+                    ExecutionReport(
+                        symbol=order_intent.symbol,
+                        side=order_intent.side,
+                        quantity=order_intent.quantity,
+                        status="accepted",
+                        broker_order_id="schwab-order-1",
+                    ),
+                )[-1]
+            ),
+            translator=build_translator("en"),
+            limit_buy_premium=1.0,
+            sell_settle_delay_sec=0,
+            publish_order_issue=lambda _message: None,
+            safe_haven_cash_substitute_threshold_usd=1000.0,
+        )
+
+        self.assertEqual(result.allocation["targets"]["SOXX"], 0.0)
+        self.assertEqual(result.allocation["targets"]["BOXX"], 49500.0)
+        self.assertEqual([(order.side, order.symbol) for order in submitted_orders], [("buy", "BOXX")])
+
     def test_run_strategy_core_supports_execution_port_runtime_path(self):
         sent_messages = []
         observed_orders = []
