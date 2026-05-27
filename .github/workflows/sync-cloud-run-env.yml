@@ -1,4 +1,4 @@
-name: Sync Cloud Run Env
+name: Deploy Cloud Run
 
 on:
   push:
@@ -8,16 +8,20 @@ env:
   GCP_PROJECT_ID: charlesschwabquant
   GCP_WORKLOAD_IDENTITY_PROVIDER: projects/401309731911/locations/global/workloadIdentityPools/github-actions/providers/github-main
   GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: schwab-platform-deploy@charlesschwabquant.iam.gserviceaccount.com
+  GCP_RUNTIME_SERVICE_ACCOUNT: schwab-platform-runtime@charlesschwabquant.iam.gserviceaccount.com
+  GCP_ARTIFACT_REGISTRY_REPOSITORY: cloud-run-source-deploy
 
 jobs:
   sync-cloud-run-env:
-    name: Sync Cloud Run Env
+    name: Deploy / Sync Cloud Run
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
     env:
+      ENABLE_GITHUB_CLOUD_RUN_DEPLOY: ${{ vars.ENABLE_GITHUB_CLOUD_RUN_DEPLOY }}
       ENABLE_GITHUB_ENV_SYNC: ${{ vars.ENABLE_GITHUB_ENV_SYNC }}
+      GCP_ARTIFACT_REGISTRY_HOSTNAME: ${{ vars.GCP_ARTIFACT_REGISTRY_HOSTNAME }}
       CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
       CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
       GOOGLE_CLOUD_PROJECT: ${{ vars.GOOGLE_CLOUD_PROJECT }}
@@ -79,14 +83,28 @@ jobs:
       CRISIS_ALERT_PUSH_ACCESS_TOKEN: ${{ secrets.CRISIS_ALERT_PUSH_ACCESS_TOKEN }}
       CRISIS_ALERT_TELEGRAM_BOT_TOKEN: ${{ secrets.CRISIS_ALERT_TELEGRAM_BOT_TOKEN }}
     steps:
-      - name: Check whether env sync is enabled
+      - name: Check whether Cloud Run automation is enabled
         id: config
         run: |
           set -euo pipefail
 
-          if [ "${ENABLE_GITHUB_ENV_SYNC:-}" != "true" ]; then
+          deploy_enabled=false
+          env_sync_enabled=false
+
+          if [ "${ENABLE_GITHUB_CLOUD_RUN_DEPLOY:-}" = "true" ]; then
+            deploy_enabled=true
+          fi
+
+          if [ "${ENABLE_GITHUB_ENV_SYNC:-}" = "true" ]; then
+            env_sync_enabled=true
+          fi
+
+          echo "deploy_enabled=${deploy_enabled}" >> "$GITHUB_OUTPUT"
+          echo "env_sync_enabled=${env_sync_enabled}" >> "$GITHUB_OUTPUT"
+
+          if [ "${deploy_enabled}" != "true" ] && [ "${env_sync_enabled}" != "true" ]; then
             echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping Cloud Run env sync because ENABLE_GITHUB_ENV_SYNC is not set to true." >&2
+            echo "Skipping Cloud Run automation because ENABLE_GITHUB_CLOUD_RUN_DEPLOY and ENABLE_GITHUB_ENV_SYNC are not true." >&2
             exit 0
           fi
 
@@ -97,13 +115,13 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Set up Python for strategy requirement resolution
-        if: steps.config.outputs.enabled == 'true'
+        if: steps.config.outputs.env_sync_enabled == 'true'
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Install strategy status dependencies
-        if: steps.config.outputs.enabled == 'true'
+        if: steps.config.outputs.env_sync_enabled == 'true'
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
@@ -111,7 +129,7 @@ jobs:
 
       - name: Resolve selected strategy runtime requirements
         id: strategy_requirements
-        if: steps.config.outputs.enabled == 'true'
+        if: steps.config.outputs.env_sync_enabled == 'true'
         run: |
           set -euo pipefail
           python - <<'PY'
@@ -160,7 +178,7 @@ jobs:
           PY
 
       - name: Validate env sync inputs
-        if: steps.config.outputs.enabled == 'true'
+        if: steps.config.outputs.env_sync_enabled == 'true'
         env:
           REQUIRES_SNAPSHOT_ARTIFACTS: ${{ steps.strategy_requirements.outputs.requires_snapshot_artifacts }}
           REQUIRES_SNAPSHOT_MANIFEST_PATH: ${{ steps.strategy_requirements.outputs.requires_snapshot_manifest_path }}
@@ -220,6 +238,24 @@ jobs:
             exit 1
           fi
 
+      - name: Validate deploy inputs
+        if: steps.config.outputs.deploy_enabled == 'true'
+        run: |
+          set -euo pipefail
+
+          missing_vars=()
+          for var_name in CLOUD_RUN_REGION CLOUD_RUN_SERVICE; do
+            if [ -z "${!var_name:-}" ]; then
+              missing_vars+=("${var_name}")
+            fi
+          done
+
+          if [ "${#missing_vars[@]}" -gt 0 ]; then
+            echo "Cloud Run deploy is enabled, but these values are missing:" >&2
+            printf '  - %s\n' "${missing_vars[@]}" >&2
+            exit 1
+          fi
+
       - name: Authenticate to Google Cloud
         id: auth
         if: steps.config.outputs.enabled == 'true'
@@ -235,8 +271,35 @@ jobs:
           project_id: ${{ env.GCP_PROJECT_ID }}
           version: ">= 416.0.0"
 
+      - name: Build, push, and deploy Cloud Run image
+        if: steps.config.outputs.deploy_enabled == 'true'
+        run: |
+          set -euo pipefail
+
+          artifact_registry_hostname="${GCP_ARTIFACT_REGISTRY_HOSTNAME:-${CLOUD_RUN_REGION}-docker.pkg.dev}"
+          image_repo="${artifact_registry_hostname}/${GCP_PROJECT_ID}/${GCP_ARTIFACT_REGISTRY_REPOSITORY}/charlesschwabplatform/${CLOUD_RUN_SERVICE}"
+          image="${image_repo}:${GITHUB_SHA}"
+
+          gcloud auth configure-docker "${artifact_registry_hostname}" --quiet
+          docker build --pull -t "${image}" .
+          docker push "${image}"
+
+          gcloud run deploy "${CLOUD_RUN_SERVICE}" \
+            --project="${GCP_PROJECT_ID}" \
+            --region="${CLOUD_RUN_REGION}" \
+            --platform=managed \
+            --image="${image}" \
+            --service-account="${GCP_RUNTIME_SERVICE_ACCOUNT}" \
+            --ingress=internal \
+            --max-instances=1 \
+            --memory=512Mi \
+            --cpu=1 \
+            --timeout=300s \
+            --labels="managed-by=github-actions,commit-sha=${GITHUB_SHA},github-run-id=${GITHUB_RUN_ID}" \
+            --quiet
+
       - name: Wait for Cloud Run deployment of current commit
-        if: steps.config.outputs.enabled == 'true'
+        if: steps.config.outputs.env_sync_enabled == 'true'
         run: |
           set -euo pipefail
 
@@ -260,7 +323,7 @@ jobs:
           done
 
       - name: Sync Cloud Run environment
-        if: steps.config.outputs.enabled == 'true'
+        if: steps.config.outputs.env_sync_enabled == 'true'
         env:
           RUNTIME_TARGET_JSON: ${{ steps.strategy_requirements.outputs.runtime_target_json }}
         run: |
@@ -630,3 +693,75 @@ jobs:
           fi
 
           gcloud "${gcloud_args[@]}"
+
+      - name: Prune old Cloud Run revisions
+        if: steps.config.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+
+          keep_revisions="$(
+            gcloud run services describe "${CLOUD_RUN_SERVICE}" \
+              --project="${GCP_PROJECT_ID}" \
+              --region="${CLOUD_RUN_REGION}" \
+              --format=json \
+            | python -c '
+          import json
+          import sys
+          service = json.load(sys.stdin)
+          revisions = {
+              item.get("revisionName")
+              for item in service.get("status", {}).get("traffic", [])
+              if item.get("revisionName") and int(item.get("percent") or 0) > 0
+          }
+          latest_ready = service.get("status", {}).get("latestReadyRevisionName")
+          if latest_ready:
+              revisions.add(latest_ready)
+          for revision in sorted(revisions):
+              print(revision)
+          '
+          )"
+
+          if [ -z "${keep_revisions}" ]; then
+            echo "No active Cloud Run revision found for ${CLOUD_RUN_SERVICE}; skipping revision prune." >&2
+            exit 0
+          fi
+
+          mapfile -t revisions_to_delete < <(
+            gcloud run revisions list \
+              --project="${GCP_PROJECT_ID}" \
+              --service "${CLOUD_RUN_SERVICE}" \
+              --region "${CLOUD_RUN_REGION}" \
+              --format='value(metadata.name)' \
+            | grep -Fvx -f <(printf '%s\n' "${keep_revisions}") || true
+          )
+
+          for revision in "${revisions_to_delete[@]}"; do
+            echo "Deleting old Cloud Run revision ${revision} for ${CLOUD_RUN_SERVICE}."
+            gcloud run revisions delete "${revision}" \
+              --project="${GCP_PROJECT_ID}" \
+              --region="${CLOUD_RUN_REGION}" \
+              --quiet
+          done
+
+      - name: Clean up old Cloud Run images
+        if: steps.config.outputs.deploy_enabled == 'true'
+        run: |
+          set -euo pipefail
+
+          artifact_registry_hostname="${GCP_ARTIFACT_REGISTRY_HOSTNAME:-${CLOUD_RUN_REGION}-docker.pkg.dev}"
+          image_repo="${artifact_registry_hostname}/${GCP_PROJECT_ID}/${GCP_ARTIFACT_REGISTRY_REPOSITORY}/charlesschwabplatform/${CLOUD_RUN_SERVICE}"
+          old_digests="$(gcloud artifacts docker images list "${image_repo}" \
+            --project="${GCP_PROJECT_ID}" \
+            --include-tags \
+            --format=json \
+            | python -c 'import json,os,sys; keep=os.environ["GITHUB_SHA"]; rows=json.load(sys.stdin); print("\n".join(row["version"] for row in rows if keep not in set(row.get("tags") or [])))')"
+
+          while IFS= read -r digest; do
+            if [ -z "${digest}" ]; then
+              continue
+            fi
+            gcloud artifacts docker images delete "${image_repo}@${digest}" \
+              --project="${GCP_PROJECT_ID}" \
+              --delete-tags \
+              --quiet
+          done <<< "${old_digests}"

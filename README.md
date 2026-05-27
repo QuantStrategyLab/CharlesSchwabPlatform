@@ -105,16 +105,18 @@ Recommended Secret Manager runtime secrets in the `charlesschwabquant` project:
 - `charles-schwab-app-secret`
 - `charles-schwab-telegram-token`
 
-### GitHub-managed Cloud Run env sync
+### GitHub-managed Cloud Run deploy and env sync
 
-If code deployment still uses Google Cloud Trigger, but you want GitHub to be the single source of truth for runtime env vars, this repo now includes `.github/workflows/sync-cloud-run-env.yml`.
+This repo includes `.github/workflows/sync-cloud-run-env.yml` for GitHub-managed Cloud Run automation. Set `ENABLE_GITHUB_CLOUD_RUN_DEPLOY=true` to build and deploy the container image from GitHub Actions; set `ENABLE_GITHUB_ENV_SYNC=true` to sync runtime env vars. You can enable either flag independently during migration from a Google Cloud Trigger.
 
 Recommended setup:
 
 - **Repository Variables**
+  - `ENABLE_GITHUB_CLOUD_RUN_DEPLOY` = `true` to let GitHub Actions build/push/deploy the Cloud Run image
   - `ENABLE_GITHUB_ENV_SYNC` = `true`
   - `CLOUD_RUN_REGION`
   - `CLOUD_RUN_SERVICE`
+  - Optional: `GCP_ARTIFACT_REGISTRY_HOSTNAME` when Artifact Registry is not in the Cloud Run region (default: `<CLOUD_RUN_REGION>-docker.pkg.dev`)
   - `TELEGRAM_TOKEN_SECRET_NAME` (recommended: `charles-schwab-telegram-token`)
   - `SCHWAB_API_KEY_SECRET_NAME` (recommended: `charles-schwab-api-key`)
   - `SCHWAB_APP_SECRET_SECRET_NAME` (recommended: `charles-schwab-app-secret`)
@@ -141,16 +143,17 @@ Recommended setup:
   - `CRISIS_ALERT_EMAIL_SENDER_PASSWORD_SECRET_NAME`
   - optional SMTP overrides: `CRISIS_ALERT_EMAIL_SMTP_HOST`, `CRISIS_ALERT_EMAIL_SMTP_PORT`, `CRISIS_ALERT_EMAIL_SMTP_SECURITY`
 
-On every push to `main`, the workflow updates the existing Cloud Run service with the values above and removes `TELEGRAM_CHAT_ID`.
+On every push to `main`, the workflow can build and deploy the configured Cloud Run service, update it with the values above, and remove `TELEGRAM_CHAT_ID`.
 
 Important:
 
 - The workflow only becomes strict when `ENABLE_GITHUB_ENV_SYNC=true`. If this variable is unset, the sync job is skipped and the old Google Cloud Trigger + manual Cloud Run env setup keeps working. When enabled, it resolves the selected profile's snapshot/config requirements from `scripts/print_strategy_profile_status.py --json` instead of a hard-coded strategy-name list.
+- The deploy path only becomes active when `ENABLE_GITHUB_CLOUD_RUN_DEPLOY=true`. If it is unset, an existing Cloud Build trigger can keep owning code deployment while this workflow only syncs env.
 - `STRATEGY_PROFILE` is driven by the platform capability matrix plus a rollout allowlist derived from `runtime_enabled` strategy metadata. Today `enabled` includes six live `us_equity` profiles: `global_etf_rotation`, `mega_cap_leader_rotation_top50_balanced`, `russell_1000_multi_factor_defensive`, `tqqq_growth_income`, `soxl_soxx_trend_income`, and `tech_communication_pullback_enhancement`; archived research-only profiles remain eligible in the capability matrix but are not enabled.
 - The current strategy domain is `us_equity`, and the repo now keeps a thin strategy registry so future expansion can grow by domain + profile instead of mixing strategy and platform in one layer.
 - `INCOME_THRESHOLD_USD`, `QQQI_INCOME_RATIO`, and `DUAL_DRIVE_UNLEVERED_SYMBOL` are optional env-sync overrides, not platform defaults. Leave them unset to inherit the `UsEquityStrategies` profile defaults; the current `tqqq_growth_income` live default is the no-income QQQ/TQQQ dual-drive mode. Set `DUAL_DRIVE_UNLEVERED_SYMBOL=QQQM` only when the deployment intentionally uses QQQM instead of whole-share QQQ.
 - GitHub now authenticates to Google Cloud with OIDC + Workload Identity Federation. `GCP_SA_KEY` is no longer required for this workflow.
-- If you deploy with `gcloud run deploy --source` or a Cloud Run source trigger, also grant `roles/storage.objectViewer` on `gs://run-sources-<project>-<region>` to the build service account, the deploy service account, and the default compute service account. Without that bucket access, source deploy fails before Cloud Build starts with `storage.objects.get` denied.
+- GitHub deploy uses the repository Dockerfile and Artifact Registry. The deploy service account needs Artifact Registry writer, Cloud Run admin, and service-account user permissions for the runtime service account.
 - The Telegram token and Schwab API credentials should live in Secret Manager and be referenced by the secret-name variables above. Across multiple quant repos, keep shared settings limited to low-coupling values such as `GLOBAL_TELEGRAM_CHAT_ID`, `NOTIFY_LANG`, and the generic `CRISIS_ALERT_EMAIL_*` crisis mail contract when the same alert policy applies.
 
 ### Deployment unit and naming
@@ -239,16 +242,18 @@ Schwab OAuth token payload 当前从 Secret Manager 的 `schwab_token` 里读取
 - `charles-schwab-app-secret`
 - `charles-schwab-telegram-token`
 
-### GitHub 统一管理 Cloud Run 环境变量
+### GitHub 统一管理 Cloud Run 部署和环境变量
 
-如果代码部署继续走 Google Cloud Trigger，但你想把运行时环境变量统一放在 GitHub 管理，这个仓库现在提供了 `.github/workflows/sync-cloud-run-env.yml`。这个 workflow 现在也会发出 `RUNTIME_TARGET_JSON`，让控制面带上结构化运行目标，而不是只看 `STRATEGY_PROFILE`。
+这个仓库提供 `.github/workflows/sync-cloud-run-env.yml` 作为 GitHub 管理 Cloud Run 的入口。设置 `ENABLE_GITHUB_CLOUD_RUN_DEPLOY=true` 时，GitHub Actions 会构建并发布容器镜像；设置 `ENABLE_GITHUB_ENV_SYNC=true` 时，GitHub Actions 会同步运行时环境变量。迁移期间两个开关可以独立启用，旧的 Google Cloud Trigger 可以先保留。这个 workflow 现在也会发出 `RUNTIME_TARGET_JSON`，让控制面带上结构化运行目标，而不是只看 `STRATEGY_PROFILE`。
 
 推荐配置方式：
 
 - **仓库级 Variables**
+  - `ENABLE_GITHUB_CLOUD_RUN_DEPLOY` = `true`（让 GitHub Actions 负责 build/push/deploy）
   - `ENABLE_GITHUB_ENV_SYNC` = `true`
   - `CLOUD_RUN_REGION`
   - `CLOUD_RUN_SERVICE`
+  - 可选：`GCP_ARTIFACT_REGISTRY_HOSTNAME`（Artifact Registry 不在 Cloud Run region 时才需要；默认 `<CLOUD_RUN_REGION>-docker.pkg.dev`）
   - `TELEGRAM_TOKEN_SECRET_NAME`（建议：`charles-schwab-telegram-token`）
   - `SCHWAB_API_KEY_SECRET_NAME`（建议：`charles-schwab-api-key`）
   - `SCHWAB_APP_SECRET_SECRET_NAME`（建议：`charles-schwab-app-secret`）
@@ -275,16 +280,17 @@ Schwab OAuth token payload 当前从 Secret Manager 的 `schwab_token` 里读取
   - `CRISIS_ALERT_EMAIL_SENDER_PASSWORD_SECRET_NAME`
   - 可选 SMTP 覆盖：`CRISIS_ALERT_EMAIL_SMTP_HOST`、`CRISIS_ALERT_EMAIL_SMTP_PORT`、`CRISIS_ALERT_EMAIL_SMTP_SECURITY`
 
-每次 push 到 `main` 时，这个 workflow 会把上面这些值同步到现有 Cloud Run 服务里，并删除旧的 `TELEGRAM_CHAT_ID`。
+每次 push 到 `main` 时，这个 workflow 可以构建并部署配置的 Cloud Run 服务，把上面这些值同步到服务里，并删除旧的 `TELEGRAM_CHAT_ID`。
 
 注意：
 
 - 只有在 `ENABLE_GITHUB_ENV_SYNC=true` 时，这个 workflow 才会严格校验并执行同步。没打开时会直接跳过，不影响原来 Google Cloud Trigger + 手工 Cloud Run env 的老流程。打开后，它会通过 `scripts/print_strategy_profile_status.py --json` 动态解析目标策略需要的 snapshot/config 输入，不再维护硬编码策略名列表。
+- 只有在 `ENABLE_GITHUB_CLOUD_RUN_DEPLOY=true` 时，GitHub Actions 才会接管代码部署；没打开时，旧的 Cloud Build trigger 仍可继续负责发布。
 - `STRATEGY_PROFILE` 现在由平台能力矩阵和从 `runtime_enabled` 策略元数据派生的 rollout allowlist 一起决定。当前 `enabled` 包含 6 条 live `us_equity` 策略：`global_etf_rotation`、`mega_cap_leader_rotation_top50_balanced`、`russell_1000_multi_factor_defensive`、`tqqq_growth_income`、`soxl_soxx_trend_income` 和 `tech_communication_pullback_enhancement`；research-only 存档 profile 仍保留能力矩阵兼容性，但不会启用。`RUNTIME_TARGET_JSON` 则表示实际运行目标，`STRATEGY_PROFILE` 继续只负责兼容选择策略实现。
 - 当前策略域是 `us_equity`，本地策略注册表只用于域和 profile 校验；结构化运行目标会通过 `RUNTIME_TARGET_JSON` 往下传。
 - `INCOME_THRESHOLD_USD`、`QQQI_INCOME_RATIO` 和 `DUAL_DRIVE_UNLEVERED_SYMBOL` 在 env-sync 里是可选 override，不是平台默认值来源。不填时会继承 `UsEquityStrategies` 的 profile 默认值；当前 `tqqq_growth_income` 实盘默认是不带收入层的 QQQ/TQQQ 双轮模式。只有在明确要用 QQQM 替代整股 QQQ 时，才设置 `DUAL_DRIVE_UNLEVERED_SYMBOL=QQQM`。
 - GitHub 现在通过 OIDC + Workload Identity Federation 登录 Google Cloud，这个 workflow 不再需要 `GCP_SA_KEY`。
-- 如果你用 `gcloud run deploy --source` 或 Cloud Run source trigger 部署，还要确保 `gs://run-sources-<project>-<region>` 这个 staging bucket 给 build service account、deploy service account、默认 compute service account 都加上 `roles/storage.objectViewer`。少了这层权限，会在 Cloud Build 启动前直接报 `storage.objects.get denied`。
+- GitHub 部署路径使用仓库里的 Dockerfile 和 Artifact Registry。部署服务账号需要 Artifact Registry 写入、Cloud Run 管理，以及对 runtime service account 的 service-account user 权限。
 - Telegram token 和 Schwab API 凭据建议放到 Secret Manager，并通过上面的 secret-name 变量引用。对多个 quant 仓库来说，真正适合跨项目共享的是低耦合配置，例如 `GLOBAL_TELEGRAM_CHAT_ID`、`NOTIFY_LANG`，以及通用的 `CRISIS_ALERT_EMAIL_*` 危机邮件契约。
 
 ### 部署单元和命名建议
