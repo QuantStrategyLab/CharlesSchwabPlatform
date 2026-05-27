@@ -260,6 +260,13 @@ class RebalanceServiceTests(unittest.TestCase):
         self.assertEqual(submitted_orders, [])
         self.assertEqual(result.allocation["targets"]["SOXX"], 0.0)
         self.assertEqual(result.allocation["targets"]["BOXX"], 0.0)
+        self.assertTrue(
+            any(
+                "SOXX.US target $194.10 is below the 1-share price $525.00" in log
+                for log in result.trade_logs
+            )
+        )
+        self.assertTrue(any("does not rebuy BOXX.US" in log for log in result.trade_logs))
 
     def test_large_safe_haven_target_survives_unbuyable_risk_target(self):
         submitted_orders = []
