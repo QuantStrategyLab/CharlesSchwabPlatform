@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from application.execution_service import execute_rebalance_cycle
 from application.runtime_dependencies import SchwabRebalanceConfig, SchwabRebalanceRuntime
+from application.signal_snapshot import build_signal_snapshot
 from notifications.events import NotificationPublisher, RenderedNotification
 from notifications import renderers as notification_renderers
 from quant_platform_kit.common.models import QuoteSnapshot
@@ -362,6 +363,15 @@ def run_strategy_core(
     )
     portfolio = execution_result.portfolio
     execution = execution_result.execution
+    execution["signal_snapshot"] = build_signal_snapshot(
+        platform="schwab",
+        strategy_profile=config.strategy_profile,
+        execution={
+            **execution,
+            "latest_price_source": "schwab_daily_history_with_live_quote_overlay",
+        },
+        allocation=execution_result.allocation,
+    )
     trade_logs = list(execution_result.trade_logs)
 
     if trade_logs:

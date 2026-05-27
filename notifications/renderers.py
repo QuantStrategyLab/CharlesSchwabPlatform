@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import re
 
 from notifications.events import RenderedNotification
@@ -146,6 +147,36 @@ def _build_timing_audit_lines(execution, *, translator) -> list[str]:
     return [f"{label}: {value}"]
 
 
+def _format_signal_snapshot_line(snapshot, *, translator) -> str:
+    if not isinstance(snapshot, Mapping):
+        return ""
+    market_date = str(snapshot.get("market_date") or snapshot.get("signal_as_of") or "").strip()
+    source = str(snapshot.get("latest_price_source") or "").strip()
+    overlay = snapshot.get("quote_overlay_used")
+    warning = snapshot.get("data_freshness_warning")
+    if not market_date and not source and overlay is None and warning in (None, "", False):
+        return ""
+    if _translator_uses_zh(translator):
+        overlay_text = "是" if overlay is True else "否" if overlay is False else "未知"
+        parts = [
+            f"日期 {market_date or '未知'}",
+            f"数据源 {source or '未知'}",
+            f"报价覆盖 {overlay_text}",
+        ]
+        if warning not in (None, "", False):
+            parts.append(f"提示 {warning}")
+        return "🧾 信号快照: " + " | ".join(parts)
+    overlay_text = "yes" if overlay is True else "no" if overlay is False else "unknown"
+    parts = [
+        f"date {market_date or 'unknown'}",
+        f"source {source or 'unknown'}",
+        f"quote overlay {overlay_text}",
+    ]
+    if warning not in (None, "", False):
+        parts.append(f"warning {warning}")
+    return "🧾 Signal snapshot: " + " | ".join(parts)
+
+
 def _format_holdings_lines(portfolio_rows, market_values, *, translator) -> list[str]:
     lines = [translator("holdings_title")]
     for row in portfolio_rows:
@@ -188,6 +219,7 @@ def _build_compact_trade_message(
     status_display,
     signal_display,
     timing_lines,
+    signal_snapshot_line,
     trade_logs,
 ) -> str:
     lines = [
@@ -206,6 +238,8 @@ def _build_compact_trade_message(
         lines.append(separator)
         lines.extend(line for line in dashboard.splitlines() if line.strip())
     lines.extend(timing_lines)
+    if signal_snapshot_line:
+        lines.append(signal_snapshot_line)
     status_summary = _first_detail_line(status_display)
     if status_summary:
         lines.append(f"📊 {status_summary}")
@@ -231,6 +265,7 @@ def _build_compact_heartbeat_message(
     status_display,
     signal_display,
     timing_lines,
+    signal_snapshot_line,
 ) -> str:
     lines = [
         translator("heartbeat_header"),
@@ -249,6 +284,8 @@ def _build_compact_heartbeat_message(
         lines.append(separator)
         lines.extend(line for line in dashboard.splitlines() if line.strip())
     lines.extend(timing_lines)
+    if signal_snapshot_line:
+        lines.append(signal_snapshot_line)
     status_summary = _first_detail_line(status_display)
     if status_summary:
         lines.append(f"📊 {status_summary}")
@@ -275,6 +312,10 @@ def render_trade_notification(
     extra_notification_block = _render_extra_notification_block(extra_notification_lines)
     dashboard_text = _format_dashboard_text(str(execution["dashboard_text"]), translator=translator)
     timing_lines = _build_timing_audit_lines(execution, translator=translator)
+    signal_snapshot_line = _format_signal_snapshot_line(
+        execution.get("signal_snapshot"),
+        translator=translator,
+    )
     separator = str(execution["separator"])
     status_line = "\n".join(_split_labeled_text(f"📊 {status_display}")) + "\n" if status_display else ""
     dashboard_block = f"{dashboard_text}\n{separator}\n" if dashboard_text else ""
@@ -288,6 +329,7 @@ def render_trade_notification(
         f"{dry_run_line}"
         f"{extra_notification_block}"
         f"{chr(10).join(timing_lines) + chr(10) if timing_lines else ''}"
+        f"{signal_snapshot_line + chr(10) if signal_snapshot_line else ''}"
         f"{status_line}"
         f"{trade_signal_block}\n\n"
         f"{dashboard_block}"
@@ -304,6 +346,7 @@ def render_trade_notification(
         status_display=status_display,
         signal_display=signal_display,
         timing_lines=timing_lines,
+        signal_snapshot_line=signal_snapshot_line,
         trade_logs=trade_logs,
     )
     return RenderedNotification(detailed_text=detailed_text, compact_text=compact_text)
@@ -324,6 +367,10 @@ def render_heartbeat_notification(
     extra_notification_block = _render_extra_notification_block(extra_notification_lines)
     dashboard_text = _format_dashboard_text(str(execution["dashboard_text"]), translator=translator)
     timing_lines = _build_timing_audit_lines(execution, translator=translator)
+    signal_snapshot_line = _format_signal_snapshot_line(
+        execution.get("signal_snapshot"),
+        translator=translator,
+    )
     separator = str(execution["separator"])
     total_equity = float(portfolio["total_equity"])
     portfolio_rows = tuple(portfolio["portfolio_rows"])
@@ -351,6 +398,7 @@ def render_heartbeat_notification(
         f"{extra_notification_block}"
         f"{portfolio_block}"
         f"{chr(10).join(timing_lines) + chr(10) if timing_lines else ''}"
+        f"{signal_snapshot_line + chr(10) if signal_snapshot_line else ''}"
         f"{status_line}"
         f"{heartbeat_signal_block}\n"
         f"{benchmark_block}"
@@ -369,5 +417,6 @@ def render_heartbeat_notification(
         status_display=status_display,
         signal_display=signal_display,
         timing_lines=timing_lines,
+        signal_snapshot_line=signal_snapshot_line,
     )
     return RenderedNotification(detailed_text=detailed_text, compact_text=compact_text)

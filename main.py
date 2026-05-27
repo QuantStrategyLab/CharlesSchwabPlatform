@@ -9,6 +9,7 @@ from application.runtime_broker_adapters import build_runtime_broker_adapters
 from application.runtime_composer import build_runtime_composer
 from application.runtime_strategy_adapters import build_runtime_strategy_adapters
 from application.rebalance_service import run_strategy_core as run_rebalance_cycle
+from application.signal_snapshot import build_signal_snapshot
 from decision_mapper import map_strategy_decision_to_plan
 from entrypoints.cloud_run import is_market_open_today
 from notifications.telegram import (
@@ -347,6 +348,22 @@ def _signal_diagnostics_from_result(result) -> dict[str, object]:
     return diagnostics
 
 
+def _has_signal_snapshot_details(snapshot: dict[str, object]) -> bool:
+    return any(
+        snapshot.get(field_name)
+        for field_name in (
+            "signal_as_of",
+            "market_date",
+            "latest_price_source",
+            "target_weights",
+            "target_values",
+            "indicators",
+            "signal",
+            "status",
+        )
+    )
+
+
 def persist_execution_report(report, *, dry_run_only_override: bool | None = None):
     return build_composer(dry_run_only_override=dry_run_only_override).build_reporting_adapters().persist_execution_report(report)
 
@@ -450,6 +467,20 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
             dry_run_only_override=dry_run_only_override,
         )
         signal_diagnostics = _signal_diagnostics_from_result(execution_result)
+        execution_payload = getattr(execution_result, "execution", None)
+        signal_snapshot = (
+            dict(execution_payload.get("signal_snapshot") or {})
+            if isinstance(execution_payload, dict)
+            else {}
+        )
+        if not signal_snapshot:
+            signal_snapshot = build_signal_snapshot(
+                platform="schwab",
+                strategy_profile=STRATEGY_PROFILE,
+                diagnostics=signal_diagnostics,
+                execution=execution_payload,
+                allocation=getattr(execution_result, "allocation", None),
+            )
         if signal_diagnostics:
             log_runtime_event(
                 log_context,
@@ -458,10 +489,22 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
                 execution_window="precheck" if dry_run_only_override else "execution",
                 **signal_diagnostics,
             )
+        has_signal_snapshot = _has_signal_snapshot_details(signal_snapshot)
+        if has_signal_snapshot:
+            log_runtime_event(
+                log_context,
+                "strategy_signal_snapshot",
+                message="Strategy signal snapshot",
+                execution_window="precheck" if dry_run_only_override else "execution",
+                **signal_snapshot,
+            )
         finalize_runtime_report(
             report,
             status="ok",
-            diagnostics={"signal": signal_diagnostics} if signal_diagnostics else None,
+            diagnostics={
+                "signal": signal_diagnostics,
+                **({"signal_snapshot": signal_snapshot} if has_signal_snapshot else {}),
+            },
         )
         log_runtime_event(
             log_context,

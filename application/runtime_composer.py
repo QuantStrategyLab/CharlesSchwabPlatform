@@ -136,6 +136,7 @@ class SchwabRuntimeComposer:
             strategy_display_name=self.strategy_display_name_localized,
             limit_buy_premium=self.limit_buy_premium,
             sell_settle_delay_sec=self.sell_settle_delay_sec,
+            strategy_profile=self.strategy_profile,
             dry_run_only=self.dry_run_only,
             post_sell_refresh_attempts=self.post_sell_refresh_attempts,
             post_sell_refresh_interval_sec=self.post_sell_refresh_interval_sec,
