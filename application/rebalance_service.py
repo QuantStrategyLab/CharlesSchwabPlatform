@@ -388,3 +388,4 @@ def run_strategy_core(
                 account_label=plan.get("account_hash", ""),
             )
         )
+    return execution_result

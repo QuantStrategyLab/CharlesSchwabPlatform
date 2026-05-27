@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -18,6 +19,14 @@ from quant_platform_kit.common.port_adapters import (
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+_NEW_YORK_TZ = ZoneInfo("America/New_York")
+
+
+def _market_date(value: datetime) -> date:
+    normalized = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
+    return normalized.astimezone(_NEW_YORK_TZ).date()
 
 
 @dataclass(frozen=True)
@@ -90,6 +99,30 @@ class SchwabRuntimeBrokerAdapters:
                 currency="USD",
                 points=tuple(points),
             )
+            try:
+                quote = load_quote(normalized_symbol)
+            except Exception:
+                quote = None
+            if quote is not None and quote.last_price > 0:
+                quote_point = PricePoint(
+                    as_of=quote.as_of,
+                    close=float(quote.last_price),
+                )
+                latest_point = series.points[-1]
+                latest_market_date = _market_date(latest_point.as_of)
+                quote_market_date = _market_date(quote_point.as_of)
+                if quote_market_date > latest_market_date:
+                    series = PriceSeries(
+                        symbol=series.symbol,
+                        currency=series.currency,
+                        points=(*series.points, quote_point),
+                    )
+                elif quote_market_date == latest_market_date:
+                    series = PriceSeries(
+                        symbol=series.symbol,
+                        currency=series.currency,
+                        points=(*series.points[:-1], quote_point),
+                    )
             price_series_cache[normalized_symbol] = series
             return series
 
