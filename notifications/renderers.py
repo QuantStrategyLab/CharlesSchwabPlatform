@@ -11,6 +11,54 @@ from quant_platform_kit.common.notification_localization import (
     translator_uses_zh as _base_translator_uses_zh,
 )
 
+try:
+    from quant_platform_kit.common.notification_localization import (
+        localize_price_source_label as _localize_price_source_label,
+        localize_quote_overlay_state as _localize_quote_overlay_state,
+    )
+except ImportError:  # pragma: no cover - compatibility with older pinned shared wheels
+    _PRICE_SOURCE_LABELS = {
+        "longbridge_candlesticks": ("LongBridge 日线K线", "LongBridge daily candlesticks"),
+        "schwab_daily_history_with_live_quote_overlay": (
+            "Schwab 日线历史 + 实时报价覆盖",
+            "Schwab daily history + live quote overlay",
+        ),
+        "firstrade_ohlc_with_live_quote_overlay": (
+            "Firstrade OHLC + 实时报价覆盖",
+            "Firstrade OHLC + live quote overlay",
+        ),
+        "market_quote": ("实时行情报价", "market quote"),
+        "mixed_market_quote_snapshot_close": (
+            "实时行情报价 + 快照收盘价回补",
+            "market quote + snapshot close fallback",
+        ),
+        "mixed_market_quote_historical_close": (
+            "实时行情报价 + 历史收盘价回补",
+            "market quote + historical close fallback",
+        ),
+        "snapshot_close": ("快照收盘价", "snapshot close"),
+        "historical_close": ("历史收盘价", "historical close"),
+        "market_data": ("市场数据", "market data"),
+    }
+
+    def _localize_price_source_label(value, *, translator=None, locale=None):
+        source = str(value or "").strip()
+        use_zh = _base_translator_uses_zh(translator) if translator is not None else str(locale or "").startswith("zh")
+        if not source:
+            return "未知" if use_zh else "unknown"
+        label = _PRICE_SOURCE_LABELS.get(source)
+        if label is not None:
+            return label[0] if use_zh else label[1]
+        return source.replace("_", " ")
+
+    def _localize_quote_overlay_state(value, *, translator=None, locale=None):
+        use_zh = _base_translator_uses_zh(translator) if translator is not None else str(locale or "").startswith("zh")
+        if value is True:
+            return "是" if use_zh else "yes"
+        if value is False:
+            return "否" if use_zh else "no"
+        return "未知" if use_zh else "unknown"
+
 _DETAIL_FIELD_SPLIT_RE = re.compile(r"\s+(?=[^\s=:：]+[=:：])")
 
 
@@ -157,20 +205,18 @@ def _format_signal_snapshot_line(snapshot, *, translator) -> str:
     if not market_date and not source and overlay is None and warning in (None, "", False):
         return ""
     if _translator_uses_zh(translator):
-        overlay_text = "是" if overlay is True else "否" if overlay is False else "未知"
         parts = [
             f"日期 {market_date or '未知'}",
-            f"数据源 {source or '未知'}",
-            f"报价覆盖 {overlay_text}",
+            f"数据源 {_localize_price_source_label(source, translator=translator)}",
+            f"报价覆盖 {_localize_quote_overlay_state(overlay, translator=translator)}",
         ]
         if warning not in (None, "", False):
-            parts.append(f"提示 {warning}")
+            parts.append(f"提示 {_localize_notification_text(warning, translator=translator)}")
         return "🧾 信号快照: " + " | ".join(parts)
-    overlay_text = "yes" if overlay is True else "no" if overlay is False else "unknown"
     parts = [
         f"date {market_date or 'unknown'}",
-        f"source {source or 'unknown'}",
-        f"quote overlay {overlay_text}",
+        f"source {_localize_price_source_label(source, translator=translator)}",
+        f"quote overlay {_localize_quote_overlay_state(overlay, translator=translator)}",
     ]
     if warning not in (None, "", False):
         parts.append(f"warning {warning}")
@@ -205,6 +251,14 @@ def _format_account_line(account_label, *, translator) -> str:
         return ""
     label = "账户" if _translator_uses_zh(translator) else "Account"
     return f"🆔 {label}: {value}"
+
+
+def _format_market_status_line(status, *, translator) -> str:
+    value = str(status or "").strip()
+    if not value:
+        return ""
+    label = "市场状态" if _translator_uses_zh(translator) else "Market"
+    return f"📊 {label}: {value}"
 
 
 def _build_compact_trade_message(
@@ -242,7 +296,7 @@ def _build_compact_trade_message(
         lines.append(signal_snapshot_line)
     status_summary = _first_detail_line(status_display)
     if status_summary:
-        lines.append(f"📊 {status_summary}")
+        lines.append(_format_market_status_line(status_summary, translator=translator))
     signal_summary = _first_detail_line(signal_display)
     if signal_summary:
         lines.append(f"🎯 {translator('signal_label')}: {signal_summary}")
@@ -288,7 +342,7 @@ def _build_compact_heartbeat_message(
         lines.append(signal_snapshot_line)
     status_summary = _first_detail_line(status_display)
     if status_summary:
-        lines.append(f"📊 {status_summary}")
+        lines.append(_format_market_status_line(status_summary, translator=translator))
     signal_summary = _first_detail_line(signal_display)
     if signal_summary:
         lines.append(f"🎯 {translator('signal_label')}: {signal_summary}")
@@ -317,7 +371,11 @@ def render_trade_notification(
         translator=translator,
     )
     separator = str(execution["separator"])
-    status_line = "\n".join(_split_labeled_text(f"📊 {status_display}")) + "\n" if status_display else ""
+    status_line = (
+        "\n".join(_split_labeled_text(_format_market_status_line(status_display, translator=translator))) + "\n"
+        if status_display
+        else ""
+    )
     dashboard_block = f"{dashboard_text}\n{separator}\n" if dashboard_text else ""
     trade_signal_lines = _format_label_value_lines(f"🎯 {translator('signal_label')}", signal_display)
     trade_signal_block = "\n".join(trade_signal_lines)
@@ -375,7 +433,11 @@ def render_heartbeat_notification(
     total_equity = float(portfolio["total_equity"])
     portfolio_rows = tuple(portfolio["portfolio_rows"])
     market_values = dict(portfolio["market_values"])
-    status_line = "\n".join(_split_labeled_text(f"📊 {status_display}")) + "\n" if status_display else ""
+    status_line = (
+        "\n".join(_split_labeled_text(_format_market_status_line(status_display, translator=translator))) + "\n"
+        if status_display
+        else ""
+    )
     dashboard_block = f"{dashboard_text}\n{separator}\n" if dashboard_text else ""
     benchmark_lines = _format_benchmark_lines(execution, translator=translator)
     benchmark_block = "\n".join(benchmark_lines) + "\n" if benchmark_lines else ""

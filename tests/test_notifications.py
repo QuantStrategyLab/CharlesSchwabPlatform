@@ -13,6 +13,7 @@ requests_stub = types.ModuleType("requests")
 requests_stub.post = lambda *args, **kwargs: None
 
 with patch.dict(sys.modules, {"requests": requests_stub}):
+    from notifications.renderers import render_heartbeat_notification
     from notifications.telegram import build_sender, build_signal_text, build_strategy_display_name, build_translator
 
 from strategy_registry import SUPPORTED_STRATEGY_PROFILES
@@ -77,6 +78,36 @@ class NotificationTests(unittest.TestCase):
         for profile in SUPPORTED_STRATEGY_PROFILES:
             self.assertNotEqual(zh_name(profile), profile)
             self.assertNotEqual(en_name(profile), profile)
+
+    def test_heartbeat_signal_snapshot_localizes_price_source_and_status_label(self):
+        rendered = render_heartbeat_notification(
+            translator=build_translator("zh"),
+            strategy_display_name="SOXL/SOXX 半导体趋势收益",
+            dry_run_only=False,
+            extra_notification_lines=(),
+            execution={
+                "dashboard_text": "",
+                "separator": "━━━━━━━━━━━━━━━━━━",
+                "signal_snapshot": {
+                    "market_date": "2026-05-28",
+                    "latest_price_source": "schwab_daily_history_with_live_quote_overlay",
+                    "quote_overlay_used": None,
+                },
+                "status_display": "🚀 风险开启（SOXX+SOXL）",
+                "signal_display": "SOXX 站上 140 日门槛线，持有 SOXL 70.0% + SOXX 20.0%",
+            },
+            portfolio={
+                "total_equity": 970.25,
+                "portfolio_rows": (("SOXL",),),
+                "market_values": {"SOXL": 677.28},
+            },
+            account_label="demo",
+        )
+
+        self.assertIn("数据源 Schwab 日线历史 + 实时报价覆盖", rendered.compact_text)
+        self.assertIn("报价覆盖 未知", rendered.compact_text)
+        self.assertIn("📊 市场状态: 🚀 风险开启（SOXX+SOXL）", rendered.compact_text)
+        self.assertNotIn("schwab_daily_history_with_live_quote_overlay", rendered.compact_text)
 
     def test_build_signal_text_formats_icon_and_label(self):
         signal_text = build_signal_text(build_translator("en"))
