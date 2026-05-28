@@ -130,7 +130,6 @@ class SchwabRuntimeComposer:
         )
 
     def build_rebalance_config(self, *, strategy_plugin_signals=()):
-        del strategy_plugin_signals
         return SchwabRebalanceConfig(
             translator=self.strategy_adapters.translator,
             strategy_display_name=self.strategy_display_name_localized,
@@ -143,6 +142,7 @@ class SchwabRuntimeComposer:
             safe_haven_cash_substitute_threshold_usd=self.safe_haven_cash_substitute_threshold_usd,
             sleeper=self.sleeper,
             extra_notification_lines=(),
+            strategy_plugin_signals=tuple(strategy_plugin_signals or ()),
         )
 
     def load_strategy_plugin_signals(self, raw_mounts):

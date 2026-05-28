@@ -22,6 +22,7 @@ class SchwabRebalanceConfig:
     safe_haven_cash_substitute_threshold_usd: float = 1000.0
     sleeper: Callable[[float], None] | None = None
     extra_notification_lines: Sequence[str] = ()
+    strategy_plugin_signals: Sequence[Any] = ()
 
 
 @dataclass(frozen=True)
