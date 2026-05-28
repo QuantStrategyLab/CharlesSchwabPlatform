@@ -21,6 +21,7 @@ from quant_platform_kit.common.port_adapters import (
     CallableNotificationPort,
     CallablePortfolioPort,
 )
+from quant_platform_kit.common.strategy_plugins import attach_strategy_plugin_metadata
 
 _DETAIL_FIELD_SPLIT_RE = re.compile(r"\s+(?=[^\s=:：]+[=:：])")
 
@@ -313,6 +314,10 @@ def run_strategy_core(
     reference_history = runtime.fetch_reference_history()
 
     def load_plan(current_snapshot):
+        current_snapshot = attach_strategy_plugin_metadata(
+            current_snapshot,
+            getattr(config, "strategy_plugin_signals", ()) or (),
+        )
         current_plan = runtime.resolve_rebalance_plan(
             qqq_history=reference_history,
             snapshot=current_snapshot,
