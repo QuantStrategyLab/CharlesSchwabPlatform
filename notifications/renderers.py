@@ -77,6 +77,22 @@ def _localize_notification_text(text, *, translator):
     return _base_localize_notification_text(text, translator=translator)
 
 
+def _infer_quote_overlay_used(source: str, overlay):
+    if overlay is not None:
+        return overlay
+    normalized_source = str(source or "").strip().lower()
+    if "with_live_quote_overlay" in normalized_source:
+        return True
+    if normalized_source in {
+        "longbridge_candlesticks",
+        "historical_close",
+        "snapshot_close",
+        "market_quote",
+    }:
+        return False
+    return None
+
+
 def _localize_timing_contract(contract: str, *, translator) -> str:
     value = str(contract or "").strip()
     if not value:
@@ -200,7 +216,7 @@ def _format_signal_snapshot_line(snapshot, *, translator) -> str:
         return ""
     market_date = str(snapshot.get("market_date") or snapshot.get("signal_as_of") or "").strip()
     source = str(snapshot.get("latest_price_source") or "").strip()
-    overlay = snapshot.get("quote_overlay_used")
+    overlay = _infer_quote_overlay_used(source, snapshot.get("quote_overlay_used"))
     warning = snapshot.get("data_freshness_warning")
     if not market_date and not source and overlay is None and warning in (None, "", False):
         return ""
