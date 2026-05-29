@@ -104,8 +104,8 @@ class NotificationTests(unittest.TestCase):
             account_label="demo",
         )
 
-        self.assertIn("数据源 Schwab 日线历史 + 实时报价覆盖", rendered.compact_text)
-        self.assertIn("报价覆盖 是", rendered.compact_text)
+        self.assertIn("数据源 Schwab 日线历史", rendered.compact_text)
+        self.assertNotIn("报价覆盖", rendered.compact_text)
         self.assertIn("📊 市场状态: 🚀 风险开启（SOXX+SOXL）", rendered.compact_text)
         self.assertNotIn("schwab_daily_history_with_live_quote_overlay", rendered.compact_text)
 

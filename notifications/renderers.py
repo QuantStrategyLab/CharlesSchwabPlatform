@@ -11,53 +11,43 @@ from quant_platform_kit.common.notification_localization import (
     translator_uses_zh as _base_translator_uses_zh,
 )
 
+_PRICE_SOURCE_LABELS = {
+    "longbridge_candlesticks": ("LongBridge 日线K线", "LongBridge daily candlesticks"),
+    "schwab_daily_history_with_live_quote_overlay": ("Schwab 日线历史", "Schwab daily history"),
+    "firstrade_ohlc_with_live_quote_overlay": ("Firstrade OHLC", "Firstrade OHLC"),
+    "market_quote": ("实时行情报价", "market quote"),
+    "mixed_market_quote_snapshot_close": (
+        "实时行情报价 + 快照收盘价回补",
+        "market quote + snapshot close fallback",
+    ),
+    "mixed_market_quote_historical_close": (
+        "实时行情报价 + 历史收盘价回补",
+        "market quote + historical close fallback",
+    ),
+    "snapshot_close": ("快照收盘价", "snapshot close"),
+    "historical_close": ("历史收盘价", "historical close"),
+    "market_data": ("市场数据", "market data"),
+}
+
 try:
     from quant_platform_kit.common.notification_localization import (
-        localize_price_source_label as _localize_price_source_label,
-        localize_quote_overlay_state as _localize_quote_overlay_state,
+        localize_price_source_label as _shared_localize_price_source_label,
     )
 except ImportError:  # pragma: no cover - compatibility with older pinned shared wheels
-    _PRICE_SOURCE_LABELS = {
-        "longbridge_candlesticks": ("LongBridge 日线K线", "LongBridge daily candlesticks"),
-        "schwab_daily_history_with_live_quote_overlay": (
-            "Schwab 日线历史 + 实时报价覆盖",
-            "Schwab daily history + live quote overlay",
-        ),
-        "firstrade_ohlc_with_live_quote_overlay": (
-            "Firstrade OHLC + 实时报价覆盖",
-            "Firstrade OHLC + live quote overlay",
-        ),
-        "market_quote": ("实时行情报价", "market quote"),
-        "mixed_market_quote_snapshot_close": (
-            "实时行情报价 + 快照收盘价回补",
-            "market quote + snapshot close fallback",
-        ),
-        "mixed_market_quote_historical_close": (
-            "实时行情报价 + 历史收盘价回补",
-            "market quote + historical close fallback",
-        ),
-        "snapshot_close": ("快照收盘价", "snapshot close"),
-        "historical_close": ("历史收盘价", "historical close"),
-        "market_data": ("市场数据", "market data"),
-    }
+    _shared_localize_price_source_label = None
 
-    def _localize_price_source_label(value, *, translator=None, locale=None):
-        source = str(value or "").strip()
-        use_zh = _base_translator_uses_zh(translator) if translator is not None else str(locale or "").startswith("zh")
-        if not source:
-            return "未知" if use_zh else "unknown"
-        label = _PRICE_SOURCE_LABELS.get(source)
-        if label is not None:
-            return label[0] if use_zh else label[1]
-        return source.replace("_", " ")
 
-    def _localize_quote_overlay_state(value, *, translator=None, locale=None):
-        use_zh = _base_translator_uses_zh(translator) if translator is not None else str(locale or "").startswith("zh")
-        if value is True:
-            return "是" if use_zh else "yes"
-        if value is False:
-            return "否" if use_zh else "no"
+def _localize_price_source_label(value, *, translator=None, locale=None):
+    source = str(value or "").strip()
+    use_zh = _base_translator_uses_zh(translator) if translator is not None else str(locale or "").startswith("zh")
+    if not source:
         return "未知" if use_zh else "unknown"
+    label = _PRICE_SOURCE_LABELS.get(source)
+    if label is not None:
+        return label[0] if use_zh else label[1]
+    if _shared_localize_price_source_label is not None:
+        return _shared_localize_price_source_label(source, translator=translator, locale=locale)
+    return source.replace("_", " ")
 
 _DETAIL_FIELD_SPLIT_RE = re.compile(r"\s+(?=[^\s=:：]+[=:：])")
 
@@ -75,22 +65,6 @@ def _translator_uses_zh(translator) -> bool:
 
 def _localize_notification_text(text, *, translator):
     return _base_localize_notification_text(text, translator=translator)
-
-
-def _infer_quote_overlay_used(source: str, overlay):
-    if overlay is not None:
-        return overlay
-    normalized_source = str(source or "").strip().lower()
-    if "with_live_quote_overlay" in normalized_source:
-        return True
-    if normalized_source in {
-        "longbridge_candlesticks",
-        "historical_close",
-        "snapshot_close",
-        "market_quote",
-    }:
-        return False
-    return None
 
 
 def _localize_timing_contract(contract: str, *, translator) -> str:
@@ -216,15 +190,13 @@ def _format_signal_snapshot_line(snapshot, *, translator) -> str:
         return ""
     market_date = str(snapshot.get("market_date") or snapshot.get("signal_as_of") or "").strip()
     source = str(snapshot.get("latest_price_source") or "").strip()
-    overlay = _infer_quote_overlay_used(source, snapshot.get("quote_overlay_used"))
     warning = snapshot.get("data_freshness_warning")
-    if not market_date and not source and overlay is None and warning in (None, "", False):
+    if not market_date and not source and warning in (None, "", False):
         return ""
     if _translator_uses_zh(translator):
         parts = [
             f"日期 {market_date or '未知'}",
             f"数据源 {_localize_price_source_label(source, translator=translator)}",
-            f"报价覆盖 {_localize_quote_overlay_state(overlay, translator=translator)}",
         ]
         if warning not in (None, "", False):
             parts.append(f"提示 {_localize_notification_text(warning, translator=translator)}")
@@ -232,7 +204,6 @@ def _format_signal_snapshot_line(snapshot, *, translator) -> str:
     parts = [
         f"date {market_date or 'unknown'}",
         f"source {_localize_price_source_label(source, translator=translator)}",
-        f"quote overlay {_localize_quote_overlay_state(overlay, translator=translator)}",
     ]
     if warning not in (None, "", False):
         parts.append(f"warning {warning}")
