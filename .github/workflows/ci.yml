@@ -56,7 +56,7 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
-          python -m pip install ruff
+          python -m pip install pytest ruff
 
       - name: Smoke import pinned shared packages
         run: |
@@ -83,4 +83,4 @@ jobs:
       - name: Run unit tests
         run: |
           set -euo pipefail
-          python -m unittest discover -s tests -v
+          PYTHONPATH=. python -m pytest -q tests
