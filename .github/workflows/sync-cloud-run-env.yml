@@ -767,5 +767,6 @@ jobs:
             gcloud artifacts docker images delete "${image_repo}@${digest}" \
               --project="${GCP_PROJECT_ID}" \
               --delete-tags \
+              --async \
               --quiet
           done <<< "${old_digests}"
