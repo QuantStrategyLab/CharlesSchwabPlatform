@@ -22,6 +22,7 @@ jobs:
     env:
       ENABLE_GITHUB_CLOUD_RUN_DEPLOY: ${{ vars.ENABLE_GITHUB_CLOUD_RUN_DEPLOY }}
       ENABLE_GITHUB_ENV_SYNC: ${{ vars.ENABLE_GITHUB_ENV_SYNC }}
+      ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION: ${{ vars.ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION }}
       GCP_ARTIFACT_REGISTRY_HOSTNAME: ${{ vars.GCP_ARTIFACT_REGISTRY_HOSTNAME }}
       CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
       CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
@@ -91,6 +92,14 @@ jobs:
 
           deploy_enabled=false
           env_sync_enabled=false
+
+          if [ "${GITHUB_EVENT_NAME:-}" = "push" ] && [ "${ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION:-}" != "true" ]; then
+            echo "deploy_enabled=false" >> "$GITHUB_OUTPUT"
+            echo "env_sync_enabled=false" >> "$GITHUB_OUTPUT"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping Cloud Run automation on push because ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION is not true." >&2
+            exit 0
+          fi
 
           if [ "${ENABLE_GITHUB_CLOUD_RUN_DEPLOY:-}" = "true" ]; then
             deploy_enabled=true
