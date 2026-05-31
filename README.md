@@ -1,5 +1,7 @@
 # Schwab Trinity Strategy Bot
 
+> ⚠️ 投资有风险，不构成投资建议，仅供学习交流用途。
+
 ![Python](https://img.shields.io/badge/Python-3.9%2B-blue)
 ![Platform](https://img.shields.io/badge/Broker-Charles%20Schwab-00a0df)
 ![Strategy](https://img.shields.io/badge/Strategy-Trinity%20Hybrid-orange)
