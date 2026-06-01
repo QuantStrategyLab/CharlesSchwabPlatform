@@ -109,13 +109,14 @@ Recommended Secret Manager runtime secrets in the `charlesschwabquant` project:
 
 ### GitHub-managed Cloud Run deploy and env sync
 
-This repo includes `.github/workflows/sync-cloud-run-env.yml` for GitHub-managed Cloud Run automation. Set `ENABLE_GITHUB_CLOUD_RUN_DEPLOY=true` to build and deploy the container image from GitHub Actions; set `ENABLE_GITHUB_ENV_SYNC=true` to sync runtime env vars. You can enable either flag independently during migration from a Google Cloud Trigger.
+This repo includes `.github/workflows/sync-cloud-run-env.yml` for GitHub-managed Cloud Run automation. Set `ENABLE_GITHUB_CLOUD_RUN_DEPLOY=true` to build and deploy the container image from GitHub Actions; set `ENABLE_GITHUB_ENV_SYNC=true` to sync runtime env vars; set `ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION=true` when `main` pushes should run the same automation. You can enable these flags independently during migration from a Google Cloud Trigger.
 
 Recommended setup:
 
 - **Repository Variables**
   - `ENABLE_GITHUB_CLOUD_RUN_DEPLOY` = `true` to let GitHub Actions build/push/deploy the Cloud Run image
   - `ENABLE_GITHUB_ENV_SYNC` = `true`
+  - `ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION` = `true` to allow `main` pushes to run the deploy/env-sync workflow; manual `workflow_dispatch` runs do not require this flag
   - `CLOUD_RUN_REGION`
   - `CLOUD_RUN_SERVICE`
   - Optional: `GCP_ARTIFACT_REGISTRY_HOSTNAME` when Artifact Registry is not in the Cloud Run region (default: `<CLOUD_RUN_REGION>-docker.pkg.dev`)
@@ -150,6 +151,7 @@ On every push to `main`, the workflow can build and deploy the configured Cloud 
 Important:
 
 - The workflow only becomes strict when `ENABLE_GITHUB_ENV_SYNC=true`. If this variable is unset, the sync job is skipped and the old Google Cloud Trigger + manual Cloud Run env setup keeps working. When enabled, it resolves the selected profile's snapshot/config requirements from `scripts/print_strategy_profile_status.py --json` instead of a hard-coded strategy-name list.
+- Push-triggered automation only runs when `ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION=true`; manual `workflow_dispatch` keeps using the deploy/env-sync switches above.
 - The deploy path only becomes active when `ENABLE_GITHUB_CLOUD_RUN_DEPLOY=true`. If it is unset, an existing Cloud Build trigger can keep owning code deployment while this workflow only syncs env.
 - `STRATEGY_PROFILE` is driven by the platform capability matrix plus a rollout allowlist derived from `runtime_enabled` strategy metadata. Today `enabled` includes six live `us_equity` profiles: `global_etf_rotation`, `mega_cap_leader_rotation_top50_balanced`, `russell_1000_multi_factor_defensive`, `tqqq_growth_income`, `soxl_soxx_trend_income`, and `tech_communication_pullback_enhancement`; archived research-only profiles remain eligible in the capability matrix but are not enabled.
 - The current strategy domain is `us_equity`, and the repo now keeps a thin strategy registry so future expansion can grow by domain + profile instead of mixing strategy and platform in one layer.
@@ -246,13 +248,14 @@ Schwab OAuth token payload 当前从 Secret Manager 的 `schwab_token` 里读取
 
 ### GitHub 统一管理 Cloud Run 部署和环境变量
 
-这个仓库提供 `.github/workflows/sync-cloud-run-env.yml` 作为 GitHub 管理 Cloud Run 的入口。设置 `ENABLE_GITHUB_CLOUD_RUN_DEPLOY=true` 时，GitHub Actions 会构建并发布容器镜像；设置 `ENABLE_GITHUB_ENV_SYNC=true` 时，GitHub Actions 会同步运行时环境变量。迁移期间两个开关可以独立启用，旧的 Google Cloud Trigger 可以先保留。这个 workflow 现在也会发出 `RUNTIME_TARGET_JSON`，让控制面带上结构化运行目标，而不是只看 `STRATEGY_PROFILE`。
+这个仓库提供 `.github/workflows/sync-cloud-run-env.yml` 作为 GitHub 管理 Cloud Run 的入口。设置 `ENABLE_GITHUB_CLOUD_RUN_DEPLOY=true` 时，GitHub Actions 会构建并发布容器镜像；设置 `ENABLE_GITHUB_ENV_SYNC=true` 时，GitHub Actions 会同步运行时环境变量；设置 `ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION=true` 时，`main` 分支 push 才会触发同一套自动化。迁移期间这些开关可以独立启用，旧的 Google Cloud Trigger 可以先保留。这个 workflow 现在也会发出 `RUNTIME_TARGET_JSON`，让控制面带上结构化运行目标，而不是只看 `STRATEGY_PROFILE`。
 
 推荐配置方式：
 
 - **仓库级 Variables**
   - `ENABLE_GITHUB_CLOUD_RUN_DEPLOY` = `true`（让 GitHub Actions 负责 build/push/deploy）
   - `ENABLE_GITHUB_ENV_SYNC` = `true`
+  - `ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION` = `true`（允许 `main` push 触发 deploy/env-sync workflow；手动 `workflow_dispatch` 不要求这个开关）
   - `CLOUD_RUN_REGION`
   - `CLOUD_RUN_SERVICE`
   - 可选：`GCP_ARTIFACT_REGISTRY_HOSTNAME`（Artifact Registry 不在 Cloud Run region 时才需要；默认 `<CLOUD_RUN_REGION>-docker.pkg.dev`）
@@ -287,6 +290,7 @@ Schwab OAuth token payload 当前从 Secret Manager 的 `schwab_token` 里读取
 注意：
 
 - 只有在 `ENABLE_GITHUB_ENV_SYNC=true` 时，这个 workflow 才会严格校验并执行同步。没打开时会直接跳过，不影响原来 Google Cloud Trigger + 手工 Cloud Run env 的老流程。打开后，它会通过 `scripts/print_strategy_profile_status.py --json` 动态解析目标策略需要的 snapshot/config 输入，不再维护硬编码策略名列表。
+- 只有在 `ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION=true` 时，push 到 `main` 才会触发自动化；手动 `workflow_dispatch` 继续只受部署/同步开关控制。
 - 只有在 `ENABLE_GITHUB_CLOUD_RUN_DEPLOY=true` 时，GitHub Actions 才会接管代码部署；没打开时，旧的 Cloud Build trigger 仍可继续负责发布。
 - `STRATEGY_PROFILE` 现在由平台能力矩阵和从 `runtime_enabled` 策略元数据派生的 rollout allowlist 一起决定。当前 `enabled` 包含 6 条 live `us_equity` 策略：`global_etf_rotation`、`mega_cap_leader_rotation_top50_balanced`、`russell_1000_multi_factor_defensive`、`tqqq_growth_income`、`soxl_soxx_trend_income` 和 `tech_communication_pullback_enhancement`；research-only 存档 profile 仍保留能力矩阵兼容性，但不会启用。`RUNTIME_TARGET_JSON` 则表示实际运行目标，`STRATEGY_PROFILE` 继续只负责兼容选择策略实现。
 - 当前策略域是 `us_equity`，本地策略注册表只用于域和 profile 校验；结构化运行目标会通过 `RUNTIME_TARGET_JSON` 往下传。
