@@ -4,6 +4,7 @@ import traceback
 
 from flask import Flask
 import google.auth
+import requests
 
 from application.runtime_broker_adapters import build_runtime_broker_adapters
 from application.runtime_composer import build_runtime_composer
@@ -241,6 +242,90 @@ def publish_notification(*, detailed_text, compact_text):
         detailed_text=detailed_text,
         compact_text=compact_text,
     )
+
+
+def _split_env_list(value: str | None) -> tuple[str, ...]:
+    return tuple(
+        item.strip()
+        for item in str(value or "").replace(";", ",").split(",")
+        if item.strip()
+    )
+
+
+def _runtime_error_notification_targets() -> tuple[tuple[str, str], ...]:
+    targets: list[tuple[str, str]] = []
+    if TG_TOKEN and TG_CHAT_ID:
+        targets.append((TG_TOKEN, TG_CHAT_ID))
+    crisis_token = os.getenv("CRISIS_ALERT_TELEGRAM_BOT_TOKEN")
+    for chat_id in _split_env_list(os.getenv("CRISIS_ALERT_TELEGRAM_CHAT_IDS")):
+        if crisis_token and chat_id:
+            targets.append((crisis_token, chat_id))
+
+    seen: set[tuple[str, str]] = set()
+    unique_targets: list[tuple[str, str]] = []
+    for target in targets:
+        if target in seen:
+            continue
+        seen.add(target)
+        unique_targets.append(target)
+    return tuple(unique_targets)
+
+
+def _runtime_error_notification_message(exc: Exception, *, route_label: str) -> str:
+    error_text = f"{type(exc).__name__}: {exc}"
+    if len(error_text) > 1200:
+        error_text = error_text[:1197] + "..."
+    return "\n".join(
+        (
+            "Schwab strategy run failed",
+            f"service: {SERVICE_NAME}",
+            f"revision: {os.getenv('K_REVISION') or '<unknown>'}",
+            f"route: {route_label}",
+            f"strategy: {STRATEGY_PROFILE}",
+            f"error: {error_text}",
+        )
+    )
+
+
+def _notify_runtime_error(exc: Exception, *, route_label: str) -> bool:
+    targets = _runtime_error_notification_targets()
+    if not targets:
+        print("Schwab runtime error notification skipped: no Telegram target configured.", flush=True)
+        return False
+    message = _runtime_error_notification_message(exc, route_label=route_label)
+    for token, chat_id in targets:
+        try:
+            requests.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json={"chat_id": chat_id, "text": message},
+                timeout=15,
+            )
+        except Exception as send_exc:
+            print(f"Schwab runtime error Telegram send failed: {send_exc}", flush=True)
+    return True
+
+
+def _publish_runtime_failure_notification(*, detailed_text: str, compact_text: str, exc: Exception) -> bool:
+    try:
+        publish_notification(detailed_text=detailed_text, compact_text=compact_text)
+        return True
+    except Exception as notification_exc:
+        print(f"Schwab runtime error notification fallback: {notification_exc}", flush=True)
+        return _notify_runtime_error(exc, route_label="strategy_cycle")
+
+
+def _handle_route_runtime_error(exc: Exception, *, route_label: str):
+    print(f"Schwab route failed before strategy-cycle handling: {type(exc).__name__}: {exc}", flush=True)
+    traceback.print_exc()
+    _notify_runtime_error(exc, route_label=route_label)
+    return "Error", 500
+
+
+def _route_with_runtime_error_fallback(handler, *args, route_label: str, **kwargs):
+    try:
+        return handler(*args, **kwargs)
+    except Exception as exc:
+        return _handle_route_runtime_error(exc, route_label=route_label)
 
 
 def log_runtime_event(log_context, event, **fields):
@@ -529,7 +614,11 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
             error_message=str(exc),
         )
         error_message = f"{t('error_header')}\n{traceback.format_exc()}"
-        publish_notification(detailed_text=error_message, compact_text=error_message)
+        _publish_runtime_failure_notification(
+            detailed_text=error_message,
+            compact_text=error_message,
+            exc=exc,
+        )
         return "Error", 500
     finally:
         try:
@@ -621,17 +710,28 @@ def _handle_schwab_probe(*, response_body: str = "Probe OK"):
 
 @app.route("/", methods=["POST", "GET"])
 def handle_schwab():
-    return _handle_schwab_cycle()
+    return _route_with_runtime_error_fallback(
+        _handle_schwab_cycle,
+        route_label="POST /",
+    )
 
 
 @app.route("/precheck", methods=["POST", "GET"])
 def handle_schwab_precheck():
-    return _handle_schwab_cycle(dry_run_only_override=True, response_body="Precheck OK")
+    return _route_with_runtime_error_fallback(
+        _handle_schwab_cycle,
+        dry_run_only_override=True,
+        response_body="Precheck OK",
+        route_label="POST /precheck",
+    )
 
 
 @app.route("/probe", methods=["POST", "GET"])
 def handle_schwab_probe():
-    return _handle_schwab_probe()
+    return _route_with_runtime_error_fallback(
+        _handle_schwab_probe,
+        route_label="POST /probe",
+    )
 
 
 if __name__ == "__main__":
