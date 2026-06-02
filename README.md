@@ -160,6 +160,36 @@ Important:
 - GitHub deploy uses the repository Dockerfile and Artifact Registry. The deploy service account needs Artifact Registry writer, Cloud Run admin, and service-account user permissions for the runtime service account.
 - The Telegram token and Schwab API credentials should live in Secret Manager and be referenced by the secret-name variables above. Across multiple quant repos, keep shared settings limited to low-coupling values such as `GLOBAL_TELEGRAM_CHAT_ID`, `NOTIFY_LANG`, and the generic `CRISIS_ALERT_EMAIL_*` crisis mail contract when the same alert policy applies.
 
+### Runtime guard alerting
+
+`.github/workflows/runtime-guard.yml` is a second notification layer for failures
+outside the Schwab Flask handler. It reads Cloud Logging for recent Cloud
+Scheduler errors and Cloud Run request/runtime failures, then sends Telegram
+directly through `CRISIS_ALERT_TELEGRAM_BOT_TOKEN` +
+`CRISIS_ALERT_TELEGRAM_CHAT_IDS` or the fallback `TELEGRAM_TOKEN` +
+`GLOBAL_TELEGRAM_CHAT_ID`.
+
+The guard does not invoke Cloud Run trading routes. It is meant to catch cases
+where Scheduler cannot reach the service, OIDC/IAM/audience is wrong, Cloud Run
+returns 4xx/5xx, or the container fails before app-level Telegram fallback code
+can run.
+
+Required setup:
+
+- keep `CLOUD_RUN_SERVICE` or `RUNTIME_GUARD_CLOUD_RUN_SERVICES` populated with
+  the service names to monitor
+- grant the GitHub deploy service account `roles/logging.viewer` on
+  `charlesschwabquant`
+- keep Telegram chat/token variables or secrets configured in GitHub
+- optionally set `RUNTIME_GUARD_SCHEDULER_JOB_PATTERN` to a regex that limits
+  Scheduler log checks to this deployment's jobs
+
+The scheduled guard runs every 30 minutes. For a missed-run heartbeat, set
+`RUNTIME_GUARD_REQUIRE_SUCCESS=true` and choose
+`RUNTIME_GUARD_LOOKBACK_MINUTES` so the window covers the expected Scheduler run.
+The default leaves the heartbeat check off to avoid false alerts outside the
+active trading window.
+
 ### Deployment unit and naming
 
 - `QuantPlatformKit` is only a shared dependency; Cloud Run still deploys `CharlesSchwabPlatform` itself.
@@ -298,6 +328,28 @@ Schwab OAuth token payload 当前从 Secret Manager 的 `schwab_token` 里读取
 - GitHub 现在通过 OIDC + Workload Identity Federation 登录 Google Cloud，这个 workflow 不再需要 `GCP_SA_KEY`。
 - GitHub 部署路径使用仓库里的 Dockerfile 和 Artifact Registry。部署服务账号需要 Artifact Registry 写入、Cloud Run 管理，以及对 runtime service account 的 service-account user 权限。
 - Telegram token 和 Schwab API 凭据建议放到 Secret Manager，并通过上面的 secret-name 变量引用。对多个 quant 仓库来说，真正适合跨项目共享的是低耦合配置，例如 `GLOBAL_TELEGRAM_CHAT_ID`、`NOTIFY_LANG`，以及通用的 `CRISIS_ALERT_EMAIL_*` 危机邮件契约。
+
+### Runtime Guard 告警
+
+`.github/workflows/runtime-guard.yml` 是 Schwab Flask handler 之外的第二层通知。它只读取
+Cloud Logging 中最近的 Cloud Scheduler 错误和 Cloud Run 请求/运行失败，然后直接通过
+`CRISIS_ALERT_TELEGRAM_BOT_TOKEN` + `CRISIS_ALERT_TELEGRAM_CHAT_IDS` 或 fallback 的
+`TELEGRAM_TOKEN` + `GLOBAL_TELEGRAM_CHAT_ID` 发 Telegram。
+
+这个 guard 不会调用 Cloud Run 的交易路由，主要覆盖 Scheduler 没打到服务、
+OIDC/IAM/audience 配错、Cloud Run 返回 4xx/5xx、或容器在 app-level Telegram fallback
+执行前就失败的情况。
+
+需要的配置：
+
+- `CLOUD_RUN_SERVICE` 或 `RUNTIME_GUARD_CLOUD_RUN_SERVICES` 中有要监控的服务名
+- GitHub deploy service account 需要 `charlesschwabquant` 项目级 `roles/logging.viewer`
+- GitHub 中继续配置 Telegram chat/token 变量或 secrets
+- 可选设置 `RUNTIME_GUARD_SCHEDULER_JOB_PATTERN`，用正则把 Scheduler 日志限制到本部署的 job
+
+默认计划每 30 分钟检查一次。若要做 missed-run 心跳，设置
+`RUNTIME_GUARD_REQUIRE_SUCCESS=true`，并把 `RUNTIME_GUARD_LOOKBACK_MINUTES` 设成覆盖预期
+Scheduler 运行时间的窗口。默认不强制心跳，避免非交易窗口误报。
 
 ### 部署单元和命名建议
 
