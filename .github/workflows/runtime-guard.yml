@@ -1,0 +1,70 @@
+name: Runtime Guard
+
+on:
+  workflow_dispatch:
+    inputs:
+      lookback_minutes:
+        description: "Cloud Logging lookback window in minutes."
+        required: false
+        type: string
+        default: "180"
+      require_success:
+        description: "Alert if no successful Cloud Run request exists in the lookback window."
+        required: false
+        type: choice
+        default: "false"
+        options:
+          - "false"
+          - "true"
+      fail_workflow_on_alert:
+        description: "Fail this workflow when an alert is emitted."
+        required: false
+        type: choice
+        default: "true"
+        options:
+          - "true"
+          - "false"
+  schedule:
+    - cron: "23,53 * * * *"
+
+env:
+  GCP_PROJECT_ID: charlesschwabquant
+  GCP_WORKLOAD_IDENTITY_PROVIDER: projects/401309731911/locations/global/workloadIdentityPools/github-actions/providers/github-main
+  GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: schwab-platform-deploy@charlesschwabquant.iam.gserviceaccount.com
+
+jobs:
+  guard:
+    name: Check Cloud Run runtime
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      RUNTIME_GUARD_NAME: CharlesSchwabPlatform
+      RUNTIME_GUARD_CLOUD_RUN_SERVICES: ${{ vars.RUNTIME_GUARD_CLOUD_RUN_SERVICES }}
+      RUNTIME_GUARD_LOOKBACK_MINUTES: ${{ inputs.lookback_minutes || vars.RUNTIME_GUARD_LOOKBACK_MINUTES || '180' }}
+      RUNTIME_GUARD_REQUIRE_SUCCESS: ${{ inputs.require_success || vars.RUNTIME_GUARD_REQUIRE_SUCCESS || 'false' }}
+      RUNTIME_GUARD_FAIL_WORKFLOW_ON_ALERT: ${{ inputs.fail_workflow_on_alert || vars.RUNTIME_GUARD_FAIL_WORKFLOW_ON_ALERT || 'true' }}
+      RUNTIME_GUARD_SCHEDULER_JOB_PATTERN: ${{ vars.RUNTIME_GUARD_SCHEDULER_JOB_PATTERN }}
+      CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
+      GOOGLE_CLOUD_PROJECT: ${{ vars.GOOGLE_CLOUD_PROJECT }}
+      GLOBAL_TELEGRAM_CHAT_ID: ${{ vars.GLOBAL_TELEGRAM_CHAT_ID }}
+      CRISIS_ALERT_TELEGRAM_CHAT_IDS: ${{ vars.CRISIS_ALERT_TELEGRAM_CHAT_IDS }}
+      CRISIS_ALERT_TELEGRAM_API_BASE_URL: ${{ vars.CRISIS_ALERT_TELEGRAM_API_BASE_URL }}
+      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+      CRISIS_ALERT_TELEGRAM_BOT_TOKEN: ${{ secrets.CRISIS_ALERT_TELEGRAM_BOT_TOKEN }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Check Cloud Scheduler and Cloud Run logs
+        run: python scripts/cloud_run_runtime_guard.py
