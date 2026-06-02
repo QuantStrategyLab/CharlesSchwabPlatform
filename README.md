@@ -190,6 +190,14 @@ The scheduled guard runs every 30 minutes. For a missed-run heartbeat, set
 The default leaves the heartbeat check off to avoid false alerts outside the
 active trading window.
 
+`Execution Report Heartbeat` (`.github/workflows/execution-report-heartbeat.yml`)
+is the stricter completion check. It runs on weekdays after the expected market
+window and verifies that a recent runtime report exists under
+`EXECUTION_REPORT_GCS_URI`. It reads the latest report JSON and alerts if no
+recent report exists or the recent reports have rejected statuses such as
+`error`. The deploy service account needs object read/list access on the report
+bucket.
+
 ### Deployment unit and naming
 
 - `QuantPlatformKit` is only a shared dependency; Cloud Run still deploys `CharlesSchwabPlatform` itself.
@@ -350,6 +358,12 @@ OIDC/IAM/audience 配错、Cloud Run 返回 4xx/5xx、或容器在 app-level Tel
 默认计划每 30 分钟检查一次。若要做 missed-run 心跳，设置
 `RUNTIME_GUARD_REQUIRE_SUCCESS=true`，并把 `RUNTIME_GUARD_LOOKBACK_MINUTES` 设成覆盖预期
 Scheduler 运行时间的窗口。默认不强制心跳，避免非交易窗口误报。
+
+更严格的完成检查是 `Execution Report Heartbeat`
+（`.github/workflows/execution-report-heartbeat.yml`）。它会在工作日预期市场窗口后检查
+`EXECUTION_REPORT_GCS_URI` 下最近的 runtime report JSON，读取 `status/stage/errors`，
+如果没有近期 report 或 report 状态为 `error` 等失败状态就发 Telegram。GitHub deploy
+service account 需要对 report bucket 有对象读取/列举权限。
 
 ### 部署单元和命名建议
 
