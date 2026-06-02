@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
@@ -22,11 +23,23 @@ def _utcnow() -> datetime:
 
 
 _NEW_YORK_TZ = ZoneInfo("America/New_York")
+_QUOTE_RATE_LIMIT_MAX_ATTEMPTS = 3
+_QUOTE_RATE_LIMIT_BACKOFF_SECONDS = (0.5, 1.5)
 
 
 def _market_date(value: datetime) -> date:
     normalized = value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
     return normalized.astimezone(_NEW_YORK_TZ).date()
+
+
+def _is_quote_rate_limit_error(exc: Exception) -> bool:
+    status_code = getattr(exc, "status_code", None)
+    if status_code == 429:
+        return True
+    response = getattr(exc, "response", None)
+    if getattr(response, "status_code", None) == 429:
+        return True
+    return "429" in str(exc)
 
 
 @dataclass(frozen=True)
@@ -45,15 +58,12 @@ class SchwabRuntimeBrokerAdapters:
         quote_cache: dict[str, QuoteSnapshot] = {}
         price_series_cache: dict[str, PriceSeries] = {}
 
-        def load_quote(symbol: str) -> QuoteSnapshot:
-            normalized_symbol = str(symbol).strip().upper()
-            cached = quote_cache.get(normalized_symbol)
-            if cached is not None:
-                return cached
-            raw_quotes = self.fetch_quotes_fn(client, [normalized_symbol])
-            raw_snapshot = raw_quotes[normalized_symbol]
-            snapshot = QuoteSnapshot(
-                symbol=normalized_symbol,
+        def normalize_quote_symbol(symbol: str) -> str:
+            return str(symbol).strip().upper()
+
+        def build_quote_snapshot(symbol: str, raw_snapshot) -> QuoteSnapshot:
+            return QuoteSnapshot(
+                symbol=symbol,
                 as_of=self.clock(),
                 last_price=float(raw_snapshot.last_price),
                 ask_price=(
@@ -67,8 +77,47 @@ class SchwabRuntimeBrokerAdapters:
                     else None
                 ),
             )
-            quote_cache[normalized_symbol] = snapshot
-            return snapshot
+
+        def quote_batch_symbols(requested_symbol: str) -> tuple[str, ...]:
+            symbols = [normalize_quote_symbol(symbol) for symbol in self.managed_symbols]
+            symbols.append(requested_symbol)
+            return tuple(dict.fromkeys(symbol for symbol in symbols if symbol))
+
+        def fetch_and_cache_quotes(symbols: tuple[str, ...]) -> None:
+            missing = tuple(symbol for symbol in symbols if symbol not in quote_cache)
+            if not missing:
+                return
+            last_error: Exception | None = None
+            for attempt in range(_QUOTE_RATE_LIMIT_MAX_ATTEMPTS):
+                try:
+                    raw_quotes = self.fetch_quotes_fn(client, list(missing))
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    if (
+                        attempt >= _QUOTE_RATE_LIMIT_MAX_ATTEMPTS - 1
+                        or not _is_quote_rate_limit_error(exc)
+                    ):
+                        raise
+                    time.sleep(
+                        _QUOTE_RATE_LIMIT_BACKOFF_SECONDS[
+                            min(attempt, len(_QUOTE_RATE_LIMIT_BACKOFF_SECONDS) - 1)
+                        ]
+                    )
+            else:  # pragma: no cover - loop always exits through break or raise
+                raise last_error or RuntimeError("Schwab quote fetch failed")
+            for symbol in missing:
+                raw_snapshot = raw_quotes.get(symbol)
+                if raw_snapshot is not None:
+                    quote_cache[symbol] = build_quote_snapshot(symbol, raw_snapshot)
+
+        def load_quote(symbol: str) -> QuoteSnapshot:
+            normalized_symbol = str(symbol).strip().upper()
+            cached = quote_cache.get(normalized_symbol)
+            if cached is not None:
+                return cached
+            fetch_and_cache_quotes(quote_batch_symbols(normalized_symbol))
+            return quote_cache[normalized_symbol]
 
         def load_price_series(symbol: str) -> PriceSeries:
             normalized_symbol = str(symbol).strip().upper()
