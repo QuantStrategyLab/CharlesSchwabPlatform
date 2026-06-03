@@ -47,6 +47,12 @@ python -m pytest -q
 
 - 暂无独立 `docs/` 目录；请先阅读本 README 和 workflow 文件。
 
+## 社区和安全
+
+- 贡献前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)，确认 PR 范围、本地校验和文档要求。
+- 讨论、issue 和 review 请遵守 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。
+- 涉及密钥、自动化、券商/交易所或云资源的漏洞请按 [SECURITY.md](SECURITY.md) 私密报告；不要为 secret 或实盘风险开公开 issue。
+
 ## 许可证
 
 详见 [LICENSE](LICENSE)。
