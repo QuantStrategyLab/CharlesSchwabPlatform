@@ -2,62 +2,51 @@
 
 [English README](README.md)
 
-> ⚠️ 投资有风险，不构成投资建议，仅供学习交流用途。
+> 投资有风险。本项目不构成投资建议，仅用于学习、研究和工程审阅。
 
-## 这个项目做什么
+## 这个仓库是什么
 
-CharlesSchwabPlatform 是 QuantStrategyLab 体系中的**执行平台**。通过 Charles Schwab 执行美股策略，包含 Cloud Run 部署、token refresh 集成和外部策略加载。
+CharlesSchwabPlatform 是 QuantStrategyLab 的Charles Schwab 美股执行平台。通过 Schwab token、订单、通知和 Cloud Run 集成执行 runtime-enabled 美股 profile。
 
-## 适合谁使用
+它属于执行层，不是策略研究仓库。策略逻辑来自 `UsEquityStrategies`；如果 profile 依赖 snapshot，验证和产物来自 `UsEquitySnapshotPipelines`。
 
-- 希望阅读、复现或扩展 QuantStrategyLab 相关模块的工程师和研究人员。
-- 在阅读详细 runbook 或 workflow 前，需要先理解项目入口的运维人员。
-- 在启用自动化前，需要确认项目职责、安全边界和证据要求的 reviewer。
+## 运行边界
 
-## 当前状态
+- 只加载策略包暴露的 runtime-enabled profile。
+- 负责券商/API 连接、dry-run 检查、通知和部署配置。
+- 凭据必须放在 GitHub Secrets、云密钥系统或券商专用密钥系统中，不能提交到 Git。
+- 任何 live 下单路径启用前，都应先从 dry-run 或 paper mode 开始。
 
-面向生产的执行平台代码；允许提交订单前应先完成只读或 dry-run 检查。
+## 普通 profile 与 snapshot-backed profile
+
+普通 runtime profile 通常可以直接基于 market history 或 portfolio state 执行。Snapshot-backed profile 需要先从对应 snapshot pipeline 获取当前 artifact bundle，平台才应该执行。平台不应该自行判断策略资格，而应消费策略仓和 snapshot 仓发布的状态与产物。
+
+## 安全部署顺序
+
+1. 在 Git 之外配置 secrets 和 runtime variables。
+2. 先以 dry-run 模式运行 workflow 或服务。
+3. 检查生成订单、日志、通知和 reconciliation 输出。
+4. 确认回滚步骤和 artifact 版本。
+5. 上述检查清楚后，再启用定时任务或 live 执行。
 
 ## 仓库结构
 
-- `application/`, `entrypoints/`, `notifications/`, `strategy/`：Python 包代码。
-- `tests/`：单元测试和契约测试。
-- `.github/workflows/`：CI、定时任务和部署 workflow。
+- `tests/`：单元测试、契约测试和回归测试。
+- `.github/workflows/`：CI、定时任务、发布或部署 workflow。
 - `scripts/`：运维脚本和本地辅助工具。
+- `research/`：研究配置和非 live 候选产物。
 
 ## 快速开始
-
-从全新 clone 开始：
 
 ```bash
 python -m pip install -r requirements.txt
 python -m pytest -q
 ```
 
-如果命令需要凭据，请先阅读相关 workflow 或 runbook，并把密钥配置在 Git 之外。
+## 延伸文档
 
-## 部署和运行
-
-配置 Schwab 凭据、token 存储、运行参数和策略包。先验证 token refresh 与 dry-run 执行，再启用生产定时 workflow。
-
-建议先手工运行或 dry-run。只有在日志、产物、权限和回滚步骤都检查过之后，才启用定时任务或 live 执行。
-
-## 策略表现与证据边界
-
-本平台不评估 alpha。收益、回撤、基准比较和 live enable 证据应以 UsEquityStrategies 与 UsEquitySnapshotPipelines 为准。
-
-README 不应该承诺固定收益或过期指标。实际使用前，请重新运行对应测试、回测或流水线任务。
-
-## 安全注意事项
-
-- 不要把 API key、券商凭据、OAuth token、Cookie 或账户标识提交到 Git。
-- 新策略或平台变更在 live 前必须先跑 dry-run 或 paper 流程。
-- 启用定时任务前，需要人工检查生成的订单、产物和日志。
-
-## 参与贡献
-
-请保持改动小、可复现，并用最小必要测试覆盖。涉及策略的改动，需要附上验证行为的证据产物或命令。
+- 暂无独立 `docs/` 目录；请先阅读本 README 和 workflow 文件。
 
 ## 许可证
 
-如仓库包含 [LICENSE](LICENSE)，请以该文件为准。
+详见 [LICENSE](LICENSE)。
