@@ -1,5 +1,36 @@
 # Schwab Trinity Strategy Bot
 
+<!-- qsl-doc-overview:start -->
+
+> ⚠️ 投资有风险，不构成投资建议，仅供学习交流用途。
+> ⚠️ Investing involves risk. This project does not provide investment advice and is for educational and research purposes only.
+
+## Open-source overview / 开源项目入口
+
+| Item | Description |
+| --- | --- |
+| Project type | execution platform |
+| What it does | Charles Schwab execution platform for US equity strategies with token refresh integration and external strategy loading. |
+| 中文说明 | Schwab 美股执行平台，负责 token、账户、策略加载和 dry-run/live 执行边界。 |
+| Current status | Execution platform. Token and account settings are sensitive and must not be committed. |
+
+### Quick start
+
+- `python -m pip install -e '.[test]'`
+- `python -m pytest -q`
+
+### Deploy / operate safely
+
+Run dry-run first, confirm token refresh and account settings, then deploy via the documented Cloud Run/GitHub Actions path.
+
+### Strategy performance / evidence boundary
+
+Strategy performance is documented in strategy/snapshot repos, not in this platform adapter.
+
+> Detailed runbooks, migration notes, workflow internals, and historical decisions are kept below. Start with this overview before using the lower-level operational sections.
+
+<!-- qsl-doc-overview:end -->
+
 > Risk warning: this project is not investment advice and is provided for study and engineering validation only.
 
 ![Python](https://img.shields.io/badge/Python-3.9%2B-blue)
