@@ -117,6 +117,29 @@ class DecisionMapperTests(unittest.TestCase):
 
         self.assertEqual(plan["execution"]["reserved_cash"], 150.0)
 
+    def test_zero_equity_weight_targets_no_execute_instead_of_translation_error(self):
+        snapshot = SimpleNamespace(
+            total_equity=0.0,
+            buying_power=0.0,
+            positions=(),
+            metadata={"account_hash": "demo"},
+        )
+        decision = StrategyDecision(
+            positions=(PositionTarget(symbol="AAPL", target_weight=0.40),),
+            diagnostics={"signal_display": "hold"},
+        )
+
+        plan = map_strategy_decision_to_plan(
+            decision,
+            snapshot=snapshot,
+            strategy_profile="tech_communication_pullback_enhancement",
+        )
+
+        self.assertEqual(plan["allocation"]["target_mode"], "value")
+        self.assertEqual(plan["allocation"]["targets"], {"AAPL": 0.0})
+        self.assertEqual(plan["portfolio"]["total_equity"], 0.0)
+        self.assertEqual(plan["execution"]["trade_threshold_value"], 0.0)
+
     def test_platform_reserved_cash_floor_can_raise_strategy_reserve(self):
         snapshot = SimpleNamespace(
             total_equity=120000.0,

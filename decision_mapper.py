@@ -4,10 +4,12 @@ from typing import Any
 
 from us_equity_strategies.catalog import resolve_canonical_profile
 from quant_platform_kit.strategy_contracts import (
+    PositionTarget,
     StrategyDecision,
     ValueTargetExecutionAnnotations,
     build_value_target_portfolio_inputs_from_snapshot,
     build_value_target_runtime_plan,
+    resolve_decision_target_mode,
     translate_decision_to_target_mode,
 )
 
@@ -36,6 +38,37 @@ def _resolve_reserved_cash(
     return max(base_reserved_cash, policy_reserved_cash)
 
 
+def _symbol_role(symbol: str) -> str | None:
+    normalized = str(symbol or "").strip().upper()
+    if normalized in {"BOXX", "BIL"}:
+        return "safe_haven"
+    if normalized in {"QQQI", "SPYI"}:
+        return "income"
+    return None
+
+
+def _build_zero_equity_value_decision(decision: StrategyDecision) -> StrategyDecision:
+    positions = []
+    for position in decision.positions:
+        positions.append(
+            PositionTarget(
+                symbol=position.symbol,
+                target_value=0.0,
+                role=position.role or _symbol_role(position.symbol),
+                order_preference=position.order_preference,
+            )
+        )
+    return StrategyDecision(
+        positions=tuple(positions),
+        budgets=decision.budgets,
+        risk_flags=tuple(dict.fromkeys((*decision.risk_flags, "no_execute"))),
+        diagnostics={
+            **dict(decision.diagnostics),
+            "execution_blocked_reason": "non_positive_total_equity",
+        },
+    )
+
+
 def map_strategy_decision_to_plan(
     decision: StrategyDecision,
     *,
@@ -44,11 +77,16 @@ def map_strategy_decision_to_plan(
     runtime_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     runtime_metadata = dict(runtime_metadata or {})
-    normalized_decision = translate_decision_to_target_mode(
-        decision,
-        target_mode="value",
-        total_equity=float(snapshot.total_equity),
-    )
+    target_mode = resolve_decision_target_mode(decision)
+    total_equity = float(snapshot.total_equity)
+    if target_mode == "weight" and total_equity <= 0.0:
+        normalized_decision = _build_zero_equity_value_decision(decision)
+    else:
+        normalized_decision = translate_decision_to_target_mode(
+            decision,
+            target_mode="value",
+            total_equity=total_equity,
+        )
     diagnostics = {**runtime_metadata, **dict(decision.diagnostics)}
     execution_annotations: dict[str, Any] = {}
     raw_runtime_annotations = runtime_metadata.get("execution_annotations")
