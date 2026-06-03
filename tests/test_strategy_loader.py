@@ -115,18 +115,16 @@ class StrategyLoaderTests(unittest.TestCase):
         self.assertEqual(adapter.portfolio_input_name, "portfolio_snapshot")
         self.assertEqual(adapter.status_icon, "📏")
 
-    def test_load_strategy_entrypoint_resolves_tech_communication_pullback_enhancement(self):
+    def test_load_strategy_entrypoint_rejects_research_only_tech_communication_pullback_enhancement(self):
         try:
             from strategy_loader import load_strategy_entrypoint_for_profile
 
-            entrypoint = load_strategy_entrypoint_for_profile("tech_communication_pullback_enhancement")
+            with self.assertRaises(ValueError):
+                load_strategy_entrypoint_for_profile("tech_communication_pullback_enhancement")
         except ModuleNotFoundError as exc:
             if exc.name in {"numpy", "pandas"}:
                 self.skipTest(f"{exc.name} is not installed")
             raise
-
-        self.assertEqual(entrypoint.manifest.profile, "tech_communication_pullback_enhancement")
-        self.assertEqual(entrypoint.manifest.required_inputs, frozenset({"feature_snapshot"}))
 
     def test_load_strategy_runtime_adapter_rejects_archived_mega_cap_on_schwab(self):
         from strategy_loader import load_strategy_runtime_adapter_for_profile
@@ -140,17 +138,11 @@ class StrategyLoaderTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             load_strategy_runtime_adapter_for_profile("dynamic_mega_leveraged_pullback")
 
-    def test_load_strategy_runtime_adapter_supports_tech_on_schwab(self):
+    def test_load_strategy_runtime_adapter_rejects_research_only_tech_on_schwab(self):
         from strategy_loader import load_strategy_runtime_adapter_for_profile
 
-        adapter = load_strategy_runtime_adapter_for_profile("tech_communication_pullback_enhancement")
-
-        self.assertEqual(
-            adapter.available_inputs,
-            frozenset({"feature_snapshot", "portfolio_snapshot"}),
-        )
-        self.assertEqual(adapter.portfolio_input_name, "portfolio_snapshot")
-        self.assertTrue(adapter.require_snapshot_manifest)
+        with self.assertRaises(ValueError):
+            load_strategy_runtime_adapter_for_profile("tech_communication_pullback_enhancement")
 
     def test_load_strategy_runtime_adapter_supports_semiconductor_on_schwab(self):
         from strategy_loader import load_strategy_runtime_adapter_for_profile

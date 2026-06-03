@@ -42,7 +42,6 @@ BASE_SCHWAB_PROFILES = frozenset(
         "mega_cap_leader_rotation_top50_balanced",
         "russell_1000_multi_factor_defensive",
         "soxl_soxx_trend_income",
-        "tech_communication_pullback_enhancement",
     }
 )
 OPTIONAL_SCHWAB_PROFILES = frozenset({"global_etf_confidence_vol_gate"})
@@ -391,7 +390,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIn("soxl_soxx_trend_income", by_profile)
         self.assertIn("global_etf_rotation", by_profile)
         self.assertIn("russell_1000_multi_factor_defensive", by_profile)
-        self.assertIn("tech_communication_pullback_enhancement", by_profile)
+        self.assertNotIn("tech_communication_pullback_enhancement", by_profile)
         self.assertIn("mega_cap_leader_rotation_top50_balanced", by_profile)
 
     def test_platform_profile_status_matrix_matches_current_schwab_rollout(self):
@@ -435,12 +434,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         )
         self.assertTrue(by_profile["soxl_soxx_trend_income"]["eligible"])
         self.assertTrue(by_profile["soxl_soxx_trend_income"]["enabled"])
-        self.assertEqual(
-            by_profile["tech_communication_pullback_enhancement"]["display_name"],
-            "Tech/Communication Pullback Enhancement",
-        )
-        self.assertTrue(by_profile["tech_communication_pullback_enhancement"]["eligible"])
-        self.assertTrue(by_profile["tech_communication_pullback_enhancement"]["enabled"])
+        self.assertNotIn("tech_communication_pullback_enhancement", by_profile)
         self.assertEqual(
             by_profile["mega_cap_leader_rotation_top50_balanced"]["display_name"],
             "Mega Cap Leader Rotation Top50 Balanced",
@@ -479,10 +473,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(by_profile["global_etf_rotation"]["input_mode"], "market_history")
         self.assertFalse(by_profile["global_etf_rotation"]["requires_snapshot_artifacts"])
         self.assertFalse(by_profile["global_etf_rotation"]["requires_strategy_config_path"])
-        self.assertEqual(by_profile["tech_communication_pullback_enhancement"]["profile_group"], "snapshot_backed")
-        self.assertEqual(by_profile["tech_communication_pullback_enhancement"]["input_mode"], "feature_snapshot")
-        self.assertTrue(by_profile["tech_communication_pullback_enhancement"]["requires_snapshot_artifacts"])
-        self.assertTrue(by_profile["tech_communication_pullback_enhancement"]["requires_strategy_config_path"])
+        self.assertNotIn("tech_communication_pullback_enhancement", by_profile)
         self.assertEqual(by_profile["mega_cap_leader_rotation_top50_balanced"]["profile_group"], "snapshot_backed")
         self.assertEqual(by_profile["mega_cap_leader_rotation_top50_balanced"]["input_mode"], "feature_snapshot")
         self.assertTrue(by_profile["mega_cap_leader_rotation_top50_balanced"]["requires_snapshot_artifacts"])
@@ -510,7 +501,8 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIn("TQQQ Growth Income", result.stdout)
         self.assertIn("Global ETF Rotation", result.stdout)
         self.assertIn("Russell 1000 Multi-Factor", result.stdout)
-        self.assertIn("Tech/Communication Pullback Enhancement", result.stdout)
+        self.assertIn("Mega Cap Leader Rotation Top50 Balanced", result.stdout)
+        self.assertNotIn("Tech/Communication Pullback Enhancement", result.stdout)
 
     def test_print_strategy_switch_env_plan_for_global_etf_rotation(self):
         result = subprocess.run(
@@ -542,27 +534,17 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIn("SCHWAB_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD", plan["optional_env"])
         self.assertIn("SCHWAB_FEATURE_SNAPSHOT_PATH", plan["remove_if_present"])
 
-    def test_print_strategy_switch_env_plan_for_tech_communication_pullback_enhancement(self):
+    def test_print_strategy_switch_env_plan_rejects_research_only_tech_profile(self):
         result = subprocess.run(
             [sys.executable, str(SWITCH_PLAN_SCRIPT_PATH), "--profile", "tech_communication_pullback_enhancement", "--json"],
-            check=True,
             capture_output=True,
             text=True,
         )
 
-        plan = json.loads(result.stdout)
-        self.assertEqual(plan["canonical_profile"], "tech_communication_pullback_enhancement")
-        self.assertEqual(plan["profile_group"], "snapshot_backed")
-        self.assertEqual(plan["input_mode"], "feature_snapshot")
-        self.assertTrue(plan["requires_snapshot_artifacts"])
-        self.assertTrue(plan["requires_strategy_config_path"])
-        self.assertEqual(plan["config_source_policy"], "bundled_or_env")
-        self.assertEqual(plan["set_env"]["SCHWAB_FEATURE_SNAPSHOT_PATH"], "<required>")
-        self.assertEqual(plan["set_env"]["SCHWAB_FEATURE_SNAPSHOT_MANIFEST_PATH"], "<required>")
-        self.assertNotIn("SCHWAB_STRATEGY_CONFIG_PATH", plan["set_env"])
-        self.assertIn("SCHWAB_STRATEGY_CONFIG_PATH", plan["remove_if_present"])
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Unsupported STRATEGY_PROFILE", result.stderr)
 
-    def test_loads_feature_snapshot_env_for_tech_profile(self):
+    def test_load_platform_runtime_settings_rejects_research_only_tech_profile(self):
         with patch.dict(
             os.environ,
             {
@@ -575,13 +557,8 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             },
             clear=True,
         ):
-            settings = load_platform_runtime_settings()
-
-        self.assertEqual(settings.strategy_profile, "tech_communication_pullback_enhancement")
-        self.assertEqual(settings.feature_snapshot_path, "gs://bucket/tech.csv")
-        self.assertEqual(settings.feature_snapshot_manifest_path, "gs://bucket/tech.csv.manifest.json")
-        self.assertEqual(settings.strategy_config_path, "/workspace/configs/tech.json")
-        self.assertEqual(settings.strategy_config_source, "env")
+            with self.assertRaisesRegex(ValueError, "Unsupported STRATEGY_PROFILE"):
+                load_platform_runtime_settings()
 
 
     def test_print_strategy_switch_env_plan_rejects_archived_mega_cap_dynamic_top20(self):

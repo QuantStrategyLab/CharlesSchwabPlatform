@@ -46,7 +46,7 @@ Automated trading service for Charles Schwab accounts, deployed on GCP Cloud Run
 The runtime now carries a structured `RuntimeTarget` / `RUNTIME_TARGET_JSON` alongside the compatibility `STRATEGY_PROFILE` selector. Strategy-owned defaults come from `UsEquityStrategies`; platform variables are only explicit overrides.
 
 This repository uses `QuantPlatformKit` for Schwab client bootstrap, account snapshot access, market data, and order submission. Cloud Run deploys this repository directly.
-The Schwab runtime can execute the six current `runtime_enabled` `us_equity` profiles from `UsEquityStrategies`.
+The Schwab runtime can execute the five current `runtime_enabled` `us_equity` profiles from `UsEquityStrategies`. Tech/Communication is retained in strategy research history, but it is not currently enabled as a Schwab live profile.
 
 Full strategy documentation now lives in [`UsEquityStrategies`](https://github.com/QuantStrategyLab/UsEquityStrategies). The sections below focus on Schwab runtime behavior, profile enablement, deployment, and credentials.
 This runtime matrix is the authoritative enablement source for Schwab. `UsEquityStrategies` carries strategy-layer logic, cadence, compatibility, and metadata.
@@ -81,7 +81,6 @@ values instead of attempting order translation.
 | `mega_cap_leader_rotation_top50_balanced` | Mega Cap Leader Rotation Top50 Balanced | Yes | Yes | `us_equity` | selectable balanced Top50 monthly leader rotation |
 | `tqqq_growth_income` | TQQQ Growth Income | Yes | Yes | `us_equity` | selectable growth line |
 | `soxl_soxx_trend_income` | SOXL/SOXX Semiconductor Trend Income | Yes | Yes | `us_equity` | enabled value-mode alternative |
-| `tech_communication_pullback_enhancement` | Tech/Communication Pullback Enhancement | Yes | Yes | `us_equity` | enabled feature-snapshot tech branch |
 
 Check the current matrix locally:
 
@@ -159,7 +158,7 @@ Recommended setup:
   - `TELEGRAM_TOKEN_SECRET_NAME` (recommended: `charles-schwab-telegram-token`)
   - `SCHWAB_API_KEY_SECRET_NAME` (recommended: `charles-schwab-api-key`)
   - `SCHWAB_APP_SECRET_SECRET_NAME` (recommended: `charles-schwab-app-secret`)
-  - `STRATEGY_PROFILE` (set explicitly to one enabled profile: `global_etf_rotation`, `mega_cap_leader_rotation_top50_balanced`, `russell_1000_multi_factor_defensive`, `tqqq_growth_income`, `soxl_soxx_trend_income`, or `tech_communication_pullback_enhancement`)
+  - `STRATEGY_PROFILE` (set explicitly to one enabled profile: `global_etf_rotation`, `mega_cap_leader_rotation_top50_balanced`, `russell_1000_multi_factor_defensive`, `tqqq_growth_income`, or `soxl_soxx_trend_income`)
   - Optional: `SCHWAB_FEATURE_SNAPSHOT_PATH`, `SCHWAB_FEATURE_SNAPSHOT_MANIFEST_PATH`, `SCHWAB_STRATEGY_CONFIG_PATH` for feature-snapshot profiles
   - Optional: `SCHWAB_STRATEGY_PLUGIN_MOUNTS_JSON` for strategy plugin artifact mounts. Do not include `mode` in this platform mount JSON.
   - Optional: `SCHWAB_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD` for the platform cash/BOXX small-notional cutoff.
@@ -189,7 +188,7 @@ Important:
 - The workflow only becomes strict when `ENABLE_GITHUB_ENV_SYNC=true`. If this variable is unset, the sync job is skipped and the old Google Cloud Trigger + manual Cloud Run env setup keeps working. When enabled, it resolves the selected profile's snapshot/config requirements from `scripts/print_strategy_profile_status.py --json` instead of a hard-coded strategy-name list.
 - Push-triggered automation only runs when `ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION=true`; manual `workflow_dispatch` keeps using the deploy/env-sync switches above.
 - The deploy path only becomes active when `ENABLE_GITHUB_CLOUD_RUN_DEPLOY=true`. If it is unset, an existing Cloud Build trigger can keep owning code deployment while this workflow only syncs env.
-- `STRATEGY_PROFILE` is driven by the platform capability matrix plus a rollout allowlist derived from `runtime_enabled` strategy metadata. Today `enabled` includes six live `us_equity` profiles: `global_etf_rotation`, `mega_cap_leader_rotation_top50_balanced`, `russell_1000_multi_factor_defensive`, `tqqq_growth_income`, `soxl_soxx_trend_income`, and `tech_communication_pullback_enhancement`; archived research-only profiles remain eligible in the capability matrix but are not enabled.
+- `STRATEGY_PROFILE` is driven by the platform capability matrix plus a rollout allowlist derived from `runtime_enabled` strategy metadata. Today `enabled` includes five live `us_equity` profiles: `global_etf_rotation`, `mega_cap_leader_rotation_top50_balanced`, `russell_1000_multi_factor_defensive`, `tqqq_growth_income`, and `soxl_soxx_trend_income`; archived research-only profiles, including Tech/Communication, are not enabled.
 - The current strategy domain is `us_equity`, and the repo now keeps a thin strategy registry so future expansion can grow by domain + profile instead of mixing strategy and platform in one layer.
 - `INCOME_THRESHOLD_USD`, `QQQI_INCOME_RATIO`, and `DUAL_DRIVE_UNLEVERED_SYMBOL` are optional env-sync overrides, not platform defaults. Leave them unset to inherit the `UsEquityStrategies` profile defaults; the current `tqqq_growth_income` live default is the no-income QQQ/TQQQ dual-drive mode. Set `DUAL_DRIVE_UNLEVERED_SYMBOL=QQQM` only when the deployment intentionally uses QQQM instead of whole-share QQQ.
 - GitHub now authenticates to Google Cloud with OIDC + Workload Identity Federation. `GCP_SA_KEY` is no longer required for this workflow.
