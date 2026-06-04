@@ -69,12 +69,12 @@ def install_stub_modules(strategy_plugin_mounts_json=None, notify_lang="en"):
         reserved_cash_floor_usd=150.0,
         reserved_cash_ratio=0.03,
         strategy_plugin_mounts_json=strategy_plugin_mounts_json,
-        crisis_alert_email_recipients=(),
-        crisis_alert_email_sender_email=None,
-        crisis_alert_email_sender_password=None,
-        crisis_alert_sms_recipients=(),
-        crisis_alert_sms_account_id=None,
-        crisis_alert_sms_auth_token=None,
+        strategy_plugin_alert_email_recipients=(),
+        strategy_plugin_alert_email_sender_email=None,
+        strategy_plugin_alert_email_sender_password=None,
+        strategy_plugin_alert_sms_recipients=(),
+        strategy_plugin_alert_sms_account_id=None,
+        strategy_plugin_alert_sms_auth_token=None,
         runtime_target=None,
     )
 
@@ -160,8 +160,16 @@ class RequestHandlingTests(unittest.TestCase):
         module.is_market_open_today = lambda: False
         module.run_strategy_core = lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("should not run"))
 
-        with module.app.test_request_context("/", method="POST"):
-            body, status = module.handle_schwab()
+        with patch.dict(
+            os.environ,
+            {
+                "STRATEGY_PLUGIN_ALERT_TELEGRAM_BOT_TOKEN": "plugin-token",
+                "STRATEGY_PLUGIN_ALERT_TELEGRAM_CHAT_IDS": "plugin-chat",
+            },
+            clear=False,
+        ):
+            with module.app.test_request_context("/", method="POST"):
+                body, status = module.handle_schwab()
 
         self.assertEqual(status, 200)
         self.assertEqual(body, "Market Closed")

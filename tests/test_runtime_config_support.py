@@ -106,36 +106,36 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIsNone(settings.strategy_config_path)
         self.assertIsNone(settings.strategy_config_source)
         self.assertIsNone(settings.strategy_plugin_mounts_json)
-        self.assertEqual(settings.crisis_alert_channels, ())
-        self.assertEqual(settings.crisis_alert_email_recipients, ())
-        self.assertIsNone(settings.crisis_alert_email_sender_email)
-        self.assertIsNone(settings.crisis_alert_email_sender_password)
-        self.assertIsNone(settings.crisis_alert_email_smtp_host)
-        self.assertIsNone(settings.crisis_alert_email_smtp_port)
-        self.assertIsNone(settings.crisis_alert_email_smtp_security)
-        self.assertEqual(settings.crisis_alert_sms_recipients, ())
-        self.assertIsNone(settings.crisis_alert_sms_provider)
-        self.assertIsNone(settings.crisis_alert_sms_account_id)
-        self.assertIsNone(settings.crisis_alert_sms_auth_token)
-        self.assertIsNone(settings.crisis_alert_sms_sender)
-        self.assertIsNone(settings.crisis_alert_sms_messaging_service_id)
-        self.assertIsNone(settings.crisis_alert_sms_api_base_url)
-        self.assertIsNone(settings.crisis_alert_sms_body_max_chars)
-        self.assertEqual(settings.crisis_alert_push_recipients, ())
-        self.assertIsNone(settings.crisis_alert_push_provider)
-        self.assertIsNone(settings.crisis_alert_push_app_token)
-        self.assertIsNone(settings.crisis_alert_push_access_token)
-        self.assertIsNone(settings.crisis_alert_push_api_base_url)
-        self.assertIsNone(settings.crisis_alert_push_device)
-        self.assertIsNone(settings.crisis_alert_push_priority)
-        self.assertIsNone(settings.crisis_alert_push_tags)
-        self.assertIsNone(settings.crisis_alert_push_body_max_chars)
-        self.assertEqual(settings.crisis_alert_telegram_chat_ids, ())
-        self.assertIsNone(settings.crisis_alert_telegram_bot_token)
-        self.assertIsNone(settings.crisis_alert_telegram_api_base_url)
-        self.assertIsNone(settings.crisis_alert_telegram_parse_mode)
-        self.assertIsNone(settings.crisis_alert_telegram_disable_web_page_preview)
-        self.assertIsNone(settings.crisis_alert_telegram_body_max_chars)
+        self.assertEqual(settings.strategy_plugin_alert_channels, ())
+        self.assertEqual(settings.strategy_plugin_alert_email_recipients, ())
+        self.assertIsNone(settings.strategy_plugin_alert_email_sender_email)
+        self.assertIsNone(settings.strategy_plugin_alert_email_sender_password)
+        self.assertIsNone(settings.strategy_plugin_alert_email_smtp_host)
+        self.assertIsNone(settings.strategy_plugin_alert_email_smtp_port)
+        self.assertIsNone(settings.strategy_plugin_alert_email_smtp_security)
+        self.assertEqual(settings.strategy_plugin_alert_sms_recipients, ())
+        self.assertIsNone(settings.strategy_plugin_alert_sms_provider)
+        self.assertIsNone(settings.strategy_plugin_alert_sms_account_id)
+        self.assertIsNone(settings.strategy_plugin_alert_sms_auth_token)
+        self.assertIsNone(settings.strategy_plugin_alert_sms_sender)
+        self.assertIsNone(settings.strategy_plugin_alert_sms_messaging_service_id)
+        self.assertIsNone(settings.strategy_plugin_alert_sms_api_base_url)
+        self.assertIsNone(settings.strategy_plugin_alert_sms_body_max_chars)
+        self.assertEqual(settings.strategy_plugin_alert_push_recipients, ())
+        self.assertIsNone(settings.strategy_plugin_alert_push_provider)
+        self.assertIsNone(settings.strategy_plugin_alert_push_app_token)
+        self.assertIsNone(settings.strategy_plugin_alert_push_access_token)
+        self.assertIsNone(settings.strategy_plugin_alert_push_api_base_url)
+        self.assertIsNone(settings.strategy_plugin_alert_push_device)
+        self.assertIsNone(settings.strategy_plugin_alert_push_priority)
+        self.assertIsNone(settings.strategy_plugin_alert_push_tags)
+        self.assertIsNone(settings.strategy_plugin_alert_push_body_max_chars)
+        self.assertEqual(settings.strategy_plugin_alert_telegram_chat_ids, ())
+        self.assertIsNone(settings.strategy_plugin_alert_telegram_bot_token)
+        self.assertIsNone(settings.strategy_plugin_alert_telegram_api_base_url)
+        self.assertIsNone(settings.strategy_plugin_alert_telegram_parse_mode)
+        self.assertIsNone(settings.strategy_plugin_alert_telegram_disable_web_page_preview)
+        self.assertIsNone(settings.strategy_plugin_alert_telegram_body_max_chars)
 
     def test_defaults_prefers_runtime_target_json(self):
         with patch.dict(
@@ -285,101 +285,101 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             '{"strategy_plugins":[{"plugin":"schwab"}]}',
         )
 
-    def test_reads_crisis_alert_email_config(self):
+    def test_reads_strategy_plugin_alert_email_config(self):
         with patch.dict(
             os.environ,
             {
                 "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
-                "CRISIS_ALERT_EMAIL_RECIPIENTS": "alerts@example.com; voice@example.com",
-                "CRISIS_ALERT_EMAIL_SENDER_EMAIL": "sender@example.com",
-                "CRISIS_ALERT_EMAIL_SENDER_PASSWORD": "secret",
-                "CRISIS_ALERT_EMAIL_SMTP_HOST": "smtp.example.com",
-                "CRISIS_ALERT_EMAIL_SMTP_PORT": "587",
-                "CRISIS_ALERT_EMAIL_SMTP_SECURITY": "starttls",
+                "STRATEGY_PLUGIN_ALERT_EMAIL_RECIPIENTS": "alerts@example.com; voice@example.com",
+                "STRATEGY_PLUGIN_ALERT_EMAIL_SENDER_EMAIL": "sender@example.com",
+                "STRATEGY_PLUGIN_ALERT_EMAIL_SENDER_PASSWORD": "secret",
+                "STRATEGY_PLUGIN_ALERT_EMAIL_SMTP_HOST": "smtp.example.com",
+                "STRATEGY_PLUGIN_ALERT_EMAIL_SMTP_PORT": "587",
+                "STRATEGY_PLUGIN_ALERT_EMAIL_SMTP_SECURITY": "starttls",
             },
             clear=True,
         ):
             settings = load_platform_runtime_settings()
 
-        self.assertEqual(settings.crisis_alert_email_recipients, ("alerts@example.com", "voice@example.com"))
-        self.assertEqual(settings.crisis_alert_email_sender_email, "sender@example.com")
-        self.assertEqual(settings.crisis_alert_email_sender_password, "secret")
-        self.assertEqual(settings.crisis_alert_email_smtp_host, "smtp.example.com")
-        self.assertEqual(settings.crisis_alert_email_smtp_port, "587")
-        self.assertEqual(settings.crisis_alert_email_smtp_security, "starttls")
+        self.assertEqual(settings.strategy_plugin_alert_email_recipients, ("alerts@example.com", "voice@example.com"))
+        self.assertEqual(settings.strategy_plugin_alert_email_sender_email, "sender@example.com")
+        self.assertEqual(settings.strategy_plugin_alert_email_sender_password, "secret")
+        self.assertEqual(settings.strategy_plugin_alert_email_smtp_host, "smtp.example.com")
+        self.assertEqual(settings.strategy_plugin_alert_email_smtp_port, "587")
+        self.assertEqual(settings.strategy_plugin_alert_email_smtp_security, "starttls")
 
-    def test_reads_crisis_alert_sms_config(self):
+    def test_reads_strategy_plugin_alert_sms_config(self):
         with patch.dict(
             os.environ,
             {
                 "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
-                "CRISIS_ALERT_SMS_RECIPIENTS": "+15165480265;(516) 548-0265",
-                "CRISIS_ALERT_SMS_PROVIDER": "twilio",
-                "CRISIS_ALERT_SMS_ACCOUNT_ID": "AC123",
-                "CRISIS_ALERT_SMS_AUTH_TOKEN": "secret",
-                "CRISIS_ALERT_SMS_SENDER": "+15551234567",
-                "CRISIS_ALERT_SMS_MESSAGING_SERVICE_ID": "MG123",
-                "CRISIS_ALERT_SMS_API_BASE_URL": "https://twilio.example.test",
-                "CRISIS_ALERT_SMS_BODY_MAX_CHARS": "160",
+                "STRATEGY_PLUGIN_ALERT_SMS_RECIPIENTS": "+15165480265;(516) 548-0265",
+                "STRATEGY_PLUGIN_ALERT_SMS_PROVIDER": "twilio",
+                "STRATEGY_PLUGIN_ALERT_SMS_ACCOUNT_ID": "AC123",
+                "STRATEGY_PLUGIN_ALERT_SMS_AUTH_TOKEN": "secret",
+                "STRATEGY_PLUGIN_ALERT_SMS_SENDER": "+15551234567",
+                "STRATEGY_PLUGIN_ALERT_SMS_MESSAGING_SERVICE_ID": "MG123",
+                "STRATEGY_PLUGIN_ALERT_SMS_API_BASE_URL": "https://twilio.example.test",
+                "STRATEGY_PLUGIN_ALERT_SMS_BODY_MAX_CHARS": "160",
             },
             clear=True,
         ):
             settings = load_platform_runtime_settings()
 
-        self.assertEqual(settings.crisis_alert_sms_recipients, ("+15165480265", "(516) 548-0265"))
-        self.assertEqual(settings.crisis_alert_sms_provider, "twilio")
-        self.assertEqual(settings.crisis_alert_sms_account_id, "AC123")
-        self.assertEqual(settings.crisis_alert_sms_auth_token, "secret")
-        self.assertEqual(settings.crisis_alert_sms_sender, "+15551234567")
-        self.assertEqual(settings.crisis_alert_sms_messaging_service_id, "MG123")
-        self.assertEqual(settings.crisis_alert_sms_api_base_url, "https://twilio.example.test")
-        self.assertEqual(settings.crisis_alert_sms_body_max_chars, "160")
+        self.assertEqual(settings.strategy_plugin_alert_sms_recipients, ("+15165480265", "(516) 548-0265"))
+        self.assertEqual(settings.strategy_plugin_alert_sms_provider, "twilio")
+        self.assertEqual(settings.strategy_plugin_alert_sms_account_id, "AC123")
+        self.assertEqual(settings.strategy_plugin_alert_sms_auth_token, "secret")
+        self.assertEqual(settings.strategy_plugin_alert_sms_sender, "+15551234567")
+        self.assertEqual(settings.strategy_plugin_alert_sms_messaging_service_id, "MG123")
+        self.assertEqual(settings.strategy_plugin_alert_sms_api_base_url, "https://twilio.example.test")
+        self.assertEqual(settings.strategy_plugin_alert_sms_body_max_chars, "160")
 
-    def test_reads_crisis_alert_channels_and_push_config(self):
+    def test_reads_strategy_plugin_alert_channels_and_push_config(self):
         with patch.dict(
             os.environ,
             {
                 "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
-                "CRISIS_ALERT_CHANNELS": "email;push;telegram",
-                "CRISIS_ALERT_PUSH_RECIPIENTS": "risk-topic; backup-topic",
-                "CRISIS_ALERT_PUSH_PROVIDER": "ntfy",
-                "CRISIS_ALERT_PUSH_APP_TOKEN": "app-token",
-                "CRISIS_ALERT_PUSH_ACCESS_TOKEN": "access-token",
-                "CRISIS_ALERT_PUSH_API_BASE_URL": "https://ntfy.example.test",
-                "CRISIS_ALERT_PUSH_DEVICE": "iphone",
-                "CRISIS_ALERT_PUSH_PRIORITY": "5",
-                "CRISIS_ALERT_PUSH_TAGS": "warning",
-                "CRISIS_ALERT_PUSH_BODY_MAX_CHARS": "300",
-                "CRISIS_ALERT_TELEGRAM_CHAT_IDS": "12345; @risk_channel",
-                "CRISIS_ALERT_TELEGRAM_BOT_TOKEN": "telegram-token",
-                "CRISIS_ALERT_TELEGRAM_API_BASE_URL": "https://telegram.example.test",
-                "CRISIS_ALERT_TELEGRAM_PARSE_MODE": "HTML",
-                "CRISIS_ALERT_TELEGRAM_DISABLE_WEB_PAGE_PREVIEW": "false",
-                "CRISIS_ALERT_TELEGRAM_BODY_MAX_CHARS": "900",
+                "STRATEGY_PLUGIN_ALERT_CHANNELS": "email;push;telegram",
+                "STRATEGY_PLUGIN_ALERT_PUSH_RECIPIENTS": "risk-topic; backup-topic",
+                "STRATEGY_PLUGIN_ALERT_PUSH_PROVIDER": "ntfy",
+                "STRATEGY_PLUGIN_ALERT_PUSH_APP_TOKEN": "app-token",
+                "STRATEGY_PLUGIN_ALERT_PUSH_ACCESS_TOKEN": "access-token",
+                "STRATEGY_PLUGIN_ALERT_PUSH_API_BASE_URL": "https://ntfy.example.test",
+                "STRATEGY_PLUGIN_ALERT_PUSH_DEVICE": "iphone",
+                "STRATEGY_PLUGIN_ALERT_PUSH_PRIORITY": "5",
+                "STRATEGY_PLUGIN_ALERT_PUSH_TAGS": "warning",
+                "STRATEGY_PLUGIN_ALERT_PUSH_BODY_MAX_CHARS": "300",
+                "STRATEGY_PLUGIN_ALERT_TELEGRAM_CHAT_IDS": "12345; @risk_channel",
+                "STRATEGY_PLUGIN_ALERT_TELEGRAM_BOT_TOKEN": "telegram-token",
+                "STRATEGY_PLUGIN_ALERT_TELEGRAM_API_BASE_URL": "https://telegram.example.test",
+                "STRATEGY_PLUGIN_ALERT_TELEGRAM_PARSE_MODE": "HTML",
+                "STRATEGY_PLUGIN_ALERT_TELEGRAM_DISABLE_WEB_PAGE_PREVIEW": "false",
+                "STRATEGY_PLUGIN_ALERT_TELEGRAM_BODY_MAX_CHARS": "900",
             },
             clear=True,
         ):
             settings = load_platform_runtime_settings()
 
-        self.assertEqual(settings.crisis_alert_channels, ("email", "push", "telegram"))
-        self.assertEqual(settings.crisis_alert_push_recipients, ("risk-topic", "backup-topic"))
-        self.assertEqual(settings.crisis_alert_push_provider, "ntfy")
-        self.assertEqual(settings.crisis_alert_push_app_token, "app-token")
-        self.assertEqual(settings.crisis_alert_push_access_token, "access-token")
-        self.assertEqual(settings.crisis_alert_push_api_base_url, "https://ntfy.example.test")
-        self.assertEqual(settings.crisis_alert_push_device, "iphone")
-        self.assertEqual(settings.crisis_alert_push_priority, "5")
-        self.assertEqual(settings.crisis_alert_push_tags, "warning")
-        self.assertEqual(settings.crisis_alert_push_body_max_chars, "300")
-        self.assertEqual(settings.crisis_alert_telegram_chat_ids, ("12345", "@risk_channel"))
-        self.assertEqual(settings.crisis_alert_telegram_bot_token, "telegram-token")
+        self.assertEqual(settings.strategy_plugin_alert_channels, ("email", "push", "telegram"))
+        self.assertEqual(settings.strategy_plugin_alert_push_recipients, ("risk-topic", "backup-topic"))
+        self.assertEqual(settings.strategy_plugin_alert_push_provider, "ntfy")
+        self.assertEqual(settings.strategy_plugin_alert_push_app_token, "app-token")
+        self.assertEqual(settings.strategy_plugin_alert_push_access_token, "access-token")
+        self.assertEqual(settings.strategy_plugin_alert_push_api_base_url, "https://ntfy.example.test")
+        self.assertEqual(settings.strategy_plugin_alert_push_device, "iphone")
+        self.assertEqual(settings.strategy_plugin_alert_push_priority, "5")
+        self.assertEqual(settings.strategy_plugin_alert_push_tags, "warning")
+        self.assertEqual(settings.strategy_plugin_alert_push_body_max_chars, "300")
+        self.assertEqual(settings.strategy_plugin_alert_telegram_chat_ids, ("12345", "@risk_channel"))
+        self.assertEqual(settings.strategy_plugin_alert_telegram_bot_token, "telegram-token")
         self.assertEqual(
-            settings.crisis_alert_telegram_api_base_url,
+            settings.strategy_plugin_alert_telegram_api_base_url,
             "https://telegram.example.test",
         )
-        self.assertEqual(settings.crisis_alert_telegram_parse_mode, "HTML")
-        self.assertEqual(settings.crisis_alert_telegram_disable_web_page_preview, "false")
-        self.assertEqual(settings.crisis_alert_telegram_body_max_chars, "900")
+        self.assertEqual(settings.strategy_plugin_alert_telegram_parse_mode, "HTML")
+        self.assertEqual(settings.strategy_plugin_alert_telegram_disable_web_page_preview, "false")
+        self.assertEqual(settings.strategy_plugin_alert_telegram_body_max_chars, "900")
 
     def test_platform_profile_matrix_exposes_profiles_without_selection_roles(self):
         rows = get_platform_profile_matrix()
