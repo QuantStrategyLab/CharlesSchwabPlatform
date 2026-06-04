@@ -256,10 +256,6 @@ def _runtime_error_notification_targets() -> tuple[tuple[str, str], ...]:
     targets: list[tuple[str, str]] = []
     if TG_TOKEN and TG_CHAT_ID:
         targets.append((TG_TOKEN, TG_CHAT_ID))
-    crisis_token = os.getenv("CRISIS_ALERT_TELEGRAM_BOT_TOKEN")
-    for chat_id in _split_env_list(os.getenv("CRISIS_ALERT_TELEGRAM_CHAT_IDS")):
-        if crisis_token and chat_id:
-            targets.append((crisis_token, chat_id))
 
     seen: set[tuple[str, str]] = set()
     unique_targets: list[tuple[str, str]] = []

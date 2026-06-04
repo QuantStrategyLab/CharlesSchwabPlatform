@@ -289,10 +289,6 @@ def _is_accepted_report(payload: dict[str, Any]) -> tuple[bool, str]:
 
 def _send_telegram(message: str) -> bool:
     targets: list[tuple[str, str]] = []
-    crisis_token = os.environ.get("CRISIS_ALERT_TELEGRAM_BOT_TOKEN")
-    for chat_id in _split_values(os.environ.get("CRISIS_ALERT_TELEGRAM_CHAT_IDS")):
-        if crisis_token:
-            targets.append((crisis_token, chat_id))
     token = os.environ.get("TELEGRAM_TOKEN") or os.environ.get("TG_TOKEN")
     for chat_id in _split_values(os.environ.get("GLOBAL_TELEGRAM_CHAT_ID")):
         if token:
@@ -301,7 +297,7 @@ def _send_telegram(message: str) -> bool:
     if not unique_targets:
         print("No Telegram token/chat configured; unable to send heartbeat alert.", file=sys.stderr)
         return False
-    base_url = os.environ.get("CRISIS_ALERT_TELEGRAM_API_BASE_URL") or "https://api.telegram.org"
+    base_url = "https://api.telegram.org"
     ok = True
     for token_value, chat_id in unique_targets:
         body = urllib.parse.urlencode({"chat_id": chat_id, "text": message}).encode()
