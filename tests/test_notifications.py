@@ -47,6 +47,20 @@ class NotificationTests(unittest.TestCase):
             "SOXX 站上 140 日门槛线，持有 SOXL 70.0% + SOXX 20.0%",
         )
         self.assertEqual(
+            translate("market_status_blend_gate_overlay_capped", asset="SOXX"),
+            "🧯 风控降档（SOXX）",
+        )
+        self.assertEqual(
+            translate(
+                "signal_blend_gate_overlay_capped",
+                trend_symbol="SOXX",
+                window=140,
+                reasons="SOXX 10 日年化波动率 68.3% 高于 55.0%，SOXL 转向 SOXX",
+                allocation_text="SOXX 90.0%",
+            ),
+            "SOXX 仍在 140 日门槛线上方，但触发风控降档（SOXX 10 日年化波动率 68.3% 高于 55.0%，SOXL 转向 SOXX），目标仓位 SOXX 90.0%",
+        )
+        self.assertEqual(
             translate(
                 "blend_gate_reason_volatility_delever",
                 symbol="SOXX",
