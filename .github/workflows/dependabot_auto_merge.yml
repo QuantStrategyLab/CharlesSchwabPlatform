@@ -19,8 +19,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           BRANCH_NAME="${{ github.event.workflow_run.head_branch }}"
-          PR_NUMBER=$(gh pr list --state open --head "${BRANCH_NAME}" --json number --jq '.[0].number // empty')
+          PR_NUMBER=$(gh pr list --repo "${GITHUB_REPOSITORY}" --state open --head "${BRANCH_NAME}" --json number --jq '.[0].number // empty')
           if [ -z "${PR_NUMBER}" ]; then
             echo "No open Dependabot PR found for ${BRANCH_NAME}." >> "$GITHUB_STEP_SUMMARY"
             exit 0
@@ -33,7 +34,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh pr view "${{ steps.pr.outputs.pr_number }}" --json number,isDraft,author,url,labels > pr.json
+          set -euo pipefail
+          gh pr view "${{ steps.pr.outputs.pr_number }}" --repo "${GITHUB_REPOSITORY}" --json number,isDraft,author,url,labels > pr.json
           python3 - <<'PY'
           import json
           import os
@@ -42,7 +44,7 @@ jobs:
           pr = json.loads(Path("pr.json").read_text(encoding="utf-8"))
           author = (pr.get("author") or {}).get("login")
           labels = {item.get("name", "") for item in pr.get("labels", [])}
-          should_merge = author == "dependabot[bot]" and not pr.get("isDraft")
+          should_merge = author in {"dependabot[bot]", "app/dependabot"} and not pr.get("isDraft")
           reason = "ready" if should_merge else "not_dependabot_or_draft"
 
           summary_lines = [
@@ -68,4 +70,4 @@ jobs:
         if: steps.merge_guard.outputs.should_merge == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh pr merge "${{ steps.pr.outputs.pr_number }}" --rebase --delete-branch
+        run: gh pr merge "${{ steps.pr.outputs.pr_number }}" --repo "${GITHUB_REPOSITORY}" --rebase --delete-branch
