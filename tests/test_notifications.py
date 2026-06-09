@@ -73,6 +73,45 @@ class NotificationTests(unittest.TestCase):
         )
         self.assertEqual(
             translate(
+                "blend_gate_reason_volatility_delever_dynamic",
+                symbol="SOXX",
+                window=10,
+                volatility="61.0%",
+                threshold="60.0%",
+                threshold_detail=translate(
+                    "blend_gate_volatility_threshold_detail_dynamic",
+                    percentile="p95",
+                    lookback="252",
+                    floor="50.0%",
+                    cap="75.0%",
+                    sample_count="252",
+                ),
+                redirect_symbol="SOXX",
+            ),
+            "SOXX 10 日年化波动率 61.0% 高于实际阈值 60.0%（动态 p95，252日窗口，范围 50.0%-75.0%，样本 252），SOXL 转向 SOXX",
+        )
+        en_translate = build_translator("en")
+        self.assertEqual(
+            en_translate(
+                "blend_gate_reason_volatility_delever_dynamic",
+                symbol="SOXX",
+                window=10,
+                volatility="61.0%",
+                threshold="60.0%",
+                threshold_detail=en_translate(
+                    "blend_gate_volatility_threshold_detail_dynamic",
+                    percentile="p95",
+                    lookback="252",
+                    floor="50.0%",
+                    cap="75.0%",
+                    sample_count="252",
+                ),
+                redirect_symbol="SOXX",
+            ),
+            "SOXX 10d annualized volatility 61.0% is above effective threshold 60.0% (dynamic p95, 252d lookback, bounded 50.0%-75.0%, samples 252); redirect SOXL to SOXX",
+        )
+        self.assertEqual(
+            translate(
                 "small_account_warning_note",
                 portfolio_equity="$0",
                 min_recommended_equity="$1,000",

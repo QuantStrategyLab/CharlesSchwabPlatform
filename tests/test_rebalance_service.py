@@ -994,7 +994,7 @@ class RebalanceServiceTests(unittest.TestCase):
 
         self.assertFalse(submitted_orders)
         self.assertEqual(len(sent_messages), 1)
-        self.assertIn("no trades", sent_messages[0])
+        self.assertIn("buy_deferred_small_account_cash_substitution", sent_messages[0])
 
     def test_run_strategy_core_dry_run_reuses_simulated_sale_proceeds_for_buys(self):
         sent_messages = []
