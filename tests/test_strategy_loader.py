@@ -41,7 +41,7 @@ class StrategyLoaderTests(unittest.TestCase):
         self.assertEqual(entrypoint.manifest.profile, "tqqq_growth_income")
         self.assertEqual(
             entrypoint.manifest.default_config["managed_symbols"],
-            ("TQQQ", "QQQ", "BOXX", "SCHD", "DGRO", "SGOV", "SPYI", "QQQI"),
+            ("TQQQ", "QQQM", "BOXX", "SCHD", "DGRO", "SGOV", "SPYI", "QQQI"),
         )
         self.assertEqual(
             entrypoint.manifest.default_config["attack_allocation_mode"],
