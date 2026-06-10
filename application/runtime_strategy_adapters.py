@@ -127,10 +127,15 @@ class SchwabRuntimeStrategyAdapters:
         )
 
     def build_account_state_from_snapshot(self, snapshot) -> dict[str, object]:
-        return build_account_state_from_portfolio_snapshot(
+        account_state = build_account_state_from_portfolio_snapshot(
             snapshot,
             strategy_symbols=self.managed_symbols,
         )
+        if self.managed_symbols:
+            account_state["total_strategy_equity"] = float(account_state["available_cash"]) + sum(
+                float(value) for value in dict(account_state["market_values"]).values()
+            )
+        return account_state
 
     def resolve_rebalance_plan(self, *, qqq_history, snapshot):
         account_state = None
