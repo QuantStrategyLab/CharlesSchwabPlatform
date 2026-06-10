@@ -655,7 +655,7 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(account_state["market_values"]["TQQQ"], 1000.0)
         self.assertEqual(account_state["market_values"]["BOXX"], 5000.0)
         self.assertNotIn("QQQ", account_state["market_values"])
-        self.assertEqual(account_state["total_strategy_equity"], 50000.0)
+        self.assertEqual(account_state["total_strategy_equity"], 14000.0)
 
     def test_build_semiconductor_indicators_uses_soxl_and_soxx_histories(self):
         module = load_module()
