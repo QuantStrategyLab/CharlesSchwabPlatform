@@ -154,6 +154,19 @@ def load_module(*, strategy_plugin_mounts_json=None, notify_lang="en"):
 
 
 class RequestHandlingTests(unittest.TestCase):
+    def test_cloud_run_route_contracts_are_registered(self):
+        module = load_module()
+
+        self.assertIs(module.app._routes[("/", ("POST", "GET"))], module.handle_schwab)
+        self.assertIs(
+            module.app._routes[("/precheck", ("POST", "GET"))],
+            module.handle_schwab_precheck,
+        )
+        self.assertIs(
+            module.app._routes[("/probe", ("POST", "GET"))],
+            module.handle_schwab_probe,
+        )
+
     def test_handle_schwab_returns_market_closed(self):
         module = load_module()
         module.get_client_from_secret = lambda *args, **kwargs: object()
