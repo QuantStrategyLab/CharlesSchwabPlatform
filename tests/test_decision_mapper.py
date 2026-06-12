@@ -36,6 +36,20 @@ class DecisionMapperTests(unittest.TestCase):
                 "exit_line": 360.0,
                 "real_buying_power": 20000.0,
                 "total_equity": 120000.0,
+                "dual_drive_volatility_delever_threshold_mode": "rolling_percentile",
+                "dual_drive_volatility_delever_dynamic_threshold": 0.30,
+                "dual_drive_volatility_delever_dynamic_sample_count": 252,
+                "dual_drive_volatility_delever_metric": 0.312,
+                "dual_drive_volatility_delever_applied": True,
+                "dual_drive_volatility_delever_veto_reason": "taco_rebound_context",
+                "dual_drive_volatility_delever_taco_veto_enabled": True,
+                "dual_drive_volatility_delever_removed_value": 4500.0,
+                "dual_drive_volatility_delever_redirect_symbol": "QQQM",
+                "dual_drive_macro_risk_governor_applied": True,
+                "dual_drive_macro_risk_governor_route": "risk_reduced",
+                "dual_drive_crisis_defense_destination": "BOXX",
+                "market_regime_control_route": "risk_reduced",
+                "market_regime_control_reason_codes": ("macro:vix_crisis_level",),
             },
         )
 
@@ -52,6 +66,20 @@ class DecisionMapperTests(unittest.TestCase):
         self.assertEqual(plan["portfolio"]["cash_sweep_symbol"], "BOXX")
         self.assertEqual(plan["portfolio"]["portfolio_rows"], (("TQQQ", "BOXX"), ("QQQI", "SPYI")))
         self.assertEqual(plan["execution"]["trade_threshold_value"], 1200.0)
+        self.assertEqual(plan["execution"]["dual_drive_volatility_delever_threshold_mode"], "rolling_percentile")
+        self.assertEqual(plan["execution"]["dual_drive_volatility_delever_dynamic_threshold"], 0.30)
+        self.assertEqual(plan["execution"]["dual_drive_volatility_delever_dynamic_sample_count"], 252)
+        self.assertEqual(plan["execution"]["dual_drive_volatility_delever_metric"], 0.312)
+        self.assertIs(plan["execution"]["dual_drive_volatility_delever_applied"], True)
+        self.assertEqual(plan["execution"]["dual_drive_volatility_delever_veto_reason"], "taco_rebound_context")
+        self.assertIs(plan["execution"]["dual_drive_volatility_delever_taco_veto_enabled"], True)
+        self.assertEqual(plan["execution"]["dual_drive_volatility_delever_removed_value"], 4500.0)
+        self.assertEqual(plan["execution"]["dual_drive_volatility_delever_redirect_symbol"], "QQQM")
+        self.assertIs(plan["execution"]["dual_drive_macro_risk_governor_applied"], True)
+        self.assertEqual(plan["execution"]["dual_drive_macro_risk_governor_route"], "risk_reduced")
+        self.assertEqual(plan["execution"]["dual_drive_crisis_defense_destination"], "BOXX")
+        self.assertEqual(plan["execution"]["market_regime_control_route"], "risk_reduced")
+        self.assertEqual(plan["execution"]["market_regime_control_reason_codes"], ("macro:vix_crisis_level",))
         self.assertNotIn("strategy_symbols", plan)
         self.assertNotIn("sell_order_symbols", plan)
         self.assertNotIn("buy_order_symbols", plan)

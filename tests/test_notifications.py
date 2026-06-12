@@ -112,6 +112,45 @@ class NotificationTests(unittest.TestCase):
         )
         self.assertEqual(
             translate(
+                "risk_control_tqqq_volatility_delever_applied_dynamic",
+                window=5,
+                volatility="31.2%",
+                threshold="30.0%",
+                threshold_detail=translate(
+                    "blend_gate_volatility_threshold_detail_dynamic",
+                    percentile="p90",
+                    lookback="252",
+                    floor="24.0%",
+                    cap="36.0%",
+                    sample_count="252",
+                ),
+                source_symbol="TQQQ",
+                redirect_symbol="QQQM",
+            ),
+            "🛡️ 风控: QQQ 5 日年化波动率 31.2% 高于实际阈值 30.0%（动态 p90，252日窗口，范围 24.0%-36.0%，样本 252），TQQQ 转向 QQQM",
+        )
+        self.assertEqual(
+            en_translate(
+                "risk_control_tqqq_volatility_delever_hysteresis_dynamic",
+                window=5,
+                volatility="26.2%",
+                exit_threshold="24.0%",
+                threshold="30.0%",
+                threshold_detail=en_translate(
+                    "blend_gate_volatility_threshold_detail_dynamic",
+                    percentile="p90",
+                    lookback="252",
+                    floor="24.0%",
+                    cap="36.0%",
+                    sample_count="252",
+                ),
+                source_symbol="TQQQ",
+                redirect_symbol="QQQM",
+            ),
+            "🛡️ Risk control: QQQ 5d annualized volatility 26.2% remains above exit threshold 24.0%; entry effective threshold 30.0% (dynamic p90, 252d lookback, bounded 24.0%-36.0%, samples 252); keep TQQQ redirected to QQQM",
+        )
+        self.assertEqual(
+            translate(
                 "small_account_warning_note",
                 portfolio_equity="$0",
                 min_recommended_equity="$1,000",
@@ -161,6 +200,45 @@ class NotificationTests(unittest.TestCase):
         self.assertNotIn("报价覆盖", rendered.compact_text)
         self.assertIn("📊 市场状态: 🚀 风险开启（SOXX+SOXL）", rendered.compact_text)
         self.assertNotIn("schwab_daily_history_with_live_quote_overlay", rendered.compact_text)
+
+    def test_heartbeat_renders_tqqq_volatility_delever_risk_control(self):
+        rendered = render_heartbeat_notification(
+            translator=build_translator("en"),
+            strategy_display_name="TQQQ Growth Income",
+            dry_run_only=False,
+            extra_notification_lines=(),
+            execution={
+                "dashboard_text": "",
+                "separator": "━━━━━━━━━━━━━━━━━━",
+                "status_display": "Entry signal",
+                "signal_display": "Entry signal",
+                "dual_drive_volatility_delever_applied": True,
+                "dual_drive_volatility_delever_window": 5,
+                "dual_drive_volatility_delever_metric": 0.312,
+                "dual_drive_volatility_delever_threshold": 0.28,
+                "dual_drive_volatility_delever_threshold_mode": "rolling_percentile",
+                "dual_drive_volatility_delever_dynamic_threshold": 0.30,
+                "dual_drive_volatility_delever_dynamic_sample_count": 252,
+                "dual_drive_volatility_delever_dynamic_lookback": 252,
+                "dual_drive_volatility_delever_dynamic_percentile": 0.90,
+                "dual_drive_volatility_delever_dynamic_min_periods": 126,
+                "dual_drive_volatility_delever_dynamic_floor": 0.24,
+                "dual_drive_volatility_delever_dynamic_cap": 0.36,
+                "dual_drive_volatility_delever_redirect_symbol": "QQQM",
+            },
+            portfolio={
+                "total_equity": 10000.0,
+                "portfolio_rows": (("TQQQ", "QQQM"),),
+                "market_values": {"TQQQ": 0.0, "QQQM": 7000.0},
+            },
+            account_label="demo",
+        )
+
+        self.assertIn(
+            "🛡️ Risk control: QQQ 5d annualized volatility 31.2% is above effective threshold 30.0% "
+            "(dynamic p90, 252d lookback, bounded 24.0%-36.0%, samples 252); TQQQ redirects to QQQM",
+            rendered.compact_text,
+        )
 
     def test_build_signal_text_formats_icon_and_label(self):
         signal_text = build_signal_text(build_translator("en"))
