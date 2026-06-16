@@ -157,7 +157,7 @@ class NotificationTests(unittest.TestCase):
                 route=translate("strategy_plugin_route_risk_reduced"),
                 action=translate("strategy_plugin_action_delever"),
             ),
-            "🧩 插件：市场状态控制通知 | 状态：风险降低 | 提醒：降杠杆",
+            "🧩 插件：市场状态控制 | 状态：风险降低 | 提醒：降杠杆",
         )
         self.assertIn("策略侧已批准", translate("strategy_plugin_guidance_market_regime_control_risk_reduced_delever"))
         self.assertEqual(
