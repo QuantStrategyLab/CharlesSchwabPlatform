@@ -311,7 +311,7 @@ def _send_telegram(message: str) -> bool:
                 ok = ok and response.status < 400
         except Exception as exc:  # noqa: BLE001
             ok = False
-            print(f"Telegram send failed: {exc}", file=sys.stderr)
+            print(f"Telegram send failed: {type(exc).__name__}", file=sys.stderr)
     return ok
 
 
