@@ -747,6 +747,14 @@ jobs:
 
           gcloud "${gcloud_args[@]}"
 
+      - name: Verify strategy plugin mounts
+        if: steps.config.outputs.env_sync_enabled == 'true'
+        env:
+          STRATEGY_PLUGIN_MOUNT_ENV_NAMES: SCHWAB_STRATEGY_PLUGIN_MOUNTS_JSON
+        run: |
+          set -euo pipefail
+          python3 scripts/verify_cloud_run_strategy_plugin_mounts.py
+
       - name: Prune old Cloud Run revisions
         if: steps.config.outputs.enabled == 'true'
         run: |
