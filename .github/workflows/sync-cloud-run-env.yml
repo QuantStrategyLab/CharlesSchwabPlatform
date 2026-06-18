@@ -31,6 +31,10 @@ jobs:
       GCP_ARTIFACT_REGISTRY_HOSTNAME: ${{ vars.GCP_ARTIFACT_REGISTRY_HOSTNAME }}
       CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
       CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
+      CLOUD_SCHEDULER_LOCATION: ${{ vars.CLOUD_SCHEDULER_LOCATION }}
+      CLOUD_SCHEDULER_MAIN_TIME: ${{ vars.CLOUD_SCHEDULER_MAIN_TIME }}
+      CLOUD_SCHEDULER_PROBE_TIME: ${{ vars.CLOUD_SCHEDULER_PROBE_TIME }}
+      CLOUD_SCHEDULER_PRECHECK_TIME: ${{ vars.CLOUD_SCHEDULER_PRECHECK_TIME }}
       GOOGLE_CLOUD_PROJECT: ${{ vars.GOOGLE_CLOUD_PROJECT }}
       TELEGRAM_TOKEN_SECRET_NAME: ${{ vars.TELEGRAM_TOKEN_SECRET_NAME }}
       SCHWAB_API_KEY_SECRET_NAME: ${{ vars.SCHWAB_API_KEY_SECRET_NAME }}
@@ -782,6 +786,125 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/verify_cloud_run_strategy_plugin_mounts.py
+
+      - name: Sync Cloud Scheduler schedule
+        if: steps.config.outputs.env_sync_enabled == 'true'
+        env:
+          RUNTIME_TARGET_JSON: ${{ steps.strategy_requirements.outputs.runtime_target_json }}
+        run: |
+          set -euo pipefail
+
+          scheduler_location="${CLOUD_SCHEDULER_LOCATION:-${CLOUD_RUN_REGION}}"
+          if [ -z "${scheduler_location}" ]; then
+            echo "Cloud Scheduler schedule sync requires CLOUD_RUN_REGION or CLOUD_SCHEDULER_LOCATION." >&2
+            exit 1
+          fi
+
+          mapfile -t scheduler_config < <(python - <<'PY'
+          import json
+          import os
+
+          raw_runtime_target = os.environ.get("RUNTIME_TARGET_JSON", "").strip()
+          runtime_scheduler = {}
+          if raw_runtime_target:
+              try:
+                  runtime_target = json.loads(raw_runtime_target)
+              except json.JSONDecodeError:
+                  runtime_target = {}
+              scheduler = runtime_target.get("scheduler") if isinstance(runtime_target, dict) else {}
+              if isinstance(scheduler, dict):
+                  runtime_scheduler = scheduler
+
+          def configured_time(key: str, name: str, default: str) -> str:
+              return str(runtime_scheduler.get(key) or os.environ.get(name, "").strip() or default)
+
+          print(str(runtime_scheduler.get("timezone") or "America/New_York").strip())
+          print(configured_time("main_time", "CLOUD_SCHEDULER_MAIN_TIME", "45 15"))
+          print(configured_time("probe_time", "CLOUD_SCHEDULER_PROBE_TIME", "35 9,15"))
+          print(configured_time("precheck_time", "CLOUD_SCHEDULER_PRECHECK_TIME", "45 9"))
+          PY
+          )
+          market_timezone="${scheduler_config[0]}"
+          main_time="${scheduler_config[1]}"
+          probe_time="${scheduler_config[2]}"
+          precheck_time="${scheduler_config[3]}"
+
+          service_url="$(gcloud run services describe "${CLOUD_RUN_SERVICE}" \
+            --project="${GCP_PROJECT_ID}" \
+            --region="${CLOUD_RUN_REGION}" \
+            --format='value(status.url)' 2>/dev/null || true)"
+          if [ -z "${service_url}" ]; then
+            echo "Unable to resolve Cloud Run service URL for ${CLOUD_RUN_SERVICE}; cannot sync scheduler URI." >&2
+            exit 1
+          fi
+
+          for suffix in scheduler probe-scheduler precheck-scheduler; do
+            case "${suffix}" in
+              scheduler)
+                schedule_time="${main_time}"
+                scheduler_path="/run"
+                ;;
+              probe-scheduler)
+                schedule_time="${probe_time}"
+                scheduler_path="/probe"
+                ;;
+              precheck-scheduler)
+                schedule_time="${precheck_time}"
+                scheduler_path="/dry-run"
+                ;;
+            esac
+
+            scheduler_job_candidates=("${CLOUD_RUN_SERVICE}-${suffix}")
+            if [[ "${CLOUD_RUN_SERVICE}" == *-service ]]; then
+              scheduler_job_candidates+=("${CLOUD_RUN_SERVICE%-service}-${suffix}")
+            fi
+
+            job_name=""
+            current_schedule=""
+            for candidate_job in "${scheduler_job_candidates[@]}"; do
+              current_schedule="$(gcloud scheduler jobs describe "${candidate_job}" \
+                --project="${GCP_PROJECT_ID}" \
+                --location="${scheduler_location}" \
+                --format='value(schedule)' 2>/dev/null || true)"
+              if [ -n "${current_schedule}" ]; then
+                job_name="${candidate_job}"
+                break
+              fi
+            done
+
+            if [ -z "${current_schedule}" ]; then
+              echo "Cloud Scheduler job for ${CLOUD_RUN_SERVICE} ${suffix} was not found in ${scheduler_location}; skipping schedule sync."
+              continue
+            fi
+
+            desired_schedule="$(CURRENT_SCHEDULE="${current_schedule}" SCHEDULE_TIME="${schedule_time}" python - <<'PY'
+          import os
+
+          current_fields = os.environ["CURRENT_SCHEDULE"].split()
+          time_fields = os.environ["SCHEDULE_TIME"].split()
+          if len(current_fields) != 5:
+              raise SystemExit(f"Cloud Scheduler schedule must have 5 fields: {os.environ['CURRENT_SCHEDULE']!r}")
+          if len(time_fields) == 5:
+              print(" ".join(time_fields))
+          elif len(time_fields) == 2:
+              print(" ".join([*time_fields, *current_fields[2:]]))
+          else:
+              raise SystemExit(
+                  f"Cloud Scheduler override must have 2 time fields or 5 cron fields: {os.environ['SCHEDULE_TIME']!r}"
+              )
+          PY
+            )"
+
+            scheduler_uri="${service_url}${scheduler_path}"
+            echo "Updating Cloud Scheduler job ${job_name} schedule to ${desired_schedule}, timezone to ${market_timezone}, and URI to ${scheduler_uri}."
+            gcloud scheduler jobs update http "${job_name}" \
+              --project="${GCP_PROJECT_ID}" \
+              --location="${scheduler_location}" \
+              --uri="${scheduler_uri}" \
+              --schedule="${desired_schedule}" \
+              --time-zone="${market_timezone}" \
+              --quiet
+          done
 
       - name: Prune old Cloud Run revisions
         if: steps.config.outputs.enabled == 'true'
