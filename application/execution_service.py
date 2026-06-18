@@ -210,6 +210,7 @@ class ExecutionCycleResult:
 
 DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD = 1000.0
 SMALL_ACCOUNT_SAFE_HAVEN_CASH_SUBSTITUTE_LIMIT_USD = 2000.0
+SMALL_ACCOUNT_EXISTING_WHOLE_SHARE_RETENTION_SYMBOLS = frozenset({"TQQQ", "SOXL"})
 
 
 def _noop_sleep(_seconds):
@@ -296,12 +297,30 @@ def _apply_small_account_whole_share_compatibility(
         )
         for symbol, quote in dict(quotes or {}).items()
     }
+    retained_symbols = []
+    portfolio = dict((plan or {}).get("portfolio") or {})
+    quantities = {
+        str(symbol or "").strip().upper(): float(quantity or 0.0)
+        for symbol, quantity in dict(portfolio.get("quantities") or {}).items()
+    }
+    compatibility_targets = {
+        str(symbol or "").strip().upper(): float(value or 0.0)
+        for symbol, value in target_values.items()
+    }
+    for symbol in candidate_symbols:
+        if symbol not in SMALL_ACCOUNT_EXISTING_WHOLE_SHARE_RETENTION_SYMBOLS:
+            continue
+        target_value = max(0.0, float(compatibility_targets.get(symbol, 0.0) or 0.0))
+        price = max(0.0, float(quote_prices.get(symbol, 0.0) or 0.0))
+        if price > 0.0 and 0.0 < target_value < price and quantities.get(symbol, 0.0) >= 1.0:
+            compatibility_targets[symbol] = price
+            retained_symbols.append(symbol)
     safe_haven_symbols = _safe_haven_cash_symbols(
-        portfolio=dict((plan or {}).get("portfolio") or {}),
+        portfolio=portfolio,
         allocation=allocation,
     )
     compatibility = apply_small_account_cash_compatibility(
-        target_values,
+        compatibility_targets,
         quote_prices,
         candidate_symbols=candidate_symbols,
         safe_haven_cash_symbols=safe_haven_symbols,
@@ -317,10 +336,14 @@ def _apply_small_account_whole_share_compatibility(
         adjusted_allocation["small_account_whole_share_substituted_symbols"] = substituted
     if safe_haven_substituted:
         adjusted_allocation["small_account_safe_haven_cash_substituted_symbols"] = tuple(safe_haven_substituted)
+    if retained_symbols:
+        adjusted_allocation["small_account_existing_whole_share_retained_symbols"] = tuple(
+            dict.fromkeys(retained_symbols)
+        )
     if compatibility.cash_substitution_notes:
         adjusted_allocation["small_account_whole_share_cash_notes"] = tuple(compatibility.cash_substitution_notes)
     adjusted_plan = dict(plan or {})
-    if substituted or safe_haven_substituted:
+    if substituted or safe_haven_substituted or retained_symbols:
         adjusted_plan["allocation"] = adjusted_allocation
     return adjusted_plan, adjusted_allocation
 
