@@ -158,6 +158,7 @@ I18N = {
         "strategy_name_tech_communication_pullback_enhancement": "科技通信回调增强",
         "strategy_name_qqq_tech_enhancement": "科技通信回调增强",
         "strategy_name_mega_cap_leader_rotation_top50_balanced": "美股超大盘50强平衡龙头轮动",
+        "strategy_name_ibit_smart_dca": "IBIT 比特币 ETF 智能定投",
     },
     "en": {
         "trade_header": "🔔 【Trade Execution Report】",
@@ -298,6 +299,7 @@ I18N = {
         "strategy_name_tech_communication_pullback_enhancement": "Tech/Communication Pullback Enhancement",
         "strategy_name_qqq_tech_enhancement": "Tech/Communication Pullback Enhancement",
         "strategy_name_mega_cap_leader_rotation_top50_balanced": "Mega Cap Leader Rotation Top50 Balanced",
+        "strategy_name_ibit_smart_dca": "IBIT Smart DCA",
     },
 }
 
