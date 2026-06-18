@@ -157,12 +157,7 @@ class RequestHandlingTests(unittest.TestCase):
     def test_cloud_run_route_contracts_are_registered(self):
         module = load_module()
 
-        self.assertIs(module.app._routes[("/", ("POST", "GET"))], module.handle_schwab)
         self.assertIs(module.app._routes[("/run", ("POST", "GET"))], module.handle_schwab)
-        self.assertIs(
-            module.app._routes[("/precheck", ("POST", "GET"))],
-            module.handle_schwab_precheck,
-        )
         self.assertIs(
             module.app._routes[("/dry-run", ("POST", "GET"))],
             module.handle_schwab_dry_run,
@@ -196,7 +191,7 @@ class RequestHandlingTests(unittest.TestCase):
             },
             clear=False,
         ):
-            with module.app.test_request_context("/", method="POST"):
+            with module.app.test_request_context("/run", method="POST"):
                 body, status = module.handle_schwab()
 
         self.assertEqual(status, 200)
@@ -216,7 +211,7 @@ class RequestHandlingTests(unittest.TestCase):
 
         module.run_strategy_core = fake_run_strategy_core
 
-        with module.app.test_request_context("/", method="POST"):
+        with module.app.test_request_context("/run", method="POST"):
             body, status = module.handle_schwab()
 
         self.assertEqual(status, 200)
@@ -239,7 +234,7 @@ class RequestHandlingTests(unittest.TestCase):
         module.requests.post = fake_post
         module._handle_schwab_cycle = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
 
-        with module.app.test_request_context("/", method="POST"):
+        with module.app.test_request_context("/run", method="POST"):
             body, status = module.handle_schwab()
 
         self.assertEqual(status, 500)
@@ -265,7 +260,7 @@ class RequestHandlingTests(unittest.TestCase):
         module.requests.post = fake_post
         module._handle_schwab_cycle = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
 
-        with module.app.test_request_context("/", method="POST"):
+        with module.app.test_request_context("/run", method="POST"):
             body, status = module.handle_schwab()
 
         self.assertEqual(status, 500)
@@ -299,7 +294,7 @@ class RequestHandlingTests(unittest.TestCase):
         module.dispatch_strategy_plugin_alerts = fake_dispatch
         module.run_strategy_core = lambda *_args, **_kwargs: None
 
-        with module.app.test_request_context("/", method="POST"):
+        with module.app.test_request_context("/run", method="POST"):
             body, status = module.handle_schwab()
 
         self.assertEqual(status, 200)
@@ -310,37 +305,7 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertIs(observed["alerts"][0][1]["notification_settings"], module.RUNTIME_SETTINGS)
         self.assertIsNotNone(observed["alerts"][0][1]["state_settings"])
 
-    def test_handle_schwab_precheck_uses_dry_run_override(self):
-        module = load_module()
-        observed = {"called": False, "dry_run_only_override": None, "events": []}
-
-        module.get_client_from_secret = lambda *args, **kwargs: object()
-        module.is_market_open_today = lambda: True
-        module.load_strategy_plugin_signals = lambda: ((), None)
-        module.attach_strategy_plugin_report = lambda *args, **kwargs: None
-        module.build_execution_report = lambda log_context, **_kwargs: {"status": "pending"}
-        module.persist_execution_report = lambda report, **_kwargs: observed.setdefault("report", dict(report)) or "/tmp/report.json"
-        module.emit_runtime_log = lambda context, event, **fields: observed["events"].append((event, fields))
-
-        def fake_run_strategy_core(client, now_ny, **kwargs):
-            observed["called"] = True
-            observed["dry_run_only_override"] = kwargs.get("dry_run_only_override")
-            self.assertIsNotNone(client)
-            self.assertIsNone(now_ny)
-
-        module.run_strategy_core = fake_run_strategy_core
-
-        with module.app.test_request_context("/precheck", method="POST"):
-            body, status = module.handle_schwab_precheck()
-
-        self.assertEqual(status, 200)
-        self.assertEqual(body, "Precheck OK")
-        self.assertTrue(observed["called"])
-        self.assertTrue(observed["dry_run_only_override"])
-        self.assertEqual(observed["events"][0][0], "strategy_cycle_received")
-        self.assertEqual(observed["events"][0][1]["execution_window"], "precheck")
-
-    def test_handle_schwab_dry_run_alias_uses_dry_run_override(self):
+    def test_handle_schwab_dry_run_uses_dry_run_override(self):
         module = load_module()
         observed = {"called": False, "dry_run_only_override": None}
 
@@ -368,7 +333,7 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertTrue(observed["called"])
         self.assertTrue(observed["dry_run_only_override"])
 
-    def test_handle_schwab_precheck_stays_silent_when_market_closed(self):
+    def test_handle_schwab_dry_run_stays_silent_when_market_closed(self):
         module = load_module()
         observed = {"notifications": []}
 
@@ -400,8 +365,8 @@ class RequestHandlingTests(unittest.TestCase):
 
         module.build_composer = lambda *, dry_run_only_override=None: FakeComposer()
 
-        with module.app.test_request_context("/precheck", method="POST"):
-            body, status = module.handle_schwab_precheck()
+        with module.app.test_request_context("/dry-run", method="POST"):
+            body, status = module.handle_schwab_dry_run()
 
         self.assertEqual(status, 200)
         self.assertEqual(body, "Market Closed")
