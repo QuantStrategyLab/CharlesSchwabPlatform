@@ -17,7 +17,10 @@ DEFAULT_MOUNT_ENV_NAMES = (
     "LONGBRIDGE_STRATEGY_PLUGIN_MOUNTS_JSON",
     "FIRSTRADE_STRATEGY_PLUGIN_MOUNTS_JSON",
 )
-DEFAULT_ALLOWED_SIGNAL_PREFIXES = ("gs://qsl-runtime-logs-shared/",)
+DEFAULT_ALLOWED_SIGNAL_PREFIXES = (
+    "gs://qsl-runtime-logs-shared/",
+    "gs://qsl-runtime-logs-interactivebrokersquant/",
+)
 
 
 def _split_csv(raw: str | None) -> list[str]:
@@ -128,8 +131,8 @@ def _load_mounts(raw: str, *, service: str, env_name: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError(f"{service}:{env_name} must decode to a JSON object")
     plugins = payload.get("strategy_plugins")
-    if not isinstance(plugins, list) or not plugins:
-        raise ValueError(f"{service}:{env_name}.strategy_plugins must be a non-empty list")
+    if not isinstance(plugins, list):
+        raise ValueError(f"{service}:{env_name}.strategy_plugins must be a list")
     return payload
 
 
