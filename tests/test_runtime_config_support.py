@@ -42,6 +42,7 @@ BASE_SCHWAB_PROFILES = frozenset(
         "mega_cap_leader_rotation_top50_balanced",
         "russell_1000_multi_factor_defensive",
         "soxl_soxx_trend_income",
+        "ibit_smart_dca",
     }
 )
 OPTIONAL_SCHWAB_PROFILES = frozenset({"global_etf_confidence_vol_gate"})
