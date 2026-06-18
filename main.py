@@ -689,12 +689,6 @@ def _handle_schwab_probe(*, response_body: str = "Probe OK"):
         reporting_adapters = composer.build_reporting_adapters()
         log_context = reporting_adapters.build_log_context()
         report = build_execution_report(log_context)
-        strategy_plugin_signals, strategy_plugin_error = load_strategy_plugin_signals()
-        attach_strategy_plugin_report(
-            report,
-            signals=strategy_plugin_signals,
-            error=strategy_plugin_error,
-        )
         log_runtime_event(
             log_context,
             "health_probe_received",
@@ -758,6 +752,7 @@ def _handle_schwab_probe(*, response_body: str = "Probe OK"):
 
 
 @app.route("/", methods=["POST", "GET"])
+@app.route("/run", methods=["POST", "GET"])
 def handle_schwab():
     return _route_with_runtime_error_fallback(
         _handle_schwab_cycle,
@@ -775,12 +770,27 @@ def handle_schwab_precheck():
     )
 
 
+@app.route("/dry-run", methods=["POST", "GET"])
+def handle_schwab_dry_run():
+    return _route_with_runtime_error_fallback(
+        _handle_schwab_cycle,
+        dry_run_only_override=True,
+        response_body="Dry Run OK",
+        route_label="POST /dry-run",
+    )
+
+
 @app.route("/probe", methods=["POST", "GET"])
 def handle_schwab_probe():
     return _route_with_runtime_error_fallback(
         _handle_schwab_probe,
         route_label="POST /probe",
     )
+
+
+@app.route("/health", methods=["GET"])
+def health():
+    return "OK", 200
 
 
 if __name__ == "__main__":
