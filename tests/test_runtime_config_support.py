@@ -95,12 +95,15 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertFalse(settings.dry_run_only)
         self.assertEqual(settings.runtime_target.platform_id, "schwab")
         self.assertEqual(settings.runtime_target.execution_mode, "live")
+        self.assertTrue(settings.runtime_target_enabled)
         self.assertEqual(settings.reserved_cash_floor_usd, DEFAULT_RESERVED_CASH_FLOOR_USD)
         self.assertEqual(settings.reserved_cash_ratio, DEFAULT_RESERVED_CASH_RATIO)
         self.assertEqual(
             settings.safe_haven_cash_substitute_threshold_usd,
             DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
         )
+        self.assertIsNone(settings.income_layer_enabled)
+        self.assertIsNone(settings.income_layer_max_ratio)
         self.assertIsNone(settings.feature_snapshot_path)
         self.assertIsNone(settings.feature_snapshot_manifest_path)
         self.assertIsNone(settings.strategy_config_path)
@@ -215,6 +218,31 @@ class RuntimeConfigSupportTests(unittest.TestCase):
 
         self.assertTrue(settings.dry_run_only)
 
+    def test_reads_runtime_target_enabled_flag(self):
+        with patch.dict(
+            os.environ,
+            {
+                "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
+                "RUNTIME_TARGET_ENABLED": "false",
+            },
+            clear=True,
+        ):
+            settings = load_platform_runtime_settings()
+
+        self.assertFalse(settings.runtime_target_enabled)
+
+    def test_rejects_invalid_runtime_target_enabled_flag(self):
+        with patch.dict(
+            os.environ,
+            {
+                "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
+                "RUNTIME_TARGET_ENABLED": "maybe",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "RUNTIME_TARGET_ENABLED"):
+                load_platform_runtime_settings()
+
     def test_reads_reserved_cash_policy_overrides(self):
         with patch.dict(
             os.environ,
@@ -229,6 +257,33 @@ class RuntimeConfigSupportTests(unittest.TestCase):
 
         self.assertEqual(settings.reserved_cash_floor_usd, 80.0)
         self.assertEqual(settings.reserved_cash_ratio, 0.025)
+
+    def test_reads_income_layer_overrides(self):
+        with patch.dict(
+            os.environ,
+            {
+                "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
+                "INCOME_LAYER_ENABLED": "false",
+                "INCOME_LAYER_MAX_RATIO": "0.25",
+            },
+            clear=True,
+        ):
+            settings = load_platform_runtime_settings()
+
+        self.assertFalse(settings.income_layer_enabled)
+        self.assertEqual(settings.income_layer_max_ratio, 0.25)
+
+    def test_rejects_invalid_income_layer_max_ratio(self):
+        with patch.dict(
+            os.environ,
+            {
+                "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
+                "INCOME_LAYER_MAX_RATIO": "1.25",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "INCOME_LAYER_MAX_RATIO"):
+                load_platform_runtime_settings()
 
     def test_reads_safe_haven_cash_substitute_threshold_override(self):
         with patch.dict(
