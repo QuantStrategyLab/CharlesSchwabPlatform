@@ -478,7 +478,12 @@ class RequestHandlingTests(unittest.TestCase):
     def test_cloud_run_route_contracts_are_registered(self):
         module = load_module()
 
+        self.assertIs(module.app._routes[("/", ("POST", "GET"))], module.handle_schwab)
         self.assertIs(module.app._routes[("/run", ("POST", "GET"))], module.handle_schwab)
+        self.assertIs(
+            module.app._routes[("/precheck", ("POST", "GET"))],
+            module.handle_schwab_dry_run,
+        )
         self.assertIs(
             module.app._routes[("/dry-run", ("POST", "GET"))],
             module.handle_schwab_dry_run,
