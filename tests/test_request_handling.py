@@ -53,19 +53,260 @@ def install_stub_modules(strategy_plugin_mounts_json=None, notify_lang="en"):
     requests_module.post = lambda *args, **kwargs: None
     pandas_module = types.ModuleType("pandas")
 
+    class FakeStrategyPluginAlertStateSettings:
+        @classmethod
+        def from_env(cls, **kwargs):
+            return types.SimpleNamespace(**kwargs)
+
+    def _strategy_plugin_label(signal) -> str:
+        return "危机观察通知" if getattr(signal, "plugin", "") == "crisis_response_shadow" else getattr(signal, "plugin", "")
+
+    def _strategy_plugin_status(signal) -> str:
+        route = getattr(signal, "canonical_route", None)
+        if route == "true_crisis":
+            return "真危机"
+        if route == "no_action":
+            return "未触发"
+        return str(route or "")
+
+    def _strategy_plugin_action(signal) -> str:
+        action = getattr(signal, "suggested_action", None)
+        if action == "defend":
+            return "防守"
+        if action == "watch_only":
+            return "仅观察，不自动交易"
+        return str(action or "")
+
+    def _coerce_strategy_plugin_signal(payload):
+        data = dict(payload or {})
+        return types.SimpleNamespace(
+            strategy=data.get("strategy"),
+            plugin=data.get("plugin"),
+            mode=data.get("mode"),
+            configured_mode=data.get("configured_mode"),
+            effective_mode=data.get("effective_mode") or data.get("mode"),
+            schema_version=data.get("schema_version"),
+            as_of=data.get("as_of"),
+            canonical_route=data.get("canonical_route"),
+            suggested_action=data.get("suggested_action"),
+            would_trade_if_enabled=bool(data.get("would_trade_if_enabled")),
+            execution_controls=dict(data.get("execution_controls") or {}),
+        )
+
+    def _parse_strategy_plugin_mounts(raw_mounts):
+        if not raw_mounts:
+            return []
+        config = json.loads(raw_mounts)
+        mounts = list(config.get("strategy_plugins") or [])
+        for mount in mounts:
+            if "mode" in mount:
+                raise ValueError("platform plugin mount config must not set mode")
+        return mounts
+
+    def _load_strategy_plugin_signals(raw_mounts):
+        try:
+            mounts = _parse_strategy_plugin_mounts(raw_mounts)
+            signals = []
+            for mount in mounts:
+                if mount.get("enabled") is False:
+                    continue
+                signal_path = mount.get("signal_path")
+                if not signal_path:
+                    continue
+                payload = json.loads(Path(signal_path).read_text(encoding="utf-8"))
+                signals.append(_coerce_strategy_plugin_signal(payload))
+            return tuple(signals), None
+        except Exception as exc:
+            return (), str(exc)
+
+    def _build_strategy_plugin_summary(signal):
+        return {
+            "strategy": getattr(signal, "strategy", None),
+            "plugin": getattr(signal, "plugin", None),
+            "effective_mode": getattr(signal, "effective_mode", None),
+            "canonical_route": getattr(signal, "canonical_route", None),
+            "suggested_action": getattr(signal, "suggested_action", None),
+            "would_trade_if_enabled": bool(getattr(signal, "would_trade_if_enabled", False)),
+            "execution_controls": dict(getattr(signal, "execution_controls", {}) or {}),
+        }
+
+    def _attach_strategy_plugin_report(report, *, signals, error=None):
+        report.setdefault("summary", {})
+        report.setdefault("diagnostics", {})
+        if signals:
+            report["summary"]["strategy_plugins"] = [
+                _build_strategy_plugin_summary(signal)
+                for signal in signals
+            ]
+        if error:
+            report["diagnostics"]["strategy_plugin_error"] = error
+
+    def _finalize_runtime_report(report, *, status, summary=None, diagnostics=None):
+        report["status"] = status
+        if summary:
+            report.setdefault("summary", {}).update(summary)
+        if diagnostics:
+            report.setdefault("diagnostics", {}).update(diagnostics)
+        return report
+
+    def _append_runtime_report_error(report, **fields):
+        report.setdefault("diagnostics", {}).setdefault("errors", []).append(dict(fields))
+        return report
+
+    def _build_runtime_report_base(*_args, **kwargs):
+        managed_symbols = kwargs.get("managed_symbols") or ("TQQQ", "BOXX", "SPYI", "QQQI")
+        signal_delay = kwargs.get("signal_effective_after_trading_days")
+        return {
+            "status": "pending",
+            "strategy_profile": kwargs.get("strategy_profile", "tqqq_growth_income"),
+            "summary": {
+                "strategy_display_name": kwargs.get("strategy_display_name", "TQQQ Growth Income"),
+                "managed_symbols": list(managed_symbols),
+                "execution_timing_contract": "next_trading_day" if signal_delay == 1 else "same_day",
+                "signal_date": "2026-01-01",
+                "effective_date": "2026-01-02",
+            },
+            "run_source": "cloud_run",
+            "dry_run": bool(kwargs.get("dry_run_only")),
+            "diagnostics": {},
+        }
+
+    class FakeReportingAdapters:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def build_log_context(self):
+            run_id_builder = self.kwargs.get("run_id_builder") or (lambda: "test-run")
+            return types.SimpleNamespace(run_id=run_id_builder())
+
+        def log_event(self, *args, **kwargs):
+            event_logger = self.kwargs.get("event_logger")
+            if event_logger is not None:
+                return event_logger(*args, **kwargs)
+            return None
+
+        def build_report(self, _log_context):
+            return _build_runtime_report_base(**self.kwargs)
+
+        def persist_execution_report(self, _report):
+            return "/tmp/report.json"
+
+    class FakeNotificationAdapters:
+        def publish_cycle_notification(self, *, detailed_text, compact_text):
+            return None
+
+    class FakeRuntimeComposer:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def send_tg_message(self, *_args, **_kwargs):
+            return None
+
+        def build_notification_adapters(self):
+            return FakeNotificationAdapters()
+
+        def build_reporting_adapters(self):
+            return FakeReportingAdapters(**self.kwargs)
+
+        def build_client(self):
+            return object()
+
+        def load_strategy_plugin_signals(self, mounts_json):
+            return _load_strategy_plugin_signals(mounts_json)
+
+        def attach_strategy_plugin_report(self, report, *, signals, error=None):
+            _attach_strategy_plugin_report(report, signals=signals, error=error)
+
+        def build_rebalance_runtime(self, *_args, **_kwargs):
+            return types.SimpleNamespace()
+
+        def build_rebalance_config(self, **kwargs):
+            return types.SimpleNamespace(**kwargs)
+
+    class FakeBrokerAdapters:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def build_price_history(self, _market_data_port, symbol):
+            return self.kwargs["fetch_daily_price_history_fn"](None, symbol)
+
+        def build_market_history_loader(self, market_data_port):
+            return lambda symbol: self.build_price_history(market_data_port, symbol)
+
+        def fetch_managed_snapshot(self, client):
+            return self.kwargs["fetch_account_snapshot_fn"](client, strategy_symbols=self.kwargs.get("managed_symbols", ()))
+
+        def build_market_data_port(self, _client):
+            return types.SimpleNamespace()
+
+    class FakeStrategyAdapters:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def translate_strategy_plugin_value(self, category, raw_value):
+            if category == "canonical_route":
+                return _strategy_plugin_status(types.SimpleNamespace(canonical_route=raw_value))
+            if category == "suggested_action":
+                return _strategy_plugin_action(types.SimpleNamespace(suggested_action=raw_value))
+            return str(raw_value or "")
+
+        def build_strategy_plugin_notification_lines(self, signals):
+            return tuple(
+                f"插件：{_strategy_plugin_label(signal)} | 状态：{_strategy_plugin_status(signal)} | 提醒：{_strategy_plugin_action(signal)}"
+                for signal in signals
+            )
+
+        def build_strategy_plugin_alert_messages(self, signals):
+            return self.build_strategy_plugin_notification_lines(signals)
+
+        def fetch_reference_history(self, market_data_port):
+            return []
+
+        def build_semiconductor_indicators(self, market_data_source, *, trend_window):
+            fetch_history = self.kwargs["broker_adapters"].kwargs["fetch_daily_price_history_fn"]
+
+            def build(symbol):
+                closes = [float(row["close"]) for row in fetch_history(market_data_source, symbol)]
+                trend_values = closes[-trend_window:]
+                ma20_values = closes[-20:]
+                return {
+                    "price": closes[-1],
+                    "ma_trend": sum(trend_values) / len(trend_values),
+                    "ma20": sum(ma20_values) / len(ma20_values),
+                    "ma20_slope": ma20_values[-1] - ma20_values[0],
+                    "rsi14": 100.0 if closes[-1] >= closes[-15] else 0.0,
+                    "realized_volatility_10": 0.0,
+                    "realized_volatility_20": 0.0,
+                    "realized_volatility": 0.0,
+                }
+
+            return {"soxl": build("SOXL"), "soxx": build("SOXX")}
+
+        def build_account_state_from_snapshot(self, snapshot):
+            managed_symbols = tuple(self.kwargs.get("managed_symbols") or ())
+            market_values = {
+                str(position.symbol).upper(): float(position.market_value or 0.0)
+                for position in getattr(snapshot, "positions", ()) or ()
+                if str(position.symbol).upper() in managed_symbols
+            }
+            available_cash = float((getattr(snapshot, "metadata", {}) or {}).get("cash_available_for_trading", snapshot.buying_power or 0.0))
+            return {
+                "available_cash": available_cash,
+                "market_values": market_values,
+                "total_strategy_equity": available_cash + sum(market_values.values()),
+            }
+
+        def resolve_rebalance_plan(self, **_kwargs):
+            return {}
+
     runtime_broker_adapters_module = types.ModuleType("application.runtime_broker_adapters")
-    runtime_broker_adapters_module.build_runtime_broker_adapters = lambda **_kwargs: types.SimpleNamespace()
+    runtime_broker_adapters_module.build_runtime_broker_adapters = lambda **kwargs: FakeBrokerAdapters(**kwargs)
 
     runtime_composer_module = types.ModuleType("application.runtime_composer")
-    runtime_composer_module.build_runtime_composer = lambda **_kwargs: types.SimpleNamespace(
-        send_tg_message=lambda *_args, **_kwargs: None,
-        build_notification_adapters=lambda: types.SimpleNamespace(
-            publish_cycle_notification=lambda *_args, **_kwargs: None,
-        ),
-    )
+    runtime_composer_module.build_runtime_composer = lambda **kwargs: FakeRuntimeComposer(**kwargs)
 
     runtime_strategy_adapters_module = types.ModuleType("application.runtime_strategy_adapters")
-    runtime_strategy_adapters_module.build_runtime_strategy_adapters = lambda **_kwargs: types.SimpleNamespace()
+    runtime_strategy_adapters_module.build_runtime_strategy_adapters = lambda **kwargs: FakeStrategyAdapters(**kwargs)
 
     rebalance_service_module = types.ModuleType("application.rebalance_service")
     rebalance_service_module.run_strategy_core = lambda *args, **kwargs: None
@@ -92,9 +333,13 @@ def install_stub_modules(strategy_plugin_mounts_json=None, notify_lang="en"):
     qpk_common_module.__path__ = []
 
     qpk_plugin_alerts_module = types.ModuleType("quant_platform_kit.notifications.strategy_plugin_alerts")
-    qpk_plugin_alerts_module.StrategyPluginAlertStateSettings = types.SimpleNamespace
-    qpk_plugin_alerts_module.build_strategy_plugin_alert_context_label = lambda *args, **kwargs: ""
-    qpk_plugin_alerts_module.publish_strategy_plugin_alerts = lambda *args, **kwargs: None
+    qpk_plugin_alerts_module.StrategyPluginAlertStateSettings = FakeStrategyPluginAlertStateSettings
+    qpk_plugin_alerts_module.build_strategy_plugin_alert_context_label = (
+        lambda *, platform_id, strategy_profile, service_name, runtime_target=None: f"{platform_id}:{strategy_profile}:{service_name}"
+    )
+    qpk_plugin_alerts_module.publish_strategy_plugin_alerts = (
+        lambda *args, **kwargs: types.SimpleNamespace(attach_to_report=lambda _report: None)
+    )
 
     qpk_schwab_module = types.ModuleType("quant_platform_kit.schwab")
     qpk_schwab_module.fetch_account_snapshot = lambda *args, **kwargs: None
@@ -104,15 +349,15 @@ def install_stub_modules(strategy_plugin_mounts_json=None, notify_lang="en"):
     qpk_schwab_module.submit_equity_order = lambda *args, **kwargs: None
 
     qpk_runtime_reports_module = types.ModuleType("quant_platform_kit.common.runtime_reports")
-    qpk_runtime_reports_module.append_runtime_report_error = lambda *args, **kwargs: {}
-    qpk_runtime_reports_module.build_runtime_report_base = lambda *args, **kwargs: {}
-    qpk_runtime_reports_module.finalize_runtime_report = lambda *args, **kwargs: {}
+    qpk_runtime_reports_module.append_runtime_report_error = _append_runtime_report_error
+    qpk_runtime_reports_module.build_runtime_report_base = _build_runtime_report_base
+    qpk_runtime_reports_module.finalize_runtime_report = _finalize_runtime_report
     qpk_runtime_reports_module.persist_runtime_report = lambda *args, **kwargs: None
 
     qpk_strategy_plugins_module = types.ModuleType("quant_platform_kit.common.strategy_plugins")
-    qpk_strategy_plugins_module.build_strategy_plugin_report_payload = lambda *args, **kwargs: {}
-    qpk_strategy_plugins_module.load_configured_strategy_plugin_signals = lambda *args, **kwargs: []
-    qpk_strategy_plugins_module.parse_strategy_plugin_mounts = lambda *args, **kwargs: []
+    qpk_strategy_plugins_module.build_strategy_plugin_report_payload = lambda signal, *args, **kwargs: _build_strategy_plugin_summary(signal)
+    qpk_strategy_plugins_module.load_configured_strategy_plugin_signals = lambda raw_mounts, *args, **kwargs: _load_strategy_plugin_signals(raw_mounts)[0]
+    qpk_strategy_plugins_module.parse_strategy_plugin_mounts = lambda raw_mounts, *args, **kwargs: _parse_strategy_plugin_mounts(raw_mounts)
 
     qpk_strategy_contracts_module = types.ModuleType("quant_platform_kit.strategy_contracts")
     qpk_strategy_contracts_module.build_strategy_evaluation_inputs = lambda *args, **kwargs: {}
