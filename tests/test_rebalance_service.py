@@ -197,6 +197,72 @@ class RebalanceServiceTests(unittest.TestCase):
         self.assertTrue(any("Market Sell SOXX: 1 shares" in log for log in result.trade_logs))
         self.assertTrue(any("Limit Buy SOXL ($191.15): 2 shares" in log for log in result.trade_logs))
 
+    def test_existing_positive_target_below_one_share_keeps_min_whole_share(self):
+        submitted_orders = []
+        plan = {
+            "account_hash": "demo",
+            "allocation": {
+                "target_mode": "value",
+                "strategy_symbols": ("TQQQ", "QQQM"),
+                "risk_symbols": ("TQQQ", "QQQM"),
+                "income_symbols": (),
+                "safe_haven_symbols": (),
+                "targets": {"TQQQ": 60.94, "QQQM": 320.0},
+            },
+            "portfolio": {
+                "market_values": {"TQQQ": 541.31, "QQQM": 0.0},
+                "quantities": {"TQQQ": 7, "QQQM": 0},
+                "liquid_cash": 539.70,
+                "cash_sweep_symbol": "",
+            },
+            "execution": {
+                "trade_threshold_value": 10.0,
+                "reserved_cash": 0.0,
+            },
+        }
+        prices = {"TQQQ": 77.33, "QQQM": 297.19}
+
+        result = execute_rebalance_cycle(
+            client=object(),
+            plan=plan,
+            portfolio=plan["portfolio"],
+            execution=plan["execution"],
+            allocation=plan["allocation"],
+            fetch_managed_snapshot=lambda _client: None,
+            market_data_port=CallableMarketDataPort(
+                quote_loader=lambda symbol: QuoteSnapshot(
+                    symbol=symbol,
+                    as_of="2026-06-17",
+                    last_price=prices[symbol],
+                    ask_price=prices[symbol],
+                )
+            ),
+            load_plan=lambda _snapshot: (plan, plan["portfolio"], plan["execution"], plan["allocation"]),
+            execution_port=CallableExecutionPort(
+                lambda order_intent: (
+                    submitted_orders.append(order_intent),
+                    ExecutionReport(
+                        symbol=order_intent.symbol,
+                        side=order_intent.side,
+                        quantity=order_intent.quantity,
+                        status="accepted",
+                        broker_order_id="schwab-order-1",
+                    ),
+                )[-1]
+            ),
+            translator=build_translator("en"),
+            limit_buy_premium=1.005,
+            sell_settle_delay_sec=0,
+            dry_run_only=False,
+            publish_order_issue=lambda _message: None,
+        )
+
+        self.assertEqual(result.allocation["small_account_existing_whole_share_retained_symbols"], ("TQQQ",))
+        sell_orders = [order for order in submitted_orders if order.side == "sell"]
+        self.assertEqual(len(sell_orders), 1)
+        self.assertEqual(sell_orders[0].symbol, "TQQQ")
+        self.assertEqual(sell_orders[0].quantity, 6)
+
     def test_cash_sweep_rebuy_skips_when_only_risk_target_is_unbuyable(self):
         submitted_orders = []
         plan = {
