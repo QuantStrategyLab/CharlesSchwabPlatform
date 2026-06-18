@@ -458,11 +458,13 @@ class RuntimeConfigSupportTests(unittest.TestCase):
                     for key in (
                         "canonical_profile",
                         "display_name",
+                        "display_name_zh",
                         "domain",
                         "eligible",
                         "enabled",
                         "platform",
                     )
+                    if key in row
                 }
                 for row in rows
             ],
@@ -475,6 +477,10 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertFalse(by_profile["global_etf_rotation"]["requires_strategy_config_path"])
         self.assertNotIn("tech_communication_pullback_enhancement", by_profile)
         self.assertEqual(by_profile["mega_cap_leader_rotation_top50_balanced"]["profile_group"], "snapshot_backed")
+        self.assertEqual(
+            by_profile["mega_cap_leader_rotation_top50_balanced"]["display_name_zh"],
+            "美股超大盘50强平衡龙头轮动",
+        )
         self.assertEqual(by_profile["mega_cap_leader_rotation_top50_balanced"]["input_mode"], "feature_snapshot")
         self.assertTrue(by_profile["mega_cap_leader_rotation_top50_balanced"]["requires_snapshot_artifacts"])
         self.assertFalse(by_profile["mega_cap_leader_rotation_top50_balanced"]["requires_strategy_config_path"])
@@ -492,6 +498,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
 
         self.assertIn("canonical_profile", result.stdout)
         self.assertIn("display_name", result.stdout)
+        self.assertIn("display_name_zh", result.stdout)
         self.assertIn("profile_group", result.stdout)
         self.assertIn("input_mode", result.stdout)
         self.assertIn("requires_snapshot_artifacts", result.stdout)
@@ -502,6 +509,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIn("Global ETF Rotation", result.stdout)
         self.assertIn("Russell 1000 Multi-Factor", result.stdout)
         self.assertIn("Mega Cap Leader Rotation Top50 Balanced", result.stdout)
+        self.assertIn("美股超大盘50强平衡龙头轮动", result.stdout)
         self.assertNotIn("Tech/Communication Pullback Enhancement", result.stdout)
 
     def test_print_strategy_switch_env_plan_for_global_etf_rotation(self):
