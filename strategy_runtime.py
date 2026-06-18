@@ -143,7 +143,14 @@ def load_strategy_runtime(
 ) -> LoadedStrategyRuntime:
     entrypoint = load_strategy_entrypoint_for_profile(raw_profile)
     runtime_adapter = load_strategy_runtime_adapter_for_profile(raw_profile)
-    overrides = dict(runtime_overrides or {})
+    overrides: dict[str, Any] = {}
+    reserved_cash_floor_usd = getattr(runtime_settings, "reserved_cash_floor_usd", 0.0)
+    reserved_cash_ratio = getattr(runtime_settings, "reserved_cash_ratio", None)
+    if float(reserved_cash_floor_usd or 0.0) > 0.0:
+        overrides["reserved_cash_floor_usd"] = float(reserved_cash_floor_usd)
+    if reserved_cash_ratio is not None and float(reserved_cash_ratio or 0.0) > 0.0:
+        overrides["reserved_cash_ratio"] = float(reserved_cash_ratio)
+    overrides.update(runtime_overrides or {})
     runtime = LoadedStrategyRuntime(
         entrypoint=entrypoint,
         runtime_adapter=runtime_adapter,

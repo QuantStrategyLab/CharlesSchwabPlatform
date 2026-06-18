@@ -77,7 +77,13 @@ class _MegaCapTop50Entrypoint:
         return StrategyDecision(diagnostics={"signal_description": "top50 balanced"})
 
 
-def _build_runtime_settings(profile: str, *, feature_snapshot_path: str | None = None) -> PlatformRuntimeSettings:
+def _build_runtime_settings(
+    profile: str,
+    *,
+    feature_snapshot_path: str | None = None,
+    reserved_cash_floor_usd: float = 0.0,
+    reserved_cash_ratio: float = 0.0,
+) -> PlatformRuntimeSettings:
     return PlatformRuntimeSettings(
         strategy_profile=profile,
         strategy_display_name=(
@@ -86,6 +92,8 @@ def _build_runtime_settings(profile: str, *, feature_snapshot_path: str | None =
         strategy_domain="us_equity",
         notify_lang="en",
         dry_run_only=False,
+        reserved_cash_floor_usd=reserved_cash_floor_usd,
+        reserved_cash_ratio=reserved_cash_ratio,
         feature_snapshot_path=feature_snapshot_path,
         feature_snapshot_manifest_path=None,
         strategy_config_path=None,
@@ -201,6 +209,29 @@ class StrategyRuntimeTests(unittest.TestCase):
         self.assertIs(runtime.entrypoint, entrypoint)
         self.assertEqual(runtime.benchmark_symbol, "VGT")
         self.assertEqual(runtime.managed_symbols, ("TQQQ", "QQQ", "BOXX", "SPYI", "QQQI"))
+
+    def test_load_strategy_runtime_applies_reserved_cash_policy_from_settings(self):
+        entrypoint = _FakeEntrypoint()
+
+        with patch.object(strategy_runtime_module, "load_strategy_entrypoint_for_profile", return_value=entrypoint):
+            with patch.object(
+                strategy_runtime_module,
+                "load_strategy_runtime_adapter_for_profile",
+                return_value=StrategyRuntimeAdapter(portfolio_input_name="portfolio_snapshot"),
+            ):
+                runtime = strategy_runtime_module.load_strategy_runtime(
+                    "tqqq_growth_income",
+                    runtime_settings=_build_runtime_settings(
+                        "tqqq_growth_income",
+                        reserved_cash_floor_usd=150.0,
+                        reserved_cash_ratio=0.03,
+                    ),
+                )
+
+        self.assertEqual(runtime.runtime_overrides["reserved_cash_floor_usd"], 150.0)
+        self.assertEqual(runtime.runtime_overrides["reserved_cash_ratio"], 0.03)
+        self.assertEqual(runtime.merged_runtime_config["reserved_cash_floor_usd"], 150.0)
+        self.assertEqual(runtime.merged_runtime_config["reserved_cash_ratio"], 0.03)
 
     def test_feature_snapshot_runtime_loads_snapshot_into_context(self):
         entrypoint = _TechEntrypoint()
