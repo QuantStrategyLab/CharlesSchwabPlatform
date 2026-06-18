@@ -103,6 +103,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
         )
         self.assertIsNone(settings.income_layer_enabled)
+        self.assertIsNone(settings.income_layer_start_usd)
         self.assertIsNone(settings.income_layer_max_ratio)
         self.assertIsNone(settings.feature_snapshot_path)
         self.assertIsNone(settings.feature_snapshot_manifest_path)
@@ -264,6 +265,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             {
                 "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
                 "INCOME_LAYER_ENABLED": "false",
+                "INCOME_LAYER_START_USD": "250000",
                 "INCOME_LAYER_MAX_RATIO": "0.25",
             },
             clear=True,
@@ -271,6 +273,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             settings = load_platform_runtime_settings()
 
         self.assertFalse(settings.income_layer_enabled)
+        self.assertEqual(settings.income_layer_start_usd, 250000.0)
         self.assertEqual(settings.income_layer_max_ratio, 0.25)
 
     def test_rejects_invalid_income_layer_max_ratio(self):
@@ -283,6 +286,18 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             clear=True,
         ):
             with self.assertRaisesRegex(ValueError, "INCOME_LAYER_MAX_RATIO"):
+                load_platform_runtime_settings()
+
+    def test_rejects_invalid_income_layer_start_usd(self):
+        with patch.dict(
+            os.environ,
+            {
+                "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
+                "INCOME_LAYER_START_USD": "-1",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(ValueError, "INCOME_LAYER_START_USD"):
                 load_platform_runtime_settings()
 
     def test_reads_safe_haven_cash_substitute_threshold_override(self):

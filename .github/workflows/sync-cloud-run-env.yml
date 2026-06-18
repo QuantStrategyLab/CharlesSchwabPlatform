@@ -78,6 +78,7 @@ jobs:
       INCOME_THRESHOLD_USD: ${{ vars.INCOME_THRESHOLD_USD }}
       QQQI_INCOME_RATIO: ${{ vars.QQQI_INCOME_RATIO }}
       INCOME_LAYER_ENABLED: ${{ vars.INCOME_LAYER_ENABLED }}
+      INCOME_LAYER_START_USD: ${{ vars.INCOME_LAYER_START_USD }}
       INCOME_LAYER_MAX_RATIO: ${{ vars.INCOME_LAYER_MAX_RATIO }}
       RUNTIME_TARGET_ENABLED: ${{ vars.RUNTIME_TARGET_ENABLED }}
       DUAL_DRIVE_UNLEVERED_SYMBOL: ${{ vars.DUAL_DRIVE_UNLEVERED_SYMBOL }}
@@ -706,6 +707,12 @@ jobs:
             env_pairs+=("INCOME_LAYER_ENABLED=${INCOME_LAYER_ENABLED}")
           else
             remove_env_vars+=("INCOME_LAYER_ENABLED")
+          fi
+
+          if [ -n "${INCOME_LAYER_START_USD:-}" ]; then
+            env_pairs+=("INCOME_LAYER_START_USD=${INCOME_LAYER_START_USD}")
+          else
+            remove_env_vars+=("INCOME_LAYER_START_USD")
           fi
 
           if [ -n "${INCOME_LAYER_MAX_RATIO:-}" ]; then
