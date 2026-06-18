@@ -61,6 +61,7 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders():
             fetch_reference_history=lambda port: ("reference-history", port),
             resolve_rebalance_plan="resolve-plan",
             build_strategy_plugin_notification_lines=lambda signals: tuple(signals),
+            build_strategy_plugin_error_notification_lines=lambda error: (f"plugin-error:{error}",) if error else (),
             load_strategy_plugin_signals=lambda raw_mounts: (tuple(raw_mounts or ()), None),
             attach_strategy_plugin_report=lambda report, *, signals, error=None: report.setdefault(
                 "strategy_plugins",
@@ -88,7 +89,10 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders():
 
     composer.send_tg_message("hello")
     runtime = composer.build_rebalance_runtime("client")
-    config = composer.build_rebalance_config(strategy_plugin_signals=("plugin-line",))
+    config = composer.build_rebalance_config(
+        strategy_plugin_signals=("plugin-line",),
+        strategy_plugin_error="bad config",
+    )
     reporting_adapters = composer.build_reporting_adapters()
     built_client = composer.build_client()
 
@@ -103,7 +107,7 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders():
     assert runtime.portfolio_port == ("portfolio-port", "client")
     assert runtime.execution_port_factory("hash-1") == ("execution-port", "client", "hash-1")
     assert runtime.notifications == "notification-port"
-    assert config.extra_notification_lines == ("plugin-line",)
+    assert config.extra_notification_lines == ("plugin-line", "plugin-error:bad config")
     assert config.strategy_display_name == "TQQQ 增长收益"
     assert config.dry_run_only is True
     assert config.safe_haven_cash_substitute_threshold_usd == 1000.0

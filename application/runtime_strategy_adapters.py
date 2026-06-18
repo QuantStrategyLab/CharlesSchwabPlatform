@@ -9,6 +9,7 @@ from typing import Any
 from quant_platform_kit.common.runtime_inputs import build_semiconductor_rotation_indicators_from_history
 from quant_platform_kit.common.strategy_plugins import (
     build_strategy_plugin_alert_messages,
+    build_strategy_plugin_error_notification_lines,
     build_strategy_plugin_notification_lines,
     should_alert_strategy_plugin_signal,
     translate_strategy_plugin_value,
@@ -63,6 +64,9 @@ class SchwabRuntimeStrategyAdapters:
 
     def build_strategy_plugin_notification_lines(self, signals) -> tuple[str, ...]:
         return build_strategy_plugin_notification_lines(signals, translator=self.translator)
+
+    def build_strategy_plugin_error_notification_lines(self, error) -> tuple[str, ...]:
+        return build_strategy_plugin_error_notification_lines(error, translator=self.translator)
 
     def should_alert_strategy_plugin_signal(self, signal) -> bool:
         return should_alert_strategy_plugin_signal(signal)
