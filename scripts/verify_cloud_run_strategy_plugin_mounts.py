@@ -160,18 +160,36 @@ def _check_signal_path(
             f"{service}:{env_name} signal_path is outside allowed prefixes: {signal_path}"
         )
 
-    signal_raw = _run(["gcloud", "storage", "cat", signal_path])
+    try:
+        signal_raw = _run(["gcloud", "storage", "cat", signal_path])
+    except RuntimeError as exc:
+        print(
+            f"Warning: {service}:{env_name} signal_path is not readable yet; "
+            f"strategy runtime will ignore the plugin until a valid signal exists: "
+            f"{signal_path} ({exc})"
+        )
+        return
     try:
         signal = json.loads(signal_raw)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"{service}:{env_name} signal_path does not contain valid JSON: {signal_path}") from exc
-    if not isinstance(signal, dict):
-        raise ValueError(f"{service}:{env_name} signal_path must contain a JSON object: {signal_path}")
-    if expected_schema and str(signal.get("schema_version") or "").strip() != expected_schema:
-        raise ValueError(
-            f"{service}:{env_name} expected schema {expected_schema}, "
-            f"got {signal.get('schema_version')!r} at {signal_path}"
+        print(
+            f"Warning: {service}:{env_name} signal_path does not contain valid JSON; "
+            f"strategy runtime will ignore the plugin until it is fixed: {signal_path} ({exc})"
         )
+        return
+    if not isinstance(signal, dict):
+        print(
+            f"Warning: {service}:{env_name} signal_path must contain a JSON object; "
+            f"strategy runtime will ignore the plugin until it is fixed: {signal_path}"
+        )
+        return
+    if expected_schema and str(signal.get("schema_version") or "").strip() != expected_schema:
+        print(
+            f"Warning: {service}:{env_name} expected schema {expected_schema}, "
+            f"got {signal.get('schema_version')!r} at {signal_path}; "
+            "strategy runtime will ignore the plugin until it is fixed."
+        )
+        return
 
 
 def _verify_target(
