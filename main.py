@@ -118,9 +118,12 @@ def build_strategy_runtime_overrides(
 ) -> dict[str, object]:
     overrides: dict[str, object] = {}
     income_layer_enabled = getattr(runtime_settings, "income_layer_enabled", None)
+    income_layer_start_usd = getattr(runtime_settings, "income_layer_start_usd", None)
     income_layer_max_ratio = getattr(runtime_settings, "income_layer_max_ratio", None)
     if income_layer_enabled is not None:
         overrides["income_layer_enabled"] = income_layer_enabled
+    if income_layer_start_usd is not None:
+        overrides["income_layer_start_usd"] = income_layer_start_usd
     if income_layer_max_ratio is not None:
         overrides["income_layer_max_ratio"] = income_layer_max_ratio
     if profile == "tqqq_growth_income":

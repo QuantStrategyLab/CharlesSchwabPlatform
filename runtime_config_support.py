@@ -38,6 +38,7 @@ class PlatformRuntimeSettings:
     reserved_cash_ratio: float = DEFAULT_RESERVED_CASH_RATIO
     safe_haven_cash_substitute_threshold_usd: float = DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD
     income_layer_enabled: bool | None = None
+    income_layer_start_usd: float | None = None
     income_layer_max_ratio: float | None = None
     feature_snapshot_path: str | None = None
     feature_snapshot_manifest_path: str | None = None
@@ -118,6 +119,18 @@ def _optional_ratio_env(name: str) -> float | None:
     return value
 
 
+def _optional_non_negative_float_env(name: str) -> float | None:
+    raw_value = os.getenv(name)
+    if raw_value is None or raw_value.strip() == "":
+        return None
+    value = float(raw_value)
+    if not math.isfinite(value):
+        raise ValueError(f"{name} must be finite, got {value}")
+    if value < 0:
+        raise ValueError(f"{name} must be non-negative, got {value}")
+    return value
+
+
 def _runtime_target_enabled_env() -> bool:
     value = _optional_bool_env("RUNTIME_TARGET_ENABLED")
     return True if value is None else value
@@ -190,6 +203,7 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
             default=DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
         ),
         income_layer_enabled=_optional_bool_env("INCOME_LAYER_ENABLED"),
+        income_layer_start_usd=_optional_non_negative_float_env("INCOME_LAYER_START_USD"),
         income_layer_max_ratio=_optional_ratio_env("INCOME_LAYER_MAX_RATIO"),
         feature_snapshot_path=runtime_paths.feature_snapshot_path,
         feature_snapshot_manifest_path=runtime_paths.feature_snapshot_manifest_path,

@@ -70,6 +70,7 @@ grep -Fq 'STRATEGY_PLUGIN_ALERT_TELEGRAM_CHAT_IDS: ${{ vars.STRATEGY_PLUGIN_ALER
 grep -Fq 'STRATEGY_PLUGIN_ALERT_TELEGRAM_BOT_TOKEN_SECRET_NAME: ${{ vars.STRATEGY_PLUGIN_ALERT_TELEGRAM_BOT_TOKEN_SECRET_NAME }}' "$workflow_file"
 grep -Fq 'INCOME_THRESHOLD_USD: ${{ vars.INCOME_THRESHOLD_USD }}' "$workflow_file"
 grep -Fq 'QQQI_INCOME_RATIO: ${{ vars.QQQI_INCOME_RATIO }}' "$workflow_file"
+grep -Fq 'INCOME_LAYER_START_USD: ${{ vars.INCOME_LAYER_START_USD }}' "$workflow_file"
 grep -Fq 'DUAL_DRIVE_UNLEVERED_SYMBOL: ${{ vars.DUAL_DRIVE_UNLEVERED_SYMBOL }}' "$workflow_file"
 grep -Fq 'GLOBAL_TELEGRAM_CHAT_ID: ${{ vars.GLOBAL_TELEGRAM_CHAT_ID }}' "$workflow_file"
 grep -Fq 'NOTIFY_LANG: ${{ vars.NOTIFY_LANG }}' "$workflow_file"
