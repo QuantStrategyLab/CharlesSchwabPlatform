@@ -558,12 +558,13 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
         signals=strategy_plugin_signals,
         error=strategy_plugin_error,
     )
+    execution_window = "dry_run" if dry_run_only_override else "execution"
     try:
         log_runtime_event(
             log_context,
             "strategy_cycle_received",
-            message="Received strategy precheck request" if dry_run_only_override else "Received strategy execution request",
-            execution_window="precheck" if dry_run_only_override else "execution",
+            message="Received strategy dry-run request" if dry_run_only_override else "Received strategy execution request",
+            execution_window=execution_window,
         )
         client = composer.build_client()
         if not is_market_open_today():
@@ -571,7 +572,7 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
                 log_context,
                 "market_closed",
                 message="Market closed; skip strategy execution",
-                execution_window="precheck" if dry_run_only_override else "execution",
+                execution_window=execution_window,
             )
             finalize_runtime_report(
                 report,
@@ -582,8 +583,8 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
         log_runtime_event(
             log_context,
             "strategy_cycle_started",
-            message="Starting strategy precheck" if dry_run_only_override else "Starting strategy execution",
-            execution_window="precheck" if dry_run_only_override else "execution",
+            message="Starting strategy dry-run" if dry_run_only_override else "Starting strategy execution",
+            execution_window=execution_window,
         )
         if dry_run_only_override is None:
             publish_strategy_plugin_alerts(strategy_plugin_signals, report=report)
@@ -614,7 +615,7 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
                 log_context,
                 "strategy_signal_diagnostics",
                 message="Strategy signal diagnostics",
-                execution_window="precheck" if dry_run_only_override else "execution",
+                execution_window=execution_window,
                 **signal_diagnostics,
             )
         has_signal_snapshot = _has_signal_snapshot_details(signal_snapshot)
@@ -623,7 +624,7 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
                 log_context,
                 "strategy_signal_snapshot",
                 message="Strategy signal snapshot",
-                execution_window="precheck" if dry_run_only_override else "execution",
+                execution_window=execution_window,
                 **signal_snapshot,
             )
         execution_summary = _summarize_cycle_result_for_report(
@@ -642,8 +643,8 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
         log_runtime_event(
             log_context,
             "strategy_cycle_completed",
-            message="Strategy precheck completed" if dry_run_only_override else "Strategy execution completed",
-            execution_window="precheck" if dry_run_only_override else "execution",
+            message="Strategy dry-run completed" if dry_run_only_override else "Strategy execution completed",
+            execution_window=execution_window,
         )
         return response_body, 200
     except Exception as exc:
@@ -751,22 +752,11 @@ def _handle_schwab_probe(*, response_body: str = "Probe OK"):
             print(f"failed to persist execution report: {persist_exc}", flush=True)
 
 
-@app.route("/", methods=["POST", "GET"])
 @app.route("/run", methods=["POST", "GET"])
 def handle_schwab():
     return _route_with_runtime_error_fallback(
         _handle_schwab_cycle,
         route_label="POST /",
-    )
-
-
-@app.route("/precheck", methods=["POST", "GET"])
-def handle_schwab_precheck():
-    return _route_with_runtime_error_fallback(
-        _handle_schwab_cycle,
-        dry_run_only_override=True,
-        response_body="Precheck OK",
-        route_label="POST /precheck",
     )
 
 
