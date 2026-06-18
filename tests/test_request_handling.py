@@ -234,6 +234,32 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertIn("Schwab strategy run failed", observed["payloads"][0][0]["text"])
         self.assertIn("RuntimeError: boom", observed["payloads"][0][0]["text"])
 
+    def test_handle_schwab_runtime_error_fallback_uses_chinese_copy(self):
+        module = load_module(notify_lang="zh")
+        observed = {"payloads": []}
+
+        class FakeResponse:
+            status_code = 200
+
+        def fake_post(_url, *, json, timeout):
+            observed["payloads"].append((json, timeout))
+            return FakeResponse()
+
+        module.TG_TOKEN = "token-1"
+        module.TG_CHAT_ID = "chat-1"
+        module.requests.post = fake_post
+        module._handle_schwab_cycle = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+
+        with module.app.test_request_context("/", method="POST"):
+            body, status = module.handle_schwab()
+
+        self.assertEqual(status, 500)
+        self.assertEqual(body, "Error")
+        text = observed["payloads"][0][0]["text"]
+        self.assertIn("Schwab 策略运行失败", text)
+        self.assertIn("服务:", text)
+        self.assertIn("错误: RuntimeError: boom", text)
+
     def test_handle_schwab_sends_escalated_strategy_plugin_alert(self):
         module = load_module()
         signal = types.SimpleNamespace(
