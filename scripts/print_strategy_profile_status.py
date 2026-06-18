@@ -37,6 +37,7 @@ def _print_table(rows: list[dict[str, object]]) -> None:
     headers = (
         "canonical_profile",
         "display_name",
+        "display_name_zh",
         "profile_group",
         "input_mode",
         "requires_snapshot_artifacts",
@@ -58,7 +59,7 @@ def _print_table(rows: list[dict[str, object]]) -> None:
 def main() -> int:
     rows = build_status_rows()
     if "--json" in sys.argv:
-        print(json.dumps(rows, indent=2, sort_keys=True))
+        print(json.dumps(rows, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
     _print_table(rows)
     return 0
