@@ -456,6 +456,21 @@ def _has_signal_snapshot_details(snapshot: dict[str, object]) -> bool:
     )
 
 
+def _summarize_cycle_result_for_report(result, *, dry_run: bool) -> dict[str, object]:
+    trade_logs = tuple(getattr(result, "trade_logs", ()) or ())
+    order_events_count = len(trade_logs)
+    orders_previewed_count = order_events_count if dry_run else 0
+    return {
+        "action_done": bool(order_events_count),
+        "order_events_count": order_events_count,
+        "orders_previewed_count": orders_previewed_count,
+        "orders_skipped_count": 0,
+        "notes_count": 0,
+        "dry_run_order_preview_available": bool(dry_run and orders_previewed_count > 0),
+        "execution_status": "executed" if order_events_count else "no_action",
+    }
+
+
 def persist_execution_report(report, *, dry_run_only_override: bool | None = None):
     return build_composer(dry_run_only_override=dry_run_only_override).build_reporting_adapters().persist_execution_report(report)
 
@@ -589,9 +604,14 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
                 execution_window="precheck" if dry_run_only_override else "execution",
                 **signal_snapshot,
             )
+        execution_summary = _summarize_cycle_result_for_report(
+            execution_result,
+            dry_run=bool(report.get("dry_run")),
+        )
         finalize_runtime_report(
             report,
             status="ok",
+            summary=execution_summary,
             diagnostics={
                 "signal": signal_diagnostics,
                 **({"signal_snapshot": signal_snapshot} if has_signal_snapshot else {}),

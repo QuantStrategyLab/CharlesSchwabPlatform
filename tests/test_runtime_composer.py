@@ -103,7 +103,7 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders():
     assert runtime.portfolio_port == ("portfolio-port", "client")
     assert runtime.execution_port_factory("hash-1") == ("execution-port", "client", "hash-1")
     assert runtime.notifications == "notification-port"
-    assert config.extra_notification_lines == ()
+    assert config.extra_notification_lines == ("plugin-line",)
     assert config.strategy_display_name == "TQQQ 增长收益"
     assert config.dry_run_only is True
     assert config.safe_haven_cash_substitute_threshold_usd == 1000.0
