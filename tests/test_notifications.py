@@ -126,8 +126,14 @@ class NotificationTests(unittest.TestCase):
                 ),
                 source_symbol="TQQQ",
                 redirect_symbol="QQQM",
+                allocation_detail=translate(
+                    "tqqq_volatility_delever_allocation_detail",
+                    retained_ratio="25.0%",
+                    redirect_symbol="QQQM",
+                    redirected_ratio="75.0%",
+                ),
             ),
-            "🛡️ 风控: QQQ 5 日年化波动率 31.2% 高于实际阈值 30.0%（动态 p90，252日窗口，范围 24.0%-36.0%，样本 252），TQQQ 转向 QQQM",
+            "🛡️ 风控: QQQ 5 日年化波动率 31.2% 高于实际阈值 30.0%（动态 p90，252日窗口，范围 24.0%-36.0%，样本 252），TQQQ 转向 QQQM（杠杆仓位：TQQQ 保留 25.0%，QQQM 75.0%）",
         )
         self.assertEqual(
             en_translate(
@@ -146,8 +152,14 @@ class NotificationTests(unittest.TestCase):
                 ),
                 source_symbol="TQQQ",
                 redirect_symbol="QQQM",
+                allocation_detail=en_translate(
+                    "tqqq_volatility_delever_allocation_detail",
+                    retained_ratio="0.0%",
+                    redirect_symbol="QQQM",
+                    redirected_ratio="100.0%",
+                ),
             ),
-            "🛡️ Risk control: QQQ 5d annualized volatility 26.2% remains above exit threshold 24.0%; entry effective threshold 30.0% (dynamic p90, 252d lookback, bounded 24.0%-36.0%, samples 252); keep TQQQ redirected to QQQM",
+            "🛡️ Risk control: QQQ 5d annualized volatility 26.2% remains above exit threshold 24.0%; entry effective threshold 30.0% (dynamic p90, 252d lookback, bounded 24.0%-36.0%, samples 252); keep TQQQ redirected to QQQM (leveraged sleeve: TQQQ retained 0.0%, QQQM 100.0%)",
         )
         self.assertEqual(
             translate(
@@ -236,6 +248,8 @@ class NotificationTests(unittest.TestCase):
                 "dual_drive_volatility_delever_dynamic_floor": 0.24,
                 "dual_drive_volatility_delever_dynamic_cap": 0.36,
                 "dual_drive_volatility_delever_redirect_symbol": "QQQM",
+                "dual_drive_volatility_delever_retained_ratio": 0.0,
+                "dual_drive_volatility_delever_redirected_ratio": 1.0,
             },
             portfolio={
                 "total_equity": 10000.0,
@@ -247,7 +261,8 @@ class NotificationTests(unittest.TestCase):
 
         self.assertIn(
             "🛡️ Risk control: QQQ 5d annualized volatility 31.2% is above effective threshold 30.0% "
-            "(dynamic p90, 252d lookback, bounded 24.0%-36.0%, samples 252); TQQQ redirects to QQQM",
+            "(dynamic p90, 252d lookback, bounded 24.0%-36.0%, samples 252); TQQQ redirects to QQQM "
+            "(leveraged sleeve: TQQQ retained 0.0%, QQQM 100.0%)",
             rendered.compact_text,
         )
 
