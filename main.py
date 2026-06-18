@@ -775,14 +775,16 @@ def _handle_schwab_probe(*, response_body: str = "Probe OK"):
             print(f"failed to persist execution report: {persist_exc}", flush=True)
 
 
+@app.route("/", methods=["POST", "GET"])
 @app.route("/run", methods=["POST", "GET"])
 def handle_schwab():
     return _route_with_runtime_error_fallback(
         _handle_schwab_cycle,
-        route_label="POST /",
+        route_label="POST /run",
     )
 
 
+@app.route("/precheck", methods=["POST", "GET"])
 @app.route("/dry-run", methods=["POST", "GET"])
 def handle_schwab_dry_run():
     return _route_with_runtime_error_fallback(
