@@ -513,7 +513,14 @@ def resolve_rebalance_plan(*, qqq_history, snapshot):
     )
 
 
-def run_strategy_core(c, now_ny, *, strategy_plugin_signals=(), dry_run_only_override: bool | None = None):
+def run_strategy_core(
+    c,
+    now_ny,
+    *,
+    strategy_plugin_signals=(),
+    strategy_plugin_error: str | None = None,
+    dry_run_only_override: bool | None = None,
+):
     composer = build_composer(dry_run_only_override=dry_run_only_override)
     return run_rebalance_cycle(
         c,
@@ -522,7 +529,10 @@ def run_strategy_core(c, now_ny, *, strategy_plugin_signals=(), dry_run_only_ove
             c,
             silent_cycle_notifications=bool(dry_run_only_override),
         ),
-        config=composer.build_rebalance_config(strategy_plugin_signals=strategy_plugin_signals),
+        config=composer.build_rebalance_config(
+            strategy_plugin_signals=strategy_plugin_signals,
+            strategy_plugin_error=strategy_plugin_error,
+        ),
     )
 
 
@@ -570,6 +580,7 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
             client,
             None,
             strategy_plugin_signals=strategy_plugin_signals,
+            strategy_plugin_error=strategy_plugin_error,
             dry_run_only_override=dry_run_only_override,
         )
         signal_diagnostics = _signal_diagnostics_from_result(execution_result)
