@@ -112,8 +112,17 @@ def build_tqqq_managed_symbols(unlevered_symbol: str) -> tuple[str, ...]:
     return ("TQQQ", symbol, "BOXX", "SPYI", "QQQI")
 
 
-def build_strategy_runtime_overrides(profile: str) -> dict[str, object]:
+def build_strategy_runtime_overrides(
+    profile: str,
+    runtime_settings=RUNTIME_SETTINGS,
+) -> dict[str, object]:
     overrides: dict[str, object] = {}
+    income_layer_enabled = getattr(runtime_settings, "income_layer_enabled", None)
+    income_layer_max_ratio = getattr(runtime_settings, "income_layer_max_ratio", None)
+    if income_layer_enabled is not None:
+        overrides["income_layer_enabled"] = income_layer_enabled
+    if income_layer_max_ratio is not None:
+        overrides["income_layer_max_ratio"] = income_layer_max_ratio
     if profile == "tqqq_growth_income":
         if INCOME_THRESHOLD_USD is not None:
             overrides["income_threshold_usd"] = INCOME_THRESHOLD_USD
@@ -548,6 +557,8 @@ def run_strategy_core(
 
 
 def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_body: str = "OK"):
+    if dry_run_only_override is None and not getattr(RUNTIME_SETTINGS, "runtime_target_enabled", True):
+        return "Runtime Target Disabled", 200
     composer = build_composer(dry_run_only_override=dry_run_only_override)
     reporting_adapters = composer.build_reporting_adapters()
     log_context = reporting_adapters.build_log_context()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,9 +33,12 @@ class PlatformRuntimeSettings:
     strategy_domain: str
     notify_lang: str
     dry_run_only: bool
+    runtime_target_enabled: bool = True
     reserved_cash_floor_usd: float = DEFAULT_RESERVED_CASH_FLOOR_USD
     reserved_cash_ratio: float = DEFAULT_RESERVED_CASH_RATIO
     safe_haven_cash_substitute_threshold_usd: float = DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD
+    income_layer_enabled: bool | None = None
+    income_layer_max_ratio: float | None = None
     feature_snapshot_path: str | None = None
     feature_snapshot_manifest_path: str | None = None
     strategy_config_path: str | None = None
@@ -90,6 +94,35 @@ def _resolve_ratio_env(name: str, *, default: float) -> float:
     return value
 
 
+def _optional_bool_env(name: str) -> bool | None:
+    raw_value = os.getenv(name)
+    if raw_value is None or str(raw_value).strip() == "":
+        return None
+    value = str(raw_value).strip().lower()
+    if value in {"1", "true", "yes", "y", "on"}:
+        return True
+    if value in {"0", "false", "no", "n", "off"}:
+        return False
+    raise ValueError(f"{name} must be boolean, got {raw_value!r}")
+
+
+def _optional_ratio_env(name: str) -> float | None:
+    raw_value = os.getenv(name)
+    if raw_value is None or raw_value.strip() == "":
+        return None
+    value = float(raw_value)
+    if not math.isfinite(value):
+        raise ValueError(f"{name} must be finite, got {value}")
+    if not (0.0 <= value <= 1.0):
+        raise ValueError(f"{name} must be in [0,1], got {value}")
+    return value
+
+
+def _runtime_target_enabled_env() -> bool:
+    value = _optional_bool_env("RUNTIME_TARGET_ENABLED")
+    return True if value is None else value
+
+
 def _first_non_empty(*raw_values: str | None) -> str | None:
     for raw_value in raw_values:
         value = str(raw_value or "").strip()
@@ -143,6 +176,7 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
         strategy_domain=runtime_paths.strategy_domain,
         notify_lang=os.getenv("NOTIFY_LANG", DEFAULT_NOTIFY_LANG),
         dry_run_only=resolve_bool_value(os.getenv("SCHWAB_DRY_RUN_ONLY")),
+        runtime_target_enabled=_runtime_target_enabled_env(),
         reserved_cash_floor_usd=_resolve_non_negative_float_env(
             "SCHWAB_MIN_RESERVED_CASH_USD",
             default=DEFAULT_RESERVED_CASH_FLOOR_USD,
@@ -155,6 +189,8 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
             "SCHWAB_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD",
             default=DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
         ),
+        income_layer_enabled=_optional_bool_env("INCOME_LAYER_ENABLED"),
+        income_layer_max_ratio=_optional_ratio_env("INCOME_LAYER_MAX_RATIO"),
         feature_snapshot_path=runtime_paths.feature_snapshot_path,
         feature_snapshot_manifest_path=runtime_paths.feature_snapshot_manifest_path,
         strategy_config_path=runtime_paths.strategy_config_path,

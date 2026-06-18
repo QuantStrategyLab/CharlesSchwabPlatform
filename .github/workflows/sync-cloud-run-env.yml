@@ -77,6 +77,9 @@ jobs:
       # Optional strategy overrides; leave unset to inherit the UsEquityStrategies profile defaults.
       INCOME_THRESHOLD_USD: ${{ vars.INCOME_THRESHOLD_USD }}
       QQQI_INCOME_RATIO: ${{ vars.QQQI_INCOME_RATIO }}
+      INCOME_LAYER_ENABLED: ${{ vars.INCOME_LAYER_ENABLED }}
+      INCOME_LAYER_MAX_RATIO: ${{ vars.INCOME_LAYER_MAX_RATIO }}
+      RUNTIME_TARGET_ENABLED: ${{ vars.RUNTIME_TARGET_ENABLED }}
       DUAL_DRIVE_UNLEVERED_SYMBOL: ${{ vars.DUAL_DRIVE_UNLEVERED_SYMBOL }}
       EXECUTION_REPORT_GCS_URI: ${{ vars.EXECUTION_REPORT_GCS_URI }}
       GLOBAL_TELEGRAM_CHAT_ID: ${{ vars.GLOBAL_TELEGRAM_CHAT_ID }}
@@ -697,6 +700,24 @@ jobs:
 
           if [ -n "${QQQI_INCOME_RATIO:-}" ]; then
             env_pairs+=("QQQI_INCOME_RATIO=${QQQI_INCOME_RATIO}")
+          fi
+
+          if [ -n "${INCOME_LAYER_ENABLED:-}" ]; then
+            env_pairs+=("INCOME_LAYER_ENABLED=${INCOME_LAYER_ENABLED}")
+          else
+            remove_env_vars+=("INCOME_LAYER_ENABLED")
+          fi
+
+          if [ -n "${INCOME_LAYER_MAX_RATIO:-}" ]; then
+            env_pairs+=("INCOME_LAYER_MAX_RATIO=${INCOME_LAYER_MAX_RATIO}")
+          else
+            remove_env_vars+=("INCOME_LAYER_MAX_RATIO")
+          fi
+
+          if [ -n "${RUNTIME_TARGET_ENABLED:-}" ]; then
+            env_pairs+=("RUNTIME_TARGET_ENABLED=${RUNTIME_TARGET_ENABLED}")
+          else
+            remove_env_vars+=("RUNTIME_TARGET_ENABLED")
           fi
 
           if [ -n "${DUAL_DRIVE_UNLEVERED_SYMBOL:-}" ]; then
