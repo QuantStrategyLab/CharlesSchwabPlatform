@@ -130,6 +130,12 @@ class SchwabRuntimeComposer:
         )
 
     def build_rebalance_config(self, *, strategy_plugin_signals=()):
+        build_plugin_lines = getattr(
+            self.strategy_adapters,
+            "build_strategy_plugin_notification_lines",
+            lambda _signals: (),
+        )
+        plugin_lines = tuple(build_plugin_lines(tuple(strategy_plugin_signals or ())))
         return SchwabRebalanceConfig(
             translator=self.strategy_adapters.translator,
             strategy_display_name=self.strategy_display_name_localized,
@@ -141,7 +147,7 @@ class SchwabRuntimeComposer:
             post_sell_refresh_interval_sec=self.post_sell_refresh_interval_sec,
             safe_haven_cash_substitute_threshold_usd=self.safe_haven_cash_substitute_threshold_usd,
             sleeper=self.sleeper,
-            extra_notification_lines=(),
+            extra_notification_lines=plugin_lines,
             strategy_plugin_signals=tuple(strategy_plugin_signals or ()),
         )
 
