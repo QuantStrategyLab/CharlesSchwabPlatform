@@ -90,6 +90,7 @@ SELL_SETTLE_DELAY_SEC = 3
 POST_SELL_REFRESH_ATTEMPTS = 5
 POST_SELL_REFRESH_INTERVAL_SEC = 1
 DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD = 1000.0
+DCA_PROFILES = frozenset({"nasdaq_sp500_smart_dca", "ibit_smart_dca"})
 
 RUNTIME_SETTINGS = load_platform_runtime_settings()
 STRATEGY_PROFILE = RUNTIME_SETTINGS.strategy_profile
@@ -126,6 +127,14 @@ def build_strategy_runtime_overrides(
         overrides["income_layer_start_usd"] = income_layer_start_usd
     if income_layer_max_ratio is not None:
         overrides["income_layer_max_ratio"] = income_layer_max_ratio
+    if profile in DCA_PROFILES:
+        dca_mode = getattr(runtime_settings, "dca_mode", None)
+        dca_base_investment_usd = getattr(runtime_settings, "dca_base_investment_usd", None)
+        if dca_mode is not None:
+            overrides["investment_amount_mode"] = "fixed"
+            overrides["smart_multiplier_enabled"] = dca_mode == "smart"
+        if dca_base_investment_usd is not None:
+            overrides["base_investment_usd"] = dca_base_investment_usd
     if profile == "tqqq_growth_income":
         if INCOME_THRESHOLD_USD is not None:
             overrides["income_threshold_usd"] = INCOME_THRESHOLD_USD
