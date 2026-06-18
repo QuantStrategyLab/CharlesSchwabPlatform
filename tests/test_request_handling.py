@@ -53,11 +53,69 @@ def install_stub_modules(strategy_plugin_mounts_json=None, notify_lang="en"):
     requests_module.post = lambda *args, **kwargs: None
     pandas_module = types.ModuleType("pandas")
 
+    runtime_broker_adapters_module = types.ModuleType("application.runtime_broker_adapters")
+    runtime_broker_adapters_module.build_runtime_broker_adapters = lambda **_kwargs: types.SimpleNamespace()
+
+    runtime_composer_module = types.ModuleType("application.runtime_composer")
+    runtime_composer_module.build_runtime_composer = lambda **_kwargs: types.SimpleNamespace(
+        send_tg_message=lambda *_args, **_kwargs: None,
+        build_notification_adapters=lambda: types.SimpleNamespace(
+            publish_cycle_notification=lambda *_args, **_kwargs: None,
+        ),
+    )
+
+    runtime_strategy_adapters_module = types.ModuleType("application.runtime_strategy_adapters")
+    runtime_strategy_adapters_module.build_runtime_strategy_adapters = lambda **_kwargs: types.SimpleNamespace()
+
     rebalance_service_module = types.ModuleType("application.rebalance_service")
     rebalance_service_module.run_strategy_core = lambda *args, **kwargs: None
 
+    signal_snapshot_module = types.ModuleType("application.signal_snapshot")
+    signal_snapshot_module.build_signal_snapshot = lambda *args, **kwargs: {}
+
+    decision_mapper_module = types.ModuleType("decision_mapper")
+    decision_mapper_module.map_strategy_decision_to_plan = lambda *args, **kwargs: {}
+
     cloud_run_module = types.ModuleType("entrypoints.cloud_run")
     cloud_run_module.is_market_open_today = lambda: True
+
+    telegram_module = types.ModuleType("notifications.telegram")
+    telegram_module.build_signal_text = lambda translator: (lambda key, **kwargs: translator(key, **kwargs))
+    telegram_module.build_strategy_display_name = lambda translator: (
+        lambda _profile, fallback_name="": fallback_name
+    )
+    telegram_module.build_translator = lambda _lang: (lambda key, **_kwargs: key)
+
+    quant_platform_kit_module = types.ModuleType("quant_platform_kit")
+    quant_platform_kit_module.__path__ = []
+    qpk_common_module = types.ModuleType("quant_platform_kit.common")
+    qpk_common_module.__path__ = []
+
+    qpk_plugin_alerts_module = types.ModuleType("quant_platform_kit.notifications.strategy_plugin_alerts")
+    qpk_plugin_alerts_module.StrategyPluginAlertStateSettings = types.SimpleNamespace
+    qpk_plugin_alerts_module.build_strategy_plugin_alert_context_label = lambda *args, **kwargs: ""
+    qpk_plugin_alerts_module.publish_strategy_plugin_alerts = lambda *args, **kwargs: None
+
+    qpk_schwab_module = types.ModuleType("quant_platform_kit.schwab")
+    qpk_schwab_module.fetch_account_snapshot = lambda *args, **kwargs: None
+    qpk_schwab_module.fetch_default_daily_price_history_candles = lambda *args, **kwargs: []
+    qpk_schwab_module.fetch_quotes = lambda *args, **kwargs: {}
+    qpk_schwab_module.get_client_from_secret = lambda *args, **kwargs: None
+    qpk_schwab_module.submit_equity_order = lambda *args, **kwargs: None
+
+    qpk_runtime_reports_module = types.ModuleType("quant_platform_kit.common.runtime_reports")
+    qpk_runtime_reports_module.append_runtime_report_error = lambda *args, **kwargs: {}
+    qpk_runtime_reports_module.build_runtime_report_base = lambda *args, **kwargs: {}
+    qpk_runtime_reports_module.finalize_runtime_report = lambda *args, **kwargs: {}
+    qpk_runtime_reports_module.persist_runtime_report = lambda *args, **kwargs: None
+
+    qpk_strategy_plugins_module = types.ModuleType("quant_platform_kit.common.strategy_plugins")
+    qpk_strategy_plugins_module.build_strategy_plugin_report_payload = lambda *args, **kwargs: {}
+    qpk_strategy_plugins_module.load_configured_strategy_plugin_signals = lambda *args, **kwargs: []
+    qpk_strategy_plugins_module.parse_strategy_plugin_mounts = lambda *args, **kwargs: []
+
+    qpk_strategy_contracts_module = types.ModuleType("quant_platform_kit.strategy_contracts")
+    qpk_strategy_contracts_module.build_strategy_evaluation_inputs = lambda *args, **kwargs: {}
 
     runtime_config_support_module = types.ModuleType("runtime_config_support")
     runtime_config_support_module.load_platform_runtime_settings = lambda: types.SimpleNamespace(
@@ -93,6 +151,10 @@ def install_stub_modules(strategy_plugin_mounts_json=None, notify_lang="en"):
         evaluate=lambda **_kwargs: None,
     )
 
+    runtime_logging_module = types.ModuleType("runtime_logging")
+    runtime_logging_module.build_run_id = lambda *args, **kwargs: "test-run"
+    runtime_logging_module.emit_runtime_log = lambda *args, **kwargs: None
+
     google_module = types.ModuleType("google")
     google_module.__path__ = []
 
@@ -117,10 +179,24 @@ def install_stub_modules(strategy_plugin_mounts_json=None, notify_lang="en"):
         "flask": flask_module,
         "requests": requests_module,
         "pandas": pandas_module,
+        "application.runtime_broker_adapters": runtime_broker_adapters_module,
+        "application.runtime_composer": runtime_composer_module,
+        "application.runtime_strategy_adapters": runtime_strategy_adapters_module,
         "application.rebalance_service": rebalance_service_module,
+        "application.signal_snapshot": signal_snapshot_module,
+        "decision_mapper": decision_mapper_module,
         "entrypoints.cloud_run": cloud_run_module,
+        "notifications.telegram": telegram_module,
+        "quant_platform_kit": quant_platform_kit_module,
+        "quant_platform_kit.common": qpk_common_module,
+        "quant_platform_kit.notifications.strategy_plugin_alerts": qpk_plugin_alerts_module,
+        "quant_platform_kit.schwab": qpk_schwab_module,
+        "quant_platform_kit.common.runtime_reports": qpk_runtime_reports_module,
+        "quant_platform_kit.common.strategy_plugins": qpk_strategy_plugins_module,
+        "quant_platform_kit.strategy_contracts": qpk_strategy_contracts_module,
         "runtime_config_support": runtime_config_support_module,
         "strategy_runtime": strategy_runtime_module,
+        "runtime_logging": runtime_logging_module,
         "google": google_module,
         "google.auth": google_auth_module,
         "google.cloud": google_cloud_module,
@@ -176,6 +252,25 @@ class RequestHandlingTests(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertEqual(body, "OK")
+
+    def test_build_strategy_runtime_overrides_applies_dca_settings(self):
+        module = load_module()
+        settings = types.SimpleNamespace(
+            income_layer_enabled=None,
+            income_layer_start_usd=None,
+            income_layer_max_ratio=None,
+            dca_mode="smart",
+            dca_base_investment_usd=500.0,
+        )
+
+        self.assertEqual(
+            module.build_strategy_runtime_overrides("nasdaq_sp500_smart_dca", settings),
+            {
+                "investment_amount_mode": "fixed",
+                "smart_multiplier_enabled": True,
+                "base_investment_usd": 500.0,
+            },
+        )
 
     def test_handle_schwab_returns_market_closed(self):
         module = load_module()
