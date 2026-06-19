@@ -9,11 +9,17 @@ from us_equity_strategies.signals import (
     MARKET_SIGNAL_REFERENCE_CONSUMPTION_AUDIT,
     MARKET_SIGNAL_REFERENCE_PLATFORM_HANDOFF,
     MARKET_SIGNAL_REFERENCE_PLATFORM_HANDOFF_INDEX,
+    SOXL_SOXX_TREND_INCOME_MARKET_SIGNAL_CONSUMER,
     extract_consumer_market_signal_inputs_from_reference,
 )
 
 
 IBIT_SMART_DCA_PROFILE = "ibit_smart_dca"
+SOXL_SOXX_TREND_INCOME_PROFILE = "soxl_soxx_trend_income"
+MARKET_SIGNAL_CONSUMER_BY_PROFILE = {
+    IBIT_SMART_DCA_PROFILE: IBIT_SMART_DCA_MARKET_SIGNAL_CONSUMER,
+    SOXL_SOXX_TREND_INCOME_PROFILE: SOXL_SOXX_TREND_INCOME_MARKET_SIGNAL_CONSUMER,
+}
 DEFAULT_MARKET_SIGNAL_CACHE_DIR = "/tmp/quant-platform-market-signals"
 
 
@@ -26,7 +32,9 @@ def resolve_external_market_signal_inputs(
     logger: Callable[[str], None] = print,
     client_factory: Any = None,
 ) -> dict[str, Any]:
-    if str(strategy_profile or "").strip().lower() != IBIT_SMART_DCA_PROFILE:
+    normalized_profile = str(strategy_profile or "").strip().lower()
+    consumer = MARKET_SIGNAL_CONSUMER_BY_PROFILE.get(normalized_profile)
+    if consumer is None:
         return {}
     if "derived_indicators" not in {str(item) for item in available_inputs or ()}:
         return {}
@@ -34,13 +42,18 @@ def resolve_external_market_signal_inputs(
     reference_type, reference = _market_signal_reference(runtime_settings)
     if reference is None:
         if bool(getattr(runtime_settings, "market_signal_required", False)):
-            raise RuntimeError("IBIT external market signal is required but no signal reference is configured")
-        return {"derived_indicators": {}}
+            raise RuntimeError(
+                f"{normalized_profile} external market signal is required "
+                "but no signal reference is configured"
+            )
+        if normalized_profile == IBIT_SMART_DCA_PROFILE:
+            return {"derived_indicators": {}}
+        return {}
 
     market_inputs, metadata = extract_consumer_market_signal_inputs_from_reference(
         reference,
         reference_type=reference_type,
-        consumer=IBIT_SMART_DCA_MARKET_SIGNAL_CONSUMER,
+        consumer=consumer,
         cache_dir=_market_signal_cache_dir(runtime_settings),
         as_of=_market_signal_as_of(as_of),
         client_factory=client_factory,
