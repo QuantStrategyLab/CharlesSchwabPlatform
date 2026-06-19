@@ -611,6 +611,11 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIn("SCHWAB_MIN_RESERVED_CASH_USD", plan["optional_env"])
         self.assertIn("SCHWAB_RESERVED_CASH_RATIO", plan["optional_env"])
         self.assertIn("SCHWAB_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD", plan["optional_env"])
+        self.assertIn("SCHWAB_MARKET_SIGNAL_HANDOFF_INDEX_URI", plan["optional_env"])
+        self.assertIn("SCHWAB_MARKET_SIGNAL_HANDOFF_MANIFEST_URI", plan["optional_env"])
+        self.assertIn("SCHWAB_MARKET_SIGNAL_CONSUMPTION_AUDIT_URI", plan["optional_env"])
+        self.assertIn("SCHWAB_MARKET_SIGNAL_CACHE_DIR", plan["optional_env"])
+        self.assertIn("SCHWAB_MARKET_SIGNAL_REQUIRED", plan["optional_env"])
         self.assertIn("SCHWAB_FEATURE_SNAPSHOT_PATH", plan["remove_if_present"])
 
     def test_print_strategy_switch_env_plan_rejects_research_only_tech_profile(self):
