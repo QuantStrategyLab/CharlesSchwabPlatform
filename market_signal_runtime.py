@@ -5,21 +5,15 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from us_equity_strategies.signals import (
-    IBIT_SMART_DCA_MARKET_SIGNAL_CONSUMER,
     MARKET_SIGNAL_REFERENCE_CONSUMPTION_AUDIT,
     MARKET_SIGNAL_REFERENCE_PLATFORM_HANDOFF,
     MARKET_SIGNAL_REFERENCE_PLATFORM_HANDOFF_INDEX,
-    SOXL_SOXX_TREND_INCOME_MARKET_SIGNAL_CONSUMER,
+    default_market_signal_inputs_when_unconfigured,
     extract_consumer_market_signal_inputs_from_reference,
+    market_signal_consumer_for_strategy_profile,
 )
 
 
-IBIT_SMART_DCA_PROFILE = "ibit_smart_dca"
-SOXL_SOXX_TREND_INCOME_PROFILE = "soxl_soxx_trend_income"
-MARKET_SIGNAL_CONSUMER_BY_PROFILE = {
-    IBIT_SMART_DCA_PROFILE: IBIT_SMART_DCA_MARKET_SIGNAL_CONSUMER,
-    SOXL_SOXX_TREND_INCOME_PROFILE: SOXL_SOXX_TREND_INCOME_MARKET_SIGNAL_CONSUMER,
-}
 DEFAULT_MARKET_SIGNAL_CACHE_DIR = "/tmp/quant-platform-market-signals"
 
 
@@ -33,7 +27,7 @@ def resolve_external_market_signal_inputs(
     client_factory: Any = None,
 ) -> dict[str, Any]:
     normalized_profile = str(strategy_profile or "").strip().lower()
-    consumer = MARKET_SIGNAL_CONSUMER_BY_PROFILE.get(normalized_profile)
+    consumer = market_signal_consumer_for_strategy_profile(normalized_profile)
     if consumer is None:
         return {}
     if "derived_indicators" not in {str(item) for item in available_inputs or ()}:
@@ -46,9 +40,7 @@ def resolve_external_market_signal_inputs(
                 f"{normalized_profile} external market signal is required "
                 "but no signal reference is configured"
             )
-        if normalized_profile == IBIT_SMART_DCA_PROFILE:
-            return {"derived_indicators": {}}
-        return {}
+        return default_market_signal_inputs_when_unconfigured(normalized_profile)
 
     market_inputs, metadata = extract_consumer_market_signal_inputs_from_reference(
         reference,
