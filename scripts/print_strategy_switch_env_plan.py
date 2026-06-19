@@ -66,6 +66,11 @@ def build_switch_plan(profile: str) -> dict[str, object]:
         "SCHWAB_MIN_RESERVED_CASH_USD",
         "SCHWAB_RESERVED_CASH_RATIO",
         "SCHWAB_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD",
+        "SCHWAB_MARKET_SIGNAL_HANDOFF_INDEX_URI",
+        "SCHWAB_MARKET_SIGNAL_HANDOFF_MANIFEST_URI",
+        "SCHWAB_MARKET_SIGNAL_CONSUMPTION_AUDIT_URI",
+        "SCHWAB_MARKET_SIGNAL_CACHE_DIR",
+        "SCHWAB_MARKET_SIGNAL_REQUIRED",
     ]
     remove_if_present: list[str] = []
     notes = [
