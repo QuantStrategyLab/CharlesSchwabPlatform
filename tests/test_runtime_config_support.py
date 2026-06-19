@@ -536,9 +536,10 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             get_platform_profile_status_matrix(),
         )
         by_profile = {row["canonical_profile"]: row for row in rows}
-        self.assertEqual(by_profile["global_etf_rotation"]["profile_group"], "direct_runtime_inputs")
-        self.assertEqual(by_profile["global_etf_rotation"]["input_mode"], "market_history")
-        self.assertFalse(by_profile["global_etf_rotation"]["requires_snapshot_artifacts"])
+        self.assertEqual(by_profile["global_etf_rotation"]["profile_group"], "snapshot_backed")
+        self.assertEqual(by_profile["global_etf_rotation"]["input_mode"], "feature_snapshot")
+        self.assertTrue(by_profile["global_etf_rotation"]["requires_snapshot_artifacts"])
+        self.assertTrue(by_profile["global_etf_rotation"]["requires_snapshot_manifest_path"])
         self.assertFalse(by_profile["global_etf_rotation"]["requires_strategy_config_path"])
         self.assertNotIn("tech_communication_pullback_enhancement", by_profile)
         self.assertEqual(by_profile["russell_top50_leader_rotation"]["profile_group"], "snapshot_backed")
@@ -590,9 +591,10 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(plan["runtime_target"]["strategy_profile"], "global_etf_rotation")
         self.assertEqual(plan["runtime_target"]["service_name"], "charles-schwab-quant-service")
         self.assertEqual(plan["runtime_target"]["execution_mode"], "live")
-        self.assertEqual(plan["profile_group"], "direct_runtime_inputs")
-        self.assertEqual(plan["input_mode"], "market_history")
-        self.assertFalse(plan["requires_snapshot_artifacts"])
+        self.assertEqual(plan["profile_group"], "snapshot_backed")
+        self.assertEqual(plan["input_mode"], "feature_snapshot")
+        self.assertTrue(plan["requires_snapshot_artifacts"])
+        self.assertTrue(plan["requires_snapshot_manifest_path"])
         self.assertFalse(plan["requires_strategy_config_path"])
         self.assertEqual(
             json.loads(plan["set_env"]["RUNTIME_TARGET_JSON"])["strategy_profile"],
@@ -611,7 +613,9 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIn("SCHWAB_FEATURE_SNAPSHOT_FALLBACK_MODE", plan["optional_env"])
         self.assertIn("SCHWAB_FEATURE_SNAPSHOT_FALLBACK_CACHE_DIR", plan["optional_env"])
         self.assertIn("SCHWAB_FEATURE_SNAPSHOT_MAX_STALE_DAYS", plan["optional_env"])
-        self.assertIn("SCHWAB_FEATURE_SNAPSHOT_PATH", plan["remove_if_present"])
+        self.assertEqual(plan["set_env"]["SCHWAB_FEATURE_SNAPSHOT_PATH"], "<required>")
+        self.assertEqual(plan["set_env"]["SCHWAB_FEATURE_SNAPSHOT_MANIFEST_PATH"], "<required>")
+        self.assertIn("SCHWAB_STRATEGY_CONFIG_PATH", plan["remove_if_present"])
 
     def test_print_strategy_switch_env_plan_rejects_research_only_tech_profile(self):
         result = subprocess.run(

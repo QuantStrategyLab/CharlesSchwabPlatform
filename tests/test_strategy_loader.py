@@ -13,7 +13,7 @@ class StrategyLoaderTests(unittest.TestCase):
             raise
 
         self.assertEqual(entrypoint.manifest.profile, "global_etf_rotation")
-        self.assertEqual(entrypoint.manifest.required_inputs, frozenset({"market_history"}))
+        self.assertEqual(entrypoint.manifest.required_inputs, frozenset({"feature_snapshot"}))
 
     def test_load_strategy_entrypoint_resolves_russell_top50_strategy(self):
         try:
@@ -99,7 +99,7 @@ class StrategyLoaderTests(unittest.TestCase):
 
         self.assertEqual(
             adapter.available_inputs,
-            frozenset({"market_history", "portfolio_snapshot"}),
+            frozenset({"feature_snapshot", "portfolio_snapshot"}),
         )
         self.assertEqual(adapter.portfolio_input_name, "portfolio_snapshot")
 

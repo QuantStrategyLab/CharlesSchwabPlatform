@@ -8,12 +8,12 @@ import pytest
 import market_signal_runtime
 
 
-def test_non_ibit_profile_does_not_load_market_signal():
+def test_unsupported_profile_does_not_load_market_signal():
     settings = SimpleNamespace(market_signal_required=True)
 
     assert (
         market_signal_runtime.resolve_external_market_signal_inputs(
-            strategy_profile="soxl_soxx_trend_income",
+            strategy_profile="tqqq_growth_income",
             available_inputs={"derived_indicators"},
             runtime_settings=settings,
         )
@@ -37,6 +37,30 @@ def test_ibit_required_reference_missing_raises():
     with pytest.raises(RuntimeError, match="external market signal is required"):
         market_signal_runtime.resolve_external_market_signal_inputs(
             strategy_profile="ibit_smart_dca",
+            available_inputs={"derived_indicators"},
+            runtime_settings=settings,
+        )
+
+
+def test_soxl_without_reference_preserves_legacy_inputs():
+    settings = SimpleNamespace(market_signal_required=False)
+
+    assert market_signal_runtime.resolve_external_market_signal_inputs(
+        strategy_profile="soxl_soxx_trend_income",
+        available_inputs={"derived_indicators"},
+        runtime_settings=settings,
+    ) == {}
+
+
+def test_soxl_required_reference_missing_raises():
+    settings = SimpleNamespace(market_signal_required=True)
+
+    with pytest.raises(
+        RuntimeError,
+        match="soxl_soxx_trend_income external market signal is required",
+    ):
+        market_signal_runtime.resolve_external_market_signal_inputs(
+            strategy_profile="soxl_soxx_trend_income",
             available_inputs={"derived_indicators"},
             runtime_settings=settings,
         )
@@ -102,4 +126,71 @@ def test_ibit_handoff_index_reference_is_extracted(monkeypatch, tmp_path):
         object,
         "last_valid",
         5,
+    )
+
+
+def test_soxl_handoff_index_reference_is_extracted(monkeypatch, tmp_path):
+    calls: dict[str, object] = {}
+
+    def fake_extract(
+        reference,
+        *,
+        reference_type,
+        consumer,
+        cache_dir,
+        as_of,
+        client_factory=None,
+        fallback_mode=None,
+        fallback_max_stale_days=None,
+    ):
+        calls["extract"] = (
+            reference,
+            reference_type,
+            consumer,
+            cache_dir,
+            as_of,
+            client_factory,
+            fallback_mode,
+            fallback_max_stale_days,
+        )
+        return {
+            "derived_indicators": {
+                "SOXL": {"price": 25.0, "ma_trend": 24.0},
+                "SOXX": {"price": 400.0, "ma_trend": 390.0},
+            }
+        }, {
+            "reference_type": reference_type,
+            "source_uri": reference,
+            "materialized_count": 2,
+        }
+
+    monkeypatch.setattr(
+        market_signal_runtime,
+        "extract_consumer_market_signal_inputs_from_reference",
+        fake_extract,
+    )
+    settings = SimpleNamespace(
+        market_signal_handoff_index_uri="gs://signals/platform_handoffs/index.json",
+        market_signal_cache_dir=str(tmp_path),
+        market_signal_required=True,
+        market_signal_fallback_mode="none",
+    )
+
+    assert market_signal_runtime.resolve_external_market_signal_inputs(
+        strategy_profile="soxl_soxx_trend_income",
+        available_inputs={"derived_indicators"},
+        runtime_settings=settings,
+        as_of=datetime(2026, 6, 19, tzinfo=timezone.utc),
+        logger=lambda _message: None,
+        client_factory=object,
+    )["derived_indicators"]["SOXL"]["price"] == 25.0
+    assert calls["extract"] == (
+        "gs://signals/platform_handoffs/index.json",
+        "platform_handoff_index",
+        "us_equity:soxl_soxx_trend_income",
+        tmp_path,
+        "2026-06-19",
+        object,
+        "none",
+        3,
     )
