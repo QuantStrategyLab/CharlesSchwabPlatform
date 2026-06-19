@@ -1,3 +1,4 @@
+import json
 import os
 import time
 import traceback
@@ -6,6 +7,7 @@ from flask import Flask
 import google.auth
 import requests
 
+from application.monitor_dispatcher import dispatch_due_monitors, load_monitor_targets
 from application.runtime_broker_adapters import build_runtime_broker_adapters
 from application.runtime_composer import build_runtime_composer
 from application.runtime_strategy_adapters import build_runtime_strategy_adapters
@@ -801,6 +803,26 @@ def handle_schwab_probe():
         _handle_schwab_probe,
         route_label="POST /probe",
     )
+
+
+@app.route("/monitor-dispatch", methods=["POST", "GET"])
+def handle_monitor_dispatch():
+    if request_method() == "GET":
+        return "Monitor Dispatch OK - use POST to dispatch due monitor checks", 200
+    try:
+        result = dispatch_due_monitors(load_monitor_targets())
+    except Exception as exc:
+        return _handle_route_runtime_error(exc, route_label="POST /monitor-dispatch")
+    return json.dumps(result, ensure_ascii=False), 200, {"Content-Type": "application/json"}
+
+
+def request_method() -> str:
+    try:
+        from flask import request
+
+        return request.method
+    except Exception:
+        return "GET"
 
 
 @app.route("/health", methods=["GET"])
