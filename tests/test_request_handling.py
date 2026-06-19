@@ -405,6 +405,12 @@ def install_stub_modules(strategy_plugin_mounts_json=None, notify_lang="en"):
 
     google_auth_module = types.ModuleType("google.auth")
     google_auth_module.default = lambda *args, **kwargs: (None, None)
+    google_auth_transport_module = types.ModuleType("google.auth.transport")
+    google_auth_transport_requests_module = types.ModuleType("google.auth.transport.requests")
+    google_auth_transport_requests_module.Request = type("Request", (), {})
+    google_oauth2_module = types.ModuleType("google.oauth2")
+    google_oauth2_id_token_module = types.ModuleType("google.oauth2.id_token")
+    google_oauth2_id_token_module.fetch_id_token = lambda *_args, **_kwargs: "id-token"
 
     google_cloud_module = types.ModuleType("google.cloud")
     google_cloud_module.__path__ = []
@@ -444,6 +450,10 @@ def install_stub_modules(strategy_plugin_mounts_json=None, notify_lang="en"):
         "runtime_logging": runtime_logging_module,
         "google": google_module,
         "google.auth": google_auth_module,
+        "google.auth.transport": google_auth_transport_module,
+        "google.auth.transport.requests": google_auth_transport_requests_module,
+        "google.oauth2": google_oauth2_module,
+        "google.oauth2.id_token": google_oauth2_id_token_module,
         "google.cloud": google_cloud_module,
         "google.cloud.secretmanager_v1": google_secretmanager_module,
         "schwab": schwab_module,
@@ -492,7 +502,29 @@ class RequestHandlingTests(unittest.TestCase):
             module.app._routes[("/probe", ("POST", "GET"))],
             module.handle_schwab_probe,
         )
+        self.assertIs(
+            module.app._routes[("/monitor-dispatch", ("POST", "GET"))],
+            module.handle_monitor_dispatch,
+        )
         self.assertIs(module.app._routes[("/health", ("GET",))], module.health)
+
+    def test_handle_monitor_dispatch_post_dispatches_due_targets(self):
+        module = load_module()
+        observed = {}
+
+        def fake_dispatch(targets):
+            observed["targets"] = targets
+            return {"ok": True, "dispatches_due": 0}
+
+        with patch.object(module, "request_method", lambda: "POST"), \
+            patch.object(module, "load_monitor_targets", lambda: [{"service_name": "charles-schwab-quant-service"}]), \
+            patch.object(module, "dispatch_due_monitors", fake_dispatch):
+            body, status, headers = module.handle_monitor_dispatch()
+
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["Content-Type"], "application/json")
+        self.assertIn('"dispatches_due": 0', body)
+        self.assertEqual(observed["targets"][0]["service_name"], "charles-schwab-quant-service")
 
     def test_health_route_returns_ok(self):
         module = load_module()

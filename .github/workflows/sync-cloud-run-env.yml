@@ -10,6 +10,7 @@ env:
   GCP_WORKLOAD_IDENTITY_PROVIDER: projects/401309731911/locations/global/workloadIdentityPools/github-actions/providers/github-main
   GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: schwab-platform-deploy@charlesschwabquant.iam.gserviceaccount.com
   GCP_RUNTIME_SERVICE_ACCOUNT: schwab-platform-runtime@charlesschwabquant.iam.gserviceaccount.com
+  GCP_SCHEDULER_SERVICE_ACCOUNT: schwab-platform-scheduler@charlesschwabquant.iam.gserviceaccount.com
   GCP_ARTIFACT_REGISTRY_REPOSITORY: cloud-run-source-deploy
 
 concurrency:
@@ -762,6 +763,33 @@ jobs:
             printf '%s' "${output}"
           }
 
+          service_url="$(gcloud run services describe "${CLOUD_RUN_SERVICE}" \
+            --project="${GCP_PROJECT_ID}" \
+            --region="${CLOUD_RUN_REGION}" \
+            --format='value(status.url)' 2>/dev/null || true)"
+          if [ -z "${service_url}" ]; then
+            echo "Unable to resolve Cloud Run service URL for ${CLOUD_RUN_SERVICE}; cannot sync monitor dispatcher targets." >&2
+            exit 1
+          fi
+          monitor_targets_json="$(
+            SERVICE_URL="${service_url}" python - <<'PY'
+          import json
+          import os
+
+          runtime_target = json.loads(os.environ.get("RUNTIME_TARGET_JSON") or "{}")
+          target = {
+              "service_name": os.environ.get("CLOUD_RUN_SERVICE"),
+              "service_url": os.environ.get("SERVICE_URL"),
+              "strategy_profile": runtime_target.get("strategy_profile"),
+              "account_scope": runtime_target.get("account_scope"),
+              "runtime_target_enabled": os.environ.get("RUNTIME_TARGET_ENABLED", "true"),
+              "scheduler": runtime_target.get("scheduler") if isinstance(runtime_target.get("scheduler"), dict) else {},
+          }
+          print(json.dumps({"targets": [target]}, separators=(",", ":")))
+          PY
+          )"
+          env_pairs+=("MONITOR_DISPATCH_TARGETS_JSON=${monitor_targets_json}")
+
           gcloud_args=(
             run services update "${CLOUD_RUN_SERVICE}"
             --region "${CLOUD_RUN_REGION}"
@@ -838,46 +866,42 @@ jobs:
             exit 1
           fi
 
-          for suffix in scheduler probe-scheduler precheck-scheduler; do
-            case "${suffix}" in
-              scheduler)
-                schedule_time="${main_time}"
-                scheduler_path="/run"
-                ;;
-              probe-scheduler)
-                schedule_time="${probe_time}"
-                scheduler_path="/probe"
-                ;;
-              precheck-scheduler)
-                schedule_time="${precheck_time}"
-                scheduler_path="/dry-run"
-                ;;
-            esac
+          gcloud run services add-iam-policy-binding "${CLOUD_RUN_SERVICE}" \
+            --project="${GCP_PROJECT_ID}" \
+            --region="${CLOUD_RUN_REGION}" \
+            --member="serviceAccount:${GCP_SCHEDULER_SERVICE_ACCOUNT}" \
+            --role="roles/run.invoker" \
+            --quiet
+          gcloud run services add-iam-policy-binding "${CLOUD_RUN_SERVICE}" \
+            --project="${GCP_PROJECT_ID}" \
+            --region="${CLOUD_RUN_REGION}" \
+            --member="serviceAccount:${GCP_RUNTIME_SERVICE_ACCOUNT}" \
+            --role="roles/run.invoker" \
+            --quiet
 
-            scheduler_job_candidates=("${CLOUD_RUN_SERVICE}-${suffix}")
-            if [[ "${CLOUD_RUN_SERVICE}" == *-service ]]; then
-              scheduler_job_candidates+=("${CLOUD_RUN_SERVICE%-service}-${suffix}")
+          scheduler_job_candidates=("${CLOUD_RUN_SERVICE}-scheduler")
+          if [[ "${CLOUD_RUN_SERVICE}" == *-service ]]; then
+            scheduler_job_candidates+=("${CLOUD_RUN_SERVICE%-service}-scheduler")
+          fi
+
+          job_name=""
+          current_schedule=""
+          for candidate_job in "${scheduler_job_candidates[@]}"; do
+            current_schedule="$(gcloud scheduler jobs describe "${candidate_job}" \
+              --project="${GCP_PROJECT_ID}" \
+              --location="${scheduler_location}" \
+              --format='value(schedule)' 2>/dev/null || true)"
+            if [ -n "${current_schedule}" ]; then
+              job_name="${candidate_job}"
+              break
             fi
+          done
+          if [ -z "${job_name}" ]; then
+            job_name="${scheduler_job_candidates[0]}"
+          fi
 
-            job_name=""
-            current_schedule=""
-            for candidate_job in "${scheduler_job_candidates[@]}"; do
-              current_schedule="$(gcloud scheduler jobs describe "${candidate_job}" \
-                --project="${GCP_PROJECT_ID}" \
-                --location="${scheduler_location}" \
-                --format='value(schedule)' 2>/dev/null || true)"
-              if [ -n "${current_schedule}" ]; then
-                job_name="${candidate_job}"
-                break
-              fi
-            done
-
-            if [ -z "${current_schedule}" ]; then
-              echo "Cloud Scheduler job for ${CLOUD_RUN_SERVICE} ${suffix} was not found in ${scheduler_location}; skipping schedule sync."
-              continue
-            fi
-
-            desired_schedule="$(CURRENT_SCHEDULE="${current_schedule}" SCHEDULE_TIME="${schedule_time}" python - <<'PY'
+          if [ -n "${current_schedule}" ]; then
+            desired_schedule="$(CURRENT_SCHEDULE="${current_schedule}" SCHEDULE_TIME="${main_time}" python - <<'PY'
           import os
 
           current_fields = os.environ["CURRENT_SCHEDULE"].split()
@@ -894,8 +918,25 @@ jobs:
               )
           PY
             )"
+          else
+            desired_schedule="$(SCHEDULE_TIME="${main_time}" python - <<'PY'
+          import os
 
-            scheduler_uri="${service_url}${scheduler_path}"
+          fields = os.environ["SCHEDULE_TIME"].split()
+          if len(fields) == 5:
+              print(" ".join(fields))
+          elif len(fields) == 2:
+              print(" ".join([*fields, "*", "*", "*"]))
+          else:
+              raise SystemExit(
+                  f"Cloud Scheduler override must have 2 time fields or 5 cron fields: {os.environ['SCHEDULE_TIME']!r}"
+              )
+          PY
+            )"
+          fi
+
+          scheduler_uri="${service_url}/run"
+          if [ -n "${current_schedule}" ]; then
             echo "Updating Cloud Scheduler job ${job_name} schedule to ${desired_schedule}, timezone to ${market_timezone}, and URI to ${scheduler_uri}."
             gcloud scheduler jobs update http "${job_name}" \
               --project="${GCP_PROJECT_ID}" \
@@ -904,6 +945,73 @@ jobs:
               --schedule="${desired_schedule}" \
               --time-zone="${market_timezone}" \
               --quiet
+          else
+            echo "Creating Cloud Scheduler job ${job_name} schedule ${desired_schedule}, timezone ${market_timezone}, and URI ${scheduler_uri}."
+            gcloud scheduler jobs create http "${job_name}" \
+              --project="${GCP_PROJECT_ID}" \
+              --location="${scheduler_location}" \
+              --uri="${scheduler_uri}" \
+              --http-method=POST \
+              --oidc-service-account-email="${GCP_SCHEDULER_SERVICE_ACCOUNT}" \
+              --oidc-token-audience="${service_url}" \
+              --schedule="${desired_schedule}" \
+              --time-zone="${market_timezone}" \
+              --attempt-deadline=600s \
+              --quiet
+          fi
+
+          monitor_job_name="schwab-monitor-dispatcher-scheduler"
+          monitor_uri="${service_url}/monitor-dispatch"
+          if gcloud scheduler jobs describe "${monitor_job_name}" \
+            --project="${GCP_PROJECT_ID}" \
+            --location="${scheduler_location}" >/dev/null 2>&1; then
+            echo "Updating Cloud Scheduler job ${monitor_job_name} to ${monitor_uri}."
+            gcloud scheduler jobs update http "${monitor_job_name}" \
+              --project="${GCP_PROJECT_ID}" \
+              --location="${scheduler_location}" \
+              --uri="${monitor_uri}" \
+              --http-method=POST \
+              --oidc-service-account-email="${GCP_SCHEDULER_SERVICE_ACCOUNT}" \
+              --oidc-token-audience="${service_url}" \
+              --schedule="*/5 * * * *" \
+              --time-zone="UTC" \
+              --attempt-deadline=180s \
+              --quiet
+          else
+            echo "Creating Cloud Scheduler job ${monitor_job_name} at ${monitor_uri}."
+            gcloud scheduler jobs create http "${monitor_job_name}" \
+              --project="${GCP_PROJECT_ID}" \
+              --location="${scheduler_location}" \
+              --uri="${monitor_uri}" \
+              --http-method=POST \
+              --oidc-service-account-email="${GCP_SCHEDULER_SERVICE_ACCOUNT}" \
+              --oidc-token-audience="${service_url}" \
+              --schedule="*/5 * * * *" \
+              --time-zone="UTC" \
+              --attempt-deadline=180s \
+              --quiet
+          fi
+
+          legacy_jobs=(
+            "${CLOUD_RUN_SERVICE}-probe-scheduler"
+            "${CLOUD_RUN_SERVICE}-precheck-scheduler"
+          )
+          if [[ "${CLOUD_RUN_SERVICE}" == *-service ]]; then
+            legacy_jobs+=(
+              "${CLOUD_RUN_SERVICE%-service}-probe-scheduler"
+              "${CLOUD_RUN_SERVICE%-service}-precheck-scheduler"
+            )
+          fi
+          for legacy_job in "${legacy_jobs[@]}"; do
+            if gcloud scheduler jobs describe "${legacy_job}" \
+              --project="${GCP_PROJECT_ID}" \
+              --location="${scheduler_location}" >/dev/null 2>&1; then
+              echo "Deleting legacy Cloud Scheduler job ${legacy_job}; monitor dispatcher now owns probe/precheck."
+              gcloud scheduler jobs delete "${legacy_job}" \
+                --project="${GCP_PROJECT_ID}" \
+                --location="${scheduler_location}" \
+                --quiet
+            fi
           done
 
       - name: Prune old Cloud Run revisions
