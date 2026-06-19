@@ -71,7 +71,7 @@ jobs:
 
           assert CallableNotificationPort
           assert CallablePortfolioPort
-          assert resolve_canonical_profile("mega_cap_leader_rotation_top50_balanced") == "mega_cap_leader_rotation_top50_balanced"
+          assert resolve_canonical_profile("russell_top50_leader_rotation") == "russell_top50_leader_rotation"
           PY
 
       - name: Install editable shared repositories

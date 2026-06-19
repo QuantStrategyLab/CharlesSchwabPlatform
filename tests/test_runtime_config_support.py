@@ -39,8 +39,7 @@ BASE_SCHWAB_PROFILES = frozenset(
     {
         SAMPLE_STRATEGY_PROFILE,
         "global_etf_rotation",
-        "mega_cap_leader_rotation_top50_balanced",
-        "russell_1000_multi_factor_defensive",
+        "russell_top50_leader_rotation",
         "soxl_soxx_trend_income",
         "ibit_smart_dca",
     }
@@ -460,9 +459,9 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertNotIn("is_rollback", by_profile[SAMPLE_STRATEGY_PROFILE])
         self.assertIn("soxl_soxx_trend_income", by_profile)
         self.assertIn("global_etf_rotation", by_profile)
-        self.assertIn("russell_1000_multi_factor_defensive", by_profile)
+        self.assertIn("russell_top50_leader_rotation", by_profile)
         self.assertNotIn("tech_communication_pullback_enhancement", by_profile)
-        self.assertIn("mega_cap_leader_rotation_top50_balanced", by_profile)
+        self.assertNotIn("mega_cap_leader_rotation_top50_balanced", by_profile)
 
     def test_platform_profile_status_matrix_matches_current_schwab_rollout(self):
         rows = get_platform_profile_status_matrix()
@@ -494,11 +493,11 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             self.assertTrue(by_profile["global_etf_confidence_vol_gate"]["eligible"])
             self.assertTrue(by_profile["global_etf_confidence_vol_gate"]["enabled"])
         self.assertEqual(
-            by_profile["russell_1000_multi_factor_defensive"]["display_name"],
-            "Russell 1000 Multi-Factor",
+            by_profile["russell_top50_leader_rotation"]["display_name"],
+            "Russell Top50 Leader Rotation",
         )
-        self.assertTrue(by_profile["russell_1000_multi_factor_defensive"]["eligible"])
-        self.assertTrue(by_profile["russell_1000_multi_factor_defensive"]["enabled"])
+        self.assertTrue(by_profile["russell_top50_leader_rotation"]["eligible"])
+        self.assertTrue(by_profile["russell_top50_leader_rotation"]["enabled"])
         self.assertEqual(
             by_profile["soxl_soxx_trend_income"]["display_name"],
             "SOXL/SOXX Semiconductor Trend Income",
@@ -506,12 +505,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertTrue(by_profile["soxl_soxx_trend_income"]["eligible"])
         self.assertTrue(by_profile["soxl_soxx_trend_income"]["enabled"])
         self.assertNotIn("tech_communication_pullback_enhancement", by_profile)
-        self.assertEqual(
-            by_profile["mega_cap_leader_rotation_top50_balanced"]["display_name"],
-            "Mega Cap Leader Rotation Top50 Balanced",
-        )
-        self.assertTrue(by_profile["mega_cap_leader_rotation_top50_balanced"]["eligible"])
-        self.assertTrue(by_profile["mega_cap_leader_rotation_top50_balanced"]["enabled"])
+        self.assertNotIn("mega_cap_leader_rotation_top50_balanced", by_profile)
 
     def test_print_strategy_profile_status_json_matches_registry(self):
         result = subprocess.run(
@@ -547,17 +541,14 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertFalse(by_profile["global_etf_rotation"]["requires_snapshot_artifacts"])
         self.assertFalse(by_profile["global_etf_rotation"]["requires_strategy_config_path"])
         self.assertNotIn("tech_communication_pullback_enhancement", by_profile)
-        self.assertEqual(by_profile["mega_cap_leader_rotation_top50_balanced"]["profile_group"], "snapshot_backed")
+        self.assertEqual(by_profile["russell_top50_leader_rotation"]["profile_group"], "snapshot_backed")
         self.assertEqual(
-            by_profile["mega_cap_leader_rotation_top50_balanced"]["display_name_zh"],
-            "美股超大盘50强平衡龙头轮动",
+            by_profile["russell_top50_leader_rotation"]["display_name_zh"],
+            "罗素 Top50 领涨轮动",
         )
-        self.assertEqual(by_profile["mega_cap_leader_rotation_top50_balanced"]["input_mode"], "feature_snapshot")
-        self.assertTrue(by_profile["mega_cap_leader_rotation_top50_balanced"]["requires_snapshot_artifacts"])
-        self.assertFalse(by_profile["mega_cap_leader_rotation_top50_balanced"]["requires_strategy_config_path"])
-        self.assertFalse(
-            by_profile["russell_1000_multi_factor_defensive"]["requires_strategy_config_path"]
-        )
+        self.assertEqual(by_profile["russell_top50_leader_rotation"]["input_mode"], "feature_snapshot")
+        self.assertTrue(by_profile["russell_top50_leader_rotation"]["requires_snapshot_artifacts"])
+        self.assertFalse(by_profile["russell_top50_leader_rotation"]["requires_strategy_config_path"])
 
     def test_print_strategy_profile_status_table_contains_expected_headers(self):
         result = subprocess.run(
@@ -575,12 +566,11 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIn("requires_snapshot_artifacts", result.stdout)
         self.assertIn("tqqq_growth_income", result.stdout)
         self.assertIn("global_etf_rotation", result.stdout)
-        self.assertIn("russell_1000_multi_factor_defensive", result.stdout)
+        self.assertIn("russell_top50_leader_rotation", result.stdout)
         self.assertIn("TQQQ Growth Income", result.stdout)
         self.assertIn("Global ETF Rotation", result.stdout)
-        self.assertIn("Russell 1000 Multi-Factor", result.stdout)
-        self.assertIn("Mega Cap Leader Rotation Top50 Balanced", result.stdout)
-        self.assertIn("美股超大盘50强平衡龙头轮动", result.stdout)
+        self.assertIn("Russell Top50 Leader Rotation", result.stdout)
+        self.assertIn("罗素 Top50 领涨轮动", result.stdout)
         self.assertNotIn("Tech/Communication Pullback Enhancement", result.stdout)
 
     def test_print_strategy_switch_env_plan_for_global_etf_rotation(self):
@@ -616,6 +606,11 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertIn("SCHWAB_MARKET_SIGNAL_CONSUMPTION_AUDIT_URI", plan["optional_env"])
         self.assertIn("SCHWAB_MARKET_SIGNAL_CACHE_DIR", plan["optional_env"])
         self.assertIn("SCHWAB_MARKET_SIGNAL_REQUIRED", plan["optional_env"])
+        self.assertIn("SCHWAB_MARKET_SIGNAL_FALLBACK_MODE", plan["optional_env"])
+        self.assertIn("SCHWAB_MARKET_SIGNAL_MAX_STALE_DAYS", plan["optional_env"])
+        self.assertIn("SCHWAB_FEATURE_SNAPSHOT_FALLBACK_MODE", plan["optional_env"])
+        self.assertIn("SCHWAB_FEATURE_SNAPSHOT_FALLBACK_CACHE_DIR", plan["optional_env"])
+        self.assertIn("SCHWAB_FEATURE_SNAPSHOT_MAX_STALE_DAYS", plan["optional_env"])
         self.assertIn("SCHWAB_FEATURE_SNAPSHOT_PATH", plan["remove_if_present"])
 
     def test_print_strategy_switch_env_plan_rejects_research_only_tech_profile(self):
@@ -655,16 +650,16 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Unsupported STRATEGY_PROFILE", result.stderr)
 
-    def test_print_strategy_switch_env_plan_for_mega_cap_top50_balanced(self):
+    def test_print_strategy_switch_env_plan_for_russell_top50(self):
         result = subprocess.run(
-            [sys.executable, str(SWITCH_PLAN_SCRIPT_PATH), "--profile", "mega_cap_leader_rotation_top50_balanced", "--json"],
+            [sys.executable, str(SWITCH_PLAN_SCRIPT_PATH), "--profile", "russell_top50_leader_rotation", "--json"],
             check=True,
             capture_output=True,
             text=True,
         )
 
         plan = json.loads(result.stdout)
-        self.assertEqual(plan["canonical_profile"], "mega_cap_leader_rotation_top50_balanced")
+        self.assertEqual(plan["canonical_profile"], "russell_top50_leader_rotation")
         self.assertEqual(plan["profile_group"], "snapshot_backed")
         self.assertEqual(plan["input_mode"], "feature_snapshot")
         self.assertTrue(plan["requires_snapshot_artifacts"])
@@ -673,7 +668,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(plan["set_env"]["SCHWAB_FEATURE_SNAPSHOT_MANIFEST_PATH"], "<required>")
         self.assertEqual(
             plan["hints"]["feature_snapshot_filename"],
-            "mega_cap_leader_rotation_top50_balanced_feature_snapshot_latest.csv",
+            "russell_top50_leader_rotation_feature_snapshot_latest.csv",
         )
 
     def test_print_strategy_switch_env_plan_rejects_archived_dynamic_mega_leveraged_pullback(self):

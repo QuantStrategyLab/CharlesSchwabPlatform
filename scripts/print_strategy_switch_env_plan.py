@@ -71,6 +71,11 @@ def build_switch_plan(profile: str) -> dict[str, object]:
         "SCHWAB_MARKET_SIGNAL_CONSUMPTION_AUDIT_URI",
         "SCHWAB_MARKET_SIGNAL_CACHE_DIR",
         "SCHWAB_MARKET_SIGNAL_REQUIRED",
+        "SCHWAB_MARKET_SIGNAL_FALLBACK_MODE",
+        "SCHWAB_MARKET_SIGNAL_MAX_STALE_DAYS",
+        "SCHWAB_FEATURE_SNAPSHOT_FALLBACK_MODE",
+        "SCHWAB_FEATURE_SNAPSHOT_FALLBACK_CACHE_DIR",
+        "SCHWAB_FEATURE_SNAPSHOT_MAX_STALE_DAYS",
     ]
     remove_if_present: list[str] = []
     notes = [

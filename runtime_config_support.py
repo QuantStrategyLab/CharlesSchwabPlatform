@@ -47,8 +47,13 @@ class PlatformRuntimeSettings:
     market_signal_consumption_audit_uri: str | None = None
     market_signal_cache_dir: str | None = None
     market_signal_required: bool = False
+    market_signal_fallback_mode: str | None = None
+    market_signal_max_stale_days: int | None = None
     feature_snapshot_path: str | None = None
     feature_snapshot_manifest_path: str | None = None
+    feature_snapshot_fallback_mode: str | None = None
+    feature_snapshot_fallback_cache_dir: str | None = None
+    feature_snapshot_fallback_max_stale_days: int | None = None
     strategy_config_path: str | None = None
     strategy_config_source: str | None = None
     strategy_plugin_mounts_json: str | None = None
@@ -180,6 +185,13 @@ def _first_non_empty(*raw_values: str | None) -> str | None:
     return None
 
 
+def _optional_int(raw_value: str | None) -> int | None:
+    value = str(raw_value or "").strip()
+    if not value:
+        return None
+    return int(value)
+
+
 def _split_env_list(raw_value: str | None) -> tuple[str, ...]:
     if raw_value is None:
         return ()
@@ -266,8 +278,36 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
                 "false",
             )
         ),
+        market_signal_fallback_mode=_first_non_empty(
+            os.getenv("SCHWAB_MARKET_SIGNAL_FALLBACK_MODE"),
+            os.getenv("MARKET_SIGNAL_FALLBACK_MODE"),
+        ),
+        market_signal_max_stale_days=_optional_int(
+            _first_non_empty(
+                os.getenv("SCHWAB_MARKET_SIGNAL_MAX_STALE_DAYS"),
+                os.getenv("SCHWAB_MARKET_SIGNAL_FALLBACK_MAX_STALE_DAYS"),
+                os.getenv("MARKET_SIGNAL_MAX_STALE_DAYS"),
+                os.getenv("MARKET_SIGNAL_FALLBACK_MAX_STALE_DAYS"),
+            )
+        ),
         feature_snapshot_path=runtime_paths.feature_snapshot_path,
         feature_snapshot_manifest_path=runtime_paths.feature_snapshot_manifest_path,
+        feature_snapshot_fallback_mode=_first_non_empty(
+            os.getenv("SCHWAB_FEATURE_SNAPSHOT_FALLBACK_MODE"),
+            os.getenv("FEATURE_SNAPSHOT_FALLBACK_MODE"),
+        ),
+        feature_snapshot_fallback_cache_dir=_first_non_empty(
+            os.getenv("SCHWAB_FEATURE_SNAPSHOT_FALLBACK_CACHE_DIR"),
+            os.getenv("FEATURE_SNAPSHOT_FALLBACK_CACHE_DIR"),
+        ),
+        feature_snapshot_fallback_max_stale_days=_optional_int(
+            _first_non_empty(
+                os.getenv("SCHWAB_FEATURE_SNAPSHOT_MAX_STALE_DAYS"),
+                os.getenv("SCHWAB_FEATURE_SNAPSHOT_FALLBACK_MAX_STALE_DAYS"),
+                os.getenv("FEATURE_SNAPSHOT_MAX_STALE_DAYS"),
+                os.getenv("FEATURE_SNAPSHOT_FALLBACK_MAX_STALE_DAYS"),
+            )
+        ),
         strategy_config_path=runtime_paths.strategy_config_path,
         strategy_config_source=runtime_paths.strategy_config_source,
         strategy_plugin_mounts_json=(

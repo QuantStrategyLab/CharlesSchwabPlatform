@@ -134,7 +134,7 @@ class DecisionMapperTests(unittest.TestCase):
         plan = map_strategy_decision_to_plan(
             decision,
             snapshot=snapshot,
-            strategy_profile="mega_cap_leader_rotation_top50_balanced",
+            strategy_profile="russell_top50_leader_rotation",
             runtime_metadata={
                 "schwab_execution_policy": {
                     "reserved_cash_floor_usd": 150.0,
@@ -160,7 +160,7 @@ class DecisionMapperTests(unittest.TestCase):
         plan = map_strategy_decision_to_plan(
             decision,
             snapshot=snapshot,
-            strategy_profile="mega_cap_leader_rotation_top50_balanced",
+            strategy_profile="russell_top50_leader_rotation",
         )
 
         self.assertEqual(plan["allocation"]["target_mode"], "value")
@@ -229,7 +229,7 @@ class DecisionMapperTests(unittest.TestCase):
 
         self.assertEqual(plan["execution"]["reserved_cash"], 35.27)
 
-    def test_translates_weight_targets_for_mega_cap_leader_rotation(self):
+    def test_translates_weight_targets_for_russell_top50_leader_rotation(self):
         snapshot = SimpleNamespace(
             total_equity=100000.0,
             buying_power=20000.0,
@@ -254,7 +254,7 @@ class DecisionMapperTests(unittest.TestCase):
         plan = map_strategy_decision_to_plan(
             decision,
             snapshot=snapshot,
-            strategy_profile="mega_cap_leader_rotation_top50_balanced",
+            strategy_profile="russell_top50_leader_rotation",
         )
 
         self.assertEqual(plan["allocation"]["target_mode"], "value")
@@ -324,7 +324,7 @@ class DecisionMapperTests(unittest.TestCase):
         plan = map_strategy_decision_to_plan(
             decision,
             snapshot=snapshot,
-            strategy_profile="russell_1000_multi_factor_defensive",
+            strategy_profile="russell_top50_leader_rotation",
         )
 
         self.assertEqual(plan["allocation"]["target_mode"], "value")

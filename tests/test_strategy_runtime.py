@@ -49,9 +49,9 @@ class _TechEntrypoint:
 
 class _RussellEntrypoint:
     manifest = StrategyManifest(
-        profile="russell_1000_multi_factor_defensive",
+        profile="russell_top50_leader_rotation",
         domain="us_equity",
-        display_name="Russell 1000 Multi-Factor",
+        display_name="Russell Top50 Leader Rotation",
         description="test entrypoint",
         required_inputs=frozenset({"feature_snapshot"}),
         default_config={"safe_haven": "BOXX", "benchmark_symbol": "SPY"},
@@ -64,9 +64,9 @@ class _RussellEntrypoint:
 
 class _MegaCapTop50Entrypoint:
     manifest = StrategyManifest(
-        profile="mega_cap_leader_rotation_top50_balanced",
+        profile="russell_top50_leader_rotation",
         domain="us_equity",
-        display_name="Mega Cap Leader Rotation Top50 Balanced",
+        display_name="Russell Top50 Leader Rotation",
         description="test entrypoint",
         required_inputs=frozenset({"feature_snapshot"}),
         default_config={"safe_haven": "BOXX", "benchmark_symbol": "QQQ"},
@@ -279,13 +279,13 @@ class StrategyRuntimeTests(unittest.TestCase):
         runtime = strategy_runtime_module.LoadedStrategyRuntime(
             entrypoint=entrypoint,
             runtime_adapter=StrategyRuntimeAdapter(
-                status_icon="📏",
+                status_icon="👑",
                 required_feature_columns=frozenset({"symbol", "sector", "mom_6_1", "mom_12_1", "sma200_gap", "vol_63", "maxdd_126"}),
                 managed_symbols_extractor=lambda *_args, **_kwargs: ("AAPL", "MSFT", "BOXX"),
                 portfolio_input_name="portfolio_snapshot",
             ),
             runtime_settings=_build_runtime_settings(
-                "russell_1000_multi_factor_defensive",
+                "russell_top50_leader_rotation",
                 feature_snapshot_path="gs://bucket/russell.csv",
             ),
             merged_runtime_config={"safe_haven": "BOXX", "benchmark_symbol": "SPY"},
@@ -311,7 +311,7 @@ class StrategyRuntimeTests(unittest.TestCase):
 
         self.assertEqual(entrypoint.ctx.market_data["feature_snapshot"][1]["symbol"], "AAPL")
         self.assertEqual(result.metadata["managed_symbols"], ("AAPL", "MSFT", "BOXX"))
-        self.assertEqual(result.metadata["status_icon"], "📏")
+        self.assertEqual(result.metadata["status_icon"], "👑")
 
     def test_feature_snapshot_runtime_loads_mega_cap_top50_snapshot_into_context(self):
         entrypoint = _MegaCapTop50Entrypoint()
@@ -324,7 +324,7 @@ class StrategyRuntimeTests(unittest.TestCase):
                 portfolio_input_name="portfolio_snapshot",
             ),
             runtime_settings=_build_runtime_settings(
-                "mega_cap_leader_rotation_top50_balanced",
+                "russell_top50_leader_rotation",
                 feature_snapshot_path="gs://bucket/top50.csv",
             ),
             merged_runtime_config={"safe_haven": "BOXX", "benchmark_symbol": "QQQ"},
