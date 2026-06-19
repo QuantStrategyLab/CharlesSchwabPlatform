@@ -44,12 +44,15 @@ def resolve_external_market_signal_inputs(
         cache_dir=_market_signal_cache_dir(runtime_settings),
         as_of=_market_signal_as_of(as_of),
         client_factory=client_factory,
+        fallback_mode=_market_signal_fallback_mode(runtime_settings),
+        fallback_max_stale_days=_market_signal_max_stale_days(runtime_settings),
     )
     logger(
         "market_signal_inputs_loaded | "
         f"profile={strategy_profile} reference_type={metadata.get('reference_type')} "
         f"source_uri={metadata.get('source_uri') or reference} "
-        f"materialized_count={metadata.get('materialized_count')}"
+        f"materialized_count={metadata.get('materialized_count')} "
+        f"fallback_used={bool(metadata.get('artifact_fallback_used'))}"
     )
     return dict(market_inputs)
 
@@ -79,6 +82,17 @@ def _market_signal_reference(runtime_settings: Any) -> tuple[str, str | None]:
 def _market_signal_cache_dir(runtime_settings: Any) -> Path:
     configured = _optional_string(getattr(runtime_settings, "market_signal_cache_dir", None))
     return Path(configured or DEFAULT_MARKET_SIGNAL_CACHE_DIR)
+
+
+def _market_signal_fallback_mode(runtime_settings: Any) -> str:
+    return _optional_string(getattr(runtime_settings, "market_signal_fallback_mode", None)) or "none"
+
+
+def _market_signal_max_stale_days(runtime_settings: Any) -> int:
+    value = getattr(runtime_settings, "market_signal_max_stale_days", None)
+    if value is None or str(value).strip() == "":
+        return 3
+    return max(0, int(value))
 
 
 def _market_signal_as_of(value: Any) -> str | None:

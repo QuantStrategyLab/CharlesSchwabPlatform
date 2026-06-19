@@ -45,8 +45,27 @@ def test_ibit_required_reference_missing_raises():
 def test_ibit_handoff_index_reference_is_extracted(monkeypatch, tmp_path):
     calls: dict[str, object] = {}
 
-    def fake_extract(reference, *, reference_type, consumer, cache_dir, as_of, client_factory=None):
-        calls["extract"] = (reference, reference_type, consumer, cache_dir, as_of, client_factory)
+    def fake_extract(
+        reference,
+        *,
+        reference_type,
+        consumer,
+        cache_dir,
+        as_of,
+        client_factory=None,
+        fallback_mode=None,
+        fallback_max_stale_days=None,
+    ):
+        calls["extract"] = (
+            reference,
+            reference_type,
+            consumer,
+            cache_dir,
+            as_of,
+            client_factory,
+            fallback_mode,
+            fallback_max_stale_days,
+        )
         return {"derived_indicators": {"BTC": {"mvrv_z_score": 1.0}}}, {
             "reference_type": reference_type,
             "source_uri": reference,
@@ -62,6 +81,8 @@ def test_ibit_handoff_index_reference_is_extracted(monkeypatch, tmp_path):
         market_signal_handoff_index_uri="gs://signals/platform_handoffs/index.json",
         market_signal_cache_dir=str(tmp_path),
         market_signal_required=False,
+        market_signal_fallback_mode="last_valid",
+        market_signal_max_stale_days=5,
     )
 
     assert market_signal_runtime.resolve_external_market_signal_inputs(
@@ -79,4 +100,6 @@ def test_ibit_handoff_index_reference_is_extracted(monkeypatch, tmp_path):
         tmp_path,
         "2026-06-19",
         object,
+        "last_valid",
+        5,
     )

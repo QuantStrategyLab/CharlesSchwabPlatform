@@ -117,6 +117,11 @@ class LoadedStrategyRuntime:
             runtime_settings=FeatureSnapshotRuntimeSettings(
                 feature_snapshot_path=self.runtime_settings.feature_snapshot_path,
                 feature_snapshot_manifest_path=self.runtime_settings.feature_snapshot_manifest_path,
+                feature_snapshot_fallback_mode=self.runtime_settings.feature_snapshot_fallback_mode,
+                feature_snapshot_fallback_cache_dir=self.runtime_settings.feature_snapshot_fallback_cache_dir,
+                feature_snapshot_fallback_max_stale_days=(
+                    self.runtime_settings.feature_snapshot_fallback_max_stale_days
+                ),
                 strategy_config_path=self.runtime_settings.strategy_config_path,
                 strategy_config_source=self.runtime_settings.strategy_config_source,
                 dry_run_only=self.runtime_settings.dry_run_only,
