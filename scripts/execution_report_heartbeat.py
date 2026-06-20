@@ -12,6 +12,7 @@ import sys
 import urllib.parse
 import urllib.request
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 DEFAULT_ACCEPT_STATUSES = {"ok", "skipped", "success", "completed", "no_action"}
@@ -40,6 +41,107 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if not value:
         return default
     return value in {"1", "true", "yes", "y", "on"}
+
+
+def _enabled_value(value: Any, *, default: bool = True) -> bool:
+    if value is None:
+        return default
+    text = str(value).strip().lower()
+    if not text:
+        return default
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return True
+
+
+def _parse_schedule_day_of_month_field(raw: str) -> set[int] | None:
+    text = str(raw or "").strip()
+    if not text or text in {"*", "?"}:
+        return None
+    days: set[int] = set()
+    for part in text.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        step = 1
+        if "/" in part:
+            part, step_text = part.split("/", 1)
+            try:
+                step = max(1, int(step_text))
+            except ValueError:
+                return None
+        if "-" in part:
+            start_text, end_text = part.split("-", 1)
+            try:
+                start = int(start_text)
+                end = int(end_text)
+            except ValueError:
+                return None
+            if start > end:
+                return None
+            days.update(day for day in range(start, end + 1, step) if 1 <= day <= 31)
+            continue
+        try:
+            day = int(part)
+        except ValueError:
+            return None
+        if 1 <= day <= 31:
+            days.add(day)
+    return days or None
+
+
+def _runtime_target_payload() -> dict[str, Any]:
+    raw = (os.environ.get("RUNTIME_TARGET_JSON") or "").strip()
+    if not raw:
+        return {}
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _runtime_target_enabled() -> bool:
+    value: Any = os.environ.get("RUNTIME_TARGET_ENABLED")
+    if value is None:
+        value = _runtime_target_payload().get("runtime_target_enabled")
+    return _enabled_value(value, default=True)
+
+
+def _runtime_target_scheduler() -> dict[str, Any]:
+    payload = _runtime_target_payload()
+    scheduler = payload.get("scheduler") if isinstance(payload, dict) else None
+    return scheduler if isinstance(scheduler, dict) else {}
+
+
+def _heartbeat_skip_reason_for_schedule(since: dt.datetime, now: dt.datetime) -> str | None:
+    scheduler = _runtime_target_scheduler()
+    cron = str(scheduler.get("main_time") or "").strip()
+    fields = cron.split()
+    if len(fields) != 5:
+        return None
+    expected_days = _parse_schedule_day_of_month_field(fields[2])
+    if not expected_days:
+        return None
+    timezone_name = str(scheduler.get("timezone") or "UTC").strip() or "UTC"
+    try:
+        timezone = ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        timezone = dt.timezone.utc
+        timezone_name = "UTC"
+    local_since_date = since.astimezone(timezone).date()
+    local_now_date = now.astimezone(timezone).date()
+    cursor = local_since_date
+    while cursor <= local_now_date:
+        if cursor.day in expected_days:
+            return None
+        cursor += dt.timedelta(days=1)
+    day_text = ",".join(str(day) for day in sorted(expected_days))
+    return (
+        f"runtime scheduler main_time is not due today "
+        f"({timezone_name} date_window={local_since_date.isoformat()}.."
+        f"{local_now_date.isoformat()}; expected day(s)={day_text})"
+    )
 
 
 def _parse_timestamp(value: Any) -> dt.datetime | None:
@@ -315,20 +417,31 @@ def _send_telegram(message: str) -> bool:
     return ok
 
 
-def main() -> int:
+def main(now: dt.datetime | None = None) -> int:
     project = (
         os.environ.get("RUNTIME_HEARTBEAT_GCP_PROJECT_ID")
         or os.environ.get("GCP_PROJECT_ID")
         or os.environ.get("GOOGLE_CLOUD_PROJECT")
     )
     name = os.environ.get("RUNTIME_HEARTBEAT_NAME") or os.environ.get("GITHUB_REPOSITORY") or "runtime"
+    if not _runtime_target_enabled():
+        print(f"Execution report heartbeat skipped for {name}: runtime target is disabled")
+        return 0
     lookback_hours = float(os.environ.get("RUNTIME_HEARTBEAT_LOOKBACK_HOURS") or "36")
     max_reports = int(os.environ.get("RUNTIME_HEARTBEAT_MAX_REPORTS_TO_READ") or "20")
     fail_workflow = _env_bool("RUNTIME_HEARTBEAT_FAIL_WORKFLOW_ON_ALERT", True)
     required_services = _load_required_services()
 
-    now = dt.datetime.now(dt.timezone.utc)
+    now = now or dt.datetime.now(dt.timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=dt.timezone.utc)
+    now = now.astimezone(dt.timezone.utc)
     since = now - dt.timedelta(hours=lookback_hours)
+    schedule_skip_reason = _heartbeat_skip_reason_for_schedule(since, now)
+    if schedule_skip_reason:
+        print(f"Execution report heartbeat skipped for {name}: {schedule_skip_reason}")
+        return 0
+
     globs = _report_globs(since, now)
     if not globs:
         raise SystemExit("No heartbeat GCS report URI configured")
