@@ -54,6 +54,7 @@ class SchwabRuntimeComposer:
     notification_builder: Callable[..., Any] = build_runtime_notification_adapters
     reporting_builder: Callable[..., Any] = build_runtime_reporting_adapters
     runtime_target: RuntimeTarget | None = None
+    limit_buy_premium_by_symbol: dict[str, float] | None = None
     extra_reporting_fields: dict[str, Any] = field(default_factory=dict)
 
     def send_tg_message(self, message: str) -> None:
@@ -151,6 +152,7 @@ class SchwabRuntimeComposer:
             translator=self.strategy_adapters.translator,
             strategy_display_name=self.strategy_display_name_localized,
             limit_buy_premium=self.limit_buy_premium,
+            limit_buy_premium_by_symbol=self.limit_buy_premium_by_symbol,
             sell_settle_delay_sec=self.sell_settle_delay_sec,
             strategy_profile=self.strategy_profile,
             dry_run_only=self.dry_run_only,
@@ -209,6 +211,7 @@ def build_runtime_composer(
     printer: Callable[..., Any] = print,
     extra_reporting_fields: dict[str, Any] | None = None,
     runtime_target: RuntimeTarget | None = None,
+    limit_buy_premium_by_symbol: dict[str, float] | None = None,
 ) -> SchwabRuntimeComposer:
     return SchwabRuntimeComposer(
         project_id=project_id,
@@ -229,6 +232,7 @@ def build_runtime_composer(
         signal_effective_after_trading_days=signal_effective_after_trading_days,
         dry_run_only=bool(dry_run_only),
         limit_buy_premium=float(limit_buy_premium),
+        limit_buy_premium_by_symbol=dict(limit_buy_premium_by_symbol or {}),
         sell_settle_delay_sec=float(sell_settle_delay_sec),
         post_sell_refresh_attempts=int(post_sell_refresh_attempts),
         post_sell_refresh_interval_sec=float(post_sell_refresh_interval_sec),

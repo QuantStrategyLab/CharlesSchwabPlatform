@@ -15,6 +15,7 @@ class SchwabRebalanceConfig:
     strategy_display_name: str
     limit_buy_premium: float
     sell_settle_delay_sec: float
+    limit_buy_premium_by_symbol: dict[str, float] | None = None
     strategy_profile: str = ""
     dry_run_only: bool = False
     post_sell_refresh_attempts: int = 1

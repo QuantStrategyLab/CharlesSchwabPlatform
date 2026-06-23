@@ -86,7 +86,7 @@ I18N = {
         "market_buy": "市价买入",
         "market_sell": "市价卖出",
         "shares": "股",
-        "submitted": "已下发",
+        "submitted": "已下发，尚未确认成交；限价单可能未成交、取消或继续挂单",
         "failed": "失败",
         "exception": "异常",
         "buy_label": "买入",
@@ -97,12 +97,21 @@ I18N = {
         "dry_run_trade_log_with_price": "🧪 模拟下单：{command} {symbol} (${price}): {quantity}{shares}",
         "buy_deferred": "ℹ️ [买入说明] {detail}",
         "buy_deferred_small_account_cash_substitution": "{symbol} 目标金额 ${diff} 低于 1 股价格 ${price}；为避免超过目标仓位，小账户本轮保留现金，不回补 {cash_symbols}",
+        "buy_lifted_small_account_whole_share": "ℹ️ [买入说明] {symbols} 目标金额接近 1 股；小账户整数股兼容，本轮允许按 1 股下单",
         "post_sell_buying_power_unreleased": "ℹ️ 卖出后购买力未释放，本轮跳过买入，等待下次执行",
         "cash_sweep_rebuy": "🏦 [尾部回补] 剩余购买力回补 {symbol}: {quantity}{shares} @ ${price}",
         "order_id_suffix": "（订单号: {order_id}）",
         "small_account_warning_note": "小账户提示：净值 {portfolio_equity} 低于建议 {min_recommended_equity}；{reason}",
         "small_account_warning_reason_integer_shares_min_position_value_may_prevent_backtest_replication": "整数股和最小仓位限制可能导致实盘无法完全复现回测",
-        "strategy_plugin_line": "🧩 插件：{plugin} | 状态：{route} | 提醒：{action}",
+        "strategy_plugin_line": "🧩 插件：{plugin} | 启用：{enabled} | 状态：{route} | 提醒：{action}",
+        "strategy_plugin_enabled_true": "是",
+        "strategy_plugin_enabled_false": "否",
+        "strategy_plugin_consumption_auto": "🧩 插件消费：已按策略规则参与本轮仓位计算",
+        "strategy_plugin_consumption_auto_defend": "🧩 插件消费：已按策略规则参与本轮仓位计算；风险仓位按防守规则处理",
+        "strategy_plugin_consumption_auto_delever": "🧩 插件消费：已按策略规则参与本轮仓位计算；杠杆仓位按降档规则缩放",
+        "strategy_plugin_consumption_loaded_not_applied": "🧩 插件消费：已加载但未改写仓位；当前策略未启用该状态的自动消费",
+        "strategy_plugin_consumption_review_only": "🧩 插件消费：仅通知复核，未参与自动仓位计算",
+        "strategy_plugin_consumption_unavailable": "🧩 插件消费：未消费插件信号",
         "strategy_plugin_alert_subject": "🚨 策略插件告警：{plugin} | {route}",
         "strategy_plugin_alert_title": "🚨 【策略插件告警】",
         "strategy_plugin_alert_context": "运行环境：{context}",
@@ -117,7 +126,7 @@ I18N = {
         "strategy_plugin_alert_scope": "仅作人工复核提醒；插件不会自动下单或改仓位",
         "strategy_plugin_name_crisis_response_shadow": "危机观察通知",
         "strategy_plugin_name_macro_risk_governor": "宏观风险控制通知",
-        "strategy_plugin_name_market_regime_control": "市场状态控制通知",
+        "strategy_plugin_name_market_regime_control": "市场状态控制",
         "strategy_plugin_name_panic_reversal_shadow": "恐慌反转观察通知",
         "strategy_plugin_name_taco_rebound_shadow": "TACO 反弹观察通知",
         "strategy_plugin_mode_shadow": "影子观察",
@@ -228,7 +237,7 @@ I18N = {
         "market_buy": "Market Buy",
         "market_sell": "Market Sell",
         "shares": " shares",
-        "submitted": "submitted",
+        "submitted": "submitted; fill not confirmed, a limit order may remain open or be canceled unfilled",
         "failed": "failed",
         "exception": "error",
         "buy_label": "Buy",
@@ -239,12 +248,21 @@ I18N = {
         "dry_run_trade_log_with_price": "🧪 DRY_RUN {command} {symbol} (${price}): {quantity}{shares}",
         "buy_deferred": "ℹ️ [Buy note] {detail}",
         "buy_deferred_small_account_cash_substitution": "{symbol} target ${diff} is below the 1-share price ${price}; to avoid exceeding the target allocation, this small account keeps cash this cycle and does not rebuy {cash_symbols}",
+        "buy_lifted_small_account_whole_share": "ℹ️ [Buy note] {symbols} target is close to one share; small-account whole-share compatibility allows a 1-share order this cycle",
         "post_sell_buying_power_unreleased": "ℹ️ Buying power did not update after the sell; skipped buys until the next run",
         "cash_sweep_rebuy": "🏦 [tail rebuy] residual buying power rebought {symbol}: {quantity}{shares} @ ${price}",
         "order_id_suffix": "(ID: {order_id})",
         "small_account_warning_note": "small account warning: portfolio equity {portfolio_equity} is below recommended {min_recommended_equity}; {reason}",
         "small_account_warning_reason_integer_shares_min_position_value_may_prevent_backtest_replication": "integer-share minimum position sizing may prevent backtest replication",
-        "strategy_plugin_line": "🧩 Plugin: {plugin} | status: {route} | notice: {action}",
+        "strategy_plugin_line": "🧩 Plugin: {plugin} | enabled: {enabled} | status: {route} | notice: {action}",
+        "strategy_plugin_enabled_true": "yes",
+        "strategy_plugin_enabled_false": "no",
+        "strategy_plugin_consumption_auto": "🧩 Plugin consumption: included in this cycle's position calculation under strategy rules",
+        "strategy_plugin_consumption_auto_defend": "🧩 Plugin consumption: included in this cycle's position calculation; risk exposure follows defensive rules",
+        "strategy_plugin_consumption_auto_delever": "🧩 Plugin consumption: included in this cycle's position calculation; leveraged exposure follows de-risking rules",
+        "strategy_plugin_consumption_loaded_not_applied": "🧩 Plugin consumption: loaded but did not rewrite positions; this strategy does not enable automatic consumption for this state",
+        "strategy_plugin_consumption_review_only": "🧩 Plugin consumption: review-only notice, not used for automatic position calculation",
+        "strategy_plugin_consumption_unavailable": "🧩 Plugin consumption: no plugin signal consumed",
         "strategy_plugin_alert_subject": "🚨 Strategy plugin alert: {plugin} | {route}",
         "strategy_plugin_alert_title": "🚨 【Strategy Plugin Alert】",
         "strategy_plugin_alert_context": "Context: {context}",
@@ -259,7 +277,7 @@ I18N = {
         "strategy_plugin_alert_scope": "Manual review notice only; the plugin does not place orders or change allocations",
         "strategy_plugin_name_crisis_response_shadow": "Crisis Watch Notice",
         "strategy_plugin_name_macro_risk_governor": "Macro Risk Governor Notice",
-        "strategy_plugin_name_market_regime_control": "Market Regime Control Notice",
+        "strategy_plugin_name_market_regime_control": "Market Regime Control",
         "strategy_plugin_name_panic_reversal_shadow": "Panic Reversal Watch Notice",
         "strategy_plugin_name_taco_rebound_shadow": "TACO Rebound Watch Notice",
         "strategy_plugin_mode_shadow": "shadow",
@@ -306,7 +324,13 @@ I18N = {
 }
 
 if _merge_strategy_plugin_i18n is not None:
-    I18N = _merge_strategy_plugin_i18n(I18N)
+    _PLATFORM_I18N = {locale: dict(values) for locale, values in I18N.items()}
+    try:
+        I18N = _merge_strategy_plugin_i18n(I18N, shared_wins=False)
+    except TypeError:
+        I18N = _merge_strategy_plugin_i18n(I18N)
+        for locale, values in _PLATFORM_I18N.items():
+            I18N.setdefault(locale, {}).update(values)
 
 
 def build_translator(lang):

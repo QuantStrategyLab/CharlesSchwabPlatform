@@ -88,11 +88,45 @@ QQQI_INCOME_RATIO = _optional_float_env("QQQI_INCOME_RATIO")
 DUAL_DRIVE_UNLEVERED_SYMBOL = _optional_symbol_env("DUAL_DRIVE_UNLEVERED_SYMBOL")
 
 LIMIT_BUY_PREMIUM = 1.005
+DEFAULT_LIMIT_BUY_PREMIUM_BY_SYMBOL = {"SOXL": 1.015, "TQQQ": 1.010}
 SELL_SETTLE_DELAY_SEC = 3
 POST_SELL_REFRESH_ATTEMPTS = 5
 POST_SELL_REFRESH_INTERVAL_SEC = 1
 DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD = 1000.0
 DCA_PROFILES = frozenset({"nasdaq_sp500_smart_dca", "ibit_smart_dca"})
+
+
+def _load_limit_buy_premium_by_symbol(*env_names: str) -> dict[str, float]:
+    raw_value = ""
+    for env_name in env_names:
+        value = os.getenv(env_name)
+        if value and value.strip():
+            raw_value = value.strip()
+            break
+    if not raw_value:
+        return dict(DEFAULT_LIMIT_BUY_PREMIUM_BY_SYMBOL)
+    try:
+        payload = json.loads(raw_value)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid limit buy premium map JSON: {raw_value!r}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Limit buy premium map must be a JSON object keyed by symbol.")
+    parsed: dict[str, float] = {}
+    for symbol, premium in payload.items():
+        symbol_text = str(symbol or "").strip().upper()
+        if not symbol_text:
+            continue
+        premium_value = float(premium)
+        if premium_value <= 0.0:
+            raise ValueError(f"Limit buy premium for {symbol_text} must be positive.")
+        parsed[symbol_text] = premium_value
+    return parsed
+
+
+LIMIT_BUY_PREMIUM_BY_SYMBOL = _load_limit_buy_premium_by_symbol(
+    "SCHWAB_LIMIT_BUY_PREMIUM_BY_SYMBOL_JSON",
+    "LIMIT_BUY_PREMIUM_BY_SYMBOL_JSON",
+)
 
 RUNTIME_SETTINGS = load_platform_runtime_settings()
 STRATEGY_PROFILE = RUNTIME_SETTINGS.strategy_profile
@@ -238,6 +272,7 @@ def build_composer(*, dry_run_only_override: bool | None = None):
         signal_effective_after_trading_days=SIGNAL_EFFECTIVE_AFTER_TRADING_DAYS,
         dry_run_only=effective_dry_run_only,
         limit_buy_premium=LIMIT_BUY_PREMIUM,
+        limit_buy_premium_by_symbol=LIMIT_BUY_PREMIUM_BY_SYMBOL,
         sell_settle_delay_sec=SELL_SETTLE_DELAY_SEC,
         post_sell_refresh_attempts=POST_SELL_REFRESH_ATTEMPTS,
         post_sell_refresh_interval_sec=POST_SELL_REFRESH_INTERVAL_SEC,
