@@ -126,7 +126,7 @@ I18N = {
         "strategy_plugin_alert_scope": "仅作人工复核提醒；插件不会自动下单或改仓位",
         "strategy_plugin_name_crisis_response_shadow": "危机观察通知",
         "strategy_plugin_name_macro_risk_governor": "宏观风险控制通知",
-        "strategy_plugin_name_market_regime_control": "市场状态控制通知",
+        "strategy_plugin_name_market_regime_control": "市场状态控制",
         "strategy_plugin_name_panic_reversal_shadow": "恐慌反转观察通知",
         "strategy_plugin_name_taco_rebound_shadow": "TACO 反弹观察通知",
         "strategy_plugin_mode_shadow": "影子观察",
@@ -277,7 +277,7 @@ I18N = {
         "strategy_plugin_alert_scope": "Manual review notice only; the plugin does not place orders or change allocations",
         "strategy_plugin_name_crisis_response_shadow": "Crisis Watch Notice",
         "strategy_plugin_name_macro_risk_governor": "Macro Risk Governor Notice",
-        "strategy_plugin_name_market_regime_control": "Market Regime Control Notice",
+        "strategy_plugin_name_market_regime_control": "Market Regime Control",
         "strategy_plugin_name_panic_reversal_shadow": "Panic Reversal Watch Notice",
         "strategy_plugin_name_taco_rebound_shadow": "TACO Rebound Watch Notice",
         "strategy_plugin_mode_shadow": "shadow",
@@ -324,7 +324,13 @@ I18N = {
 }
 
 if _merge_strategy_plugin_i18n is not None:
-    I18N = _merge_strategy_plugin_i18n(I18N)
+    _PLATFORM_I18N = {locale: dict(values) for locale, values in I18N.items()}
+    try:
+        I18N = _merge_strategy_plugin_i18n(I18N, shared_wins=False)
+    except TypeError:
+        I18N = _merge_strategy_plugin_i18n(I18N)
+        for locale, values in _PLATFORM_I18N.items():
+            I18N.setdefault(locale, {}).update(values)
 
 
 def build_translator(lang):

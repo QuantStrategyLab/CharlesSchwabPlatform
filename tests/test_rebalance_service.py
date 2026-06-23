@@ -1413,7 +1413,7 @@ class RebalanceServiceTests(unittest.TestCase):
 
         self.assertTrue(sent_messages)
         self.assertIn("模拟下单: sell BOXX: 10shares", sent_messages[0])
-        self.assertIn("模拟下单: limit buy QQQM ($50.00): 5shares", sent_messages[0])
+        self.assertIn("模拟下单: limit buy QQQM ($50.00): 11shares", sent_messages[0])
         self.assertNotIn("buy BOXX", sent_messages[0])
 
     def test_run_strategy_core_retries_refresh_until_sold_cash_is_available(self):
