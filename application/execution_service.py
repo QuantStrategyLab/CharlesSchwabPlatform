@@ -37,6 +37,8 @@ except ImportError:  # pragma: no cover - compatibility with older pinned shared
 try:
     from quant_platform_kit.common.small_account_compatibility import (
         apply_small_account_cash_compatibility,
+        build_small_account_allocation_drift_notes,
+        format_small_account_allocation_drift_notes,
         format_small_account_cash_substitution_notes,
     )
 except ImportError:  # pragma: no cover - compatibility with older pinned shared wheels
@@ -195,6 +197,12 @@ except ImportError:  # pragma: no cover - compatibility with older pinned shared
             )
             messages.append(translator(wrapper_key, detail=detail))
         return tuple(messages)
+
+    def build_small_account_allocation_drift_notes(**_kwargs):
+        return ()
+
+    def format_small_account_allocation_drift_notes(_notes, *, translator, **_kwargs):
+        return ()
 from quant_platform_kit.common.models import OrderIntent
 from quant_platform_kit.common.quantity import format_quantity
 
@@ -260,6 +268,26 @@ def _safe_haven_cash_symbols(*, portfolio: dict, allocation: dict) -> tuple[str,
     if cash_sweep_symbol:
         symbols.append(cash_sweep_symbol)
     return tuple(dict.fromkeys(symbols))
+
+
+def _small_account_drift_reference_targets(allocation: Mapping, *, portfolio: Mapping | None = None) -> dict:
+    allocation = dict(allocation or {})
+    targets = {
+        str(symbol or "").strip().upper(): float(value or 0.0)
+        for symbol, value in dict(allocation.get("targets") or {}).items()
+    }
+    candidate_symbols = tuple(
+        dict.fromkeys(
+            str(symbol or "").strip().upper()
+            for symbol in tuple(allocation.get("risk_symbols", ()))
+            + tuple(allocation.get("income_symbols", ()))
+            if str(symbol or "").strip()
+        )
+    )
+    if not candidate_symbols:
+        safe_haven_symbols = set(_safe_haven_cash_symbols(portfolio=dict(portfolio or {}), allocation=allocation))
+        candidate_symbols = tuple(symbol for symbol in targets if symbol not in safe_haven_symbols)
+    return {symbol: targets.get(symbol, 0.0) for symbol in candidate_symbols if symbol in targets}
 
 
 def _positive_target_total(targets: dict) -> float:
@@ -518,6 +546,7 @@ def execute_rebalance_cycle(
     strategy_symbols = tuple(allocation["strategy_symbols"])
     quotes = load_quotes(strategy_symbols)
     trade_logs: list[str] = []
+    submitted_orders: list[dict] = []
     small_account_cash_note_messages: set[str] = set()
     small_account_bootstrap_note_messages: set[str] = set()
 
@@ -551,6 +580,24 @@ def execute_rebalance_cycle(
         position_value = held_quantity * price
         quantity_from_position = int(max(0.0, position_value - target_value) / price + 1e-9)
         return min(held_quantity, max(quantity_from_position, value_based_quantity))
+
+    def record_submitted_order(symbol, action_type, quantity, price=None, *, status, broker_order_id=None):
+        side = "sell" if action_type == "SELL" else "buy"
+        order_type = "limit" if action_type == "BUY_LIMIT" else "market"
+        payload = {
+            "symbol": str(symbol or "").strip().upper(),
+            "side": side,
+            "quantity": quantity,
+            "order_type": order_type,
+            "status": status,
+        }
+        if price:
+            payload["price"] = round(float(price), 4)
+            if order_type == "limit":
+                payload["limit_price"] = round(float(price), 4)
+        if broker_order_id:
+            payload["broker_order_id"] = broker_order_id
+        submitted_orders.append(payload)
 
     def execute_fire_forget(symbol, action_type, quantity, price=None):
         if quantity <= 0:
@@ -604,6 +651,7 @@ def execute_rebalance_cycle(
                             shares=translator("shares"),
                         )
                     )
+                record_submitted_order(symbol, action_type, quantity, price, status="dry_run")
                 return True
 
             if execution_port is not None:
@@ -618,6 +666,14 @@ def execute_rebalance_cycle(
             if not order_id_suffix or order_id_suffix == "order_id_suffix":
                 order_id_suffix = f"（订单号: {info}）"
             if success:
+                record_submitted_order(
+                    symbol,
+                    action_type,
+                    quantity,
+                    price,
+                    status=report.status,
+                    broker_order_id=report.broker_order_id,
+                )
                 if action_type == "SELL":
                     trade_logs.append(
                         f"✅ 📉 {translator('market_sell_cmd')} {symbol}: {quantity}{translator('shares')} {order_id_suffix}"
@@ -649,11 +705,18 @@ def execute_rebalance_cycle(
 
     market_values = dict(portfolio["market_values"])
     quantities = dict(portfolio["quantities"])
+    allocation_drift_base_market_values = dict(market_values)
+    allocation_drift_base_quantities = dict(quantities)
+    allocation_drift_base_cash = float(portfolio.get("liquid_cash", 0.0) or 0.0)
     plan, allocation = _apply_safe_haven_cash_substitution(
         plan=plan,
         portfolio=portfolio,
         allocation=allocation,
         threshold_usd=safe_haven_cash_substitute_threshold_usd,
+    )
+    small_account_reference_target_values = _small_account_drift_reference_targets(
+        allocation,
+        portfolio=portfolio,
     )
     plan, allocation = _apply_small_account_whole_share_compatibility(
         plan=plan,
@@ -810,6 +873,10 @@ def execute_rebalance_cycle(
                 allocation=allocation,
                 threshold_usd=safe_haven_cash_substitute_threshold_usd,
             )
+            small_account_reference_target_values = _small_account_drift_reference_targets(
+                allocation,
+                portfolio=portfolio,
+            )
             strategy_symbols = tuple(allocation["strategy_symbols"])
             quotes = load_quotes(strategy_symbols)
             plan, allocation = _apply_small_account_whole_share_compatibility(
@@ -882,6 +949,22 @@ def execute_rebalance_cycle(
         and not buy_executed
     ):
         trade_logs.append(translator("post_sell_buying_power_unreleased"))
+
+    reference_prices = {
+        symbol: float((quotes.get(symbol) or {}).get("lastPrice") or 0.0)
+        for symbol in tuple(strategy_symbols)
+    }
+    total_value = float(portfolio.get("total_strategy_equity") or portfolio.get("total_equity") or 0.0)
+    drift_notes = build_small_account_allocation_drift_notes(
+        target_values=small_account_reference_target_values,
+        current_values=allocation_drift_base_market_values,
+        current_quantities=allocation_drift_base_quantities,
+        prices=reference_prices,
+        submitted_orders=submitted_orders,
+        total_value=total_value,
+        cash_value=allocation_drift_base_cash,
+    )
+    trade_logs.extend(format_small_account_allocation_drift_notes(drift_notes, translator=translator))
 
     return ExecutionCycleResult(
         plan=dict(plan or {}),
