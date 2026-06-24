@@ -274,12 +274,12 @@ class NotificationTests(unittest.TestCase):
     def test_build_sender_posts_to_telegram(self):
         fake_requests = FakeRequests()
         sender = build_sender("token-1", "chat-1", requests_module=fake_requests)
-        sender("hello")
+        sender("SOXL.US and 00700.HK")
         self.assertEqual(len(fake_requests.calls), 1)
         url, payload, timeout = fake_requests.calls[0]
         self.assertIn("token-1", url)
         self.assertEqual(payload["chat_id"], "chat-1")
-        self.assertEqual(payload["text"], "hello")
+        self.assertEqual(payload["text"], "SOXL.\u2060US and 00700.\u2060HK")
         self.assertEqual(timeout, 15)
 
 
