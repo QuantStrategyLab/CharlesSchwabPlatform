@@ -312,6 +312,7 @@ class RebalanceServiceTests(unittest.TestCase):
         self.assertEqual(result.allocation["small_account_whole_share_bootstrap_symbols"], ("SOXL",))
         self.assertEqual(result.allocation["small_account_whole_share_substituted_symbols"], ("SOXX",))
         self.assertTrue(any("SOXL.US target is close to one share" in log for log in result.trade_logs))
+        self.assertTrue(any("Integer-share drift" in log and "SOXX.US projected 0.0%" in log for log in result.trade_logs))
         self.assertTrue(any("Limit Buy SOXL ($233.18): 1 shares" in log for log in result.trade_logs))
         self.assertFalse(any("Limit Buy SOXX" in log for log in result.trade_logs))
 
