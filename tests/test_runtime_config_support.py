@@ -102,6 +102,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             settings.safe_haven_cash_substitute_threshold_usd,
             DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
         )
+        self.assertTrue(settings.cash_only_execution)
         self.assertIsNone(settings.income_layer_enabled)
         self.assertIsNone(settings.income_layer_start_usd)
         self.assertIsNone(settings.income_layer_max_ratio)
@@ -275,6 +276,19 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertFalse(settings.income_layer_enabled)
         self.assertEqual(settings.income_layer_start_usd, 250000.0)
         self.assertEqual(settings.income_layer_max_ratio, 0.25)
+
+    def test_reads_cash_only_execution_override(self):
+        with patch.dict(
+            os.environ,
+            {
+                "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
+                "CASH_ONLY_EXECUTION": "false",
+            },
+            clear=True,
+        ):
+            settings = load_platform_runtime_settings()
+
+        self.assertFalse(settings.cash_only_execution)
 
     def test_rejects_invalid_income_layer_max_ratio(self):
         with patch.dict(

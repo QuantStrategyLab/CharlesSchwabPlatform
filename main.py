@@ -132,6 +132,7 @@ RUNTIME_SETTINGS = load_platform_runtime_settings()
 STRATEGY_PROFILE = RUNTIME_SETTINGS.strategy_profile
 STRATEGY_DISPLAY_NAME = RUNTIME_SETTINGS.strategy_display_name
 NOTIFY_LANG = RUNTIME_SETTINGS.notify_lang
+CASH_ONLY_EXECUTION = RUNTIME_SETTINGS.cash_only_execution
 t = build_translator(NOTIFY_LANG)
 signal_text = build_signal_text(t)
 strategy_display_name = build_strategy_display_name(t)(
@@ -238,6 +239,7 @@ def build_strategy_adapters():
         parse_strategy_plugin_mounts_fn=parse_strategy_plugin_mounts,
         reserved_cash_floor_usd=RUNTIME_SETTINGS.reserved_cash_floor_usd,
         reserved_cash_ratio=RUNTIME_SETTINGS.reserved_cash_ratio,
+        cash_only_execution=CASH_ONLY_EXECUTION,
     )
 
 
@@ -601,6 +603,7 @@ def run_strategy_core(
         config=composer.build_rebalance_config(
             strategy_plugin_signals=strategy_plugin_signals,
             strategy_plugin_error=strategy_plugin_error,
+            cash_only_execution=CASH_ONLY_EXECUTION,
         ),
     )
 

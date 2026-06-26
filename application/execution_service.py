@@ -527,6 +527,7 @@ def execute_rebalance_cycle(
     sleeper=_noop_sleep,
     publish_order_issue,
     safe_haven_cash_substitute_threshold_usd=DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
+    cash_only_execution=True,
 ) -> ExecutionCycleResult:
     def load_quotes(symbols):
         quotes = {}
@@ -910,7 +911,7 @@ def execute_rebalance_cycle(
         if market_values[symbol] < (target_values[symbol] - threshold)
     ]
     buys_blocked_reason = None
-    if pending_sell_release_symbols and buy_needed_symbols:
+    if cash_only_execution and pending_sell_release_symbols and buy_needed_symbols:
         estimated_buy_cost = 0.0
         for symbol in buy_needed_symbols:
             target_val = target_values[symbol]
@@ -935,7 +936,7 @@ def execute_rebalance_cycle(
                     symbols=", ".join(pending_sell_release_symbols),
                 )
             )
-    if buys_blocked_reason is None and liquid_cash < 0.0 and buy_needed_symbols:
+    if buys_blocked_reason is None and cash_only_execution and liquid_cash < 0.0 and buy_needed_symbols:
         buys_blocked_reason = "negative_cash"
         trade_logs.append(
             translator(

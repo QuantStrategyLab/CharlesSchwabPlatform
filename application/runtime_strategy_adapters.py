@@ -16,8 +16,7 @@ from quant_platform_kit.common.strategy_plugins import (
 )
 from quant_platform_kit.strategy_contracts import build_account_state_from_portfolio_snapshot
 from us_equity_strategies.cash_only_equity import (
-    apply_cash_only_account_state,
-    resolve_raw_cash_from_snapshot,
+    normalize_account_state_from_snapshot,
 )
 
 
@@ -39,6 +38,7 @@ class SchwabRuntimeStrategyAdapters:
     parse_strategy_plugin_mounts_fn: Callable[..., Any]
     reserved_cash_floor_usd: float = 0.0
     reserved_cash_ratio: float = 0.0
+    cash_only_execution: bool = True
 
     def load_strategy_plugin_signals(self, raw_mounts):
         if not raw_mounts:
@@ -140,9 +140,10 @@ class SchwabRuntimeStrategyAdapters:
             strategy_symbols=self.managed_symbols,
         )
         if self.managed_symbols:
-            return apply_cash_only_account_state(
+            return normalize_account_state_from_snapshot(
                 account_state,
-                raw_cash=resolve_raw_cash_from_snapshot(snapshot),
+                snapshot,
+                cash_only_execution=self.cash_only_execution,
             )
         return account_state
 
@@ -174,6 +175,7 @@ class SchwabRuntimeStrategyAdapters:
         runtime_metadata["schwab_execution_policy"] = {
             "reserved_cash_floor_usd": float(self.reserved_cash_floor_usd or 0.0),
             "reserved_cash_ratio": float(self.reserved_cash_ratio or 0.0),
+            "cash_only_execution": bool(self.cash_only_execution),
         }
         return self.map_strategy_decision_to_plan_fn(
             evaluation.decision,
@@ -201,6 +203,7 @@ def build_runtime_strategy_adapters(
     parse_strategy_plugin_mounts_fn: Callable[..., Any],
     reserved_cash_floor_usd: float = 0.0,
     reserved_cash_ratio: float = 0.0,
+    cash_only_execution: bool = True,
 ) -> SchwabRuntimeStrategyAdapters:
     return SchwabRuntimeStrategyAdapters(
         strategy_runtime=strategy_runtime,
@@ -219,4 +222,5 @@ def build_runtime_strategy_adapters(
         parse_strategy_plugin_mounts_fn=parse_strategy_plugin_mounts_fn,
         reserved_cash_floor_usd=float(reserved_cash_floor_usd or 0.0),
         reserved_cash_ratio=float(reserved_cash_ratio or 0.0),
+        cash_only_execution=bool(cash_only_execution),
     )

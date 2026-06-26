@@ -135,6 +135,7 @@ class SchwabRuntimeComposer:
         *,
         strategy_plugin_signals=(),
         strategy_plugin_error: str | None = None,
+        cash_only_execution=True,
     ):
         build_plugin_lines = getattr(
             self.strategy_adapters,
@@ -162,6 +163,7 @@ class SchwabRuntimeComposer:
             sleeper=self.sleeper,
             extra_notification_lines=(*plugin_lines, *plugin_error_lines),
             strategy_plugin_signals=tuple(strategy_plugin_signals or ()),
+            cash_only_execution=bool(cash_only_execution),
         )
 
     def load_strategy_plugin_signals(self, raw_mounts):

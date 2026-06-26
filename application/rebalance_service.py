@@ -360,6 +360,7 @@ def run_strategy_core(
         post_sell_refresh_interval_sec=config.post_sell_refresh_interval_sec,
         sleeper=sleeper_fn,
         safe_haven_cash_substitute_threshold_usd=config.safe_haven_cash_substitute_threshold_usd,
+        cash_only_execution=getattr(config, "cash_only_execution", True),
         publish_order_issue=lambda message: notification_publisher.publish(
             RenderedNotification(
                 detailed_text=message,
@@ -369,6 +370,9 @@ def run_strategy_core(
     )
     portfolio = execution_result.portfolio
     execution = execution_result.execution
+    signal_metadata = dict(execution.get("signal_metadata") or {})
+    signal_metadata["cash_only_execution"] = bool(getattr(config, "cash_only_execution", True))
+    execution["cash_only_execution"] = signal_metadata["cash_only_execution"]
     execution["signal_snapshot"] = build_signal_snapshot(
         platform="schwab",
         strategy_profile=config.strategy_profile,
@@ -376,6 +380,7 @@ def run_strategy_core(
             **execution,
             "latest_price_source": "schwab_daily_history_with_live_quote_overlay",
         },
+        metadata=signal_metadata,
         allocation=execution_result.allocation,
     )
     trade_logs = list(execution_result.trade_logs)
