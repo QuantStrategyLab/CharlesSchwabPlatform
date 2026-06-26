@@ -15,6 +15,10 @@ from quant_platform_kit.common.strategy_plugins import (
     translate_strategy_plugin_value,
 )
 from quant_platform_kit.strategy_contracts import build_account_state_from_portfolio_snapshot
+from us_equity_strategies.cash_only_equity import (
+    apply_cash_only_account_state,
+    resolve_raw_cash_from_snapshot,
+)
 
 
 @dataclass(frozen=True)
@@ -136,8 +140,9 @@ class SchwabRuntimeStrategyAdapters:
             strategy_symbols=self.managed_symbols,
         )
         if self.managed_symbols:
-            account_state["total_strategy_equity"] = float(account_state["available_cash"]) + sum(
-                float(value) for value in dict(account_state["market_values"]).values()
+            return apply_cash_only_account_state(
+                account_state,
+                raw_cash=resolve_raw_cash_from_snapshot(snapshot),
             )
         return account_state
 

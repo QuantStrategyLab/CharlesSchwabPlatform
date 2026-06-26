@@ -664,7 +664,10 @@ def execute_rebalance_cycle(
             info = report.broker_order_id if success else report.raw_payload.get("detail", report.status)
             order_id_suffix = str(translator("order_id_suffix", order_id=info)).strip()
             if not order_id_suffix or order_id_suffix == "order_id_suffix":
-                order_id_suffix = f"（订单号: {info}）"
+                if str(translator("shares")).strip() == "股":
+                    order_id_suffix = f"（订单号: {info}）"
+                else:
+                    order_id_suffix = f"(ID: {info})"
             if success:
                 record_submitted_order(
                     symbol,
@@ -769,6 +772,7 @@ def execute_rebalance_cycle(
     )
     sell_executed = False
     cash_sweep_sold_this_cycle = False
+    pending_sell_release_symbols: list[str] = []
     for symbol in sell_order_symbols:
         current = market_values[symbol]
         target = target_values[symbol]
@@ -778,6 +782,10 @@ def execute_rebalance_cycle(
                 quantity = cash_sweep_sale_quantity_to_fund_buy(quantity, funding_buy_candidates)
                 if quantity <= 0:
                     continue
+            if quantity <= 0:
+                pending_sell_release_symbols.append(symbol)
+                trade_logs.append(translator("sell_deferred_whole_share", symbol=symbol))
+                continue
             if execute_fire_forget(symbol, "SELL", quantity):
                 sell_executed = True
                 if symbol == cash_sweep_symbol:
@@ -895,25 +903,72 @@ def execute_rebalance_cycle(
     liquid_cash = float(portfolio["liquid_cash"])
     reserved_cash = float(execution["reserved_cash"])
     estimated_buying_power = max(0, liquid_cash - reserved_cash)
+    pending_sell_release_symbols = list(dict.fromkeys(pending_sell_release_symbols))
+    buy_needed_symbols = [
+        symbol
+        for symbol in buy_order_symbols
+        if market_values[symbol] < (target_values[symbol] - threshold)
+    ]
+    buys_blocked_reason = None
+    if pending_sell_release_symbols and buy_needed_symbols:
+        estimated_buy_cost = 0.0
+        for symbol in buy_needed_symbols:
+            target_val = target_values[symbol]
+            amount_to_spend = min(
+                target_val - market_values[symbol],
+                estimated_buying_power,
+            )
+            if amount_to_spend <= 0:
+                continue
+            ask = quotes[symbol]["askPrice"]
+            limit_price = _limit_buy_price(
+                symbol, ask, limit_buy_premium, limit_buy_premium_by_symbol
+            )
+            quantity = int(amount_to_spend // limit_price) if limit_price > 0 else 0
+            if quantity > 0:
+                estimated_buy_cost += quantity * limit_price
+        if estimated_buy_cost > estimated_buying_power:
+            buys_blocked_reason = "pending_sell_release"
+            trade_logs.append(
+                translator(
+                    "buy_deferred_pending_sell_release",
+                    symbols=", ".join(pending_sell_release_symbols),
+                )
+            )
+    if buys_blocked_reason is None and liquid_cash < 0.0 and buy_needed_symbols:
+        buys_blocked_reason = "negative_cash"
+        trade_logs.append(
+            translator(
+                "buy_deferred_negative_cash",
+                cash=f"{liquid_cash:,.2f}",
+            )
+        )
     buy_executed = False
-    for symbol in buy_order_symbols:
-        target_val = target_values[symbol]
-        if market_values[symbol] < (target_val - threshold):
-            amount_to_spend = min(target_val - market_values[symbol], estimated_buying_power)
-            if amount_to_spend > 0:
-                ask = quotes[symbol]["askPrice"]
-                limit_price = _limit_buy_price(symbol, ask, limit_buy_premium, limit_buy_premium_by_symbol)
-                quantity = int(amount_to_spend // limit_price) if limit_price > 0 else 0
-                if quantity > 0:
-                    if execute_fire_forget(symbol, "BUY_LIMIT", quantity, limit_price):
-                        buy_executed = True
-                        estimated_buying_power -= quantity * limit_price
+    if not buys_blocked_reason:
+        for symbol in buy_order_symbols:
+            target_val = target_values[symbol]
+            if market_values[symbol] < (target_val - threshold):
+                amount_to_spend = min(target_val - market_values[symbol], estimated_buying_power)
+                if amount_to_spend > 0:
+                    ask = quotes[symbol]["askPrice"]
+                    limit_price = _limit_buy_price(symbol, ask, limit_buy_premium, limit_buy_premium_by_symbol)
+                    quantity = int(amount_to_spend // limit_price) if limit_price > 0 else 0
+                    if quantity > 0:
+                        order_cost = quantity * limit_price
+                        if order_cost > estimated_buying_power:
+                            quantity = int(estimated_buying_power // limit_price) if limit_price > 0 else 0
+                            order_cost = quantity * limit_price
+                        if quantity > 0 and order_cost <= estimated_buying_power:
+                            if execute_fire_forget(symbol, "BUY_LIMIT", quantity, limit_price):
+                                buy_executed = True
+                                estimated_buying_power -= order_cost
 
     cash_sweep_substituted_to_cash = bool(
         allocation.get("small_account_safe_haven_cash_substituted_symbols")
     )
     if (
-        not cash_sweep_sold_this_cycle
+        not buys_blocked_reason
+        and not cash_sweep_sold_this_cycle
         and cash_sweep_symbol
         and (
             float(target_values.get(cash_sweep_symbol, 0.0) or 0.0) > 0.0
