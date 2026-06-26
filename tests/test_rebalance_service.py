@@ -197,6 +197,179 @@ class RebalanceServiceTests(unittest.TestCase):
         self.assertTrue(any("Market Sell SOXX: 1 shares" in log for log in result.trade_logs))
         self.assertTrue(any("Limit Buy SOXL ($191.15): 2 shares" in log for log in result.trade_logs))
 
+    def test_small_account_whole_share_layer_retains_near_one_share_soxx_delever_target(self):
+        plan = {
+            "account_hash": "demo",
+            "allocation": {
+                "target_mode": "value",
+                "strategy_symbols": ("SOXL", "SOXX", "BOXX"),
+                "risk_symbols": ("SOXL", "SOXX"),
+                "income_symbols": (),
+                "safe_haven_symbols": ("BOXX",),
+                "targets": {"SOXL": 357.21, "SOXX": 561.33, "BOXX": 102.06},
+            },
+            "portfolio": {
+                "market_values": {"SOXL": 0.0, "SOXX": 605.17, "BOXX": 0.0},
+                "quantities": {"SOXL": 0, "SOXX": 1, "BOXX": 0},
+                "liquid_cash": 519.54,
+                "cash_sweep_symbol": "BOXX",
+            },
+            "execution": {
+                "trade_threshold_value": 11.71,
+                "reserved_cash": 150.0,
+            },
+        }
+        prices = {"SOXL": 232.99, "SOXX": 605.17, "BOXX": 117.06}
+
+        result = execute_rebalance_cycle(
+            client=object(),
+            plan=plan,
+            portfolio=plan["portfolio"],
+            execution=plan["execution"],
+            allocation=plan["allocation"],
+            fetch_managed_snapshot=lambda _client: None,
+            market_data_port=CallableMarketDataPort(
+                quote_loader=lambda symbol: QuoteSnapshot(
+                    symbol=symbol,
+                    as_of="2026-06-24",
+                    last_price=prices[symbol],
+                    ask_price=prices[symbol],
+                )
+            ),
+            load_plan=lambda _snapshot: (plan, plan["portfolio"], plan["execution"], plan["allocation"]),
+            execution_port=CallableExecutionPort(
+                lambda _order_intent: (_ for _ in ()).throw(
+                    AssertionError("dry run should not submit")
+                )
+            ),
+            translator=build_translator("en"),
+            limit_buy_premium=1.005,
+            sell_settle_delay_sec=0,
+            dry_run_only=True,
+            publish_order_issue=lambda _message: None,
+            safe_haven_cash_substitute_threshold_usd=1000.0,
+        )
+
+        self.assertEqual(result.allocation["small_account_existing_whole_share_retained_symbols"], ("SOXX",))
+        self.assertNotIn("small_account_whole_share_substituted_symbols", result.allocation)
+        self.assertFalse(any("Market Sell SOXX" in log for log in result.trade_logs))
+        self.assertTrue(any("Limit Buy SOXL ($234.15): 1 shares" in log for log in result.trade_logs))
+
+    def test_small_account_bootstraps_close_to_one_share_core_target(self):
+        plan = {
+            "account_hash": "demo",
+            "allocation": {
+                "target_mode": "value",
+                "strategy_symbols": ("SOXL", "SOXX", "BOXX"),
+                "risk_symbols": ("SOXL", "SOXX"),
+                "income_symbols": (),
+                "safe_haven_symbols": ("BOXX",),
+                "targets": {"SOXL": 218.19, "SOXX": 342.86, "BOXX": 62.34},
+            },
+            "portfolio": {
+                "market_values": {"SOXL": 0.0, "SOXX": 0.0, "BOXX": 0.0},
+                "quantities": {"SOXL": 0, "SOXX": 0, "BOXX": 0},
+                "liquid_cash": 623.39,
+                "cash_sweep_symbol": "BOXX",
+            },
+            "execution": {
+                "trade_threshold_value": 6.23,
+                "reserved_cash": 150.0,
+            },
+        }
+        prices = {"SOXL": 229.73, "SOXX": 603.00, "BOXX": 100.0}
+
+        result = execute_rebalance_cycle(
+            client=object(),
+            plan=plan,
+            portfolio=plan["portfolio"],
+            execution=plan["execution"],
+            allocation=plan["allocation"],
+            fetch_managed_snapshot=lambda _client: None,
+            market_data_port=CallableMarketDataPort(
+                quote_loader=lambda symbol: QuoteSnapshot(
+                    symbol=symbol,
+                    as_of="2026-06-24",
+                    last_price=prices[symbol],
+                    ask_price=prices[symbol],
+                )
+            ),
+            load_plan=lambda _snapshot: (plan, plan["portfolio"], plan["execution"], plan["allocation"]),
+            execution_port=CallableExecutionPort(
+                lambda _order_intent: (_ for _ in ()).throw(
+                    AssertionError("dry run should not submit")
+                )
+            ),
+            translator=build_translator("en"),
+            limit_buy_premium=1.005,
+            limit_buy_premium_by_symbol={"SOXL": 1.015},
+            sell_settle_delay_sec=0,
+            dry_run_only=True,
+            publish_order_issue=lambda _message: None,
+            safe_haven_cash_substitute_threshold_usd=1000.0,
+        )
+
+        self.assertEqual(result.allocation["small_account_whole_share_bootstrap_symbols"], ("SOXL",))
+        self.assertEqual(result.allocation["small_account_whole_share_substituted_symbols"], ("SOXX",))
+        self.assertTrue(any("SOXL.US target is close to one share" in log for log in result.trade_logs))
+        self.assertTrue(any("Integer-share drift" in log and "SOXX.US projected 0.0%" in log for log in result.trade_logs))
+        self.assertTrue(any("Limit Buy SOXL ($233.18): 1 shares" in log for log in result.trade_logs))
+        self.assertFalse(any("Limit Buy SOXX" in log for log in result.trade_logs))
+
+    def test_symbol_specific_limit_buy_premium_applies_to_buy_limit(self):
+        plan = {
+            "account_hash": "demo",
+            "allocation": {
+                "target_mode": "value",
+                "strategy_symbols": ("SOXL",),
+                "risk_symbols": ("SOXL",),
+                "income_symbols": (),
+                "safe_haven_symbols": (),
+                "targets": {"SOXL": 1000.0},
+            },
+            "portfolio": {
+                "market_values": {"SOXL": 0.0},
+                "quantities": {"SOXL": 0},
+                "liquid_cash": 1000.0,
+                "cash_sweep_symbol": "",
+            },
+            "execution": {
+                "trade_threshold_value": 10.0,
+                "reserved_cash": 0.0,
+            },
+        }
+        result = execute_rebalance_cycle(
+            client=object(),
+            plan=plan,
+            portfolio=plan["portfolio"],
+            execution=plan["execution"],
+            allocation=plan["allocation"],
+            fetch_managed_snapshot=lambda _client: None,
+            market_data_port=CallableMarketDataPort(
+                quote_loader=lambda symbol: QuoteSnapshot(
+                    symbol=symbol,
+                    as_of="2026-06-24",
+                    last_price=100.0,
+                    ask_price=100.0,
+                )
+            ),
+            load_plan=lambda _snapshot: (plan, plan["portfolio"], plan["execution"], plan["allocation"]),
+            execution_port=CallableExecutionPort(
+                lambda _order_intent: (_ for _ in ()).throw(
+                    AssertionError("dry run should not submit")
+                )
+            ),
+            translator=build_translator("en"),
+            limit_buy_premium=1.005,
+            limit_buy_premium_by_symbol={"SOXL": 1.015},
+            sell_settle_delay_sec=0,
+            dry_run_only=True,
+            publish_order_issue=lambda _message: None,
+            safe_haven_cash_substitute_threshold_usd=1000.0,
+        )
+
+        self.assertTrue(any("Limit Buy SOXL ($101.50): 9 shares" in log for log in result.trade_logs))
+
     def test_existing_positive_target_below_one_share_keeps_min_whole_share(self):
         submitted_orders = []
         plan = {
@@ -1241,7 +1414,7 @@ class RebalanceServiceTests(unittest.TestCase):
 
         self.assertTrue(sent_messages)
         self.assertIn("模拟下单: sell BOXX: 10shares", sent_messages[0])
-        self.assertIn("模拟下单: limit buy QQQM ($50.00): 5shares", sent_messages[0])
+        self.assertIn("模拟下单: limit buy QQQM ($50.00): 11shares", sent_messages[0])
         self.assertNotIn("buy BOXX", sent_messages[0])
 
     def test_run_strategy_core_retries_refresh_until_sold_cash_is_available(self):

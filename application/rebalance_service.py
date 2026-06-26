@@ -353,6 +353,7 @@ def run_strategy_core(
         ),
         translator=config.translator,
         limit_buy_premium=config.limit_buy_premium,
+        limit_buy_premium_by_symbol=config.limit_buy_premium_by_symbol,
         sell_settle_delay_sec=config.sell_settle_delay_sec,
         dry_run_only=config.dry_run_only,
         post_sell_refresh_attempts=config.post_sell_refresh_attempts,

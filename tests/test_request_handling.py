@@ -252,7 +252,7 @@ def install_stub_modules(strategy_plugin_mounts_json=None, notify_lang="en"):
 
         def build_strategy_plugin_notification_lines(self, signals):
             return tuple(
-                f"插件：{_strategy_plugin_label(signal)} | 状态：{_strategy_plugin_status(signal)} | 提醒：{_strategy_plugin_action(signal)}"
+                f"插件：{_strategy_plugin_label(signal)} | 启用：是 | 状态：{_strategy_plugin_status(signal)} | 提醒：{_strategy_plugin_action(signal)}"
                 for signal in signals
             )
 
