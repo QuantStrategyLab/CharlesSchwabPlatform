@@ -3,11 +3,15 @@ from __future__ import annotations
 from typing import Any
 
 from us_equity_strategies.catalog import resolve_canonical_profile
+from us_equity_strategies.cash_only_equity import (
+    apply_cash_only_account_state,
+    build_cash_only_portfolio_inputs_from_snapshot,
+    resolve_raw_cash_from_snapshot,
+)
 from quant_platform_kit.strategy_contracts import (
     PositionTarget,
     StrategyDecision,
     ValueTargetExecutionAnnotations,
-    build_value_target_portfolio_inputs_from_snapshot,
     build_value_target_runtime_plan,
     resolve_decision_target_mode,
     translate_decision_to_target_mode,
@@ -102,7 +106,7 @@ def map_strategy_decision_to_plan(
         runtime_metadata=runtime_metadata,
         strategy_profile=strategy_profile,
     )
-    portfolio_inputs = build_value_target_portfolio_inputs_from_snapshot(snapshot)
+    portfolio_inputs = build_cash_only_portfolio_inputs_from_snapshot(snapshot)
     plan = build_value_target_runtime_plan(
         normalized_decision,
         strategy_profile=strategy_profile,
