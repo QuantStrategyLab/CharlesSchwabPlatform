@@ -128,6 +128,7 @@ I18N = {
         "strategy_plugin_consumption_loaded_not_applied": "🧩 插件本次影响：已加载；该状态未启用自动仓位改写",
         "strategy_plugin_consumption_review_only": "🧩 插件本次影响：仅通知复核；当前状态未触发自动仓位改写",
         "strategy_plugin_consumption_unavailable": "🧩 插件本次影响：未加载可用插件信号",
+
         "strategy_plugin_alert_subject": "🚨 策略插件告警：{plugin} | {route}",
         "strategy_plugin_alert_title": "🚨 【策略插件告警】",
         "strategy_plugin_alert_context": "运行环境：{context}",
@@ -281,6 +282,7 @@ I18N = {
         "strategy_plugin_consumption_loaded_not_applied": "🧩 Plugin impact this run: loaded; this state did not enable automatic position rewrites",
         "strategy_plugin_consumption_review_only": "🧩 Plugin impact this run: review-only notice; current state did not trigger automatic position rewrites",
         "strategy_plugin_consumption_unavailable": "🧩 Plugin impact this run: no usable plugin signal loaded",
+
         "strategy_plugin_alert_subject": "🚨 Strategy plugin alert: {plugin} | {route}",
         "strategy_plugin_alert_title": "🚨 【Strategy Plugin Alert】",
         "strategy_plugin_alert_context": "Context: {context}",
