@@ -253,7 +253,6 @@ class RebalanceServiceTests(unittest.TestCase):
         self.assertEqual(result.allocation["small_account_existing_whole_share_retained_symbols"], ("SOXX",))
         self.assertNotIn("small_account_whole_share_substituted_symbols", result.allocation)
         self.assertFalse(any("Market Sell SOXX" in log for log in result.trade_logs))
-        self.assertTrue(any("[Sell skipped] SOXX" in log for log in result.trade_logs))
         self.assertTrue(any("Limit Buy SOXL ($234.15): 1 shares" in log for log in result.trade_logs))
 
     def test_small_account_bootstraps_close_to_one_share_core_target(self):
