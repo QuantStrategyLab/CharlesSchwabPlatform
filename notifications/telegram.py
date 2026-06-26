@@ -2,12 +2,26 @@
 
 from __future__ import annotations
 
+import re
+
 try:
     from quant_platform_kit.common.notification_localization import (
         merge_strategy_plugin_i18n as _merge_strategy_plugin_i18n,
     )
 except ImportError:  # pragma: no cover - compatibility with older pinned shared wheels
     _merge_strategy_plugin_i18n = None
+
+_TELEGRAM_MARKET_SYMBOL_LINK_RE = re.compile(r"(?<![A-Za-z0-9_])([A-Z0-9]{1,12})\.([A-Z]{2,4})(?![A-Za-z0-9_])")
+_TELEGRAM_MARKET_SYMBOL_LINK_JOINER = "\u2060"
+
+
+def _break_telegram_market_symbol_auto_links(value) -> str:
+    text = str(value or "")
+    return _TELEGRAM_MARKET_SYMBOL_LINK_RE.sub(
+        lambda match: f"{match.group(1)}.{_TELEGRAM_MARKET_SYMBOL_LINK_JOINER}{match.group(2)}",
+        text,
+    )
+
 
 SIGNAL_ICONS = {
     "hold": "💎",
@@ -108,12 +122,13 @@ I18N = {
         "strategy_plugin_line": "🧩 插件：{plugin} | 启用：{enabled} | 状态：{route} | 提醒：{action}",
         "strategy_plugin_enabled_true": "是",
         "strategy_plugin_enabled_false": "否",
-        "strategy_plugin_consumption_auto": "🧩 插件消费：已按策略规则参与本轮仓位计算",
-        "strategy_plugin_consumption_auto_defend": "🧩 插件消费：已按策略规则参与本轮仓位计算；风险仓位按防守规则处理",
-        "strategy_plugin_consumption_auto_delever": "🧩 插件消费：已按策略规则参与本轮仓位计算；杠杆仓位按降档规则缩放",
-        "strategy_plugin_consumption_loaded_not_applied": "🧩 插件消费：已加载但未改写仓位；当前策略未启用该状态的自动消费",
-        "strategy_plugin_consumption_review_only": "🧩 插件消费：仅通知复核，未参与自动仓位计算",
-        "strategy_plugin_consumption_unavailable": "🧩 插件消费：未消费插件信号",
+        "strategy_plugin_consumption_auto": "🧩 插件本次影响：已按策略规则参与本轮仓位计算",
+        "strategy_plugin_consumption_auto_defend": "🧩 插件本次影响：已触发防守规则并参与本轮仓位计算",
+        "strategy_plugin_consumption_auto_delever": "🧩 插件本次影响：已触发降杠杆规则并参与本轮仓位计算",
+        "strategy_plugin_consumption_loaded_not_applied": "🧩 插件本次影响：已加载；该状态未启用自动仓位改写",
+        "strategy_plugin_consumption_review_only": "🧩 插件本次影响：仅通知复核；当前状态未触发自动仓位改写",
+        "strategy_plugin_consumption_unavailable": "🧩 插件本次影响：未加载可用插件信号",
+
         "strategy_plugin_alert_subject": "🚨 策略插件告警：{plugin} | {route}",
         "strategy_plugin_alert_title": "🚨 【策略插件告警】",
         "strategy_plugin_alert_context": "运行环境：{context}",
@@ -261,12 +276,13 @@ I18N = {
         "strategy_plugin_line": "🧩 Plugin: {plugin} | enabled: {enabled} | status: {route} | notice: {action}",
         "strategy_plugin_enabled_true": "yes",
         "strategy_plugin_enabled_false": "no",
-        "strategy_plugin_consumption_auto": "🧩 Plugin consumption: included in this cycle's position calculation under strategy rules",
-        "strategy_plugin_consumption_auto_defend": "🧩 Plugin consumption: included in this cycle's position calculation; risk exposure follows defensive rules",
-        "strategy_plugin_consumption_auto_delever": "🧩 Plugin consumption: included in this cycle's position calculation; leveraged exposure follows de-risking rules",
-        "strategy_plugin_consumption_loaded_not_applied": "🧩 Plugin consumption: loaded but did not rewrite positions; this strategy does not enable automatic consumption for this state",
-        "strategy_plugin_consumption_review_only": "🧩 Plugin consumption: review-only notice, not used for automatic position calculation",
-        "strategy_plugin_consumption_unavailable": "🧩 Plugin consumption: no plugin signal consumed",
+        "strategy_plugin_consumption_auto": "🧩 Plugin impact this run: included in this cycle's position calculation under strategy rules",
+        "strategy_plugin_consumption_auto_defend": "🧩 Plugin impact this run: triggered defensive rules and joined this cycle's position calculation",
+        "strategy_plugin_consumption_auto_delever": "🧩 Plugin impact this run: triggered de-levering rules and joined this cycle's position calculation",
+        "strategy_plugin_consumption_loaded_not_applied": "🧩 Plugin impact this run: loaded; this state did not enable automatic position rewrites",
+        "strategy_plugin_consumption_review_only": "🧩 Plugin impact this run: review-only notice; current state did not trigger automatic position rewrites",
+        "strategy_plugin_consumption_unavailable": "🧩 Plugin impact this run: no usable plugin signal loaded",
+
         "strategy_plugin_alert_subject": "🚨 Strategy plugin alert: {plugin} | {route}",
         "strategy_plugin_alert_title": "🚨 【Strategy Plugin Alert】",
         "strategy_plugin_alert_context": "Context: {context}",
@@ -378,7 +394,11 @@ def build_sender(token, chat_id, *, requests_module=None):
             return
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         try:
-            requests_module.post(url, json={"chat_id": chat_id, "text": message}, timeout=15)
+            requests_module.post(
+                url,
+                json={"chat_id": chat_id, "text": _break_telegram_market_symbol_auto_links(message)},
+                timeout=15,
+            )
         except Exception as exc:
             print(f"Telegram send failed: {type(exc).__name__}", flush=True)
 
