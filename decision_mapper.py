@@ -3,11 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from us_equity_strategies.catalog import resolve_canonical_profile
-from us_equity_strategies.cash_only_equity import (
-    apply_cash_only_account_state,
-    build_cash_only_portfolio_inputs_from_snapshot,
-    resolve_raw_cash_from_snapshot,
-)
+from us_equity_strategies.cash_only_equity import build_portfolio_inputs_from_snapshot
 from quant_platform_kit.strategy_contracts import (
     PositionTarget,
     StrategyDecision,
@@ -106,7 +102,14 @@ def map_strategy_decision_to_plan(
         runtime_metadata=runtime_metadata,
         strategy_profile=strategy_profile,
     )
-    portfolio_inputs = build_cash_only_portfolio_inputs_from_snapshot(snapshot)
+    raw_policy = runtime_metadata.get("schwab_execution_policy")
+    cash_only_execution = True
+    if isinstance(raw_policy, dict):
+        cash_only_execution = bool(raw_policy.get("cash_only_execution", True))
+    portfolio_inputs = build_portfolio_inputs_from_snapshot(
+        snapshot,
+        cash_only_execution=cash_only_execution,
+    )
     plan = build_value_target_runtime_plan(
         normalized_decision,
         strategy_profile=strategy_profile,

@@ -95,6 +95,7 @@ jobs:
       INCOME_LAYER_ENABLED: ${{ vars.INCOME_LAYER_ENABLED }}
       INCOME_LAYER_START_USD: ${{ vars.INCOME_LAYER_START_USD }}
       INCOME_LAYER_MAX_RATIO: ${{ vars.INCOME_LAYER_MAX_RATIO }}
+      CASH_ONLY_EXECUTION: ${{ vars.CASH_ONLY_EXECUTION }}
       RUNTIME_TARGET_ENABLED: ${{ vars.RUNTIME_TARGET_ENABLED }}
       DUAL_DRIVE_UNLEVERED_SYMBOL: ${{ vars.DUAL_DRIVE_UNLEVERED_SYMBOL }}
       EXECUTION_REPORT_GCS_URI: ${{ vars.EXECUTION_REPORT_GCS_URI }}
@@ -800,6 +801,12 @@ jobs:
             env_pairs+=("INCOME_LAYER_MAX_RATIO=${INCOME_LAYER_MAX_RATIO}")
           else
             remove_env_vars+=("INCOME_LAYER_MAX_RATIO")
+          fi
+
+          if [ -n "${CASH_ONLY_EXECUTION:-}" ]; then
+            env_pairs+=("CASH_ONLY_EXECUTION=${CASH_ONLY_EXECUTION}")
+          else
+            remove_env_vars+=("CASH_ONLY_EXECUTION")
           fi
 
           if [ -n "${RUNTIME_TARGET_ENABLED:-}" ]; then

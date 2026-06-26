@@ -21,6 +21,7 @@ class SchwabRebalanceConfig:
     post_sell_refresh_attempts: int = 1
     post_sell_refresh_interval_sec: float = 0.0
     safe_haven_cash_substitute_threshold_usd: float = 1000.0
+    cash_only_execution: bool = True
     sleeper: Callable[[float], None] | None = None
     extra_notification_lines: Sequence[str] = ()
     strategy_plugin_signals: Sequence[Any] = ()

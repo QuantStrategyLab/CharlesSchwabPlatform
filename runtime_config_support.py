@@ -37,6 +37,7 @@ class PlatformRuntimeSettings:
     reserved_cash_floor_usd: float = DEFAULT_RESERVED_CASH_FLOOR_USD
     reserved_cash_ratio: float = DEFAULT_RESERVED_CASH_RATIO
     safe_haven_cash_substitute_threshold_usd: float = DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD
+    cash_only_execution: bool = True
     income_layer_enabled: bool | None = None
     income_layer_start_usd: float | None = None
     income_layer_max_ratio: float | None = None
@@ -250,6 +251,7 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
             "SCHWAB_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD",
             default=DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
         ),
+        cash_only_execution=resolve_cash_only_execution_env(),
         income_layer_enabled=_optional_bool_env("INCOME_LAYER_ENABLED"),
         income_layer_start_usd=_optional_non_negative_float_env("INCOME_LAYER_START_USD"),
         income_layer_max_ratio=_optional_ratio_env("INCOME_LAYER_MAX_RATIO"),
@@ -368,3 +370,8 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
         ),
         runtime_target=runtime_target,
     )
+
+
+def resolve_cash_only_execution_env(name: str = "CASH_ONLY_EXECUTION") -> bool:
+    value = _optional_bool_env(name)
+    return True if value is None else value
