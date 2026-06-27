@@ -1,8 +1,10 @@
 name: Deploy Cloud Run
 
 on:
-  push:
-    branches: [ main ]
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
   workflow_dispatch:
 
 env:
@@ -20,9 +22,17 @@ concurrency:
 jobs:
   sync-cloud-run-env:
     name: Deploy / Sync Cloud Run
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push'
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
+      actions: read
       contents: read
       id-token: write
     env:
@@ -154,6 +164,8 @@ jobs:
       - name: Checkout repository
         if: steps.config.outputs.enabled == 'true'
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Set up Python for strategy requirement resolution
         if: steps.config.outputs.env_sync_enabled == 'true'

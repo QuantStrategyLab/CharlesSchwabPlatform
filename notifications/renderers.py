@@ -154,7 +154,22 @@ def _format_inline_segments(line: str, *, translator, holdings_title_emitted: bo
     return [f"  - {part}" for part in parts], holdings_title_emitted
 
 
-def _format_dashboard_text(text: str, *, translator) -> str:
+def _relabel_dashboard_buying_power(text: str, *, cash_only_execution: bool, translator) -> str:
+    value = str(text or "")
+    if cash_only_execution:
+        target = translator("buying_power")
+        for source in ("Buying power", "购买力"):
+            if source != target:
+                value = value.replace(source, target)
+        return value
+    target = translator("buying_power_margin")
+    for source in ("Available cash", "可用现金"):
+        if source != target:
+            value = value.replace(source, target)
+    return value
+
+
+def _format_dashboard_text(text: str, *, translator, cash_only_execution: bool = True) -> str:
     raw_lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
     formatted_lines: list[str] = []
     holdings_title_emitted = False
@@ -165,7 +180,12 @@ def _format_dashboard_text(text: str, *, translator) -> str:
             holdings_title_emitted=holdings_title_emitted,
         )
         formatted_lines.extend(expanded)
-    return "\n".join(formatted_lines)
+    result = "\n".join(formatted_lines)
+    return _relabel_dashboard_buying_power(
+        result,
+        cash_only_execution=cash_only_execution,
+        translator=translator,
+    )
 
 
 def _build_timing_audit_lines(execution, *, translator) -> list[str]:
@@ -497,7 +517,12 @@ def render_trade_notification(
     signal_display = _localize_notification_text(execution["signal_display"], translator=translator)
     status_display = _localize_notification_text(execution.get("status_display"), translator=translator)
     extra_notification_block = _render_extra_notification_block(extra_notification_lines)
-    dashboard_text = _format_dashboard_text(str(execution["dashboard_text"]), translator=translator)
+    cash_only_execution = bool(execution.get("cash_only_execution", True))
+    dashboard_text = _format_dashboard_text(
+        str(execution["dashboard_text"]),
+        translator=translator,
+        cash_only_execution=cash_only_execution,
+    )
     timing_lines = _build_timing_audit_lines(execution, translator=translator)
     signal_snapshot_line = _format_signal_snapshot_line(
         execution.get("signal_snapshot"),
@@ -562,7 +587,12 @@ def render_heartbeat_notification(
     signal_display = _localize_notification_text(execution["signal_display"], translator=translator)
     status_display = _localize_notification_text(execution.get("status_display"), translator=translator)
     extra_notification_block = _render_extra_notification_block(extra_notification_lines)
-    dashboard_text = _format_dashboard_text(str(execution["dashboard_text"]), translator=translator)
+    cash_only_execution = bool(execution.get("cash_only_execution", True))
+    dashboard_text = _format_dashboard_text(
+        str(execution["dashboard_text"]),
+        translator=translator,
+        cash_only_execution=cash_only_execution,
+    )
     timing_lines = _build_timing_audit_lines(execution, translator=translator)
     signal_snapshot_line = _format_signal_snapshot_line(
         execution.get("signal_snapshot"),
