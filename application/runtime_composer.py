@@ -17,6 +17,7 @@ from quant_platform_kit.common.runtime_assembly import build_runtime_assembly
 from quant_platform_kit.common.port_adapters import CallableNotificationPort
 from quant_platform_kit.common.runtime_target import build_runtime_context_fields
 from quant_platform_kit.common.runtime_target import RuntimeTarget
+from runtime_execution_policy import notional_buy_execution_enabled
 from notifications.telegram import build_sender
 
 
@@ -169,6 +170,7 @@ class SchwabRuntimeComposer:
             extra_notification_lines=(*plugin_lines, *plugin_error_lines),
             strategy_plugin_signals=tuple(strategy_plugin_signals or ()),
             cash_only_execution=bool(cash_only_execution),
+            notional_buy_execution=notional_buy_execution_enabled(self.strategy_profile),
             execution_dedup_enabled=resolve_execution_dedup_enabled(
                 platform_env_prefix="SCHWAB",
                 env_reader=self.env_reader,

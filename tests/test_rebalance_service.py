@@ -571,6 +571,72 @@ class RebalanceServiceTests(unittest.TestCase):
         self.assertEqual(result.allocation["targets"]["BOXX"], 49500.0)
         self.assertEqual([(order.side, order.symbol) for order in submitted_orders], [("buy", "BOXX")])
 
+    def test_notional_buy_execution_submits_dollar_market_order(self):
+        submitted_orders = []
+        plan = {
+            "account_hash": "demo",
+            "allocation": {
+                "target_mode": "value",
+                "strategy_symbols": ("QQQM",),
+                "risk_symbols": ("QQQM",),
+                "income_symbols": (),
+                "safe_haven_symbols": (),
+                "targets": {"QQQM": 50.0},
+            },
+            "portfolio": {
+                "market_values": {"QQQM": 0.0},
+                "quantities": {"QQQM": 0},
+                "liquid_cash": 50.0,
+                "cash_sweep_symbol": "",
+            },
+            "execution": {
+                "trade_threshold_value": 1.0,
+                "reserved_cash": 0.0,
+            },
+        }
+
+        result = execute_rebalance_cycle(
+            client=object(),
+            plan=plan,
+            portfolio=plan["portfolio"],
+            execution=plan["execution"],
+            allocation=plan["allocation"],
+            fetch_managed_snapshot=lambda _client: None,
+            market_data_port=CallableMarketDataPort(
+                quote_loader=lambda symbol: QuoteSnapshot(
+                    symbol=symbol,
+                    as_of="2026-06-12",
+                    last_price=500.0,
+                    ask_price=500.0,
+                )
+            ),
+            load_plan=lambda _snapshot: (plan, plan["portfolio"], plan["execution"], plan["allocation"]),
+            execution_port=CallableExecutionPort(
+                lambda order_intent: (
+                    submitted_orders.append(order_intent),
+                    ExecutionReport(
+                        symbol=order_intent.symbol,
+                        side=order_intent.side,
+                        quantity=order_intent.quantity,
+                        status="accepted",
+                        broker_order_id="schwab-order-1",
+                    ),
+                )[-1]
+            ),
+            translator=build_translator("en"),
+            limit_buy_premium=1.0,
+            sell_settle_delay_sec=0,
+            publish_order_issue=lambda _message: None,
+            notional_buy_execution=True,
+        )
+
+        self.assertEqual(len(submitted_orders), 1)
+        order = submitted_orders[0]
+        self.assertEqual(order.side, "buy")
+        self.assertEqual(order.symbol, "QQQM")
+        self.assertEqual(order.metadata["notional_usd"], 50.0)
+        self.assertTrue(any("market_buy_cmd" in log or "Market Buy" in log for log in result.trade_logs))
+
     def test_run_strategy_core_supports_execution_port_runtime_path(self):
         sent_messages = []
         observed_orders = []

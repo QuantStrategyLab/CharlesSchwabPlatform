@@ -21,12 +21,10 @@ from quant_platform_kit.common.strategies import (
 )
 
 SCHWAB_PLATFORM = "schwab"
-NASDAQ_SP500_SMART_DCA_PROFILE = "nasdaq_sp500_smart_dca"
 TECH_COMMUNICATION_PULLBACK_PROFILE = "tech_communication_pullback_enhancement"
 
 SCHWAB_EXCLUDED_LIVE_PROFILES = frozenset(
     {
-        NASDAQ_SP500_SMART_DCA_PROFILE,
         TECH_COMMUNICATION_PULLBACK_PROFILE,
     }
 )
@@ -52,6 +50,8 @@ PLATFORM_CAPABILITY_MATRIX = PlatformCapabilityMatrix(
             "snapshot",
         }
     ),
+    # DCA / notional equity orders stay disabled on Schwab until paper/live validation.
+    # Non-DCA profiles continue whole-share execution via runtime_execution_policy.
     supported_capabilities=frozenset(),
 )
 ELIGIBLE_STRATEGY_PROFILES = derive_eligible_profiles_for_platform(

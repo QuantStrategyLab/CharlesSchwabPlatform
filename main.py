@@ -14,7 +14,8 @@ from application.runtime_strategy_adapters import build_runtime_strategy_adapter
 from application.rebalance_service import run_strategy_core as run_rebalance_cycle
 from application.signal_snapshot import build_signal_snapshot
 from decision_mapper import map_strategy_decision_to_plan
-from entrypoints.cloud_run import is_market_open_today
+from entrypoints.cloud_run import is_market_open_now
+from runtime_execution_policy import dca_execution_unsupported_reason
 from notifications.telegram import (
     build_signal_text,
     build_strategy_display_name,
@@ -608,6 +609,17 @@ def run_strategy_core(
     )
 
 
+def _schwab_force_run_env() -> bool:
+    return (os.getenv("SCHWAB_FORCE_RUN") or "").strip().lower() == "true"
+
+
+def _schwab_market_open_now():
+    market_open = is_market_open_now(calendar_name="NASDAQ", timezone_name="America/New_York")
+    if isinstance(market_open, tuple):
+        return market_open
+    return market_open, None
+
+
 def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_body: str = "OK"):
     if dry_run_only_override is None and not getattr(RUNTIME_SETTINGS, "runtime_target_enabled", True):
         return "Runtime Target Disabled", 200
@@ -630,7 +642,16 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
             execution_window=execution_window,
         )
         client = composer.build_client()
-        if not is_market_open_today():
+        market_open, market_hours_error = _schwab_market_open_now()
+        if market_hours_error is not None:
+            log_runtime_event(
+                log_context,
+                "market_hours_check_failed",
+                message="Market hours check failed",
+                execution_window=execution_window,
+                error_message=str(market_hours_error),
+            )
+        if not market_open and not _schwab_force_run_env():
             log_runtime_event(
                 log_context,
                 "market_closed",
@@ -643,6 +664,29 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
                 diagnostics={"skip_reason": "market_closed"},
             )
             return "Market Closed", 200
+        if _schwab_force_run_env() and not market_open:
+            log_runtime_event(
+                log_context,
+                "market_hours_bypassed",
+                message="Market hours bypassed for strategy execution",
+                execution_window=execution_window,
+            )
+        unsupported_reason = dca_execution_unsupported_reason(STRATEGY_PROFILE)
+        if unsupported_reason is not None:
+            log_runtime_event(
+                log_context,
+                "strategy_execution_unsupported",
+                message="Strategy requires fractional-share execution; skip",
+                execution_window=execution_window,
+                skip_reason=unsupported_reason,
+                strategy_profile=STRATEGY_PROFILE,
+            )
+            finalize_runtime_report(
+                report,
+                status="skipped",
+                diagnostics={"skip_reason": unsupported_reason},
+            )
+            return "Unsupported Strategy", 200
         log_runtime_event(
             log_context,
             "strategy_cycle_started",
