@@ -723,7 +723,7 @@ class RebalanceServiceTests(unittest.TestCase):
         assert "📊 资产看板\n  - 净值: $1,172.38" in formatted
         assert "💼 持仓\n  - TQQQ: $506.79\n  - QQQM: $0.00\n  - BOXX: $581.80" in formatted
         assert "  - SPYI: $0.00\n  - QQQI: $0.00" in formatted
-        assert "  - 购买力: $83.79\n  - 信号: 💎 趋势持有" in formatted
+        assert "  - 可用现金: $83.79\n  - 信号: 💎 趋势持有" in formatted
         assert "QQQM: $0.00 | BOXX" not in formatted
 
     def test_translator_localizes_semiconductor_trend_status_for_zh(self):

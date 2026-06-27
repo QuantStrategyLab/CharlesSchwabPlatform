@@ -13,7 +13,7 @@ requests_stub = types.ModuleType("requests")
 requests_stub.post = lambda *args, **kwargs: None
 
 with patch.dict(sys.modules, {"requests": requests_stub}):
-    from notifications.renderers import render_heartbeat_notification
+    from notifications.renderers import render_heartbeat_notification, render_trade_notification
     from notifications.telegram import build_sender, build_signal_text, build_strategy_display_name, build_translator
 
 from strategy_registry import SUPPORTED_STRATEGY_PROFILES
@@ -266,6 +266,47 @@ class NotificationTests(unittest.TestCase):
             "(leveraged sleeve: TQQQ retained 0.0%, QQQM 100.0%)",
             rendered.compact_text,
         )
+
+    def test_dashboard_relabels_buying_power_for_cash_only_execution(self):
+        execution = {
+            "dashboard_text": (
+                "📊 资产看板 | 净值: $1,172.38\n"
+                "购买力: $83.79 | 信号: 💎 趋势持有"
+            ),
+            "separator": "━━━━━━━━━━━━━━━━━━",
+            "signal_display": "hold",
+            "status_display": "hold",
+            "cash_only_execution": True,
+        }
+        rendered = render_trade_notification(
+            translator=build_translator("zh"),
+            strategy_display_name="demo",
+            dry_run_only=False,
+            extra_notification_lines=(),
+            execution=execution,
+            trade_logs=(),
+        )
+        self.assertIn("可用现金: $83.79", rendered.compact_text)
+        self.assertNotIn("购买力: $83.79", rendered.compact_text)
+
+    def test_dashboard_keeps_margin_buying_power_label_when_cash_only_disabled(self):
+        execution = {
+            "dashboard_text": "Available cash: $83.79 | Signal: hold",
+            "separator": "━━━━━━━━━━━━━━━━━━",
+            "signal_display": "hold",
+            "status_display": "hold",
+            "cash_only_execution": False,
+        }
+        rendered = render_trade_notification(
+            translator=build_translator("en"),
+            strategy_display_name="demo",
+            dry_run_only=False,
+            extra_notification_lines=(),
+            execution=execution,
+            trade_logs=(),
+        )
+        self.assertIn("Buying power: $83.79", rendered.compact_text)
+        self.assertNotIn("Available cash: $83.79", rendered.compact_text)
 
     def test_build_signal_text_formats_icon_and_label(self):
         signal_text = build_signal_text(build_translator("en"))
