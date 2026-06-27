@@ -180,73 +180,28 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
-      - name: Resolve selected strategy runtime requirements
+      - name: Resolve Cloud Run sync targets
         id: strategy_requirements
         if: steps.config.outputs.env_sync_enabled == 'true'
         run: |
           set -euo pipefail
-          python - <<'PY'
-          import json
-          import os
-          import subprocess
-          import sys
-          from us_equity_strategies import resolve_canonical_profile
-
-          raw_runtime_target = os.environ.get("RUNTIME_TARGET_JSON", "").strip()
-          if not raw_runtime_target:
-              raise SystemExit("RUNTIME_TARGET_JSON is required")
-          runtime_target = json.loads(raw_runtime_target)
-          profile = str(runtime_target.get("strategy_profile") or "").strip().lower()
-          if not profile:
-              raise SystemExit("RUNTIME_TARGET_JSON.strategy_profile is required")
-          canonical_profile = resolve_canonical_profile(profile)
-
-          raw_status = subprocess.check_output(
-              [sys.executable, "scripts/print_strategy_profile_status.py", "--json"],
-              text=True,
-          )
-          rows = json.loads(raw_status)
-          selected = next((row for row in rows if row["canonical_profile"] == canonical_profile), None)
-          if selected is None:
-              supported = ", ".join(sorted(row["canonical_profile"] for row in rows))
-              raise SystemExit(f"Unsupported STRATEGY_PROFILE={profile!r}; supported: {supported}")
-          if not selected.get("eligible") or not selected.get("enabled"):
-              raise SystemExit(f"STRATEGY_PROFILE={profile!r} is not eligible/enabled: {selected}")
-
-          output_path = os.environ["GITHUB_OUTPUT"]
-          with open(output_path, "a", encoding="utf-8") as output:
-              output.write(f"canonical_profile={canonical_profile}\n")
-              output.write(
-                  f"requires_snapshot_artifacts={str(bool(selected.get('requires_snapshot_artifacts'))).lower()}\n"
-              )
-              output.write(
-                  f"requires_snapshot_manifest_path={str(bool(selected.get('requires_snapshot_manifest_path'))).lower()}\n"
-              )
-              output.write(
-                  f"requires_strategy_config_path={str(bool(selected.get('requires_strategy_config_path'))).lower()}\n"
-              )
-              output.write(
-                  f"config_source_policy={str(selected.get('config_source_policy') or 'none')}\n"
-              )
-              output.write(f"runtime_target_json={json.dumps(runtime_target, sort_keys=True)}\n")
-          PY
+          sync_plan_json="$(python scripts/build_cloud_run_env_sync_plan.py --json)"
+          {
+            echo "sync_plan_json<<__SYNC_PLAN_JSON__"
+            printf '%s\n' "${sync_plan_json}"
+            echo "__SYNC_PLAN_JSON__"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Validate env sync inputs
         if: steps.config.outputs.env_sync_enabled == 'true'
         env:
-          REQUIRES_SNAPSHOT_ARTIFACTS: ${{ steps.strategy_requirements.outputs.requires_snapshot_artifacts }}
-          REQUIRES_SNAPSHOT_MANIFEST_PATH: ${{ steps.strategy_requirements.outputs.requires_snapshot_manifest_path }}
-          REQUIRES_STRATEGY_CONFIG_PATH: ${{ steps.strategy_requirements.outputs.requires_strategy_config_path }}
-          CONFIG_SOURCE_POLICY: ${{ steps.strategy_requirements.outputs.config_source_policy }}
-          RUNTIME_TARGET_JSON: ${{ steps.strategy_requirements.outputs.runtime_target_json }}
+          SYNC_PLAN_JSON: ${{ steps.strategy_requirements.outputs.sync_plan_json }}
         run: |
           set -euo pipefail
 
           required_vars=(
             CLOUD_RUN_REGION
             CLOUD_RUN_SERVICE
-            GLOBAL_TELEGRAM_CHAT_ID
-            NOTIFY_LANG
           )
 
           missing_vars=()
@@ -268,23 +223,21 @@ jobs:
             missing_vars+=("SCHWAB_APP_SECRET_SECRET_NAME or SCHWAB_APP_SECRET")
           fi
 
-          if [ "${REQUIRES_SNAPSHOT_ARTIFACTS:-}" = "true" ] && [ -z "${SCHWAB_FEATURE_SNAPSHOT_PATH:-}" ]; then
-            missing_vars+=("SCHWAB_FEATURE_SNAPSHOT_PATH")
-          fi
+          python - <<'PY'
+          import json
+          import os
 
-          if [ "${REQUIRES_SNAPSHOT_MANIFEST_PATH:-}" = "true" ] && [ -z "${SCHWAB_FEATURE_SNAPSHOT_MANIFEST_PATH:-}" ]; then
-            missing_vars+=("SCHWAB_FEATURE_SNAPSHOT_MANIFEST_PATH")
-          fi
-
-          if [ "${REQUIRES_STRATEGY_CONFIG_PATH:-}" = "true" ] \
-            && [ "${CONFIG_SOURCE_POLICY:-}" = "env_only" ] \
-            && [ -z "${SCHWAB_STRATEGY_CONFIG_PATH:-}" ]; then
-            missing_vars+=("SCHWAB_STRATEGY_CONFIG_PATH")
-          fi
-
-          if [ -z "${RUNTIME_TARGET_JSON:-}" ]; then
-            missing_vars+=("RUNTIME_TARGET_JSON")
-          fi
+          plan = json.loads(os.environ["SYNC_PLAN_JSON"])
+          targets = plan.get("targets") or []
+          if not targets:
+              raise SystemExit("Cloud Run env sync did not resolve any targets")
+          for target in targets:
+              service_name = str(target.get("service_name") or "").strip()
+              if not service_name:
+                  raise SystemExit("Cloud Run sync target is missing service_name")
+              if not isinstance(target.get("env"), dict):
+                  raise SystemExit(f"Cloud Run sync target {service_name} is missing env")
+          PY
 
           if [ "${#missing_vars[@]}" -gt 0 ]; then
             echo "Cloud Run env sync is enabled, but these values are missing:" >&2
@@ -379,19 +332,35 @@ jobs:
       - name: Sync Cloud Run environment
         if: steps.config.outputs.env_sync_enabled == 'true'
         env:
-          STRATEGY_PROFILE: ${{ steps.strategy_requirements.outputs.canonical_profile }}
-          RUNTIME_TARGET_JSON: ${{ steps.strategy_requirements.outputs.runtime_target_json }}
+          SYNC_PLAN_JSON: ${{ steps.strategy_requirements.outputs.sync_plan_json }}
         run: |
           set -euo pipefail
 
-          env_pairs=(
-            "GLOBAL_TELEGRAM_CHAT_ID=${GLOBAL_TELEGRAM_CHAT_ID}"
-            "NOTIFY_LANG=${NOTIFY_LANG}"
-            "STRATEGY_PROFILE=${STRATEGY_PROFILE}"
-            "RUNTIME_TARGET_JSON=${RUNTIME_TARGET_JSON}"
+          mapfile -t target_env_pairs < <(python - <<'PY'
+          import json
+          import os
+
+          plan = json.loads(os.environ["SYNC_PLAN_JSON"])
+          target = plan["targets"][0]
+          for key, value in sorted(target["env"].items()):
+              print(f"{key}={value}")
+          PY
           )
+          mapfile -t target_remove_env_vars < <(python - <<'PY'
+          import json
+          import os
+
+          plan = json.loads(os.environ["SYNC_PLAN_JSON"])
+          target = plan["targets"][0]
+          for key in sorted(target.get("remove_env_vars") or []):
+              print(key)
+          PY
+          )
+
+          env_pairs=("${target_env_pairs[@]}")
           secret_pairs=()
-          remove_env_vars=(
+          remove_env_vars=("${target_remove_env_vars[@]}")
+          remove_env_vars+=(
             "TELEGRAM_CHAT_ID"
             "CRISIS_ALERT_GOOGLE_VOICE_TO"
             "CRISIS_ALERT_GOOGLE_VOICE_GATEWAY"
@@ -529,108 +498,6 @@ jobs:
           else
             remove_env_vars+=("STRATEGY_PLUGIN_ALERT_TELEGRAM_BOT_TOKEN")
             remove_secret_vars+=("STRATEGY_PLUGIN_ALERT_TELEGRAM_BOT_TOKEN")
-          fi
-
-          if [ -n "${SCHWAB_FEATURE_SNAPSHOT_PATH:-}" ]; then
-            env_pairs+=("SCHWAB_FEATURE_SNAPSHOT_PATH=${SCHWAB_FEATURE_SNAPSHOT_PATH}")
-          else
-            remove_env_vars+=("SCHWAB_FEATURE_SNAPSHOT_PATH")
-          fi
-
-          if [ -n "${SCHWAB_FEATURE_SNAPSHOT_MANIFEST_PATH:-}" ]; then
-            env_pairs+=("SCHWAB_FEATURE_SNAPSHOT_MANIFEST_PATH=${SCHWAB_FEATURE_SNAPSHOT_MANIFEST_PATH}")
-          else
-            remove_env_vars+=("SCHWAB_FEATURE_SNAPSHOT_MANIFEST_PATH")
-          fi
-
-          if [ -n "${SCHWAB_FEATURE_SNAPSHOT_FALLBACK_MODE:-}" ]; then
-            env_pairs+=("SCHWAB_FEATURE_SNAPSHOT_FALLBACK_MODE=${SCHWAB_FEATURE_SNAPSHOT_FALLBACK_MODE}")
-          else
-            remove_env_vars+=("SCHWAB_FEATURE_SNAPSHOT_FALLBACK_MODE")
-          fi
-
-          if [ -n "${SCHWAB_FEATURE_SNAPSHOT_FALLBACK_CACHE_DIR:-}" ]; then
-            env_pairs+=("SCHWAB_FEATURE_SNAPSHOT_FALLBACK_CACHE_DIR=${SCHWAB_FEATURE_SNAPSHOT_FALLBACK_CACHE_DIR}")
-          else
-            remove_env_vars+=("SCHWAB_FEATURE_SNAPSHOT_FALLBACK_CACHE_DIR")
-          fi
-
-          if [ -n "${SCHWAB_FEATURE_SNAPSHOT_MAX_STALE_DAYS:-}" ]; then
-            env_pairs+=("SCHWAB_FEATURE_SNAPSHOT_MAX_STALE_DAYS=${SCHWAB_FEATURE_SNAPSHOT_MAX_STALE_DAYS}")
-          else
-            remove_env_vars+=("SCHWAB_FEATURE_SNAPSHOT_MAX_STALE_DAYS")
-          fi
-
-          if [ -n "${SCHWAB_STRATEGY_CONFIG_PATH:-}" ]; then
-            env_pairs+=("SCHWAB_STRATEGY_CONFIG_PATH=${SCHWAB_STRATEGY_CONFIG_PATH}")
-          else
-            remove_env_vars+=("SCHWAB_STRATEGY_CONFIG_PATH")
-          fi
-
-          if [ -n "${SCHWAB_STRATEGY_PLUGIN_MOUNTS_JSON:-}" ]; then
-            env_pairs+=("SCHWAB_STRATEGY_PLUGIN_MOUNTS_JSON=${SCHWAB_STRATEGY_PLUGIN_MOUNTS_JSON}")
-          else
-            remove_env_vars+=("SCHWAB_STRATEGY_PLUGIN_MOUNTS_JSON")
-          fi
-
-          if [ -n "${SCHWAB_MARKET_SIGNAL_HANDOFF_INDEX_URI:-}" ]; then
-            env_pairs+=("SCHWAB_MARKET_SIGNAL_HANDOFF_INDEX_URI=${SCHWAB_MARKET_SIGNAL_HANDOFF_INDEX_URI}")
-          else
-            remove_env_vars+=("SCHWAB_MARKET_SIGNAL_HANDOFF_INDEX_URI")
-          fi
-
-          if [ -n "${SCHWAB_MARKET_SIGNAL_HANDOFF_MANIFEST_URI:-}" ]; then
-            env_pairs+=("SCHWAB_MARKET_SIGNAL_HANDOFF_MANIFEST_URI=${SCHWAB_MARKET_SIGNAL_HANDOFF_MANIFEST_URI}")
-          else
-            remove_env_vars+=("SCHWAB_MARKET_SIGNAL_HANDOFF_MANIFEST_URI")
-          fi
-
-          if [ -n "${SCHWAB_MARKET_SIGNAL_CONSUMPTION_AUDIT_URI:-}" ]; then
-            env_pairs+=("SCHWAB_MARKET_SIGNAL_CONSUMPTION_AUDIT_URI=${SCHWAB_MARKET_SIGNAL_CONSUMPTION_AUDIT_URI}")
-          else
-            remove_env_vars+=("SCHWAB_MARKET_SIGNAL_CONSUMPTION_AUDIT_URI")
-          fi
-
-          if [ -n "${SCHWAB_MARKET_SIGNAL_CACHE_DIR:-}" ]; then
-            env_pairs+=("SCHWAB_MARKET_SIGNAL_CACHE_DIR=${SCHWAB_MARKET_SIGNAL_CACHE_DIR}")
-          else
-            remove_env_vars+=("SCHWAB_MARKET_SIGNAL_CACHE_DIR")
-          fi
-
-          if [ -n "${SCHWAB_MARKET_SIGNAL_REQUIRED:-}" ]; then
-            env_pairs+=("SCHWAB_MARKET_SIGNAL_REQUIRED=${SCHWAB_MARKET_SIGNAL_REQUIRED}")
-          else
-            remove_env_vars+=("SCHWAB_MARKET_SIGNAL_REQUIRED")
-          fi
-
-          if [ -n "${SCHWAB_MARKET_SIGNAL_FALLBACK_MODE:-}" ]; then
-            env_pairs+=("SCHWAB_MARKET_SIGNAL_FALLBACK_MODE=${SCHWAB_MARKET_SIGNAL_FALLBACK_MODE}")
-          else
-            remove_env_vars+=("SCHWAB_MARKET_SIGNAL_FALLBACK_MODE")
-          fi
-
-          if [ -n "${SCHWAB_MARKET_SIGNAL_MAX_STALE_DAYS:-}" ]; then
-            env_pairs+=("SCHWAB_MARKET_SIGNAL_MAX_STALE_DAYS=${SCHWAB_MARKET_SIGNAL_MAX_STALE_DAYS}")
-          else
-            remove_env_vars+=("SCHWAB_MARKET_SIGNAL_MAX_STALE_DAYS")
-          fi
-
-          if [ -n "${SCHWAB_MIN_RESERVED_CASH_USD:-}" ]; then
-            env_pairs+=("SCHWAB_MIN_RESERVED_CASH_USD=${SCHWAB_MIN_RESERVED_CASH_USD}")
-          else
-            remove_env_vars+=("SCHWAB_MIN_RESERVED_CASH_USD")
-          fi
-
-          if [ -n "${SCHWAB_RESERVED_CASH_RATIO:-}" ]; then
-            env_pairs+=("SCHWAB_RESERVED_CASH_RATIO=${SCHWAB_RESERVED_CASH_RATIO}")
-          else
-            remove_env_vars+=("SCHWAB_RESERVED_CASH_RATIO")
-          fi
-
-          if [ -n "${SCHWAB_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD:-}" ]; then
-            env_pairs+=("SCHWAB_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD=${SCHWAB_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD}")
-          else
-            remove_env_vars+=("SCHWAB_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD")
           fi
 
           if [ -n "${STRATEGY_PLUGIN_ALERT_CHANNELS:-}" ]; then
@@ -783,66 +650,6 @@ jobs:
             remove_env_vars+=("STRATEGY_PLUGIN_ALERT_TELEGRAM_BODY_MAX_CHARS")
           fi
 
-          if [ -n "${INCOME_THRESHOLD_USD:-}" ]; then
-            env_pairs+=("INCOME_THRESHOLD_USD=${INCOME_THRESHOLD_USD}")
-          fi
-
-          if [ -n "${SCHWAB_DRY_RUN_ONLY:-}" ]; then
-            env_pairs+=("SCHWAB_DRY_RUN_ONLY=${SCHWAB_DRY_RUN_ONLY}")
-          else
-            remove_env_vars+=("SCHWAB_DRY_RUN_ONLY")
-          fi
-
-          if [ -n "${QQQI_INCOME_RATIO:-}" ]; then
-            env_pairs+=("QQQI_INCOME_RATIO=${QQQI_INCOME_RATIO}")
-          fi
-
-          if [ -n "${INCOME_LAYER_ENABLED:-}" ]; then
-            env_pairs+=("INCOME_LAYER_ENABLED=${INCOME_LAYER_ENABLED}")
-          else
-            remove_env_vars+=("INCOME_LAYER_ENABLED")
-          fi
-
-          if [ -n "${INCOME_LAYER_START_USD:-}" ]; then
-            env_pairs+=("INCOME_LAYER_START_USD=${INCOME_LAYER_START_USD}")
-          else
-            remove_env_vars+=("INCOME_LAYER_START_USD")
-          fi
-
-          if [ -n "${INCOME_LAYER_MAX_RATIO:-}" ]; then
-            env_pairs+=("INCOME_LAYER_MAX_RATIO=${INCOME_LAYER_MAX_RATIO}")
-          else
-            remove_env_vars+=("INCOME_LAYER_MAX_RATIO")
-          fi
-
-          if [ -n "${CASH_ONLY_EXECUTION:-}" ]; then
-            env_pairs+=("CASH_ONLY_EXECUTION=${CASH_ONLY_EXECUTION}")
-          else
-            remove_env_vars+=("CASH_ONLY_EXECUTION")
-          fi
-
-          if [ -n "${RUNTIME_TARGET_ENABLED:-}" ]; then
-            env_pairs+=("RUNTIME_TARGET_ENABLED=${RUNTIME_TARGET_ENABLED}")
-          else
-            remove_env_vars+=("RUNTIME_TARGET_ENABLED")
-          fi
-
-          if [ -n "${DUAL_DRIVE_UNLEVERED_SYMBOL:-}" ]; then
-            env_pairs+=("DUAL_DRIVE_UNLEVERED_SYMBOL=${DUAL_DRIVE_UNLEVERED_SYMBOL}")
-          else
-            remove_env_vars+=("DUAL_DRIVE_UNLEVERED_SYMBOL")
-          fi
-
-          if [ -n "${EXECUTION_REPORT_GCS_URI:-}" ]; then
-            env_pairs+=("EXECUTION_REPORT_GCS_URI=${EXECUTION_REPORT_GCS_URI}")
-          else
-            remove_env_vars+=("EXECUTION_REPORT_GCS_URI")
-          fi
-
-          if [ -n "${GOOGLE_CLOUD_PROJECT:-}" ]; then
-            env_pairs+=("GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT}")
-          fi
-
           join_by_delimiter() {
             local delimiter="$1"
             shift
@@ -871,16 +678,19 @@ jobs:
           import json
           import os
 
-          runtime_target = json.loads(os.environ.get("RUNTIME_TARGET_JSON") or "{}")
-          target = {
-              "service_name": os.environ.get("CLOUD_RUN_SERVICE"),
+          plan = json.loads(os.environ["SYNC_PLAN_JSON"])
+          target = plan["targets"][0]
+          env = target.get("env") or {}
+          runtime_target = json.loads(env.get("RUNTIME_TARGET_JSON") or "{}")
+          payload = {
+              "service_name": target.get("service_name") or os.environ.get("CLOUD_RUN_SERVICE"),
               "service_url": os.environ.get("SERVICE_URL"),
-              "strategy_profile": runtime_target.get("strategy_profile"),
+              "strategy_profile": target.get("strategy_profile") or env.get("STRATEGY_PROFILE"),
               "account_scope": runtime_target.get("account_scope"),
-              "runtime_target_enabled": os.environ.get("RUNTIME_TARGET_ENABLED", "true"),
-              "scheduler": runtime_target.get("scheduler") if isinstance(runtime_target.get("scheduler"), dict) else {},
+              "runtime_target_enabled": env.get("RUNTIME_TARGET_ENABLED", "true"),
+              "scheduler": target.get("scheduler") or {},
           }
-          print(json.dumps({"targets": [target]}, separators=(",", ":")))
+          print(json.dumps({"targets": [payload]}, separators=(",", ":")))
           PY
           )"
           env_pairs+=("MONITOR_DISPATCH_TARGETS_JSON=${monitor_targets_json}")
@@ -913,7 +723,7 @@ jobs:
       - name: Sync Cloud Scheduler schedule
         if: steps.config.outputs.env_sync_enabled == 'true'
         env:
-          RUNTIME_TARGET_JSON: ${{ steps.strategy_requirements.outputs.runtime_target_json }}
+          SYNC_PLAN_JSON: ${{ steps.strategy_requirements.outputs.sync_plan_json }}
         run: |
           set -euo pipefail
 
@@ -927,24 +737,13 @@ jobs:
           import json
           import os
 
-          raw_runtime_target = os.environ.get("RUNTIME_TARGET_JSON", "").strip()
-          runtime_scheduler = {}
-          if raw_runtime_target:
-              try:
-                  runtime_target = json.loads(raw_runtime_target)
-              except json.JSONDecodeError:
-                  runtime_target = {}
-              scheduler = runtime_target.get("scheduler") if isinstance(runtime_target, dict) else {}
-              if isinstance(scheduler, dict):
-                  runtime_scheduler = scheduler
-
-          def configured_time(key: str, name: str, default: str) -> str:
-              return str(runtime_scheduler.get(key) or os.environ.get(name, "").strip() or default)
-
-          print(str(runtime_scheduler.get("timezone") or "America/New_York").strip())
-          print(configured_time("main_time", "CLOUD_SCHEDULER_MAIN_TIME", "45 15"))
-          print(configured_time("probe_time", "CLOUD_SCHEDULER_PROBE_TIME", "35 9,15"))
-          print(configured_time("precheck_time", "CLOUD_SCHEDULER_PRECHECK_TIME", "45 9"))
+          plan = json.loads(os.environ["SYNC_PLAN_JSON"])
+          target = plan["targets"][0]
+          scheduler = target.get("scheduler") or {}
+          print(str(scheduler.get("timezone") or "America/New_York").strip())
+          print(str(scheduler.get("main_time") or os.environ.get("CLOUD_SCHEDULER_MAIN_TIME", "").strip() or "45 15"))
+          print(str(scheduler.get("probe_time") or os.environ.get("CLOUD_SCHEDULER_PROBE_TIME", "").strip() or "35 9,15"))
+          print(str(scheduler.get("precheck_time") or os.environ.get("CLOUD_SCHEDULER_PRECHECK_TIME", "").strip() or "45 9"))
           PY
           )
           market_timezone="${scheduler_config[0]}"
