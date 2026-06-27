@@ -7,6 +7,7 @@ from pathlib import Path
 
 from quant_platform_kit.common.runtime_config import (
     resolve_bool_value,
+    resolve_dry_run_env,
     resolve_strategy_runtime_path_settings,
 )
 from quant_platform_kit.common.runtime_target import (
@@ -237,7 +238,7 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
         strategy_display_name=runtime_paths.strategy_display_name,
         strategy_domain=runtime_paths.strategy_domain,
         notify_lang=os.getenv("NOTIFY_LANG", DEFAULT_NOTIFY_LANG),
-        dry_run_only=resolve_bool_value(os.getenv("SCHWAB_DRY_RUN_ONLY")),
+        dry_run_only=resolve_dry_run_env(os.environ, "SCHWAB_DRY_RUN_ONLY"),
         runtime_target_enabled=_runtime_target_enabled_env(),
         reserved_cash_floor_usd=_resolve_non_negative_float_env(
             "SCHWAB_MIN_RESERVED_CASH_USD",

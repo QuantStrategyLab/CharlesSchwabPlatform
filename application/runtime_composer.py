@@ -9,6 +9,10 @@ from typing import Any
 from application.runtime_dependencies import SchwabRebalanceConfig, SchwabRebalanceRuntime
 from application.runtime_notification_adapters import build_runtime_notification_adapters
 from application.runtime_reporting_adapters import build_runtime_reporting_adapters
+from quant_platform_kit.common.execution_state import (
+    build_execution_marker_store_from_env,
+    resolve_execution_dedup_enabled,
+)
 from quant_platform_kit.common.runtime_assembly import build_runtime_assembly
 from quant_platform_kit.common.port_adapters import CallableNotificationPort
 from quant_platform_kit.common.runtime_target import build_runtime_context_fields
@@ -149,6 +153,7 @@ class SchwabRuntimeComposer:
             lambda _error: (),
         )
         plugin_error_lines = tuple(build_plugin_error_lines(strategy_plugin_error))
+        execution_state_account_scope = "PAPER" if self.dry_run_only else "LIVE"
         return SchwabRebalanceConfig(
             translator=self.strategy_adapters.translator,
             strategy_display_name=self.strategy_display_name_localized,
@@ -164,6 +169,18 @@ class SchwabRuntimeComposer:
             extra_notification_lines=(*plugin_lines, *plugin_error_lines),
             strategy_plugin_signals=tuple(strategy_plugin_signals or ()),
             cash_only_execution=bool(cash_only_execution),
+            execution_dedup_enabled=resolve_execution_dedup_enabled(
+                platform_env_prefix="SCHWAB",
+                env_reader=self.env_reader,
+                dry_run_only=self.dry_run_only,
+                account_scope=execution_state_account_scope,
+            ),
+            execution_state_store=build_execution_marker_store_from_env(
+                platform_env_prefix="SCHWAB",
+                env_reader=self.env_reader,
+                gcp_project_id=self.project_id,
+            ),
+            execution_state_account_scope=execution_state_account_scope,
         )
 
     def load_strategy_plugin_signals(self, raw_mounts):
