@@ -5,15 +5,18 @@ from types import SimpleNamespace
 
 import pytest
 
-import market_signal_runtime
 from us_equity_strategies.signals import runtime_market_signal_inputs as runtime_signal_inputs
+
+
+def _resolve(*args, **kwargs):
+    return runtime_signal_inputs.resolve_external_market_signal_inputs(*args, **kwargs)
 
 
 def test_unsupported_profile_does_not_load_market_signal():
     settings = SimpleNamespace(market_signal_required=True)
 
     assert (
-        market_signal_runtime.resolve_external_market_signal_inputs(
+        runtime_signal_inputs.resolve_external_market_signal_inputs(
             strategy_profile="tqqq_growth_income",
             available_inputs={"derived_indicators"},
             runtime_settings=settings,
@@ -25,7 +28,7 @@ def test_unsupported_profile_does_not_load_market_signal():
 def test_ibit_without_reference_provides_empty_indicator_input():
     settings = SimpleNamespace(market_signal_required=False)
 
-    assert market_signal_runtime.resolve_external_market_signal_inputs(
+    assert runtime_signal_inputs.resolve_external_market_signal_inputs(
         strategy_profile="ibit_smart_dca",
         available_inputs={"derived_indicators"},
         runtime_settings=settings,
@@ -36,7 +39,7 @@ def test_ibit_required_reference_missing_raises():
     settings = SimpleNamespace(market_signal_required=True)
 
     with pytest.raises(RuntimeError, match="external market signal is required"):
-        market_signal_runtime.resolve_external_market_signal_inputs(
+        runtime_signal_inputs.resolve_external_market_signal_inputs(
             strategy_profile="ibit_smart_dca",
             available_inputs={"derived_indicators"},
             runtime_settings=settings,
@@ -46,7 +49,7 @@ def test_ibit_required_reference_missing_raises():
 def test_soxl_without_reference_preserves_legacy_inputs():
     settings = SimpleNamespace(market_signal_required=False)
 
-    assert market_signal_runtime.resolve_external_market_signal_inputs(
+    assert runtime_signal_inputs.resolve_external_market_signal_inputs(
         strategy_profile="soxl_soxx_trend_income",
         available_inputs={"derived_indicators"},
         runtime_settings=settings,
@@ -56,7 +59,7 @@ def test_soxl_without_reference_preserves_legacy_inputs():
 def test_nasdaq_without_reference_preserves_legacy_inputs():
     settings = SimpleNamespace(market_signal_required=False)
 
-    assert market_signal_runtime.resolve_external_market_signal_inputs(
+    assert runtime_signal_inputs.resolve_external_market_signal_inputs(
         strategy_profile="nasdaq_sp500_smart_dca",
         available_inputs={"derived_indicators"},
         runtime_settings=settings,
@@ -70,7 +73,7 @@ def test_soxl_required_reference_missing_raises():
         RuntimeError,
         match="soxl_soxx_trend_income external market signal is required",
     ):
-        market_signal_runtime.resolve_external_market_signal_inputs(
+        runtime_signal_inputs.resolve_external_market_signal_inputs(
             strategy_profile="soxl_soxx_trend_income",
             available_inputs={"derived_indicators"},
             runtime_settings=settings,
@@ -120,7 +123,7 @@ def test_ibit_handoff_index_reference_is_extracted(monkeypatch, tmp_path):
         market_signal_max_stale_days=5,
     )
 
-    assert market_signal_runtime.resolve_external_market_signal_inputs(
+    assert runtime_signal_inputs.resolve_external_market_signal_inputs(
         strategy_profile="ibit_smart_dca",
         available_inputs={"derived_indicators"},
         runtime_settings=settings,
@@ -188,7 +191,7 @@ def test_nasdaq_handoff_index_reference_is_extracted(monkeypatch, tmp_path):
         market_signal_max_stale_days=4,
     )
 
-    assert market_signal_runtime.resolve_external_market_signal_inputs(
+    assert runtime_signal_inputs.resolve_external_market_signal_inputs(
         strategy_profile="nasdaq_sp500_smart_dca",
         available_inputs={"derived_indicators"},
         runtime_settings=settings,
@@ -255,7 +258,7 @@ def test_soxl_handoff_index_reference_is_extracted(monkeypatch, tmp_path):
         market_signal_fallback_mode="none",
     )
 
-    assert market_signal_runtime.resolve_external_market_signal_inputs(
+    assert runtime_signal_inputs.resolve_external_market_signal_inputs(
         strategy_profile="soxl_soxx_trend_income",
         available_inputs={"derived_indicators"},
         runtime_settings=settings,
