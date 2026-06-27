@@ -5,11 +5,12 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 
-from application.execution_service import execute_rebalance_cycle
+from application.execution_service import execute_rebalance_cycle, ExecutionCycleResult
 from application.runtime_dependencies import SchwabRebalanceConfig, SchwabRebalanceRuntime
 from application.signal_snapshot import build_signal_snapshot
 from notifications.events import NotificationPublisher, RenderedNotification
 from notifications import renderers as notification_renderers
+from quant_platform_kit.common.execution_state import build_execution_marker_key
 from quant_platform_kit.common.models import QuoteSnapshot
 from quant_platform_kit.common.notification_localization import (
     localize_notification_text as _base_localize_notification_text,
@@ -227,6 +228,81 @@ _localize_notification_text = notification_renderers._localize_notification_text
 _format_dashboard_text = notification_renderers._format_dashboard_text
 
 
+def _resolve_execution_account_scope(*, config: SchwabRebalanceConfig, plan: dict) -> str:
+    account_hash = str(plan.get("account_hash") or "").strip()
+    if account_hash:
+        return account_hash
+    configured_scope = str(getattr(config, "execution_state_account_scope", "") or "").strip()
+    if configured_scope:
+        return configured_scope
+    return "PAPER" if bool(getattr(config, "dry_run_only", False)) else "LIVE"
+
+
+def _build_execution_marker_key(*, config: SchwabRebalanceConfig, execution: dict, plan: dict) -> str:
+    if not getattr(config, "execution_dedup_enabled", False):
+        return ""
+    execution_mode = "paper" if bool(getattr(config, "dry_run_only", False)) else "live"
+    return build_execution_marker_key(
+        platform="schwab",
+        strategy_profile=getattr(config, "strategy_profile", "") or "unknown",
+        account_scope=_resolve_execution_account_scope(config=config, plan=plan),
+        execution_mode=execution_mode,
+        signal_date=execution.get("signal_date"),
+        effective_date=execution.get("effective_date"),
+        execution_timing_contract=execution.get("execution_timing_contract"),
+    )
+
+
+def _execution_already_recorded_message(*, config: SchwabRebalanceConfig, execution: dict) -> str:
+    message = config.translator(
+        "execution_already_recorded",
+        signal_date=str(execution.get("signal_date") or ""),
+        effective_date=str(execution.get("effective_date") or ""),
+    )
+    if not message or message == "execution_already_recorded":
+        message = (
+            f"Execution already recorded for signal={execution.get('signal_date')} "
+            f"effective={execution.get('effective_date')}"
+        )
+    return message
+
+
+def _should_record_execution_marker(*, result: ExecutionCycleResult, config: SchwabRebalanceConfig) -> bool:
+    if not getattr(config, "execution_dedup_enabled", False):
+        return False
+    return bool(tuple(getattr(result, "trade_logs", ()) or ()))
+
+
+def _record_execution_marker(
+    *,
+    config: SchwabRebalanceConfig,
+    marker_key: str,
+    result: ExecutionCycleResult,
+    plan: dict,
+    notify_issue,
+) -> None:
+    store = getattr(config, "execution_state_store", None)
+    if not store or not marker_key:
+        return
+    try:
+        store.record_marker(
+            marker_key,
+            metadata={
+                "strategy_profile": getattr(config, "strategy_profile", ""),
+                "account_scope": _resolve_execution_account_scope(config=config, plan=plan),
+                "dry_run_only": bool(getattr(config, "dry_run_only", False)),
+                "trade_logs_count": len(tuple(getattr(result, "trade_logs", ()) or ())),
+                "signal_date": str(dict(getattr(result, "execution", {}) or {}).get("signal_date") or ""),
+                "effective_date": str(dict(getattr(result, "execution", {}) or {}).get("effective_date") or ""),
+            },
+        )
+    except Exception as exc:
+        notify_issue(
+            "Execution marker write failed",
+            f"Marker: {marker_key}\n{type(exc).__name__}: {exc}",
+        )
+
+
 def _legacy_quote_snapshot(symbol, quote_snapshots) -> QuoteSnapshot:
     raw_snapshot = quote_snapshots[str(symbol).strip().upper()]
     return QuoteSnapshot(
@@ -336,38 +412,91 @@ def run_strategy_core(
         if runtime.execution_port_factory is not None
         else None
     )
-    execution_result = execute_rebalance_cycle(
-        client=client,
-        plan=plan,
-        portfolio=portfolio,
-        execution=execution,
-        allocation=allocation,
-        fetch_managed_snapshot=lambda _client: runtime.portfolio_port.get_portfolio_snapshot(),
-        market_data_port=runtime.market_data_port,
-        load_plan=load_plan,
-        execution_port=execution_port,
-        submit_equity_order=(
-            (lambda _client, account_hash, order_intent: runtime.submit_equity_order(account_hash, order_intent))
-            if runtime.submit_equity_order is not None
-            else None
-        ),
-        translator=config.translator,
-        limit_buy_premium=config.limit_buy_premium,
-        limit_buy_premium_by_symbol=config.limit_buy_premium_by_symbol,
-        sell_settle_delay_sec=config.sell_settle_delay_sec,
-        dry_run_only=config.dry_run_only,
-        post_sell_refresh_attempts=config.post_sell_refresh_attempts,
-        post_sell_refresh_interval_sec=config.post_sell_refresh_interval_sec,
-        sleeper=sleeper_fn,
-        safe_haven_cash_substitute_threshold_usd=config.safe_haven_cash_substitute_threshold_usd,
-        cash_only_execution=getattr(config, "cash_only_execution", True),
-        publish_order_issue=lambda message: notification_publisher.publish(
-            RenderedNotification(
-                detailed_text=message,
-                compact_text=message,
+    execution_marker_key = _build_execution_marker_key(config=config, execution=execution, plan=plan)
+    execution_state_store = getattr(config, "execution_state_store", None)
+    execution_already_recorded = False
+    if execution_marker_key and execution_state_store:
+        try:
+            execution_already_recorded = bool(execution_state_store.has_marker(execution_marker_key))
+        except Exception as exc:
+            print(
+                f"Execution marker read failed\nMarker: {execution_marker_key}\n{type(exc).__name__}: {exc}",
+                flush=True,
             )
-        ),
-    )
+        if not execution_already_recorded and hasattr(execution_state_store, "has_prior_execution_report"):
+            try:
+                execution_already_recorded = bool(
+                    execution_state_store.has_prior_execution_report(
+                        platform="schwab",
+                        strategy_profile=getattr(config, "strategy_profile", "") or "unknown",
+                        account_scope=_resolve_execution_account_scope(config=config, plan=plan),
+                        signal_date=execution.get("signal_date"),
+                        effective_date=execution.get("effective_date"),
+                        dry_run_only=bool(getattr(config, "dry_run_only", False)),
+                    )
+                )
+            except Exception as exc:
+                print(
+                    f"Execution report dedup read failed\nMarker: {execution_marker_key}\n{type(exc).__name__}: {exc}",
+                    flush=True,
+                )
+
+    if execution_already_recorded:
+        message = _execution_already_recorded_message(config=config, execution=execution)
+        print(message, flush=True)
+        execution_result = ExecutionCycleResult(
+            plan=plan,
+            portfolio=portfolio,
+            execution=execution,
+            allocation=allocation,
+            trade_logs=(),
+        )
+    else:
+        execution_result = execute_rebalance_cycle(
+            client=client,
+            plan=plan,
+            portfolio=portfolio,
+            execution=execution,
+            allocation=allocation,
+            fetch_managed_snapshot=lambda _client: runtime.portfolio_port.get_portfolio_snapshot(),
+            market_data_port=runtime.market_data_port,
+            load_plan=load_plan,
+            execution_port=execution_port,
+            submit_equity_order=(
+                (lambda _client, account_hash, order_intent: runtime.submit_equity_order(account_hash, order_intent))
+                if runtime.submit_equity_order is not None
+                else None
+            ),
+            translator=config.translator,
+            limit_buy_premium=config.limit_buy_premium,
+            limit_buy_premium_by_symbol=config.limit_buy_premium_by_symbol,
+            sell_settle_delay_sec=config.sell_settle_delay_sec,
+            dry_run_only=config.dry_run_only,
+            post_sell_refresh_attempts=config.post_sell_refresh_attempts,
+            post_sell_refresh_interval_sec=config.post_sell_refresh_interval_sec,
+            sleeper=sleeper_fn,
+            safe_haven_cash_substitute_threshold_usd=config.safe_haven_cash_substitute_threshold_usd,
+            cash_only_execution=getattr(config, "cash_only_execution", True),
+            publish_order_issue=lambda message: notification_publisher.publish(
+                RenderedNotification(
+                    detailed_text=message,
+                    compact_text=message,
+                )
+            ),
+        )
+        if _should_record_execution_marker(result=execution_result, config=config):
+            _record_execution_marker(
+                config=config,
+                marker_key=execution_marker_key,
+                result=execution_result,
+                plan=plan,
+                notify_issue=lambda title, detail: notification_publisher.publish(
+                    RenderedNotification(
+                        detailed_text=f"{title}\n{detail}",
+                        compact_text=f"{title}\n{detail}",
+                    )
+                ),
+            )
     portfolio = execution_result.portfolio
     execution = execution_result.execution
     signal_metadata = dict(execution.get("signal_metadata") or {})

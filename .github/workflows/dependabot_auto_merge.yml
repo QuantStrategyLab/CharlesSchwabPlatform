@@ -22,12 +22,19 @@ jobs:
         run: |
           set -euo pipefail
           BRANCH_NAME="${{ github.event.workflow_run.head_branch }}"
-          PR_NUMBER=$(gh pr list --repo "${GITHUB_REPOSITORY}" --state open --head "${BRANCH_NAME}" --json number --jq '.[0].number // empty')
+          PR_PAYLOAD=$(gh pr list --repo "${GITHUB_REPOSITORY}" --state open --head "${BRANCH_NAME}" --json number,headRefOid --jq '.[0] // {}')
+          PR_NUMBER=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("number", ""))' <<<"${PR_PAYLOAD}")
+          PR_HEAD_SHA=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("headRefOid", ""))' <<<"${PR_PAYLOAD}")
           if [ -z "${PR_NUMBER}" ]; then
             echo "No open Dependabot PR found for ${BRANCH_NAME}." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
+          if [ "${PR_HEAD_SHA}" != "${{ github.event.workflow_run.head_sha }}" ]; then
+            echo "Skipping auto-merge: PR #${PR_NUMBER} head ${PR_HEAD_SHA} does not match completed CI head ${{ github.event.workflow_run.head_sha }}." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "head_sha=${PR_HEAD_SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Evaluate merge eligibility
         id: merge_guard
@@ -36,7 +43,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          gh pr view "${{ steps.pr.outputs.pr_number }}" --repo "${GITHUB_REPOSITORY}" --json number,isDraft,author,url,labels > pr.json
+          gh pr view "${{ steps.pr.outputs.pr_number }}" --repo "${GITHUB_REPOSITORY}" --json number,isDraft,author,url,body,labels > pr.json
           python3 - <<'PY'
           import json
           import os
@@ -45,16 +52,26 @@ jobs:
           pr = json.loads(Path("pr.json").read_text(encoding="utf-8"))
           author = (pr.get("author") or {}).get("login")
           labels = {item.get("name", "") for item in pr.get("labels", [])}
-          should_merge = author in {"dependabot[bot]", "app/dependabot"} and not pr.get("isDraft")
-          reason = "ready" if should_merge else "not_dependabot_or_draft"
+          body = pr.get("body") or ""
+          is_major = "update-type: version-update:semver-major" in body
+          dependabot_authors = {"dependabot[bot]", "app/dependabot"}
+          is_dependabot = author in dependabot_authors and "dependencies" in labels
+          should_merge = is_dependabot and not pr.get("isDraft") and not is_major
+          if should_merge:
+              reason = "ready"
+          elif is_major:
+              reason = "major_update"
+          else:
+              reason = "not_eligible_dependabot_pr"
 
           summary_lines = [
               "## Auto-Merge Gate",
               f"- PR: {pr['url']}",
               f"- Author: `{author or '<unknown>'}`",
-              f"- Draft: `{ 'yes' if pr.get('isDraft') else 'no' }`",
-              f"- Dependabot label: `{ 'yes' if 'dependencies' in labels else 'no' }`",
-              f"- Final merge decision: `{ 'merge' if should_merge else 'skip' }`",
+              f"- Draft: `{'yes' if pr.get('isDraft') else 'no'}`",
+              f"- Dependabot label: `{'yes' if 'dependencies' in labels else 'no'}`",
+              f"- Major update: `{'yes' if is_major else 'no'}`",
+              f"- Final merge decision: `{'merge' if should_merge else 'skip'}`",
               f"- Reason: `{reason}`",
           ]
           Path("pr-summary.md").write_text("\n".join(summary_lines).strip() + "\n", encoding="utf-8")
@@ -71,4 +88,4 @@ jobs:
         if: steps.merge_guard.outputs.should_merge == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh pr merge "${{ steps.pr.outputs.pr_number }}" --repo "${GITHUB_REPOSITORY}" --rebase --delete-branch
+        run: gh pr merge "${{ steps.pr.outputs.pr_number }}" --repo "${GITHUB_REPOSITORY}" --rebase --delete-branch --match-head-commit "${{ steps.pr.outputs.head_sha }}"

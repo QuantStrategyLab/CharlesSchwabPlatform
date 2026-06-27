@@ -1673,6 +1673,99 @@ class RebalanceServiceTests(unittest.TestCase):
         self.assertIn("模拟运行", sent_messages[0])
         self.assertIn("模拟下单", sent_messages[0])
 
+    def test_run_strategy_skips_when_execution_marker_already_exists(self):
+        sent_messages = []
+        observed_orders = []
+        checked_keys = []
+        plan = {
+            "account_hash": "demo",
+            "allocation": {
+                "target_mode": "value",
+                "strategy_symbols": ("SOXX",),
+                "risk_symbols": ("SOXX",),
+                "income_symbols": (),
+                "safe_haven_symbols": (),
+                "targets": {"SOXX": 500.0},
+            },
+            "portfolio": {
+                "strategy_symbols": ("SOXX",),
+                "portfolio_rows": (("SOXX",),),
+                "market_values": {"SOXX": 0.0},
+                "quantities": {"SOXX": 0},
+                "liquid_cash": 600.0,
+                "total_equity": 600.0,
+                "cash_sweep_symbol": "BOXX",
+            },
+            "execution": {
+                "trade_threshold_value": 10.0,
+                "reserved_cash": 0.0,
+                "signal_display": "Risk on",
+                "dashboard_text": "dashboard",
+                "signal_date": "2026-06-01",
+                "effective_date": "2026-06-02",
+                "execution_timing_contract": "next_trading_day",
+                "separator": "━━━━━━━━━━━━━━━━━━",
+            },
+        }
+        snapshot = PortfolioSnapshot(
+            as_of="2026-06-02",
+            total_equity=600.0,
+            buying_power=600.0,
+            positions=(Position(symbol="SOXX", quantity=0, market_value=0.0),),
+            metadata={"account_hash": "demo"},
+        )
+        quote_snapshots = {
+            "SOXX": QuoteSnapshot(symbol="SOXX", as_of="2026-06-02", last_price=524.0, ask_price=524.0),
+        }
+
+        class FakeStore:
+            def has_marker(self, marker_key):
+                checked_keys.append(marker_key)
+                return True
+
+            def record_marker(self, *_args, **_kwargs):
+                raise AssertionError("duplicate run must not record a new marker")
+
+        run_strategy_core(
+            runtime=SchwabRebalanceRuntime(
+                fetch_reference_history=lambda: [{"close": 1.0, "high": 1.0, "low": 1.0}],
+                portfolio_port=CallablePortfolioPort(lambda: snapshot),
+                market_data_port=CallableMarketDataPort(quote_loader=lambda symbol: quote_snapshots[symbol]),
+                resolve_rebalance_plan=lambda *, qqq_history, snapshot: plan,
+                notifications=CallableNotificationPort(sent_messages.append),
+                execution_port_factory=lambda _account_hash: CallableExecutionPort(
+                    lambda order_intent: (
+                        observed_orders.append(order_intent),
+                        ExecutionReport(
+                            symbol=order_intent.symbol,
+                            side=order_intent.side,
+                            quantity=order_intent.quantity,
+                            status="accepted",
+                            broker_order_id="schwab-order-1",
+                        ),
+                    )[-1]
+                ),
+            ),
+            config=SchwabRebalanceConfig(
+                translator=build_translator("en"),
+                strategy_display_name="SOXL/SOXX Semiconductor Trend Income",
+                limit_buy_premium=1.005,
+                sell_settle_delay_sec=0,
+                strategy_profile="soxl_soxx_trend_income",
+                dry_run_only=True,
+                execution_dedup_enabled=True,
+                execution_state_store=FakeStore(),
+                execution_state_account_scope="PAPER",
+            ),
+        )
+
+        self.assertEqual(len(checked_keys), 1)
+        self.assertIn("paper", checked_keys[0])
+        self.assertEqual(observed_orders, [])
+        self.assertEqual(len(sent_messages), 1)
+        self.assertIn("Heartbeat", sent_messages[0])
+        self.assertIn("No rebalance needed", sent_messages[0])
+
 
 if __name__ == "__main__":
     unittest.main()

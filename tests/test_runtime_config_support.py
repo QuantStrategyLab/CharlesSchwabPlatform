@@ -92,7 +92,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(settings.strategy_display_name, "TQQQ Growth Income")
         self.assertEqual(settings.strategy_domain, US_EQUITY_DOMAIN)
         self.assertEqual(settings.notify_lang, DEFAULT_NOTIFY_LANG)
-        self.assertFalse(settings.dry_run_only)
+        self.assertTrue(settings.dry_run_only)
         self.assertEqual(settings.runtime_target.platform_id, "schwab")
         self.assertEqual(settings.runtime_target.execution_mode, "live")
         self.assertTrue(settings.runtime_target_enabled)
