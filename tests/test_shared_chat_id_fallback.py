@@ -51,6 +51,7 @@ def install_stub_modules():
     rebalance_service_module.run_strategy_core = lambda *args, **kwargs: None
 
     cloud_run_module = types.ModuleType("entrypoints.cloud_run")
+    cloud_run_module.is_market_open_now = lambda **_kwargs: True
     cloud_run_module.is_market_open_today = lambda: True
 
     strategy_runtime_module = types.ModuleType("strategy_runtime")
