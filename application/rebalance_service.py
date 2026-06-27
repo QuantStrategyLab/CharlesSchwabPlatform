@@ -477,6 +477,7 @@ def run_strategy_core(
             sleeper=sleeper_fn,
             safe_haven_cash_substitute_threshold_usd=config.safe_haven_cash_substitute_threshold_usd,
             cash_only_execution=getattr(config, "cash_only_execution", True),
+            notional_buy_execution=getattr(config, "notional_buy_execution", False),
             publish_order_issue=lambda message: notification_publisher.publish(
                 RenderedNotification(
                     detailed_text=message,

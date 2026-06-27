@@ -318,7 +318,8 @@ def install_stub_modules(strategy_plugin_mounts_json=None, notify_lang="en"):
     decision_mapper_module.map_strategy_decision_to_plan = lambda *args, **kwargs: {}
 
     cloud_run_module = types.ModuleType("entrypoints.cloud_run")
-    cloud_run_module.is_market_open_today = lambda: True
+    cloud_run_module.is_market_open_now = lambda **_kwargs: True
+    cloud_run_module.is_market_open_today = lambda **_kwargs: True
 
     telegram_module = types.ModuleType("notifications.telegram")
     telegram_module.build_signal_text = lambda translator: (lambda key, **kwargs: translator(key, **kwargs))
@@ -426,6 +427,9 @@ def install_stub_modules(strategy_plugin_mounts_json=None, notify_lang="en"):
 
     pandas_market_calendars = types.ModuleType("pandas_market_calendars")
 
+    runtime_execution_policy_module = types.ModuleType("runtime_execution_policy")
+    runtime_execution_policy_module.dca_execution_unsupported_reason = lambda _profile: None
+
     modules = {
         "flask": flask_module,
         "requests": requests_module,
@@ -446,6 +450,7 @@ def install_stub_modules(strategy_plugin_mounts_json=None, notify_lang="en"):
         "quant_platform_kit.common.strategy_plugins": qpk_strategy_plugins_module,
         "quant_platform_kit.strategy_contracts": qpk_strategy_contracts_module,
         "runtime_config_support": runtime_config_support_module,
+        "runtime_execution_policy": runtime_execution_policy_module,
         "strategy_runtime": strategy_runtime_module,
         "runtime_logging": runtime_logging_module,
         "google": google_module,
@@ -557,7 +562,7 @@ class RequestHandlingTests(unittest.TestCase):
     def test_handle_schwab_returns_market_closed(self):
         module = load_module()
         module.get_client_from_secret = lambda *args, **kwargs: object()
-        module.is_market_open_today = lambda: False
+        module._schwab_market_open_now = lambda: (False, None)
         module.run_strategy_core = lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("should not run"))
 
         with patch.dict(
@@ -579,7 +584,7 @@ class RequestHandlingTests(unittest.TestCase):
         observed = {"called": False}
 
         module.get_client_from_secret = lambda *args, **kwargs: object()
-        module.is_market_open_today = lambda: True
+        module._schwab_market_open_now = lambda: (True, None)
 
         def fake_run_strategy_core(client, now_ny, **_kwargs):
             observed["called"] = True
@@ -660,7 +665,7 @@ class RequestHandlingTests(unittest.TestCase):
         observed = {"alerts": []}
 
         module.get_client_from_secret = lambda *args, **kwargs: object()
-        module.is_market_open_today = lambda: True
+        module._schwab_market_open_now = lambda: (True, None)
         module.load_strategy_plugin_signals = lambda: ((signal,), None)
         module.attach_strategy_plugin_report = lambda *args, **kwargs: None
 
@@ -687,7 +692,7 @@ class RequestHandlingTests(unittest.TestCase):
         observed = {"called": False, "dry_run_only_override": None}
 
         module.get_client_from_secret = lambda *args, **kwargs: object()
-        module.is_market_open_today = lambda: True
+        module._schwab_market_open_now = lambda: (True, None)
         module.load_strategy_plugin_signals = lambda: ((), None)
         module.attach_strategy_plugin_report = lambda *args, **kwargs: None
         module.build_execution_report = lambda log_context, **_kwargs: {"status": "pending"}
@@ -715,7 +720,7 @@ class RequestHandlingTests(unittest.TestCase):
         observed = {"notifications": []}
 
         module.get_client_from_secret = lambda *args, **kwargs: object()
-        module.is_market_open_today = lambda: False
+        module._schwab_market_open_now = lambda: (False, None)
         module.load_strategy_plugin_signals = lambda: ((), None)
         module.attach_strategy_plugin_report = lambda *args, **kwargs: None
         module.build_execution_report = lambda log_context, **_kwargs: {"status": "pending"}
@@ -801,7 +806,7 @@ class RequestHandlingTests(unittest.TestCase):
         module.build_run_id = lambda: "run-001"
         module.emit_runtime_log = lambda context, event, **fields: observed.append((context.run_id, event, fields))
         module.get_client_from_secret = lambda *args, **kwargs: object()
-        module.is_market_open_today = lambda: True
+        module._schwab_market_open_now = lambda: (True, None)
         module.run_strategy_core = lambda *_args, **_kwargs: None
 
         with module.app.test_request_context("/", method="POST"):
@@ -821,7 +826,7 @@ class RequestHandlingTests(unittest.TestCase):
 
         module.build_run_id = lambda: "run-001"
         module.get_client_from_secret = lambda *args, **kwargs: object()
-        module.is_market_open_today = lambda: True
+        module._schwab_market_open_now = lambda: (True, None)
         module.run_strategy_core = lambda *_args, **_kwargs: None
         module.persist_execution_report = lambda report: observed.setdefault("report", report) or "/tmp/report.json"
 
@@ -886,7 +891,7 @@ class RequestHandlingTests(unittest.TestCase):
             observed = {}
 
             module.get_client_from_secret = lambda *args, **kwargs: object()
-            module.is_market_open_today = lambda: True
+            module._schwab_market_open_now = lambda: (True, None)
             module.persist_execution_report = (
                 lambda report: observed.setdefault("report", report) or "/tmp/report.json"
             )
@@ -954,7 +959,7 @@ class RequestHandlingTests(unittest.TestCase):
             observed = {}
 
             module.get_client_from_secret = lambda *args, **kwargs: object()
-            module.is_market_open_today = lambda: True
+            module._schwab_market_open_now = lambda: (True, None)
             module.persist_execution_report = (
                 lambda report: observed.setdefault("report", report) or "/tmp/report.json"
             )
@@ -1031,7 +1036,7 @@ class RequestHandlingTests(unittest.TestCase):
         observed = {"called": False}
 
         module.get_client_from_secret = lambda *args, **kwargs: object()
-        module.is_market_open_today = lambda: True
+        module._schwab_market_open_now = lambda: (True, None)
         module.persist_execution_report = lambda report: observed.setdefault("report", report) or "/tmp/report.json"
 
         def fake_run_strategy_core(client, now_ny, *, strategy_plugin_signals=(), **_kwargs):

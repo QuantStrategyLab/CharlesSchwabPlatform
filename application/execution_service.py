@@ -217,6 +217,7 @@ class ExecutionCycleResult:
 
 
 DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD = 1000.0
+MIN_NOTIONAL_BUY_USD = 1.0
 SMALL_ACCOUNT_SAFE_HAVEN_CASH_SUBSTITUTE_LIMIT_USD = 2000.0
 SMALL_ACCOUNT_EXISTING_WHOLE_SHARE_RETENTION_SYMBOLS = frozenset({"TQQQ", "SOXL"})
 SMALL_ACCOUNT_EXISTING_WHOLE_SHARE_RETENTION_MIN_TARGET_SHARE_RATIO_BY_SYMBOL = {
@@ -528,6 +529,7 @@ def execute_rebalance_cycle(
     publish_order_issue,
     safe_haven_cash_substitute_threshold_usd=DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
     cash_only_execution=True,
+    notional_buy_execution: bool = False,
 ) -> ExecutionCycleResult:
     def load_quotes(symbols):
         quotes = {}
@@ -584,7 +586,10 @@ def execute_rebalance_cycle(
 
     def record_submitted_order(symbol, action_type, quantity, price=None, *, status, broker_order_id=None):
         side = "sell" if action_type == "SELL" else "buy"
-        order_type = "limit" if action_type == "BUY_LIMIT" else "market"
+        if action_type == "BUY_NOTIONAL":
+            order_type = "market"
+        else:
+            order_type = "limit" if action_type == "BUY_LIMIT" else "market"
         payload = {
             "symbol": str(symbol or "").strip().upper(),
             "side": side,
@@ -592,6 +597,8 @@ def execute_rebalance_cycle(
             "order_type": order_type,
             "status": status,
         }
+        if action_type == "BUY_NOTIONAL":
+            payload["notional_usd"] = round(float(quantity), 2)
         if price:
             payload["price"] = round(float(price), 4)
             if order_type == "limit":
@@ -601,7 +608,10 @@ def execute_rebalance_cycle(
         submitted_orders.append(payload)
 
     def execute_fire_forget(symbol, action_type, quantity, price=None):
-        if quantity <= 0:
+        if action_type == "BUY_NOTIONAL":
+            if float(quantity or 0.0) < MIN_NOTIONAL_BUY_USD:
+                return False
+        elif quantity <= 0:
             return False
         try:
             price_text = "{:.2f}".format(price) if price else None
@@ -617,6 +627,14 @@ def execute_rebalance_cycle(
                 )
             elif action_type == "BUY_MARKET":
                 order_intent = OrderIntent(symbol=symbol, side="buy", quantity=quantity)
+            elif action_type == "BUY_NOTIONAL":
+                order_intent = OrderIntent(
+                    symbol=symbol,
+                    side="buy",
+                    quantity=0.0,
+                    order_type="market",
+                    metadata={"notional_usd": round(float(quantity), 2)},
+                )
             else:
                 return False
 
@@ -641,6 +659,10 @@ def execute_rebalance_cycle(
                             quantity=quantity,
                             shares=translator("shares"),
                         )
+                    )
+                elif action_type == "BUY_NOTIONAL":
+                    trade_logs.append(
+                        f"DRY RUN {translator('market_buy_cmd')} {symbol}: ${float(quantity):.2f}"
                     )
                 elif action_type == "BUY_MARKET":
                     trade_logs.append(
@@ -686,6 +708,10 @@ def execute_rebalance_cycle(
                     trade_logs.append(
                         f"✅ 💰 {translator('limit_buy_cmd')} {symbol} (${price_text}): {quantity}{translator('shares')} {translator('submitted')} {order_id_suffix}"
                     )
+                elif action_type == "BUY_NOTIONAL":
+                    trade_logs.append(
+                        f"✅ 📈 {translator('market_buy_cmd')} {symbol}: ${float(quantity):.2f} {order_id_suffix}"
+                    )
                 elif action_type == "BUY_MARKET":
                     trade_logs.append(
                         f"✅ 📈 {translator('market_buy_cmd')} {symbol}: {quantity}{translator('shares')} {order_id_suffix}"
@@ -722,13 +748,14 @@ def execute_rebalance_cycle(
         allocation,
         portfolio=portfolio,
     )
-    plan, allocation = _apply_small_account_whole_share_compatibility(
-        plan=plan,
-        allocation=allocation,
-        quotes=quotes,
-        limit_buy_premium=limit_buy_premium,
-        limit_buy_premium_by_symbol=limit_buy_premium_by_symbol,
-    )
+    if not notional_buy_execution:
+        plan, allocation = _apply_small_account_whole_share_compatibility(
+            plan=plan,
+            allocation=allocation,
+            quotes=quotes,
+            limit_buy_premium=limit_buy_premium,
+            limit_buy_premium_by_symbol=limit_buy_premium_by_symbol,
+        )
     append_small_account_cash_notes(allocation)
     append_small_account_bootstrap_notes(allocation)
     target_values = dict(allocation["targets"])
@@ -888,13 +915,14 @@ def execute_rebalance_cycle(
             )
             strategy_symbols = tuple(allocation["strategy_symbols"])
             quotes = load_quotes(strategy_symbols)
-            plan, allocation = _apply_small_account_whole_share_compatibility(
-                plan=plan,
-                allocation=allocation,
-                quotes=quotes,
-                limit_buy_premium=limit_buy_premium,
-                limit_buy_premium_by_symbol=limit_buy_premium_by_symbol,
-            )
+            if not notional_buy_execution:
+                plan, allocation = _apply_small_account_whole_share_compatibility(
+                    plan=plan,
+                    allocation=allocation,
+                    quotes=quotes,
+                    limit_buy_premium=limit_buy_premium,
+                    limit_buy_premium_by_symbol=limit_buy_premium_by_symbol,
+                )
             append_small_account_cash_notes(allocation)
             append_small_account_bootstrap_notes(allocation)
             market_values = dict(portfolio["market_values"])
@@ -920,6 +948,10 @@ def execute_rebalance_cycle(
                 estimated_buying_power,
             )
             if amount_to_spend <= 0:
+                continue
+            if notional_buy_execution:
+                if amount_to_spend >= MIN_NOTIONAL_BUY_USD:
+                    estimated_buy_cost += amount_to_spend
                 continue
             ask = quotes[symbol]["askPrice"]
             limit_price = _limit_buy_price(
@@ -951,6 +983,12 @@ def execute_rebalance_cycle(
             if market_values[symbol] < (target_val - threshold):
                 amount_to_spend = min(target_val - market_values[symbol], estimated_buying_power)
                 if amount_to_spend > 0:
+                    if notional_buy_execution:
+                        if amount_to_spend >= MIN_NOTIONAL_BUY_USD and amount_to_spend <= estimated_buying_power:
+                            if execute_fire_forget(symbol, "BUY_NOTIONAL", amount_to_spend):
+                                buy_executed = True
+                                estimated_buying_power -= amount_to_spend
+                        continue
                     ask = quotes[symbol]["askPrice"]
                     limit_price = _limit_buy_price(symbol, ask, limit_buy_premium, limit_buy_premium_by_symbol)
                     quantity = int(amount_to_spend // limit_price) if limit_price > 0 else 0
