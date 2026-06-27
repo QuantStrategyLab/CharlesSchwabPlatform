@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 import market_signal_runtime
+from us_equity_strategies.signals import runtime_market_signal_inputs as runtime_signal_inputs
 
 
 def test_unsupported_profile_does_not_load_market_signal():
@@ -107,7 +108,7 @@ def test_ibit_handoff_index_reference_is_extracted(monkeypatch, tmp_path):
         }
 
     monkeypatch.setattr(
-        market_signal_runtime,
+        runtime_signal_inputs,
         "extract_consumer_market_signal_inputs_from_reference",
         fake_extract,
     )
@@ -175,7 +176,7 @@ def test_nasdaq_handoff_index_reference_is_extracted(monkeypatch, tmp_path):
         }
 
     monkeypatch.setattr(
-        market_signal_runtime,
+        runtime_signal_inputs,
         "extract_consumer_market_signal_inputs_from_reference",
         fake_extract,
     )
@@ -243,7 +244,7 @@ def test_soxl_handoff_index_reference_is_extracted(monkeypatch, tmp_path):
         }
 
     monkeypatch.setattr(
-        market_signal_runtime,
+        runtime_signal_inputs,
         "extract_consumer_market_signal_inputs_from_reference",
         fake_extract,
     )
