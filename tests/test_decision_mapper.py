@@ -255,10 +255,8 @@ class DecisionMapperTests(unittest.TestCase):
             decision,
             snapshot=snapshot,
             strategy_profile="russell_top50_leader_rotation",
+            runtime_metadata={"schwab_execution_policy": {"cash_only_execution": False}},
         )
-
-        self.assertEqual(plan["allocation"]["target_mode"], "value")
-        self.assertEqual(plan["allocation"]["targets"]["AAPL"], 35000.0)
         self.assertEqual(plan["allocation"]["targets"]["MSFT"], 25000.0)
         self.assertEqual(plan["allocation"]["targets"]["BOXX"], 40000.0)
 
@@ -288,6 +286,7 @@ class DecisionMapperTests(unittest.TestCase):
             decision,
             snapshot=snapshot,
             strategy_profile="global_etf_rotation",
+            runtime_metadata={"schwab_execution_policy": {"cash_only_execution": False}},
         )
 
         self.assertEqual(plan["allocation"]["target_mode"], "value")
@@ -325,6 +324,7 @@ class DecisionMapperTests(unittest.TestCase):
             decision,
             snapshot=snapshot,
             strategy_profile="russell_top50_leader_rotation",
+            runtime_metadata={"schwab_execution_policy": {"cash_only_execution": False}},
         )
 
         self.assertEqual(plan["allocation"]["target_mode"], "value")

@@ -3,7 +3,10 @@ from __future__ import annotations
 from typing import Any
 
 from us_equity_strategies.catalog import resolve_canonical_profile
-from us_equity_strategies.cash_only_equity import build_portfolio_inputs_from_snapshot
+from us_equity_strategies.cash_only_equity import (
+    build_portfolio_inputs_from_snapshot,
+    resolve_weight_translation_equity,
+)
 from quant_platform_kit.strategy_contracts import (
     PositionTarget,
     StrategyDecision,
@@ -77,13 +80,35 @@ def map_strategy_decision_to_plan(
     runtime_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     runtime_metadata = dict(runtime_metadata or {})
+    raw_policy = runtime_metadata.get("schwab_execution_policy")
+    cash_only_execution = True
+    if isinstance(raw_policy, dict):
+        cash_only_execution = bool(raw_policy.get("cash_only_execution", True))
+    portfolio_inputs = build_portfolio_inputs_from_snapshot(
+        snapshot,
+        cash_only_execution=cash_only_execution,
+    )
     target_mode = resolve_decision_target_mode(decision)
-    total_equity = float(snapshot.total_equity)
-    if target_mode == "weight" and total_equity <= 0.0:
+    total_equity, block_execution, deleverage_mode = resolve_weight_translation_equity(
+        portfolio_inputs,
+        cash_only_execution=cash_only_execution,
+    )
+    if target_mode == "weight" and block_execution:
         normalized_decision = _build_zero_equity_value_decision(decision)
     else:
+        decision_for_translation = decision
+        if deleverage_mode:
+            decision_for_translation = StrategyDecision(
+                positions=decision.positions,
+                budgets=decision.budgets,
+                risk_flags=decision.risk_flags,
+                diagnostics={
+                    **dict(decision.diagnostics),
+                    "cash_only_deleverage_mode": True,
+                },
+            )
         normalized_decision = translate_decision_to_target_mode(
-            decision,
+            decision_for_translation,
             target_mode="value",
             total_equity=total_equity,
         )
@@ -102,14 +127,8 @@ def map_strategy_decision_to_plan(
         runtime_metadata=runtime_metadata,
         strategy_profile=strategy_profile,
     )
-    raw_policy = runtime_metadata.get("schwab_execution_policy")
-    cash_only_execution = True
     if isinstance(raw_policy, dict):
         cash_only_execution = bool(raw_policy.get("cash_only_execution", True))
-    portfolio_inputs = build_portfolio_inputs_from_snapshot(
-        snapshot,
-        cash_only_execution=cash_only_execution,
-    )
     plan = build_value_target_runtime_plan(
         normalized_decision,
         strategy_profile=strategy_profile,
