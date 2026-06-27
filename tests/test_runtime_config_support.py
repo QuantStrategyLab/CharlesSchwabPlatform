@@ -282,7 +282,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             os.environ,
             {
                 "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
-                "CASH_ONLY_EXECUTION": "false",
+                "SCHWAB_CASH_ONLY_EXECUTION": "false",
             },
             clear=True,
         ):

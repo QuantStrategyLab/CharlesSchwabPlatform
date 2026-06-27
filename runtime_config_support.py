@@ -7,6 +7,7 @@ from pathlib import Path
 
 from quant_platform_kit.common.runtime_config import (
     resolve_bool_value,
+    resolve_cash_only_execution_env,
     resolve_dry_run_env,
     resolve_strategy_runtime_path_settings,
 )
@@ -252,7 +253,10 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
             "SCHWAB_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD",
             default=DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
         ),
-        cash_only_execution=resolve_cash_only_execution_env(),
+        cash_only_execution=resolve_cash_only_execution_env(
+            os.environ,
+            platform_env_prefix="SCHWAB",
+        ),
         income_layer_enabled=_optional_bool_env("INCOME_LAYER_ENABLED"),
         income_layer_start_usd=_optional_non_negative_float_env("INCOME_LAYER_START_USD"),
         income_layer_max_ratio=_optional_ratio_env("INCOME_LAYER_MAX_RATIO"),
@@ -371,8 +375,3 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
         ),
         runtime_target=runtime_target,
     )
-
-
-def resolve_cash_only_execution_env(name: str = "CASH_ONLY_EXECUTION") -> bool:
-    value = _optional_bool_env(name)
-    return True if value is None else value
