@@ -174,6 +174,19 @@ def build_strategy_runtime_overrides(
             overrides["smart_multiplier_enabled"] = dca_mode == "smart"
         if dca_base_investment_usd is not None:
             overrides["base_investment_usd"] = dca_base_investment_usd
+    # IBIT z-score exit runtime overrides (matching IBKR implementation)
+    if profile == "ibit_smart_dca":
+        for setting_name in (
+            "ibit_zscore_exit_enabled",
+            "ibit_zscore_exit_mode",
+            "ibit_zscore_exit_parking_symbol",
+            "ibit_zscore_exit_risk_reduced_exposure",
+            "ibit_zscore_exit_risk_off_exposure",
+            "ibit_zscore_exit_allow_outside_execution_window",
+        ):
+            value = getattr(runtime_settings, setting_name, None)
+            if value is not None:
+                overrides[setting_name] = value
     if profile == "tqqq_growth_income":
         if INCOME_THRESHOLD_USD is not None:
             overrides["income_threshold_usd"] = INCOME_THRESHOLD_USD
