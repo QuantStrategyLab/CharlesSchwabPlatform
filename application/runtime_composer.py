@@ -98,7 +98,7 @@ class SchwabRuntimeComposer:
             dry_run=self.dry_run_only,
             signal_effective_after_trading_days=self.signal_effective_after_trading_days,
             report_base_dir=self.env_reader("EXECUTION_REPORT_OUTPUT_DIR", ""),
-            report_gcs_prefix_uri=self.env_reader("EXECUTION_REPORT_GCS_URI", ""),
+            report_cloud_prefix_uri=self.env_reader("EXECUTION_REPORT_GCS_URI", ""),
             run_id_builder=self.run_id_builder,
             event_logger=self.event_logger,
             report_builder=self.report_builder,
@@ -180,7 +180,7 @@ class SchwabRuntimeComposer:
             execution_state_store=build_execution_marker_store_from_env(
                 platform_env_prefix="SCHWAB",
                 env_reader=self.env_reader,
-                gcp_project_id=self.project_id,
+                project_id=self.project_id,
             ),
             execution_state_account_scope=execution_state_account_scope,
         )

@@ -433,7 +433,7 @@ def build_strategy_plugin_alert_messages(signals):
 
 def build_strategy_plugin_alert_state_settings():
     return StrategyPluginAlertStateSettings.from_env(
-        gcp_project_id=PROJECT_ID,
+        project_id=PROJECT_ID,
     )
 
 
