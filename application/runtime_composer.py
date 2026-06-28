@@ -18,7 +18,7 @@ from quant_platform_kit.common.port_adapters import CallableNotificationPort
 from quant_platform_kit.common.runtime_target import build_runtime_context_fields
 from quant_platform_kit.common.runtime_target import RuntimeTarget
 from runtime_execution_policy import notional_buy_execution_enabled
-from notifications.telegram import build_sender
+from quant_platform_kit.notifications.cycle_channel import build_cycle_sender
 
 
 @dataclass(frozen=True)
@@ -55,20 +55,35 @@ class SchwabRuntimeComposer:
     env_reader: Callable[[str, str], str | None]
     sleeper: Callable[[float], None] | None = None
     printer: Callable[..., Any] = print
-    sender_builder: Callable[..., Callable[[str], None]] = build_sender
+    notification_channel: str = "telegram"
+    webhook_url: str | None = None
+    sender_builder: Callable[..., Callable[[str], None]] | None = None
     notification_builder: Callable[..., Any] = build_runtime_notification_adapters
     reporting_builder: Callable[..., Any] = build_runtime_reporting_adapters
     runtime_target: RuntimeTarget | None = None
     limit_buy_premium_by_symbol: dict[str, float] | None = None
     extra_reporting_fields: dict[str, Any] = field(default_factory=dict)
 
-    def send_tg_message(self, message: str) -> None:
-        sender = self.sender_builder(self.tg_token, self.tg_chat_id)
+    def send_message(self, message: str) -> None:
+        """Send a cycle notification through the configured channel."""
+        if self.sender_builder is not None:
+            sender = self.sender_builder(self.tg_token, self.tg_chat_id)
+            sender(message)
+            return
+        sender = build_cycle_sender(
+            channel=self.notification_channel,
+            telegram_token=self.tg_token,
+            telegram_chat_id=self.tg_chat_id,
+            webhook_url=self.webhook_url,
+        )
         sender(message)
+
+    send_tg_message = send_message  # backward-compat alias
 
     def build_notification_adapters(self):
         return self.notification_builder(
-            send_message=self.send_tg_message,
+            send_message=self.send_message,
+            notification_channel=self.notification_channel,
             log_message=lambda message: self.printer(message, flush=True),
         )
 
@@ -211,6 +226,8 @@ def build_runtime_composer(
     notify_lang: str,
     tg_token: str | None,
     tg_chat_id: str | None,
+    notification_channel: str = "telegram",
+    webhook_url: str | None = None,
     managed_symbols: tuple[str, ...],
     benchmark_symbol: str,
     signal_effective_after_trading_days: int | None,
@@ -248,6 +265,8 @@ def build_runtime_composer(
         notify_lang=str(notify_lang or ""),
         tg_token=tg_token,
         tg_chat_id=tg_chat_id,
+        notification_channel=notification_channel,
+        webhook_url=webhook_url,
         managed_symbols=tuple(managed_symbols),
         benchmark_symbol=str(benchmark_symbol or ""),
         signal_effective_after_trading_days=signal_effective_after_trading_days,

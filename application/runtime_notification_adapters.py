@@ -26,6 +26,7 @@ class SchwabNotificationAdapters:
 def build_runtime_notification_adapters(
     *,
     send_message,
+    notification_channel: str = "telegram",
     log_message=None,
 ) -> SchwabNotificationAdapters:
     return SchwabNotificationAdapters(
