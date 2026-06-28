@@ -759,7 +759,7 @@ def execute_rebalance_cycle(
     append_small_account_cash_notes(allocation)
     append_small_account_bootstrap_notes(allocation)
     target_values = dict(allocation["targets"])
-    threshold = float(execution["trade_threshold_value"])
+    threshold = float(execution.get("trade_threshold_value", 0))
     cash_sweep_symbol = str(portfolio["cash_sweep_symbol"])
     dry_run_sale_events = []
     post_sell_buying_power_released = None
@@ -769,7 +769,7 @@ def execute_rebalance_cycle(
     funding_buy_candidates = [
         symbol
         for symbol in buy_order_symbols
-        if symbol != cash_sweep_symbol and (target_values[symbol] - market_values[symbol]) > threshold
+        if symbol != cash_sweep_symbol and (target_values.get(symbol, 0) - market_values.get(symbol, 0)) > threshold
     ]
 
     def cash_sweep_sale_quantity_to_fund_buy(max_quantity, candidate_symbols):
@@ -927,16 +927,16 @@ def execute_rebalance_cycle(
             append_small_account_bootstrap_notes(allocation)
             market_values = dict(portfolio["market_values"])
             target_values = dict(allocation["targets"])
-            threshold = float(execution["trade_threshold_value"])
+            threshold = float(execution.get("trade_threshold_value", 0))
 
     liquid_cash = float(portfolio["liquid_cash"])
-    reserved_cash = float(execution["reserved_cash"])
+    reserved_cash = float(execution.get("reserved_cash", 0))
     estimated_buying_power = max(0, liquid_cash - reserved_cash)
     pending_sell_release_symbols = list(dict.fromkeys(pending_sell_release_symbols))
     buy_needed_symbols = [
         symbol
         for symbol in buy_order_symbols
-        if market_values[symbol] < (target_values[symbol] - threshold)
+        if market_values.get(symbol, 0) < (target_values.get(symbol, 0) - threshold)
     ]
     buys_blocked_reason = None
     if cash_only_execution and pending_sell_release_symbols and buy_needed_symbols:
