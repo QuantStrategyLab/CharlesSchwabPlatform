@@ -1,0 +1,9 @@
+.git
+.github
+.pytest_cache
+.runtime
+.venv
+__pycache__
+*.py[cod]
+.env
+.cookies

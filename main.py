@@ -1,13 +1,13 @@
 import json
 import os
+import tempfile
 import time
 import traceback
 
 from flask import Flask
-import google.auth
 import requests
 
-from application.monitor_dispatcher import dispatch_due_monitors, load_monitor_targets
+from quant_platform_kit.common.platform_runner import dispatch_due_monitors, load_monitor_targets
 from application.runtime_broker_adapters import build_runtime_broker_adapters
 from application.runtime_composer import build_runtime_composer
 from application.runtime_strategy_adapters import build_runtime_strategy_adapters
@@ -54,8 +54,9 @@ app = Flask(__name__)
 
 def get_project_id():
     try:
-        _, project_id = google.auth.default()
-        return project_id if project_id else os.getenv("GOOGLE_CLOUD_PROJECT")
+        from quant_platform_kit.cloud import get_deployment_context
+
+        return get_deployment_context().project_id
     except Exception:
         return os.getenv("GOOGLE_CLOUD_PROJECT")
 
@@ -67,7 +68,7 @@ APP_SECRET = os.getenv("SCHWAB_APP_SECRET")
 TG_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TG_CHAT_ID = os.getenv("GLOBAL_TELEGRAM_CHAT_ID")
 SECRET_ID = "schwab_token"
-TOKEN_PATH = "/tmp/token.json"
+TOKEN_PATH = os.path.join(tempfile.gettempdir(), "qsl-schwab-token.json")
 
 
 def _optional_float_env(name: str) -> float | None:
