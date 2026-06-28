@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
-"""Translate the Codex GitHub App's PR review into a check run for branch protection.
+"""PR merge gate: static checks + Codex App review → check run for branch protection.
 
-Two modes:
-  WAIT  — on PR opened/synchronize: create pending check, poll for Codex review,
-          fall back to pass after timeout (Codex might be broken → don't block).
-  REACT — on Codex bot review submitted: update check immediately.
+Two-phase guard (no API keys needed):
+  1. STATIC  — scan diff for secrets, blocked files, metadata issues (<30s).
+               Fail immediately on hard violations.
+  2. WAIT    — poll for Codex GitHub App review up to N min.
+               Fail on CHANGES_REQUESTED, pass on APPROVED/timeout.
+  3. REACT   — on Codex bot review submitted: update check instantly.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -22,6 +25,7 @@ API_BASE = "https://api.github.com"
 BOT_LOGIN = "chatgpt-codex-connector[bot]"
 CHECK_NAME = "Codex Review Gate"
 DETAIL_URL = "https://github.com/apps/chatgpt-codex-connector"
+POLICY_PATH = Path(".github/codex_auto_merge_policy.json")
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -164,6 +168,160 @@ def review_decision(review: dict[str, Any] | None) -> tuple[str, str, str]:
     )
 
 
+# ── static guard ─────────────────────────────────────────────────────────────
+
+
+def load_policy() -> dict[str, Any]:
+    if POLICY_PATH.exists():
+        try:
+            return json.loads(POLICY_PATH.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            pass
+    return {
+        "version": 1,
+        "blocked_path_patterns": [
+            r"(^|/)(\.env|.*secret.*|.*credential.*|.*token.*|.*private.*|.*\.pem|.*\.key)$",
+        ],
+        "max_changed_files": 50,
+        "max_changed_lines": 5000,
+    }
+
+
+def compile_blocked_patterns(policy: dict[str, Any]) -> list[re.Pattern[str]]:
+    raw = policy.get("blocked_path_patterns", [])
+    patterns: list[re.Pattern[str]] = []
+    for p in raw:
+        if isinstance(p, str) and p.strip():
+            try:
+                patterns.append(re.compile(p, re.IGNORECASE))
+            except re.error:
+                pass
+    return patterns
+
+
+_SENSITIVE_ASSIGN = re.compile(
+    r'(?:api[_\s]?key|secret|password|token|credential|private[_\s]?key)\s*[:=]\s*["\']'
+    r'(?!\$\{\{|{{|example|placeholder|test|your[-_\s]|xxx|TODO|CHANGEME|replace)[^"\']{12,}["\']',
+    re.IGNORECASE,
+)
+
+
+def scan_diff_for_secrets(diff_text: str, path_patterns: list[re.Pattern[str]]) -> list[str]:
+    """Scan PR diff for blocked files and hardcoded secret assignments."""
+    violations: list[str] = []
+    current_file = ""
+
+    for line in diff_text.splitlines():
+        if line.startswith("diff --git "):
+            parts = line.split(" ")
+            current_file = parts[3][2:] if len(parts) >= 4 and parts[3].startswith("b/") else ""
+            # Check path-level blocks once per file header
+            if current_file:
+                for pat in path_patterns:
+                    if pat.search(current_file):
+                        violations.append(
+                            f"**Blocked file**: `{current_file}` matches `{pat.pattern}`"
+                        )
+                        break
+            continue
+
+        if line.startswith("+++ b/"):
+            current_file = line[6:]
+            continue
+
+        # Only inspect added lines
+        if not line.startswith("+") or line.startswith("+++"):
+            continue
+
+        content = line[1:]
+        m = _SENSITIVE_ASSIGN.search(content)
+        if m:
+            violations.append(
+                f"**Hardcoded secret** in `{current_file}`: `{m.group(0)[:100]}`"
+            )
+
+    return list(dict.fromkeys(violations))  # dedup preserving order
+
+
+def check_pr_metadata(files: list[dict[str, Any]], policy: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+    max_files = policy.get("max_changed_files", 50)
+    max_lines = policy.get("max_changed_lines", 5000)
+    ta = sum(f.get("additions", 0) or 0 for f in files)
+    td = sum(f.get("deletions", 0) or 0 for f in files)
+
+    for f in files:
+        fn = f.get("filename", "?")
+        st = (f.get("status") or "").lower().strip()
+        if st == "removed":
+            issues.append(f"**File deleted**: `{fn}` — verify intentional")
+        elif st == "renamed":
+            issues.append(f"**File renamed**: `{f.get('previous_filename', '?')}` → `{fn}`")
+
+    if len(files) > max_files:
+        issues.append(f"**Too many files**: {len(files)} changed (limit {max_files})")
+    if ta + td > max_lines:
+        issues.append(f"**Too many lines**: {ta + td} changed (limit {max_lines})")
+
+    return issues
+
+
+def run_static_guard(
+    token: str, repo: str, pr_number: int, head_sha: str
+) -> tuple[list[str], str, str] | None:
+    """Run static checks. Returns (issues, title, summary) or None if clean."""
+    policy = load_policy()
+
+    # Fetch PR files
+    all_files: list[dict[str, Any]] = []
+    page = 1
+    while True:
+        try:
+            batch = github_request(
+                token, "GET", f"/repos/{repo}/pulls/{pr_number}/files?per_page=100&page={page}"
+            )
+        except RuntimeError:
+            break
+        if not isinstance(batch, list) or not batch:
+            break
+        all_files.extend(batch)
+        if len(batch) < 100:
+            break
+        page += 1
+
+    # Fetch diff
+    diff_text = ""
+    try:
+        req = urllib.request.Request(
+            f"{API_BASE}/repos/{repo}/pulls/{pr_number}",
+            method="GET",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github.v3.diff",
+                "X-GitHub-Api-Version": "2022-11-28",
+                "User-Agent": "codex-review-gate",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            diff_text = resp.read().decode("utf-8", errors="replace")
+    except Exception:
+        pass
+
+    # Scan
+    issues: list[str] = []
+    issues.extend(check_pr_metadata(all_files, policy))
+    patterns = compile_blocked_patterns(policy)
+    issues.extend(scan_diff_for_secrets(diff_text, patterns))
+
+    if not issues:
+        return None
+
+    title = f"Merge blocked: {len(issues)} static issue(s)"
+    summary = "\n".join(f"- {i}" for i in issues)
+    summary += "\n\n---\nPush a fix commit to clear this block."
+    return issues, title, summary
+
+
 # ── main logic ───────────────────────────────────────────────────────────────
 
 
@@ -196,6 +354,29 @@ def main() -> int:
         return 0
 
     print(f"PR #{pr_number}  sha={head_sha[:12]}  event={event_name}")
+
+    # ═══════════════════════════════════════════════════════════════════
+    # PHASE 1: Static guard — runs on every PR event, <30s, no API keys
+    # ═══════════════════════════════════════════════════════════════════
+    if event_name != "pull_request_review":  # skip on review-only events
+        try:
+            static_result = run_static_guard(token, repo, pr_number, head_sha)
+        except RuntimeError as exc:
+            print(f"::warning::Static guard failed: {exc}")
+            static_result = None
+
+        if static_result is not None:
+            issues, title, summary = static_result
+            upsert_check_run(token, repo, head_sha, status="completed",
+                             conclusion="failure", title=title, summary=summary)
+            print(f"STATIC → FAIL: {len(issues)} issue(s)")
+            return 1
+        else:
+            print("STATIC → clean")
+
+    # ═══════════════════════════════════════════════════════════════════
+    # PHASE 2: App review gate
+    # ═══════════════════════════════════════════════════════════════════
 
     # ── REACT mode: Codex just submitted a review ──────────────────────
     review_event = event.get("review") or {}
