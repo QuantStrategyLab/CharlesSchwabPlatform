@@ -19,7 +19,6 @@ on:
     types: [submitted]
 
 permissions:
-  checks: write
   contents: read
   pull-requests: read
 
@@ -40,7 +39,7 @@ jobs:
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       CODEX_GATE_POLL_SECONDS: ${{ vars.CODEX_GATE_POLL_SECONDS || '30' }}
-      CODEX_GATE_MAX_WAIT_MINUTES: ${{ vars.CODEX_GATE_MAX_WAIT_MINUTES || '10' }}
+      CODEX_GATE_MAX_WAIT_MINUTES: ${{ vars.CODEX_GATE_MAX_WAIT_MINUTES || '5' }}
 
     steps:
       - name: Checkout
