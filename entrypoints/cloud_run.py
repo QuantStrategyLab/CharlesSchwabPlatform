@@ -16,8 +16,8 @@ def is_market_open_now(*, calendar_name="NASDAQ", timezone_name="America/New_Yor
         now_market = datetime.now(market_tz)
         schedule = calendar.schedule(start_date=now_market.date(), end_date=now_market.date())
         if schedule.empty:
-            return False
-        return calendar.open_at_time(schedule, now_market)
+            return False, None
+        return calendar.open_at_time(schedule, now_market), None
     except Exception as exc:
         return False, exc
 

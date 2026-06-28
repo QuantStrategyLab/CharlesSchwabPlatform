@@ -16,4 +16,4 @@ RUN python -m pip install --upgrade pip \
 
 COPY . .
 
-CMD ["gunicorn", "--bind", ":8080", "--workers", "1", "--threads", "1", "--timeout", "300", "main:app"]
+CMD ["gunicorn", "--bind", ":8080", "--workers", "1", "--threads", "8", "--timeout", "300", "main:app"]
