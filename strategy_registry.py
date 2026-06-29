@@ -6,6 +6,9 @@ from us_equity_strategies import (
     get_strategy_catalog,
 )
 
+from quant_platform_kit.common.execution_capabilities import (
+    FRACTIONAL_SHARE_EXECUTION_CAPABILITY,
+)
 from quant_platform_kit.common.strategies import (
     PlatformCapabilityMatrix,
     PlatformStrategyPolicy,
@@ -50,9 +53,9 @@ PLATFORM_CAPABILITY_MATRIX = PlatformCapabilityMatrix(
             "snapshot",
         }
     ),
-    # DCA / notional equity orders stay disabled on Schwab until paper/live validation.
+    # DCA / notional equity orders enabled for Schwab Paper validation.
     # Non-DCA profiles continue whole-share execution via runtime_execution_policy.
-    supported_capabilities=frozenset(),
+    supported_capabilities=frozenset({FRACTIONAL_SHARE_EXECUTION_CAPABILITY}),
 )
 ELIGIBLE_STRATEGY_PROFILES = derive_eligible_profiles_for_platform(
     STRATEGY_CATALOG,
