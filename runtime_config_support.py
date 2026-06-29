@@ -4,6 +4,7 @@ import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from quant_platform_kit.common.runtime_config import (
     resolve_bool_value,
@@ -96,6 +97,7 @@ class PlatformRuntimeSettings:
     feishu_webhook_url: str | None = None
     serverchan_webhook_url: str | None = None
     runtime_target: RuntimeTarget | None = None
+    strategy_metadata: Any = None
 
 
 def _resolve_non_negative_float_env(name: str, *, default: float) -> float:
@@ -243,6 +245,7 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
         strategy_profile=runtime_paths.strategy_profile,
         strategy_display_name=runtime_paths.strategy_display_name,
         strategy_domain=runtime_paths.strategy_domain,
+        strategy_metadata=strategy_metadata,
         notify_lang=os.getenv("NOTIFY_LANG", DEFAULT_NOTIFY_LANG),
         dry_run_only=resolve_dry_run_env(os.environ, "SCHWAB_DRY_RUN_ONLY"),
         runtime_target_enabled=_runtime_target_enabled_env(),

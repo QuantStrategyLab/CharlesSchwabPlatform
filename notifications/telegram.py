@@ -7,9 +7,11 @@ import re
 try:
     from quant_platform_kit.common.notification_localization import (
         merge_strategy_plugin_i18n as _merge_strategy_plugin_i18n,
+        translator_uses_zh,
     )
 except ImportError:  # pragma: no cover - compatibility with older pinned shared wheels
     _merge_strategy_plugin_i18n = None
+    translator_uses_zh = None
 
 _TELEGRAM_MARKET_SYMBOL_LINK_RE = re.compile(r"(?<![A-Za-z0-9_])([A-Z0-9]{1,12})\.([A-Z]{2,4})(?![A-Za-z0-9_])")
 _TELEGRAM_MARKET_SYMBOL_LINK_JOINER = "\u2060"
@@ -380,7 +382,15 @@ def build_signal_text(translate_fn):
 
 
 def build_strategy_display_name(translate_fn):
-    def strategy_display_name(profile: str, *, fallback_name: str | None = None) -> str:
+    def strategy_display_name(profile: str, *, fallback_name: str | None = None, metadata=None) -> str:
+        if metadata is not None:
+            from quant_platform_kit.common.notification_localization import resolve_strategy_display_name
+
+            return resolve_strategy_display_name(
+                "zh" if translator_uses_zh(translate_fn) else "en",
+                metadata,
+                translator=translate_fn,
+            )
         key = f"strategy_name_{str(profile or '').strip()}"
         translated = translate_fn(key)
         if translated != key:

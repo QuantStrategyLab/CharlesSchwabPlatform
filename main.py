@@ -153,6 +153,7 @@ signal_text = build_signal_text(t)
 strategy_display_name = build_strategy_display_name(t)(
     STRATEGY_PROFILE,
     fallback_name=STRATEGY_DISPLAY_NAME,
+    metadata=RUNTIME_SETTINGS.strategy_metadata,
 )
 
 
