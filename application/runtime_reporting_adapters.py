@@ -137,7 +137,7 @@ def build_runtime_reporting_adapters(
         dry_run=bool(dry_run),
         signal_effective_after_trading_days=signal_effective_after_trading_days,
         report_base_dir=report_base_dir,
-        report_cloud_prefix_uri=report_gcs_prefix_uri,
+        report_gcs_prefix_uri=report_gcs_prefix_uri,
         run_id_builder=run_id_builder,
         event_logger=event_logger,
         report_builder=report_builder,
