@@ -1,30 +1,33 @@
 from __future__ import annotations
 
-from quant_platform_kit.common.strategies import (
-    StrategyDefinition,
-    load_strategy_entrypoint,
+from quant_platform_kit.common.platform_runner.loader import (
+    load_strategy_definition as _qpk_load_definition,
+    load_strategy_entrypoint_for_profile as _qpk_load_entrypoint,
+    load_strategy_runtime_adapter_for_profile as _qpk_load_runtime_adapter,
 )
+from quant_platform_kit.common.strategies import StrategyDefinition
 from quant_platform_kit.strategy_contracts import StrategyEntrypoint, StrategyRuntimeAdapter
-from us_equity_strategies import get_platform_runtime_adapter
 
-from strategy_registry import SCHWAB_PLATFORM, resolve_strategy_definition
+from strategy_registry import SCHWAB_PLATFORM as PLATFORM, PLATFORM_POLICY, STRATEGY_CATALOG, get_platform_runtime_adapter
 
 
 def load_strategy_definition(raw_profile: str | None) -> StrategyDefinition:
-    return resolve_strategy_definition(
+    return _qpk_load_definition(
         raw_profile,
-        platform_id=SCHWAB_PLATFORM,
+        platform_id=PLATFORM,
+        strategy_catalog=STRATEGY_CATALOG,
+        policy=PLATFORM_POLICY,
     )
 
 
 def load_strategy_entrypoint_for_profile(raw_profile: str | None) -> StrategyEntrypoint:
-    definition = load_strategy_definition(raw_profile)
     runtime_adapter = load_strategy_runtime_adapter_for_profile(raw_profile)
-    return load_strategy_entrypoint(
-        definition,
-        platform_id=SCHWAB_PLATFORM,
-        available_inputs=runtime_adapter.available_inputs,
-        available_capabilities=runtime_adapter.available_capabilities,
+    return _qpk_load_entrypoint(
+        raw_profile,
+        platform_id=PLATFORM,
+        strategy_catalog=STRATEGY_CATALOG,
+        policy=PLATFORM_POLICY,
+        runtime_adapter=runtime_adapter,
     )
 
 
@@ -32,5 +35,5 @@ def load_strategy_runtime_adapter_for_profile(raw_profile: str | None) -> Strate
     definition = load_strategy_definition(raw_profile)
     return get_platform_runtime_adapter(
         definition.profile,
-        platform_id=SCHWAB_PLATFORM,
+        platform_id=PLATFORM,
     )
