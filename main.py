@@ -1,4 +1,5 @@
 import json
+import importlib
 import os
 import tempfile
 import time
@@ -939,6 +940,19 @@ def request_method() -> str:
 
 @app.route("/health", methods=["GET"])
 def health():
+    critical_errors: list[str] = []
+    for module_path in (
+        "application.runtime_composer",
+        "application.runtime_reporting_adapters",
+        "application.runtime_strategy_adapters",
+        "runtime_execution_policy",
+    ):
+        try:
+            importlib.import_module(module_path)
+        except Exception as exc:
+            critical_errors.append(f"{module_path}: {type(exc).__name__}: {exc}")
+    if critical_errors:
+        return json.dumps({"status": "unhealthy", "errors": critical_errors}, ensure_ascii=False), 500
     return "OK", 200
 
 
