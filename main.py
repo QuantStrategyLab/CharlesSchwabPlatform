@@ -158,6 +158,80 @@ strategy_display_name = build_strategy_display_name(t)(
 )
 
 
+def _normalize_plugin_mounts_strategy(raw_mounts_json: str | None) -> str | None:
+    """Auto-correct plugin mount strategy fields to match STRATEGY_PROFILE.
+
+    When the user changes the strategy profile, the plugin mount JSON may still
+    reference the old strategy name.  This function rewrites the ``strategy``
+    field inside every mount entry so it always matches the runtime strategy.
+    A warning is printed for each corrected entry.
+    """
+    if not raw_mounts_json:
+        return raw_mounts_json
+    try:
+        mounts = json.loads(raw_mounts_json)
+    except json.JSONDecodeError:
+        return raw_mounts_json
+    if not isinstance(mounts, dict):
+        return raw_mounts_json
+    plugins = mounts.get("strategy_plugins")
+    if not isinstance(plugins, list):
+        return raw_mounts_json
+    changed = False
+    for entry in plugins:
+        if not isinstance(entry, dict):
+            continue
+        old = entry.get("strategy")
+        if old and old != STRATEGY_PROFILE:
+            entry["strategy"] = STRATEGY_PROFILE
+            changed = True
+            print(
+                f"[config-sync] Plugin mount strategy corrected: "
+                f"{old} → {STRATEGY_PROFILE}",
+                flush=True,
+            )
+    return json.dumps(mounts, ensure_ascii=False) if changed else raw_mounts_json
+
+
+def _normalize_monitor_targets_strategy(raw_targets_json: str | None) -> str | None:
+    """Auto-correct monitor dispatch targets to match STRATEGY_PROFILE."""
+    if not raw_targets_json:
+        return raw_targets_json
+    try:
+        targets = json.loads(raw_targets_json)
+    except json.JSONDecodeError:
+        return raw_targets_json
+    if not isinstance(targets, dict):
+        return raw_targets_json
+    entries = targets.get("targets")
+    if not isinstance(entries, list):
+        return raw_targets_json
+    changed = False
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        old = entry.get("strategy_profile")
+        if old and old != STRATEGY_PROFILE:
+            entry["strategy_profile"] = STRATEGY_PROFILE
+            changed = True
+            print(
+                f"[config-sync] Monitor target strategy corrected: "
+                f"{old} → {STRATEGY_PROFILE}",
+                flush=True,
+            )
+    return json.dumps(targets, ensure_ascii=False) if changed else raw_targets_json
+
+
+# Patch the RUNTIME_SETTINGS dataclass to use normalized configs.
+# We use object.__setattr__ because the dataclass is frozen.
+if hasattr(RUNTIME_SETTINGS, "strategy_plugin_mounts_json"):
+    normalized = _normalize_plugin_mounts_strategy(
+        RUNTIME_SETTINGS.strategy_plugin_mounts_json
+    )
+    if normalized != RUNTIME_SETTINGS.strategy_plugin_mounts_json:
+        object.__setattr__(RUNTIME_SETTINGS, "strategy_plugin_mounts_json", normalized)
+
+
 def build_tqqq_managed_symbols(unlevered_symbol: str) -> tuple[str, ...]:
     symbol = str(unlevered_symbol or "QQQ").strip().upper()
     if not symbol:

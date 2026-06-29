@@ -217,8 +217,19 @@ def _split_env_list(raw_value: str | None) -> tuple[str, ...]:
 
 
 def resolve_strategy_profile(raw_value: str | None = None) -> str:
+    """Resolve strategy profile from RUNTIME_TARGET_JSON (via raw_value).
+
+    The deprecated STRATEGY_PROFILE env-var fallback was removed because
+    RUNTIME_TARGET_JSON is the single source of truth.  Callers must pass
+    the value extracted from the runtime target.
+    """
+    if raw_value is None:
+        raise EnvironmentError(
+            "RUNTIME_TARGET_JSON must contain strategy_profile; "
+            "the deprecated STRATEGY_PROFILE env var is no longer read"
+        )
     return resolve_strategy_definition(
-        raw_value if raw_value is not None else os.getenv("STRATEGY_PROFILE"),
+        raw_value,
         platform_id=SCHWAB_PLATFORM,
     ).profile
 
