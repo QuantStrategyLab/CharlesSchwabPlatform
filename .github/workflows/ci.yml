@@ -80,6 +80,10 @@ jobs:
           python -m pip install --no-deps -e external/QuantPlatformKit -e external/UsEquityStrategies
 
       - name: Run ruff
+
+      - name: Check QPK pin consistency
+        run: python scripts/check_qpk_pin_consistency.py
+        continue-on-error: true
         run: |
           set -euo pipefail
           ruff check .
