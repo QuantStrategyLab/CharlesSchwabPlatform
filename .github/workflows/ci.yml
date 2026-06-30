@@ -60,7 +60,7 @@ jobs:
           set -euo pipefail
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
-          python -m pip install pytest ruff
+          python -m pip install pytest pytest-cov ruff
 
       - name: Smoke import pinned shared packages
         run: |
@@ -87,4 +87,4 @@ jobs:
       - name: Run unit tests
         run: |
           set -euo pipefail
-          PYTHONPATH=. python -m pytest -q tests --cov --cov-report=term
+          PYTHONPATH=. python -m pytest -q tests --cov --cov-report=term --cov-report=xml
