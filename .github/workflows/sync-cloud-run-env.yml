@@ -182,7 +182,10 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          grep -vE "^\s*(#|$)|git\+" requirements.txt | xargs -r python -m pip install -c https://raw.githubusercontent.com/QuantStrategyLab/QuantPlatformKit/main/constraints.txt
+          grep 'git+' requirements.txt | while IFS= read -r pkg; do
+            [ -n "$pkg" ] && python -m pip install --no-deps "$pkg" -c https://raw.githubusercontent.com/QuantStrategyLab/QuantPlatformKit/main/constraints.txt
+          done
 
       - name: Resolve Cloud Run sync targets
         id: strategy_requirements
