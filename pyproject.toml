@@ -28,3 +28,9 @@ omit = ["tests/*", "*/external/*"]
 
 [tool.coverage.report]
 show_missing = true
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
