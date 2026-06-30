@@ -441,19 +441,10 @@ def _build_compact_trade_message(
     if dashboard:
         lines.append(separator)
         lines.extend(line for line in dashboard.splitlines() if line.strip())
-    lines.extend(timing_lines)
-    if signal_snapshot_line:
-        lines.append(signal_snapshot_line)
-    status_summary = _first_detail_line(status_display)
-    if status_summary:
-        lines.append(_format_market_status_line(status_summary, translator=translator))
-    lines.extend(risk_control_lines)
-    signal_summary = _first_detail_line(signal_display)
-    if signal_summary:
-        lines.append(f"🎯 {translator('signal_label')}: {signal_summary}")
-    if trade_logs:
         lines.append(separator)
-    lines.extend(str(log).strip() for log in trade_logs if str(log).strip())
+    if trade_logs:
+        lines.extend(str(log).strip() for log in trade_logs if str(log).strip())
+        lines.append(separator)
     return "\n".join(lines)
 
 
