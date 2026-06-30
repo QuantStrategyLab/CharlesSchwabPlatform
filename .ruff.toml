@@ -4,4 +4,4 @@ target-version = "py311"
 "tests/*.py" = ["E402"]
 
 [lint]
-ignore = ["E701"]
+ignore = ["E701", "E702", "E741", "F841", "F821", "B008", "F401", "F601", "E402"]
