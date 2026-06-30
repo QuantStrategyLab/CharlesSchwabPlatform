@@ -31,7 +31,7 @@ def main():
                 print(f"  ❌ {path}: QPK@{sha[:12]} (expected {target[:12]})")
                 if fix:
                     path.write_text(content.replace(sha, target))
-                    print(f"     → fixed")
+                    print("     → fixed")
     if errors:
         print(f"\n{errors} mismatch(es). Run with --fix to auto-fix.")
         return 1
