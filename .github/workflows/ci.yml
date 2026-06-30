@@ -87,4 +87,4 @@ jobs:
       - name: Run unit tests
         run: |
           set -euo pipefail
-          PYTHONPATH=. python -m pytest -q tests
+          PYTHONPATH=. python -m pytest -q tests --cov --cov-report=term
