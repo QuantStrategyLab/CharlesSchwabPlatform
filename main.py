@@ -67,7 +67,7 @@ SERVICE_NAME = os.getenv("SERVICE_NAME") or os.getenv("K_SERVICE") or "charles-s
 APP_KEY = os.getenv("SCHWAB_API_KEY")
 APP_SECRET = os.getenv("SCHWAB_APP_SECRET")
 TG_TOKEN = os.getenv("TELEGRAM_TOKEN")
-TG_CHAT_ID = os.getenv("GLOBAL_TELEGRAM_CHAT_ID")
+TG_CHAT_ID = os.getenv("QSL_GLOBAL_TELEGRAM_CHAT_ID") or os.getenv("GLOBAL_TELEGRAM_CHAT_ID")
 from quant_platform_kit.notifications.cycle_channel import resolve_cycle_channel_and_url
 
 _NOTIFICATION_CHANNEL, _NOTIFICATION_WEBHOOK_URL = resolve_cycle_channel_and_url(
