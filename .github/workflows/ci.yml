@@ -61,7 +61,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install --upgrade pip
           # Install non-git packages first to avoid cross-package dependency conflicts
-          grep -vE "^\s*(#|$)|git\+" requirements.txt | xargs -r python -m pip install
+          grep -vE "^\s*(#|$)|git\+" requirements.txt | xargs -r python -m pip install -c https://raw.githubusercontent.com/QuantStrategyLab/QuantPlatformKit/fe4341b08f1f026a21ca07c4752e48ed2640cc07/constraints.txt
           # Install git-based packages individually with --no-deps
           grep 'git+' requirements.txt | while IFS= read -r pkg; do
             [ -n "$pkg" ] && python -m pip install --no-deps "$pkg"
