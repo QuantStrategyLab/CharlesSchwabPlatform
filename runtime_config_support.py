@@ -197,7 +197,7 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
         strategy_display_name=runtime_paths.strategy_display_name,
         strategy_domain=runtime_paths.strategy_domain,
         strategy_metadata=strategy_metadata,
-        notify_lang=os.getenv("NOTIFY_LANG", DEFAULT_NOTIFY_LANG),
+        notify_lang=os.getenv("QSL_NOTIFY_LANG") or os.getenv("NOTIFY_LANG", DEFAULT_NOTIFY_LANG),
         dry_run_only=resolve_dry_run_env(os.environ, "SCHWAB_DRY_RUN_ONLY"),
         runtime_target_enabled=_runtime_target_enabled_env(),
         reserved_cash_floor_usd=_resolve_non_negative_float_env(
@@ -278,6 +278,7 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
         strategy_config_source=runtime_paths.strategy_config_source,
         strategy_plugin_mounts_json=(
             os.getenv("SCHWAB_STRATEGY_PLUGIN_MOUNTS_JSON")
+            or os.getenv("QSL_STRATEGY_PLUGIN_MOUNTS_JSON")
             or os.getenv("STRATEGY_PLUGIN_MOUNTS_JSON")
         ),
         strategy_plugin_alert_channels=resolve_split_env_list("STRATEGY_PLUGIN_ALERT_CHANNELS"),
@@ -318,7 +319,8 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
             "STRATEGY_PLUGIN_ALERT_TELEGRAM_CHAT_IDS"
         ),
         strategy_plugin_alert_telegram_bot_token=_first_non_empty(
-            os.getenv("STRATEGY_PLUGIN_ALERT_TELEGRAM_BOT_TOKEN")
+            os.getenv("QSL_STRATEGY_PLUGIN_ALERT_TELEGRAM_BOT_TOKEN")
+            or os.getenv("STRATEGY_PLUGIN_ALERT_TELEGRAM_BOT_TOKEN")
         ),
         strategy_plugin_alert_telegram_api_base_url=_first_non_empty(
             os.getenv("STRATEGY_PLUGIN_ALERT_TELEGRAM_API_BASE_URL")
