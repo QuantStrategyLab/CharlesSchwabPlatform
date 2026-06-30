@@ -286,10 +286,6 @@ jobs:
           version: ">= 416.0.0"
 
       - name: 
-      - name: Download constraints
-        if: steps.config.outputs.deploy_enabled == 'true'
-        run: curl -sL https://raw.githubusercontent.com/QuantStrategyLab/QuantPlatformKit/main/constraints.txt -o constraints.txt
-
       - name: Build, push, and deploy Cloud Run image
         if: steps.config.outputs.deploy_enabled == 'true'
         run: |
