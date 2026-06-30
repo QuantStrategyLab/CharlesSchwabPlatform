@@ -59,7 +59,13 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          python -m pip install --upgrade pip
+          # Install non-git packages first to avoid cross-package dependency conflicts
+          grep -vE "^\s*(#|$)|git\+" requirements.txt | xargs -r python -m pip install
+          # Install git-based packages individually with --no-deps
+          grep 'git+' requirements.txt | while IFS= read -r pkg; do
+            [ -n "$pkg" ] && python -m pip install --no-deps "$pkg"
+          done
           python -m pip install pytest pytest-cov ruff
 
       - name: Smoke import pinned shared packages
