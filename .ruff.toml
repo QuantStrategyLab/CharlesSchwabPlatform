@@ -1,7 +1,7 @@
 target-version = "py311"
 
 [lint.per-file-ignores]
-"tests/*.py" = ["E402"]
+"tests/*.py" = ["E402", "E401"]
 
 [lint]
-ignore = ["E701", "E702", "E741", "F841", "F821", "B008", "F401", "F601", "E402"]
+ignore = ["E701", "E702", "E741", "F841", "F821", "B008", "F401", "F601", "E402", "E401"]
