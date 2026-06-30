@@ -12,4 +12,4 @@ google-cloud-storage
 google-auth
 numpy
 
-quantuscombostrategies @ git+https://github.com/QuantStrategyLab/QuantUsComboStrategies.git@007c7511cca365993de1f761c734cafa26dbad30
+quantuscombostrategies @ git+https://github.com/QuantStrategyLab/QuantUsComboStrategies.git@d35f4f86b09a7f4e99a1f83c973b21f2420398ef
