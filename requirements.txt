@@ -9,6 +9,6 @@ google-cloud-secret-manager
 google-cloud-storage
 google-auth
 numpy
-quant-platform-kit @ git+https://github.com/QuantStrategyLab/QuantPlatformKit.git@08e586b3190b62cb3f512cb221add96c4ac3e411
+quant-platform-kit @ git+https://github.com/QuantStrategyLab/QuantPlatformKit.git@d786c1140967f0e96e35599d057f0655e5a9ba25
 us-equity-strategies @ git+https://github.com/QuantStrategyLab/UsEquityStrategies.git@c8df5f9659340965bd7f53998892ed1018ed4254
 quantuscombostrategies @ git+https://github.com/QuantStrategyLab/QuantUsComboStrategies.git@d35f4f86b09a7f4e99a1f83c973b21f2420398ef
