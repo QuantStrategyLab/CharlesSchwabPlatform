@@ -10,6 +10,11 @@ from quant_platform_kit.common.runtime_config import (
     resolve_bool_value,
     resolve_cash_only_execution_env,
     resolve_dry_run_env,
+    resolve_optional_bool_env,
+    resolve_optional_dca_mode_env,
+    resolve_optional_positive_float_env,
+    resolve_optional_ratio_env,
+    resolve_split_env_list,
     resolve_strategy_runtime_path_settings,
 )
 from quant_platform_kit.common.runtime_target import (
@@ -117,29 +122,6 @@ def _resolve_ratio_env(name: str, *, default: float) -> float:
     return value
 
 
-def _optional_bool_env(name: str) -> bool | None:
-    raw_value = os.getenv(name)
-    if raw_value is None or str(raw_value).strip() == "":
-        return None
-    value = str(raw_value).strip().lower()
-    if value in {"1", "true", "yes", "y", "on"}:
-        return True
-    if value in {"0", "false", "no", "n", "off"}:
-        return False
-    raise ValueError(f"{name} must be boolean, got {raw_value!r}")
-
-
-def _optional_ratio_env(name: str) -> float | None:
-    raw_value = os.getenv(name)
-    if raw_value is None or raw_value.strip() == "":
-        return None
-    value = float(raw_value)
-    if not math.isfinite(value):
-        raise ValueError(f"{name} must be finite, got {value}")
-    if not (0.0 <= value <= 1.0):
-        raise ValueError(f"{name} must be in [0,1], got {value}")
-    return value
-
 
 def _optional_non_negative_float_env(name: str) -> float | None:
     raw_value = os.getenv(name)
@@ -153,37 +135,9 @@ def _optional_non_negative_float_env(name: str) -> float | None:
     return value
 
 
-def _optional_positive_float_env(name: str) -> float | None:
-    raw_value = os.getenv(name)
-    if raw_value is None or raw_value.strip() == "":
-        return None
-    value = float(raw_value)
-    if not math.isfinite(value):
-        raise ValueError(f"{name} must be finite, got {value}")
-    if value <= 0:
-        raise ValueError(f"{name} must be positive, got {value}")
-    return value
-
-
-def _optional_dca_mode_env(name: str) -> str | None:
-    raw_value = os.getenv(name)
-    if raw_value is None or str(raw_value).strip() == "":
-        return None
-    value = str(raw_value).strip().lower()
-    aliases = {
-        "ordinary": "fixed",
-        "ordinary_dca": "fixed",
-        "fixed_dca": "fixed",
-        "smart_dca": "smart",
-    }
-    mode = aliases.get(value, value)
-    if mode not in {"fixed", "smart"}:
-        raise ValueError(f"{name} must be fixed or smart, got {raw_value!r}")
-    return mode
-
 
 def _runtime_target_enabled_env() -> bool:
-    value = _optional_bool_env("RUNTIME_TARGET_ENABLED")
+    value = resolve_optional_bool_env("RUNTIME_TARGET_ENABLED")
     return True if value is None else value
 
 
@@ -200,20 +154,6 @@ def _optional_int(raw_value: str | None) -> int | None:
     if not value:
         return None
     return int(value)
-
-
-def _split_env_list(raw_value: str | None) -> tuple[str, ...]:
-    if raw_value is None:
-        return ()
-    items = []
-    seen = set()
-    for value in str(raw_value).replace(";", ",").replace("\n", ",").split(","):
-        item = value.strip()
-        if not item or item in seen:
-            continue
-        items.append(item)
-        seen.add(item)
-    return tuple(items)
 
 
 def resolve_strategy_profile(raw_value: str | None = None) -> str:
@@ -276,11 +216,11 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
             os.environ,
             platform_env_prefix="SCHWAB",
         ),
-        income_layer_enabled=_optional_bool_env("INCOME_LAYER_ENABLED"),
+        income_layer_enabled=resolve_optional_bool_env("INCOME_LAYER_ENABLED"),
         income_layer_start_usd=_optional_non_negative_float_env("INCOME_LAYER_START_USD"),
-        income_layer_max_ratio=_optional_ratio_env("INCOME_LAYER_MAX_RATIO"),
-        dca_mode=_optional_dca_mode_env("DCA_MODE"),
-        dca_base_investment_usd=_optional_positive_float_env("DCA_BASE_INVESTMENT_USD"),
+        income_layer_max_ratio=resolve_optional_ratio_env("INCOME_LAYER_MAX_RATIO"),
+        dca_mode=resolve_optional_dca_mode_env("DCA_MODE"),
+        dca_base_investment_usd=resolve_optional_positive_float_env("DCA_BASE_INVESTMENT_USD"),
         market_signal_handoff_index_uri=_first_non_empty(
             os.getenv("SCHWAB_MARKET_SIGNAL_HANDOFF_INDEX_URI"),
             os.getenv("MARKET_SIGNAL_HANDOFF_INDEX_URI"),
@@ -340,8 +280,8 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
             os.getenv("SCHWAB_STRATEGY_PLUGIN_MOUNTS_JSON")
             or os.getenv("STRATEGY_PLUGIN_MOUNTS_JSON")
         ),
-        strategy_plugin_alert_channels=_split_env_list(os.getenv("STRATEGY_PLUGIN_ALERT_CHANNELS")),
-        strategy_plugin_alert_email_recipients=_split_env_list(os.getenv("STRATEGY_PLUGIN_ALERT_EMAIL_RECIPIENTS")),
+        strategy_plugin_alert_channels=resolve_split_env_list("STRATEGY_PLUGIN_ALERT_CHANNELS"),
+        strategy_plugin_alert_email_recipients=resolve_split_env_list("STRATEGY_PLUGIN_ALERT_EMAIL_RECIPIENTS"),
         strategy_plugin_alert_email_sender_email=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_EMAIL_SENDER_EMAIL")),
         strategy_plugin_alert_email_sender_password=_first_non_empty(
             os.getenv("STRATEGY_PLUGIN_ALERT_EMAIL_SENDER_PASSWORD")
@@ -351,7 +291,7 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
         strategy_plugin_alert_email_smtp_security=_first_non_empty(
             os.getenv("STRATEGY_PLUGIN_ALERT_EMAIL_SMTP_SECURITY")
         ),
-        strategy_plugin_alert_sms_recipients=_split_env_list(os.getenv("STRATEGY_PLUGIN_ALERT_SMS_RECIPIENTS")),
+        strategy_plugin_alert_sms_recipients=resolve_split_env_list("STRATEGY_PLUGIN_ALERT_SMS_RECIPIENTS"),
         strategy_plugin_alert_sms_provider=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_SMS_PROVIDER")),
         strategy_plugin_alert_sms_account_id=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_SMS_ACCOUNT_ID")),
         strategy_plugin_alert_sms_auth_token=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_SMS_AUTH_TOKEN")),
@@ -363,7 +303,7 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
         strategy_plugin_alert_sms_body_max_chars=_first_non_empty(
             os.getenv("STRATEGY_PLUGIN_ALERT_SMS_BODY_MAX_CHARS")
         ),
-        strategy_plugin_alert_push_recipients=_split_env_list(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_RECIPIENTS")),
+        strategy_plugin_alert_push_recipients=resolve_split_env_list("STRATEGY_PLUGIN_ALERT_PUSH_RECIPIENTS"),
         strategy_plugin_alert_push_provider=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_PROVIDER")),
         strategy_plugin_alert_push_app_token=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_APP_TOKEN")),
         strategy_plugin_alert_push_access_token=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_ACCESS_TOKEN")),
@@ -374,8 +314,8 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
         strategy_plugin_alert_push_body_max_chars=_first_non_empty(
             os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_BODY_MAX_CHARS")
         ),
-        strategy_plugin_alert_telegram_chat_ids=_split_env_list(
-            os.getenv("STRATEGY_PLUGIN_ALERT_TELEGRAM_CHAT_IDS")
+        strategy_plugin_alert_telegram_chat_ids=resolve_split_env_list(
+            "STRATEGY_PLUGIN_ALERT_TELEGRAM_CHAT_IDS"
         ),
         strategy_plugin_alert_telegram_bot_token=_first_non_empty(
             os.getenv("STRATEGY_PLUGIN_ALERT_TELEGRAM_BOT_TOKEN")
