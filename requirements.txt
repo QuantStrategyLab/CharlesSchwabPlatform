@@ -1,15 +1,4 @@
-flask
-gunicorn
+-e .
 quant-platform-kit @ git+https://github.com/QuantStrategyLab/QuantPlatformKit.git@5b76090a358073f00b1705409fff0902bd5f0ca4
 us-equity-strategies @ git+https://github.com/QuantStrategyLab/UsEquityStrategies.git@a15fcbff1725051d5a3e117bb94c4b8cad5dcabc
-pandas
-requests
-pandas_market_calendars
-pytz
-schwab-py
-google-cloud-secret-manager
-google-cloud-storage
-google-auth
-numpy
-
 quantuscombostrategies @ git+https://github.com/QuantStrategyLab/QuantUsComboStrategies.git@d35f4f86b09a7f4e99a1f83c973b21f2420398ef
