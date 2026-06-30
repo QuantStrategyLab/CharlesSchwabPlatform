@@ -8,7 +8,3 @@ us-equity-strategies @ git+https://github.com/QuantStrategyLab/UsEquityStrategie
 hk-equity-strategies @ git+https://github.com/QuantStrategyLab/HkEquityStrategies.git@5fb48ea102c28deb6dd1c9674553f3c77aba4f2c
 cn-equity-strategies @ git+https://github.com/QuantStrategyLab/CnEquityStrategies.git@e09fd557c2bd9ae5f4d44228915c4e52c4b0dd21
 crypto-strategies @ git+https://github.com/QuantStrategyLab/CryptoStrategies.git@565be005e4186fd6d750884e7b0bc59f779f9549
-quantuscombostrategies @ git+https://github.com/QuantStrategyLab/QuantUsComboStrategies.git@d35f4f86b09a7f4e99a1f83c973b21f2420398ef
-quanthkcombostrategies @ git+https://github.com/QuantStrategyLab/QuantHkComboStrategies.git@dfc21e923c0f9ba54678a75d0edc96a56e2188e2
-quantcncombostrategies @ git+https://github.com/QuantStrategyLab/QuantCnComboStrategies.git@1172e77e8046088c2bab2880343786ec135539da
-quantcryptocombostrategies @ git+https://github.com/QuantStrategyLab/QuantCryptoComboStrategies.git@475c5259d3ba7e2dcd4de30aaa96437142669a1c
