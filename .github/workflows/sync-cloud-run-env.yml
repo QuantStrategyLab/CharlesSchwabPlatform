@@ -182,10 +182,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          grep -vE "^\s*(#|$)|git\+" requirements.txt | xargs -r python -m pip install
-          grep 'git+' requirements.txt | while IFS= read -r pkg; do
-            [ -n "$pkg" ] && python -m pip install --no-deps "$pkg"
-          done
+          python -m pip install -r requirements.txt
 
       - name: Resolve Cloud Run sync targets
         id: strategy_requirements
@@ -285,7 +282,6 @@ jobs:
           project_id: ${{ env.GCP_PROJECT_ID }}
           version: ">= 416.0.0"
 
-      - name: 
       - name: Build, push, and deploy Cloud Run image
         if: steps.config.outputs.deploy_enabled == 'true'
         run: |
