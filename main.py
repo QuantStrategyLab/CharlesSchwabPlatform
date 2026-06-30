@@ -8,6 +8,7 @@ import traceback
 from flask import Flask
 import requests
 
+from quant_platform_kit.common.health import register_health_endpoint
 from quant_platform_kit.common.platform_runner import dispatch_due_monitors, load_monitor_targets
 from application.runtime_broker_adapters import build_runtime_broker_adapters
 from application.runtime_composer import build_runtime_composer
@@ -51,6 +52,7 @@ from runtime_logging import build_run_id, emit_runtime_log
 from strategy_runtime import load_strategy_runtime
 
 app = Flask(__name__)
+register_health_endpoint(app)  # GET /health /healthz
 
 
 def get_project_id():
