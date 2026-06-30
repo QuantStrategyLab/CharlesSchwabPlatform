@@ -3,7 +3,6 @@ from __future__ import annotations
 from quant_platform_kit.common.platform_runner.loader import (
     load_strategy_definition as _qpk_load_definition,
     load_strategy_entrypoint_for_profile as _qpk_load_entrypoint,
-    load_strategy_runtime_adapter_for_profile as _qpk_load_runtime_adapter,
 )
 from quant_platform_kit.common.strategies import StrategyDefinition
 from quant_platform_kit.strategy_contracts import StrategyEntrypoint, StrategyRuntimeAdapter

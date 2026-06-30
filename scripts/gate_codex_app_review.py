@@ -228,7 +228,7 @@ def main() -> int:
     pr_number = pr.get("number")
     head_sha = (pr.get("head") or {}).get("sha")
     if not pr_number or not head_sha:
-        print(f"::warning::Cannot resolve PR context"); return 0
+        print("::warning::Cannot resolve PR context"); return 0
 
     print(f"PR #{pr_number}  sha={head_sha[:12]}  event={event_name}")
 
