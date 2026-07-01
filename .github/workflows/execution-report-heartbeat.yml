@@ -1,5 +1,6 @@
 name: Execution Report Heartbeat
 
+# Schedule disabled; trade/error notifications own unattended alerting.
 on:
   workflow_dispatch:
     inputs:
@@ -16,8 +17,6 @@ on:
         options:
           - "true"
           - "false"
-  schedule:
-        # cron disabled — notify only on trades/errors "20 23 * * 1-5"
 
 env:
   GCP_PROJECT_ID: charlesschwabquant
