@@ -56,6 +56,8 @@ def _load_services() -> list[str]:
                 for target in targets:
                     if not isinstance(target, dict):
                         continue
+                    if not _target_enabled(target):
+                        continue
                     runtime_target = target.get("runtime_target") or target.get(
                         "runtime_target_json"
                     )
@@ -85,17 +87,41 @@ def _load_services() -> list[str]:
     return unique
 
 
+def _service_job_aliases(service: str) -> list[str]:
+    service_name = str(service or "").strip()
+    if not service_name:
+        return []
+    aliases = [service_name]
+    if service_name.endswith("-service"):
+        aliases.append(service_name.removesuffix("-service"))
+    return list(dict.fromkeys(aliases))
+
+
 def _scheduler_job_pattern_for_services(services: list[str]) -> str:
     candidates: list[str] = []
     for service in services:
-        service_name = str(service or "").strip()
-        if not service_name:
-            continue
-        candidates.append(service_name)
-        if service_name.endswith("-service"):
-            candidates.append(service_name.removesuffix("-service"))
+        candidates.extend(_service_job_aliases(service))
     unique = list(dict.fromkeys(candidates))
     return "|".join(re.escape(candidate) for candidate in unique)
+
+
+def _entry_job_name(entry: dict[str, Any]) -> str:
+    labels = _labels(entry)
+    return str(labels.get("job_id") or labels.get("job_name") or "")
+
+
+def _scheduler_entry_since(
+    entry: dict[str, Any],
+    service_since_by_name: dict[str, dt.datetime],
+    fallback: dt.datetime,
+) -> dt.datetime:
+    job_name = _entry_job_name(entry)
+    matches = [
+        service_since
+        for service, service_since in service_since_by_name.items()
+        if any(alias and alias in job_name for alias in _service_job_aliases(service))
+    ]
+    return max(matches) if matches else fallback
 
 
 def _run_gcloud(args: list[str]) -> subprocess.CompletedProcess[str]:
@@ -182,6 +208,27 @@ def _runtime_target(target: dict[str, Any]) -> dict[str, Any]:
         except json.JSONDecodeError:
             runtime_target = {}
     return runtime_target if isinstance(runtime_target, dict) else {}
+
+
+def _coerce_bool(value: Any, default: bool) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if not text:
+        return default
+    return text in {"1", "true", "yes", "y", "on"}
+
+
+def _target_enabled(target: dict[str, Any]) -> bool:
+    runtime_target = _runtime_target(target)
+    for key in ("runtime_target_enabled", "RUNTIME_TARGET_ENABLED"):
+        if key in target:
+            return _coerce_bool(target.get(key), True)
+        if key in runtime_target:
+            return _coerce_bool(runtime_target.get(key), True)
+    return True
 
 
 def _target_service_names(target: dict[str, Any]) -> list[str]:
@@ -427,6 +474,7 @@ def main() -> int:
     issues: list[str] = []
     details: list[str] = []
     success_count = 0
+    service_since_by_name: dict[str, dt.datetime] = {}
 
     try:
         services = _load_services()
@@ -440,6 +488,7 @@ def main() -> int:
 
     for service in services:
         service_since = _cloud_run_log_since(project, service, since) if ignore_pre_ready_logs else since
+        service_since_by_name[service] = service_since
         service_since_text = _format_timestamp(service_since)
         log_filter = (
             'resource.type="cloud_run_revision" '
@@ -473,7 +522,15 @@ def main() -> int:
                     for entry in entries
                     if regex.search(str(_labels(entry).get("job_id") or _labels(entry).get("job_name") or ""))
                 ]
-            failures = [entry for entry in entries if _is_failure(entry)]
+            failures = []
+            for entry in entries:
+                if not _is_failure(entry):
+                    continue
+                entry_timestamp = _parse_timestamp(entry.get("timestamp"))
+                entry_since = _scheduler_entry_since(entry, service_since_by_name, since)
+                if entry_timestamp and entry_timestamp < entry_since:
+                    continue
+                failures.append(entry)
             if failures:
                 issues.append(f"{len(failures)} Cloud Scheduler failure log(s)")
                 details.extend(_summarize(entry) for entry in failures[:5])
