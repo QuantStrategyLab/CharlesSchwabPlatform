@@ -85,6 +85,23 @@ def _load_services() -> list[str]:
     return unique
 
 
+def _scheduler_job_pattern_for_services(services: list[str]) -> str:
+    candidates: list[str] = []
+    for service in services:
+        service_name = str(service or "").strip()
+        if not service_name:
+            continue
+        candidates.append(service_name)
+        if service_name.endswith("-service"):
+            candidates.append(service_name.removesuffix("-service"))
+    unique = list(dict.fromkeys(candidates))
+    return "|".join(re.escape(candidate) for candidate in unique)
+
+
+def _run_gcloud(args: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(args, text=True, capture_output=True, check=False)
+
+
 def _run_gcloud_logging(project: str, log_filter: str, limit: int) -> list[dict[str, Any]]:
     command = [
         "gcloud",
@@ -166,10 +183,45 @@ def _summarize(entry: dict[str, Any]) -> str:
     return f"- {timestamp} {target or '<unknown>'} severity={severity}{status_text}{suffix}"
 
 
+def _telegram_secret_project() -> str | None:
+    return (
+        os.environ.get("RUNTIME_HEARTBEAT_GCP_PROJECT_ID")
+        or os.environ.get("RUNTIME_GUARD_GCP_PROJECT_ID")
+        or os.environ.get("GCP_PROJECT_ID")
+        or os.environ.get("GOOGLE_CLOUD_PROJECT")
+    )
+
+
+def _load_telegram_token_from_secret() -> str:
+    secret_name = (os.environ.get("TELEGRAM_TOKEN_SECRET_NAME") or "").strip()
+    if not secret_name:
+        return ""
+    command = ["gcloud", "secrets", "versions", "access", "latest", "--secret", secret_name]
+    project = _telegram_secret_project()
+    if project:
+        command.extend(["--project", project])
+    result = _run_gcloud(command)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        print(
+            f"Unable to read Telegram token from Secret Manager: {detail or 'gcloud failed'}",
+            file=sys.stderr,
+        )
+        return ""
+    return result.stdout.strip()
+
+
+def _telegram_token() -> str:
+    direct_token = (os.environ.get("TELEGRAM_TOKEN") or os.environ.get("TG_TOKEN") or "").strip()
+    if direct_token:
+        return direct_token
+    return _load_telegram_token_from_secret()
+
+
 def _send_telegram(message: str) -> bool:
     targets: list[tuple[str, str]] = []
 
-    token = os.environ.get("TELEGRAM_TOKEN") or os.environ.get("TG_TOKEN")
+    token = _telegram_token()
     for chat_id in _split_values(os.environ.get("GLOBAL_TELEGRAM_CHAT_ID")):
         if token:
             targets.append((token, chat_id))
@@ -214,7 +266,6 @@ def main() -> int:
     require_success = _env_bool("RUNTIME_GUARD_REQUIRE_SUCCESS", False)
     fail_workflow = _env_bool("RUNTIME_GUARD_FAIL_WORKFLOW_ON_ALERT", True)
     check_scheduler = _env_bool("RUNTIME_GUARD_CHECK_SCHEDULER", True)
-    scheduler_pattern = os.environ.get("RUNTIME_GUARD_SCHEDULER_JOB_PATTERN") or ""
 
     since = (
         dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=lookback_minutes)
@@ -230,6 +281,10 @@ def main() -> int:
     except RuntimeError as exc:
         services = []
         issues.append(f"service configuration error: {exc}")
+    scheduler_pattern = (
+        os.environ.get("RUNTIME_GUARD_SCHEDULER_JOB_PATTERN")
+        or _scheduler_job_pattern_for_services(services)
+    )
 
     for service in services:
         log_filter = (
@@ -253,7 +308,7 @@ def main() -> int:
             f"no successful Cloud Run request found for {', '.join(services)} in the last {lookback_minutes} minutes"
         )
 
-    if check_scheduler:
+    if check_scheduler and scheduler_pattern:
         log_filter = f'resource.type="cloud_scheduler_job" AND timestamp >= "{since_text}"'
         try:
             entries = _run_gcloud_logging(project, log_filter, limit)
@@ -270,6 +325,8 @@ def main() -> int:
                 details.extend(_summarize(entry) for entry in failures[:5])
         except RuntimeError as exc:
             issues.append(f"Cloud Scheduler log query failed: {exc}")
+    elif check_scheduler:
+        print("Skipping Cloud Scheduler check because no scheduler job pattern could be derived.", file=sys.stderr)
 
     if not issues:
         service_text = ", ".join(services) if services else "<none configured>"
