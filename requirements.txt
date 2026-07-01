@@ -10,4 +10,4 @@ google-cloud-storage
 google-auth
 numpy
 quant-platform-kit @ git+https://github.com/QuantStrategyLab/QuantPlatformKit.git@d786c1140967f0e96e35599d057f0655e5a9ba25
-us-equity-strategies @ git+https://github.com/QuantStrategyLab/UsEquityStrategies.git@c8df5f9659340965bd7f53998892ed1018ed4254
+us-equity-strategies @ git+https://github.com/QuantStrategyLab/UsEquityStrategies.git@c57fb20528d40f363ae149ae6e3f6b1a240ec237

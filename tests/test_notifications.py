@@ -220,9 +220,10 @@ class NotificationTests(unittest.TestCase):
             account_label="demo",
         )
 
-        self.assertIn("数据源 Schwab 日线历史", rendered.compact_text)
-        self.assertNotIn("报价覆盖", rendered.compact_text)
-        self.assertIn("📊 市场状态: 🚀 风险开启（SOXX+SOXL）", rendered.compact_text)
+        self.assertIn("数据源 Schwab 日线历史", rendered.detailed_text)
+        self.assertIn("📊 市场状态: 🚀 风险开启（SOXX+SOXL）", rendered.detailed_text)
+        self.assertNotIn("数据源 Schwab 日线历史", rendered.compact_text)
+        self.assertNotIn("📊 市场状态", rendered.compact_text)
         self.assertNotIn("schwab_daily_history_with_live_quote_overlay", rendered.compact_text)
 
     def test_heartbeat_renders_tqqq_volatility_delever_risk_control(self):
@@ -264,8 +265,33 @@ class NotificationTests(unittest.TestCase):
             "🛡️ Risk control: QQQ 5d annualized volatility 31.2% is above effective threshold 30.0% "
             "(dynamic p90, 252d lookback, bounded 24.0%-36.0%, samples 252); TQQQ redirects to QQQM "
             "(leveraged sleeve: TQQQ retained 0.0%, QQQM 100.0%)",
-            rendered.compact_text,
+            rendered.detailed_text,
         )
+        self.assertNotIn("🛡️ Risk control:", rendered.compact_text)
+
+    def test_dashboard_relabels_total_assets_for_margin_execution(self):
+        rendered = render_heartbeat_notification(
+            translator=build_translator("zh"),
+            strategy_display_name="TQQQ 增长收益",
+            dry_run_only=False,
+            extra_notification_lines=(),
+            execution={
+                "dashboard_text": "总资产（策略标的+现金，不含融资额度）: $50,000.00\n可用现金: $75,000.00",
+                "separator": "━━━━━━━━━━━━━━━━━━",
+                "signal_display": "hold",
+                "cash_only_execution": False,
+            },
+            portfolio={
+                "total_equity": 50000.0,
+                "portfolio_rows": (("TQQQ",),),
+                "market_values": {"TQQQ": 8000.0},
+            },
+            account_label="demo",
+        )
+
+        self.assertIn("总资产（策略净值）: $50,000.00", rendered.compact_text)
+        self.assertIn("购买力: $75,000.00", rendered.compact_text)
+        self.assertNotIn("不含融资额度", rendered.compact_text)
 
     def test_dashboard_relabels_buying_power_for_cash_only_execution(self):
         execution = {

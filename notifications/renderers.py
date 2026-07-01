@@ -157,11 +157,26 @@ def _format_inline_segments(line: str, *, translator, holdings_title_emitted: bo
 def _relabel_dashboard_buying_power(text: str, *, cash_only_execution: bool, translator) -> str:
     value = str(text or "")
     if cash_only_execution:
+        value = value.replace("总资产（策略净值）", "总资产（策略标的+现金，不含融资额度）")
+        value = value.replace(
+            "Total assets (strategy net liquidation)",
+            "Total assets (strategy symbols + cash, ex-margin)",
+        )
         target = translator("buying_power")
         for source in ("Buying power", "购买力"):
             if source != target:
                 value = value.replace(source, target)
         return value
+    value = value.replace("总资产（策略标的+现金，不含融资额度）", "总资产（策略净值）")
+    value = value.replace("总资产（策略标的+现金）", "总资产（策略净值）")
+    value = value.replace(
+        "Total assets (strategy symbols + cash, ex-margin)",
+        "Total assets (strategy net liquidation)",
+    )
+    value = value.replace(
+        "Total assets (strategy symbols + cash)",
+        "Total assets (strategy net liquidation)",
+    )
     target = translator("buying_power_margin")
     for source in ("Available cash", "可用现金"):
         if source != target:
@@ -186,6 +201,24 @@ def _format_dashboard_text(text: str, *, translator, cash_only_execution: bool =
         cash_only_execution=cash_only_execution,
         translator=translator,
     )
+
+
+def _is_compact_dashboard_audit_line(line: str) -> bool:
+    text = str(line or "").strip()
+    lowered = text.lower()
+    return (
+        text.startswith(("⏱", "🧾", "🧩 输入状态", "📊", "🎯", "🛡️"))
+        or lowered.startswith(("signal:", "signal：", "market status:"))
+        or text.startswith(("信号:", "信号：", "市场状态:", "市场状态："))
+    )
+
+
+def _compact_dashboard_lines(dashboard_text: str) -> list[str]:
+    return [
+        line
+        for line in str(dashboard_text or "").splitlines()
+        if line.strip() and not _is_compact_dashboard_audit_line(line)
+    ]
 
 
 def _build_timing_audit_lines(execution, *, translator) -> list[str]:
@@ -439,8 +472,12 @@ def _build_compact_trade_message(
         lines.extend(line for line in extra_notification_block.splitlines() if line.strip())
     dashboard = str(dashboard_text or "").strip()
     if dashboard:
+        dashboard_lines = _compact_dashboard_lines(dashboard)
+    else:
+        dashboard_lines = []
+    if dashboard_lines:
         lines.append(separator)
-        lines.extend(line for line in dashboard.splitlines() if line.strip())
+        lines.extend(dashboard_lines)
         lines.append(separator)
     if trade_logs:
         lines.extend(str(log).strip() for log in trade_logs if str(log).strip())
@@ -478,18 +515,12 @@ def _build_compact_heartbeat_message(
         lines.extend(line for line in extra_notification_block.splitlines() if line.strip())
     dashboard = str(dashboard_text or "").strip()
     if dashboard:
+        dashboard_lines = _compact_dashboard_lines(dashboard)
+    else:
+        dashboard_lines = []
+    if dashboard_lines:
         lines.append(separator)
-        lines.extend(line for line in dashboard.splitlines() if line.strip())
-    lines.extend(timing_lines)
-    if signal_snapshot_line:
-        lines.append(signal_snapshot_line)
-    status_summary = _first_detail_line(status_display)
-    if status_summary:
-        lines.append(_format_market_status_line(status_summary, translator=translator))
-    lines.extend(risk_control_lines)
-    signal_summary = _first_detail_line(signal_display)
-    if signal_summary:
-        lines.append(f"🎯 {translator('signal_label')}: {signal_summary}")
+        lines.extend(dashboard_lines)
     lines.append(separator)
     lines.append(translator("no_trades"))
     return "\n".join(lines)
