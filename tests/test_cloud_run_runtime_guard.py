@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import datetime as dt
+import json
 import re
 import subprocess
 
@@ -39,3 +41,52 @@ def test_telegram_token_falls_back_to_secret_manager(monkeypatch):
         "--project",
         "charlesschwabquant",
     ]
+
+
+def test_cloud_run_log_since_uses_latest_ready_revision(monkeypatch):
+    monkeypatch.setenv("CLOUD_RUN_REGION", "us-central1")
+    observed = []
+
+    def fake_run_gcloud(command):
+        observed.append(command)
+        if command[1:4] == ["run", "services", "describe"]:
+            payload = {"status": {"latestReadyRevisionName": "charles-schwab-service-00002"}}
+        else:
+            payload = {"metadata": {"creationTimestamp": "2026-07-01T06:50:04.123Z"}}
+        return subprocess.CompletedProcess(command, 0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(guard, "_run_gcloud", fake_run_gcloud)
+
+    fallback = dt.datetime(2026, 7, 1, 6, 0, tzinfo=dt.timezone.utc)
+    result = guard._cloud_run_log_since("charlesschwabquant", "charles-schwab-service", fallback)
+
+    assert result == dt.datetime(2026, 7, 1, 6, 50, 4, 123000, tzinfo=dt.timezone.utc)
+    assert observed[0] == [
+        "gcloud",
+        "run",
+        "services",
+        "describe",
+        "charles-schwab-service",
+        "--project",
+        "charlesschwabquant",
+        "--region",
+        "us-central1",
+        "--format=json",
+    ]
+    assert observed[1][1:5] == ["run", "revisions", "describe", "charles-schwab-service-00002"]
+
+
+def test_region_for_service_prefers_target_region(monkeypatch):
+    monkeypatch.setenv("CLOUD_RUN_REGION", "us-central1")
+    monkeypatch.setenv(
+        "CLOUD_RUN_SERVICE_TARGETS_JSON",
+        json.dumps(
+            {
+                "targets": [
+                    {"service": "charles-schwab-service", "region": "asia-east1"},
+                ]
+            }
+        ),
+    )
+
+    assert guard._region_for_service("charles-schwab-service") == "asia-east1"
