@@ -3,8 +3,8 @@
 # Generated: 2026-07-01
 # Auto-updated by update-qpk-pin.yml on every push to QPK main.
 
-quant-platform-kit @ git+https://github.com/QuantStrategyLab/QuantPlatformKit.git@d786c1140967f0e96e35599d057f0655e5a9ba25
-us-equity-strategies @ git+https://github.com/QuantStrategyLab/UsEquityStrategies.git@c57fb20528d40f363ae149ae6e3f6b1a240ec237
+quant-platform-kit @ git+https://github.com/QuantStrategyLab/QuantPlatformKit.git@b0eacd2fe4884f7f2447b704a232e9a121f396c4
+us-equity-strategies @ git+https://github.com/QuantStrategyLab/UsEquityStrategies.git@6568c315ce3be6f7ae5b799374cf7fb44232c170
 hk-equity-strategies @ git+https://github.com/QuantStrategyLab/HkEquityStrategies.git@700c8b19c46336d3d8fcba687e58553afcf0235f
 cn-equity-strategies @ git+https://github.com/QuantStrategyLab/CnEquityStrategies.git@e09fd557c2bd9ae5f4d44228915c4e52c4b0dd21
 crypto-strategies @ git+https://github.com/QuantStrategyLab/CryptoStrategies.git@565be005e4186fd6d750884e7b0bc59f779f9549
