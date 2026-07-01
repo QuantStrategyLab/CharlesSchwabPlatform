@@ -90,3 +90,38 @@ def test_region_for_service_prefers_target_region(monkeypatch):
     )
 
     assert guard._region_for_service("charles-schwab-service") == "asia-east1"
+
+
+def test_load_services_ignores_disabled_runtime_targets(monkeypatch):
+    monkeypatch.delenv("RUNTIME_GUARD_CLOUD_RUN_SERVICES", raising=False)
+    monkeypatch.delenv("CLOUD_RUN_SERVICES", raising=False)
+    monkeypatch.delenv("CLOUD_RUN_SERVICE", raising=False)
+    monkeypatch.setenv(
+        "CLOUD_RUN_SERVICE_TARGETS_JSON",
+        json.dumps(
+            {
+                "targets": [
+                    {"service": "enabled-service", "RUNTIME_TARGET_ENABLED": "true"},
+                    {"service": "disabled-service", "RUNTIME_TARGET_ENABLED": "false"},
+                    {"service": "disabled-lower-service", "runtime_target_enabled": "false"},
+                ]
+            }
+        ),
+    )
+
+    assert guard._load_services() == ["enabled-service"]
+
+
+def test_scheduler_entry_since_uses_matching_service_revision_window():
+    fallback = dt.datetime(2026, 7, 1, 1, 0, tzinfo=dt.timezone.utc)
+    service_since = dt.datetime(2026, 7, 1, 2, 0, tzinfo=dt.timezone.utc)
+    entry = {"resource": {"labels": {"job_id": "enabled-service-scheduler"}}}
+
+    assert (
+        guard._scheduler_entry_since(entry, {"enabled-service": service_since}, fallback)
+        == service_since
+    )
+    assert (
+        guard._scheduler_entry_since(entry, {"other-service": service_since}, fallback)
+        == fallback
+    )
