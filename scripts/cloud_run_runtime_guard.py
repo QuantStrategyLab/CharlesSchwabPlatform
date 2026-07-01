@@ -102,6 +102,19 @@ def _run_gcloud(args: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(args, text=True, capture_output=True, check=False)
 
 
+def _run_gcloud_json(args: list[str], context: str) -> Any:
+    result = _run_gcloud(args)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(detail or f"gcloud {context} failed")
+    if not result.stdout.strip():
+        return None
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"gcloud {context} returned invalid JSON: {exc}") from exc
+
+
 def _run_gcloud_logging(project: str, log_filter: str, limit: int) -> list[dict[str, Any]]:
     command = [
         "gcloud",
@@ -124,6 +137,144 @@ def _run_gcloud_logging(project: str, log_filter: str, limit: int) -> list[dict[
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"gcloud returned invalid JSON: {exc}") from exc
     return payload if isinstance(payload, list) else []
+
+
+def _parse_timestamp(value: Any) -> dt.datetime | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = dt.datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed.astimezone(dt.timezone.utc)
+
+
+def _format_timestamp(value: dt.datetime) -> str:
+    return value.astimezone(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _target_payloads() -> list[dict[str, Any]]:
+    raw_targets = (os.environ.get("CLOUD_RUN_SERVICE_TARGETS_JSON") or "").strip()
+    if not raw_targets:
+        return []
+    try:
+        payload = json.loads(raw_targets)
+    except json.JSONDecodeError:
+        return []
+    targets = payload.get("targets") if isinstance(payload, dict) else payload
+    if not isinstance(targets, list):
+        return []
+    return [target for target in targets if isinstance(target, dict)]
+
+
+def _runtime_target(target: dict[str, Any]) -> dict[str, Any]:
+    runtime_target = target.get("runtime_target") or target.get("runtime_target_json")
+    if isinstance(runtime_target, str):
+        try:
+            runtime_target = json.loads(runtime_target)
+        except json.JSONDecodeError:
+            runtime_target = {}
+    return runtime_target if isinstance(runtime_target, dict) else {}
+
+
+def _target_service_names(target: dict[str, Any]) -> list[str]:
+    runtime_target = _runtime_target(target)
+    for key in ("service", "service_name", "cloud_run_service"):
+        value = target.get(key) or runtime_target.get(key)
+        if value:
+            return _split_values(str(value))
+    return []
+
+
+def _region_for_service(service: str) -> str:
+    for target in _target_payloads():
+        if service not in _target_service_names(target):
+            continue
+        runtime_target = _runtime_target(target)
+        for key in ("region", "cloud_run_region", "location"):
+            value = target.get(key) or runtime_target.get(key)
+            if value:
+                return str(value).strip()
+    return (
+        os.environ.get("RUNTIME_GUARD_CLOUD_RUN_REGION")
+        or os.environ.get("CLOUD_RUN_REGION")
+        or os.environ.get("CLOUD_RUN_LOCATION")
+        or os.environ.get("GOOGLE_CLOUD_REGION")
+        or ""
+    ).strip()
+
+
+def _latest_ready_revision_started_at(project: str, service: str) -> dt.datetime | None:
+    region = _region_for_service(service)
+    if not region:
+        return None
+
+    service_payload = _run_gcloud_json(
+        [
+            "gcloud",
+            "run",
+            "services",
+            "describe",
+            service,
+            "--project",
+            project,
+            "--region",
+            region,
+            "--format=json",
+        ],
+        f"run services describe {service}",
+    )
+    if not isinstance(service_payload, dict):
+        return None
+    status = service_payload.get("status") or {}
+    if not isinstance(status, dict):
+        return None
+    revision = str(status.get("latestReadyRevisionName") or "").strip()
+    if not revision:
+        return None
+
+    revision_payload = _run_gcloud_json(
+        [
+            "gcloud",
+            "run",
+            "revisions",
+            "describe",
+            revision,
+            "--project",
+            project,
+            "--region",
+            region,
+            "--format=json",
+        ],
+        f"run revisions describe {revision}",
+    )
+    if not isinstance(revision_payload, dict):
+        return None
+    metadata = revision_payload.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        return None
+    return _parse_timestamp(metadata.get("creationTimestamp"))
+
+
+def _cloud_run_log_since(project: str, service: str, fallback: dt.datetime) -> dt.datetime:
+    try:
+        revision_start = _latest_ready_revision_started_at(project, service)
+    except RuntimeError as exc:
+        print(
+            f"Unable to resolve latest ready revision for {service}; using lookback window: {exc}",
+            file=sys.stderr,
+        )
+        return fallback
+    if revision_start and revision_start > fallback:
+        return revision_start
+    return fallback
 
 
 def _status(entry: dict[str, Any]) -> int | None:
@@ -266,6 +417,7 @@ def main() -> int:
     require_success = _env_bool("RUNTIME_GUARD_REQUIRE_SUCCESS", False)
     fail_workflow = _env_bool("RUNTIME_GUARD_FAIL_WORKFLOW_ON_ALERT", True)
     check_scheduler = _env_bool("RUNTIME_GUARD_CHECK_SCHEDULER", True)
+    ignore_pre_ready_logs = _env_bool("RUNTIME_GUARD_IGNORE_PRE_READY_REVISION_LOGS", True)
 
     since = (
         dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=lookback_minutes)
@@ -287,10 +439,12 @@ def main() -> int:
     )
 
     for service in services:
+        service_since = _cloud_run_log_since(project, service, since) if ignore_pre_ready_logs else since
+        service_since_text = _format_timestamp(service_since)
         log_filter = (
             'resource.type="cloud_run_revision" '
             f'AND resource.labels.service_name="{service}" '
-            f'AND timestamp >= "{since_text}"'
+            f'AND timestamp >= "{service_since_text}"'
         )
         try:
             entries = _run_gcloud_logging(project, log_filter, limit)
