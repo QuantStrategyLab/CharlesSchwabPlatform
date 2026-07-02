@@ -993,7 +993,7 @@ class RebalanceServiceTests(unittest.TestCase):
         self.assertIn("strategy=TQQQ Growth Income", sent_messages[0])
         self.assertIn("dashboard", sent_messages[0])
 
-    def test_run_strategy_core_adds_plugin_context_to_heartbeat(self):
+    def test_run_strategy_core_suppresses_no_trade_plugin_heartbeat_when_configured(self):
         sent_messages = []
         snapshot = SimpleNamespace(
             positions=(
@@ -1072,17 +1072,10 @@ class RebalanceServiceTests(unittest.TestCase):
             extra_notification_lines=(
                 "Plugin crisis_response_shadow [shadow] no_action -> monitor",
             ),
+            notify_no_trade_cycles=False,
         )
 
-        self.assertEqual(len(sent_messages), 1)
-        self.assertIn("heartbeat", sent_messages[0])
-        self.assertIn(
-            "Plugin crisis_response_shadow [shadow] no_action -> monitor",
-            sent_messages[0],
-        )
-        self.assertIn("strategy dashboard", sent_messages[0])
-        self.assertIn("2026-04-21 -> 2026-04-22", sent_messages[0])
-        self.assertIn("no trades", sent_messages[0])
+        self.assertEqual(sent_messages, [])
 
     def test_run_strategy_core_refreshes_buying_power_after_sell_before_buying(self):
         sent_messages = []

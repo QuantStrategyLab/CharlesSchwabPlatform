@@ -111,5 +111,6 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders():
     assert config.strategy_display_name == "TQQQ 增长收益"
     assert config.dry_run_only is True
     assert config.safe_haven_cash_substitute_threshold_usd == 1000.0
+    assert config.notify_no_trade_cycles is False
     assert reporting_adapters == "reporting-adapters"
     assert built_client[0][:4] == ("project-1", "schwab_token", "app-key", "app-secret")

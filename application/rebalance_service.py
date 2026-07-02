@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import json
 from datetime import datetime, timezone
 
 from application.execution_service import execute_rebalance_cycle, ExecutionCycleResult
@@ -273,6 +274,10 @@ def _should_record_execution_marker(*, result: ExecutionCycleResult, config: Sch
     return bool(tuple(getattr(result, "trade_logs", ()) or ()))
 
 
+def _has_submitted_orders(result: ExecutionCycleResult) -> bool:
+    return bool(tuple(getattr(result, "submitted_orders", ()) or ()))
+
+
 def _record_execution_marker(
     *,
     config: SchwabRebalanceConfig,
@@ -338,6 +343,7 @@ def run_strategy_core(
     post_sell_refresh_interval_sec=0.0,
     sleeper=_noop_sleep,
     extra_notification_lines=(),
+    notify_no_trade_cycles=True,
 ):
     del now_ny
     if runtime is None:
@@ -380,6 +386,7 @@ def run_strategy_core(
             post_sell_refresh_interval_sec=post_sell_refresh_interval_sec,
             sleeper=sleeper,
             extra_notification_lines=tuple(extra_notification_lines),
+            notify_no_trade_cycles=bool(notify_no_trade_cycles),
         )
     sleeper_fn = config.sleeper or _noop_sleep
     notification_publisher = NotificationPublisher(
@@ -515,7 +522,7 @@ def run_strategy_core(
     )
     trade_logs = list(execution_result.trade_logs)
 
-    if trade_logs:
+    if _has_submitted_orders(execution_result):
         notification_publisher.publish(
             notification_renderers.render_trade_notification(
                 translator=config.translator,
@@ -527,7 +534,7 @@ def run_strategy_core(
                 account_label=plan.get("account_hash", ""),
             )
         )
-    else:
+    elif getattr(config, "notify_no_trade_cycles", True):
         notification_publisher.publish(
             notification_renderers.render_heartbeat_notification(
                 translator=config.translator,
@@ -538,5 +545,11 @@ def run_strategy_core(
                 portfolio=portfolio,
                 account_label=plan.get("account_hash", ""),
             )
+        )
+    else:
+        print(
+            "notification_suppressed "
+            + json.dumps({"reason": "no_trade_or_error", "trade_logs_count": len(trade_logs)}, ensure_ascii=False),
+            flush=True,
         )
     return execution_result
