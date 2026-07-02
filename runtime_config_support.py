@@ -137,8 +137,14 @@ def _optional_non_negative_float_env(name: str) -> float | None:
 
 
 def _runtime_target_enabled_env() -> bool:
-    value = resolve_optional_bool_env("RUNTIME_TARGET_ENABLED")
-    return True if value is None else value
+    return resolve_optional_bool_env("RUNTIME_TARGET_ENABLED", default=True)
+
+
+def _optional_bool_env(name: str) -> bool | None:
+    raw_value = os.getenv(f"QSL_{name}") or os.getenv(name)
+    if raw_value is None or str(raw_value).strip() == "":
+        return None
+    return resolve_optional_bool_env(name)
 
 
 def _first_non_empty(*raw_values: str | None) -> str | None:
@@ -216,7 +222,7 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
             os.environ,
             platform_env_prefix="SCHWAB",
         ),
-        income_layer_enabled=resolve_optional_bool_env("INCOME_LAYER_ENABLED"),
+        income_layer_enabled=_optional_bool_env("INCOME_LAYER_ENABLED"),
         income_layer_start_usd=_optional_non_negative_float_env("INCOME_LAYER_START_USD"),
         income_layer_max_ratio=resolve_optional_ratio_env("INCOME_LAYER_MAX_RATIO"),
         dca_mode=resolve_optional_dca_mode_env("DCA_MODE"),
