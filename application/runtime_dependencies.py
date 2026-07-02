@@ -25,6 +25,7 @@ class SchwabRebalanceConfig:
     notional_buy_execution: bool = False
     sleeper: Callable[[float], None] | None = None
     extra_notification_lines: Sequence[str] = ()
+    notify_no_trade_cycles: bool = True
     strategy_plugin_signals: Sequence[Any] = ()
     execution_dedup_enabled: bool = False
     execution_state_store: Any = None
