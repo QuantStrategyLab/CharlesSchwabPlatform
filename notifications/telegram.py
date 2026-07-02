@@ -193,6 +193,8 @@ I18N = {
         "strategy_name_russell_top50_leader_rotation": "罗素 Top50 领涨轮动",
         "strategy_name_nasdaq_sp500_smart_dca": "纳指100 / 标普500 智能定投",
         "strategy_name_ibit_smart_dca": "IBIT 比特币 ETF 智能定投",
+        "strategy_name_us_equity_combo": "美股核心组合",
+        "strategy_name_us_equity_combo_leveraged": "美股Alpha组合",
     },
     "en": {
         "trade_header": "🔔 【Trade Execution Report】",
@@ -352,6 +354,8 @@ I18N = {
         "strategy_name_russell_top50_leader_rotation": "Russell Top50 Leader Rotation",
         "strategy_name_nasdaq_sp500_smart_dca": "Nasdaq 100 / S&P 500 Smart DCA",
         "strategy_name_ibit_smart_dca": "IBIT Smart DCA",
+        "strategy_name_us_equity_combo": "US Equity Combo",
+        "strategy_name_us_equity_combo_leveraged": "US Equity Combo Leveraged",
     },
 }
 
