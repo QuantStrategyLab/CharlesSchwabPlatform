@@ -214,6 +214,7 @@ class ExecutionCycleResult:
     execution: dict
     allocation: dict
     trade_logs: tuple[str, ...]
+    submitted_orders: tuple[dict, ...] = ()
 
 
 DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD = 1000.0
@@ -1083,4 +1084,5 @@ def execute_rebalance_cycle(
         execution=dict(execution or {}),
         allocation=dict(allocation or {}),
         trade_logs=tuple(trade_logs),
+        submitted_orders=tuple(submitted_orders),
     )

@@ -5,11 +5,6 @@ from us_equity_strategies import (
     get_runtime_enabled_profiles,
     get_strategy_catalog,
 )
-from quant_us_combo_strategies import (
-    get_platform_runtime_adapter as get_combo_runtime_adapter,
-    get_runtime_enabled_profiles as get_combo_runtime_enabled_profiles,
-    get_strategy_catalog as get_combo_strategy_catalog,
-)
 
 from quant_platform_kit.common.execution_capabilities import (
     FRACTIONAL_SHARE_EXECUTION_CAPABILITY,
@@ -17,9 +12,7 @@ from quant_platform_kit.common.execution_capabilities import (
 from quant_platform_kit.common.strategies import (
     PlatformCapabilityMatrix,
     PlatformStrategyPolicy,
-    StrategyCatalog,
     StrategyDefinition,
-    StrategyMetadata,
     US_EQUITY_DOMAIN,
     build_platform_profile_matrix,
     build_platform_profile_status_matrix,
@@ -31,7 +24,6 @@ from quant_platform_kit.common.strategies import (
 )
 
 SCHWAB_PLATFORM = "schwab"
-COMBOS_DOMAIN = "quant_combo"
 TECH_COMMUNICATION_PULLBACK_PROFILE = "tech_communication_pullback_enhancement"
 
 SCHWAB_EXCLUDED_LIVE_PROFILES = frozenset(
@@ -39,50 +31,14 @@ SCHWAB_EXCLUDED_LIVE_PROFILES = frozenset(
         TECH_COMMUNICATION_PULLBACK_PROFILE,
     }
 )
-SCHWAB_ROLLOUT_ALLOWLIST = (
-    get_runtime_enabled_profiles()
-    | get_combo_runtime_enabled_profiles()
-) - SCHWAB_EXCLUDED_LIVE_PROFILES
+SCHWAB_ROLLOUT_ALLOWLIST = get_runtime_enabled_profiles() - SCHWAB_EXCLUDED_LIVE_PROFILES
 
 PLATFORM_SUPPORTED_DOMAINS: dict[str, frozenset[str]] = {
-    SCHWAB_PLATFORM: frozenset({US_EQUITY_DOMAIN, COMBOS_DOMAIN}),
+    SCHWAB_PLATFORM: frozenset({US_EQUITY_DOMAIN}),
 }
 
 
-def _merge_strategy_catalogs(*catalogs: StrategyCatalog) -> StrategyCatalog:
-    definitions: dict[str, StrategyDefinition] = {}
-    metadata: dict[str, StrategyMetadata] = {}
-    compatible_platforms: dict[str, frozenset[str]] = {}
-    profile_aliases: dict[str, str] = {}
-    for catalog in catalogs:
-        for profile, definition in catalog.definitions.items():
-            if profile in definitions and definitions[profile] != definition:
-                raise ValueError(f"Duplicate strategy definition for profile {profile!r}")
-            definitions[profile] = definition
-        for profile, value in catalog.metadata.items():
-            if profile in metadata and metadata[profile] != value:
-                raise ValueError(f"Duplicate strategy metadata for profile {profile!r}")
-            metadata[profile] = value
-        for profile, platforms in catalog.compatible_platforms.items():
-            if profile in compatible_platforms and compatible_platforms[profile] != platforms:
-                raise ValueError(f"Duplicate strategy platform compatibility for profile {profile!r}")
-            compatible_platforms[profile] = platforms
-        for alias, profile_name in catalog.profile_aliases.items():
-            if alias in profile_aliases and profile_aliases[alias] != profile_name:
-                raise ValueError(f"Duplicate strategy alias {alias!r}")
-            profile_aliases[alias] = profile_name
-    return StrategyCatalog(
-        definitions=definitions,
-        metadata=metadata,
-        compatible_platforms=compatible_platforms,
-        profile_aliases=profile_aliases,
-    )
-
-
-STRATEGY_CATALOG = _merge_strategy_catalogs(
-    get_strategy_catalog(),
-    get_combo_strategy_catalog(),
-)
+STRATEGY_CATALOG = get_strategy_catalog()
 PLATFORM_CAPABILITY_MATRIX = PlatformCapabilityMatrix(
     platform_id=SCHWAB_PLATFORM,
     supported_domains=PLATFORM_SUPPORTED_DOMAINS[SCHWAB_PLATFORM],
@@ -107,20 +63,11 @@ PLATFORM_CAPABILITY_MATRIX = PlatformCapabilityMatrix(
     # Non-DCA profiles continue whole-share execution.
     supported_capabilities=frozenset({FRACTIONAL_SHARE_EXECUTION_CAPABILITY}),
 )
-COMBO_STRATEGY_PROFILES = frozenset(get_combo_strategy_catalog().definitions)
-
-
-def _get_platform_runtime_adapter_router(profile: str, *, platform_id: str):
-    """Route to the correct adapter based on the profile's domain."""
-    if profile in COMBO_STRATEGY_PROFILES:
-        return get_combo_runtime_adapter(profile, platform_id=platform_id)
-    return get_platform_runtime_adapter(profile, platform_id=platform_id)
-
 
 ELIGIBLE_STRATEGY_PROFILES = derive_eligible_profiles_for_platform(
     STRATEGY_CATALOG,
     capability_matrix=PLATFORM_CAPABILITY_MATRIX,
-    runtime_adapter_loader=lambda profile: _get_platform_runtime_adapter_router(
+    runtime_adapter_loader=lambda profile: get_platform_runtime_adapter(
         profile,
         platform_id=SCHWAB_PLATFORM,
     ),
@@ -128,7 +75,7 @@ ELIGIBLE_STRATEGY_PROFILES = derive_eligible_profiles_for_platform(
 SCHWAB_ENABLED_PROFILES = derive_enabled_profiles_for_platform(
     STRATEGY_CATALOG,
     capability_matrix=PLATFORM_CAPABILITY_MATRIX,
-    runtime_adapter_loader=lambda profile: _get_platform_runtime_adapter_router(
+    runtime_adapter_loader=lambda profile: get_platform_runtime_adapter(
         profile,
         platform_id=SCHWAB_PLATFORM,
     ),
