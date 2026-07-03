@@ -20,7 +20,7 @@ def main():
     target = fetch_pin()
     print(f"QPK_PIN: {target[:12]}...")
     errors = 0
-    for path in sorted(Path.cwd().glob("**/requirements*.txt")) + sorted(Path.cwd().glob("**/pyproject.toml")):
+    for path in sorted(Path.cwd().glob("**/requirements*.txt")) + sorted(Path.cwd().glob("**/constraints*.txt")) + sorted(Path.cwd().glob("**/pyproject.toml")):
         if "external" in str(path): continue
         content = path.read_text()
         updated = content
