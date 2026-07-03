@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "charles-schwab-platform"
-version = "0.2.0"
+version = "0.3.0"
 description = "QuantStrategyLab platform layer for Charles Schwab broker."
 requires-python = ">=3.11"
 dependencies = [
@@ -39,7 +39,22 @@ omit = ["tests/*", "*/external/*"]
 show_missing = true
 
 [tool.setuptools]
-package-dir = { "" = "src" }
+py-modules = [
+  "decision_mapper",
+  "main",
+  "runtime_config_support",
+  "runtime_execution_policy",
+  "runtime_logging",
+  "strategy_loader",
+  "strategy_registry",
+  "strategy_runtime",
+]
 
 [tool.setuptools.packages.find]
-where = ["src"]
+include = [
+  "application*",
+  "entrypoints*",
+  "notifications*",
+  "scripts*",
+  "strategy*",
+]

@@ -39,7 +39,7 @@ Direct runtime profiles can usually run from market history or portfolio state. 
 ## Quick start
 
 ```bash
-uv sync --frozen --extra test --no-install-project
+uv sync --frozen --extra test
 uv run --no-sync ruff check --exclude external .
 uv run --no-sync python scripts/check_qpk_pin_consistency.py
 ```

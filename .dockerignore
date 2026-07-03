@@ -7,3 +7,7 @@ __pycache__
 *.py[cod]
 .env
 .cookies
+build
+dist
+*.egg-info
+.ruff_cache
