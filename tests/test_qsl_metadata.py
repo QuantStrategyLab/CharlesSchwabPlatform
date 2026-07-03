@@ -1,0 +1,18 @@
+from __future__ import annotations
+
+from pathlib import Path
+import tomllib
+
+
+def test_qsl_metadata_has_runtime_platform_fields() -> None:
+    qsl_path = Path(__file__).resolve().parents[1] / "qsl.toml"
+    with qsl_path.open("rb") as f:
+        qsl = tomllib.load(f)["qsl"]
+
+    assert qsl["tier"] == "runtime-platform"
+    assert qsl["ring"] == 3
+    assert qsl.get("repo") == "CharlesSchwabPlatform"
+    assert qsl["compat"]["bundle"] == "2026.07.0"
+    requires = qsl["requires"]
+    assert "quant_platform_kit" in requires
+    assert "us_equity_strategies" in requires
