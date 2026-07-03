@@ -18,11 +18,15 @@ def test_ci_and_docker_use_uv_lock() -> None:
     lockfile = Path("uv.lock").read_text(encoding="utf-8")
 
     assert lockfile.startswith("version = ")
-    assert "uv sync --frozen --extra test --no-install-project" in ci
+    assert "uv sync --frozen --extra test" in ci
     assert "uv run --no-sync ruff check --exclude external ." in ci
     assert "uv run --no-sync python scripts/check_qpk_pin_consistency.py" in ci
-    assert "uv sync --frozen --no-dev --no-install-project" in env_sync
+    assert "uv sync --frozen --no-dev" in env_sync
     assert "uv run --no-sync python scripts/build_cloud_run_env_sync_plan.py --json" in env_sync
-    assert "COPY pyproject.toml uv.lock ./" in dockerfile
-    assert "uv sync --frozen --no-dev --no-install-project" in dockerfile
+    assert "COPY . ." in dockerfile
+    assert dockerfile.index("COPY . .") < dockerfile.index("uv sync --frozen --no-dev")
+    assert "uv sync --frozen --no-dev" in dockerfile
     assert "python -m pip install -r requirements.txt" not in dockerfile
+    assert "--no-install-project" not in ci
+    assert "--no-install-project" not in env_sync
+    assert "--no-install-project" not in dockerfile

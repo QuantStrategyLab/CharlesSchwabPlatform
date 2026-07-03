@@ -13,10 +13,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends git \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml uv.lock ./
-RUN python -m pip install --upgrade pip uv \
-    && uv sync --frozen --no-dev --no-install-project
-
 COPY . .
+RUN python -m pip install --upgrade pip uv \
+    && uv sync --frozen --no-dev
 
 CMD ["gunicorn", "--bind", ":8080", "--workers", "1", "--threads", "8", "--timeout", "300", "main:app"]

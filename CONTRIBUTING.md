@@ -28,5 +28,5 @@ Thanks for contributing to `CharlesSchwabPlatform`.
 Run the main verification command before opening a pull request:
 
 ```bash
-python3 -m pip install -r requirements.txt && python3 -m unittest discover -s tests -v
+uv sync --frozen --extra test && uv run --no-sync python -m pytest -q
 ```

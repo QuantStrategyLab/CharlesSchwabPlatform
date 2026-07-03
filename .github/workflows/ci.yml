@@ -59,7 +59,7 @@ jobs:
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip uv
-          uv sync --frozen --extra test --no-install-project
+          uv sync --frozen --extra test
 
       - name: Smoke import pinned shared packages
         run: |

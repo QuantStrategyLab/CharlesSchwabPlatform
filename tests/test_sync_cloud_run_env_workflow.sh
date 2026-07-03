@@ -12,7 +12,7 @@ grep -Fq 'workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}'
 grep -Fq 'service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}' "$workflow_file"
 grep -Fq 'uses: actions/checkout@v6' "$workflow_file"
 grep -Fq 'uses: actions/setup-python@v6' "$workflow_file"
-grep -Fq 'uv sync --frozen --no-dev --no-install-project' "$workflow_file"
+grep -Fq 'uv sync --frozen --no-dev' "$workflow_file"
 grep -Fq 'id: strategy_requirements' "$workflow_file"
 grep -Fq 'uv run --no-sync python scripts/build_cloud_run_env_sync_plan.py --json' "$workflow_file"
 grep -Fq 'name: Resolve Cloud Run sync targets' "$workflow_file"

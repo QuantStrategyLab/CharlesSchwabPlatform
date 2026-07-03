@@ -18,3 +18,5 @@ venv/
 # 环境与本地配置
 .env
 .DS_Store
+
+*.egg-info/
