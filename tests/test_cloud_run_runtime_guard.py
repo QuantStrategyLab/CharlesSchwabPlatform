@@ -8,6 +8,18 @@ import subprocess
 from scripts import cloud_run_runtime_guard as guard
 
 
+def test_cloud_run_log_filter_includes_region_when_available():
+    log_filter = guard._cloud_run_log_filter(
+        "charles-schwab-service",
+        "2026-07-01T12:00:00Z",
+        "asia-east1",
+    )
+
+    assert 'resource.labels.service_name="charles-schwab-service"' in log_filter
+    assert 'resource.labels.location="asia-east1"' in log_filter
+    assert 'timestamp >= "2026-07-01T12:00:00Z"' in log_filter
+
+
 def test_scheduler_job_pattern_includes_service_alias():
     pattern = guard._scheduler_job_pattern_for_services(["charles-schwab-service"])
 
@@ -125,3 +137,45 @@ def test_scheduler_entry_since_uses_matching_service_revision_window():
         guard._scheduler_entry_since(entry, {"other-service": service_since}, fallback)
         == fallback
     )
+
+
+def test_monitor_dispatch_capacity_warning_is_not_failure_by_default(monkeypatch):
+    monkeypatch.delenv("RUNTIME_GUARD_IGNORE_MONITOR_DISPATCH_CAPACITY_WARNINGS", raising=False)
+    entry = {
+        "severity": "WARNING",
+        "httpRequest": {
+            "status": 429,
+            "requestUrl": "https://example.run.app/monitor-dispatch",
+        },
+        "textPayload": "The request was aborted because there was no available instance.",
+    }
+
+    assert guard._is_failure(entry) is False
+
+
+def test_monitor_dispatch_capacity_warning_can_be_counted(monkeypatch):
+    monkeypatch.setenv("RUNTIME_GUARD_IGNORE_MONITOR_DISPATCH_CAPACITY_WARNINGS", "false")
+    entry = {
+        "severity": "WARNING",
+        "httpRequest": {
+            "status": 429,
+            "requestUrl": "https://example.run.app/monitor-dispatch",
+        },
+        "textPayload": "The request was aborted because there was no available instance.",
+    }
+
+    assert guard._is_failure(entry) is True
+
+
+def test_strategy_request_capacity_warning_still_fails(monkeypatch):
+    monkeypatch.delenv("RUNTIME_GUARD_IGNORE_MONITOR_DISPATCH_CAPACITY_WARNINGS", raising=False)
+    entry = {
+        "severity": "WARNING",
+        "httpRequest": {
+            "status": 429,
+            "requestUrl": "https://example.run.app/dry-run",
+        },
+        "textPayload": "The request was aborted because there was no available instance.",
+    }
+
+    assert guard._is_failure(entry) is True
