@@ -1,0 +1,12 @@
+[qsl]
+repo = "CharlesSchwabPlatform"
+tier = "runtime-platform"
+ring = 3
+allow_legacy = false
+
+[qsl.requires]
+quant_platform_kit = "0063af3b4a974650ea58a7d3f26dd1b94f65d3e8"
+us_equity_strategies = "46887bc3f5454d5b59623b1f5efb7c65912c6b8b"
+
+[qsl.compat]
+bundle = "2026.07.0"
