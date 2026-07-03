@@ -87,6 +87,17 @@ def _load_services() -> list[str]:
     return unique
 
 
+def _cloud_run_log_filter(service: str, since_text: str, region: str = "") -> str:
+    parts = [
+        'resource.type="cloud_run_revision"',
+        f'resource.labels.service_name="{service}"',
+        f'timestamp >= "{since_text}"',
+    ]
+    if region:
+        parts.append(f'resource.labels.location="{region}"')
+    return " AND ".join(parts)
+
+
 def _service_job_aliases(service: str) -> list[str]:
     service_name = str(service or "").strip()
     if not service_name:
@@ -345,7 +356,26 @@ def _entry_text(entry: dict[str, Any]) -> str:
     return " ".join(chunks)
 
 
+def _request_path(entry: dict[str, Any]) -> str:
+    request_url = str((entry.get("httpRequest") or {}).get("requestUrl") or "").strip()
+    if not request_url:
+        return ""
+    return urllib.parse.urlparse(request_url).path
+
+
+def _is_ignorable_monitor_dispatch_capacity_warning(entry: dict[str, Any]) -> bool:
+    if not _env_bool("RUNTIME_GUARD_IGNORE_MONITOR_DISPATCH_CAPACITY_WARNINGS", True):
+        return False
+    return (
+        _status(entry) == 429
+        and _request_path(entry) == "/monitor-dispatch"
+        and "NO AVAILABLE INSTANCE" in _entry_text(entry).upper()
+    )
+
+
 def _is_failure(entry: dict[str, Any]) -> bool:
+    if _is_ignorable_monitor_dispatch_capacity_warning(entry):
+        return False
     severity = str(entry.get("severity") or "").upper()
     status = _status(entry)
     text = _entry_text(entry).upper()
@@ -490,11 +520,7 @@ def main() -> int:
         service_since = _cloud_run_log_since(project, service, since) if ignore_pre_ready_logs else since
         service_since_by_name[service] = service_since
         service_since_text = _format_timestamp(service_since)
-        log_filter = (
-            'resource.type="cloud_run_revision" '
-            f'AND resource.labels.service_name="{service}" '
-            f'AND timestamp >= "{service_since_text}"'
-        )
+        log_filter = _cloud_run_log_filter(service, service_since_text, _region_for_service(service))
         try:
             entries = _run_gcloud_logging(project, log_filter, limit)
         except RuntimeError as exc:
