@@ -181,15 +181,15 @@ jobs:
         if: steps.config.outputs.env_sync_enabled == 'true'
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
+          python -m pip install --upgrade pip uv
+          uv sync --frozen --no-dev --no-install-project
 
       - name: Resolve Cloud Run sync targets
         id: strategy_requirements
         if: steps.config.outputs.env_sync_enabled == 'true'
         run: |
           set -euo pipefail
-          sync_plan_json="$(python scripts/build_cloud_run_env_sync_plan.py --json)"
+          sync_plan_json="$(uv run --no-sync python scripts/build_cloud_run_env_sync_plan.py --json)"
           {
             echo "sync_plan_json<<__SYNC_PLAN_JSON__"
             printf '%s\n' "${sync_plan_json}"
