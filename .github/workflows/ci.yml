@@ -58,20 +58,13 @@ jobs:
       - name: Install dependencies
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip
-          python -m pip install --upgrade pip
-          # Install non-git packages first to avoid cross-package dependency conflicts
-          grep -vE "^\s*(#|$)|git\+" requirements.txt | xargs -r python -m pip install -c https://raw.githubusercontent.com/QuantStrategyLab/QuantPlatformKit/main/constraints.txt
-          # Install git-based packages individually with --no-deps
-          grep 'git+' requirements.txt | while IFS= read -r pkg; do
-            [ -n "$pkg" ] && python -m pip install --no-deps "$pkg"
-          done
-          python -m pip install pytest pytest-cov ruff
+          python -m pip install --upgrade pip uv
+          uv sync --frozen --extra test --no-install-project
 
       - name: Smoke import pinned shared packages
         run: |
           set -euo pipefail
-          python - <<'PY'
+          uv run --no-sync python - <<'PY'
           from quant_platform_kit.common.port_adapters import CallableNotificationPort, CallablePortfolioPort
           from us_equity_strategies import resolve_canonical_profile
 
@@ -83,12 +76,12 @@ jobs:
       - name: Install editable shared repositories
         run: |
           set -euo pipefail
-          python -m pip install --no-deps -e external/QuantPlatformKit -e external/UsEquityStrategies
+          uv pip install --no-deps -e external/QuantPlatformKit -e external/UsEquityStrategies
 
       - name: Run ruff
         run: |
           set -euo pipefail
-          ruff check --exclude external .
+          uv run --no-sync ruff check --exclude external .
 
       - name: Check QPK pin consistency
-        run: python scripts/check_qpk_pin_consistency.py
+        run: uv run --no-sync python scripts/check_qpk_pin_consistency.py
