@@ -1,5 +1,14 @@
 # CharlesSchwabPlatform
 
+
+## QSL architecture role
+
+- **Layer**: `runtime-platform`.
+- **Responsibility**: Charles Schwab US equity execution runtime.
+- **Owns**: Schwab connectivity, token/runtime integration, dry-run/live controls.
+- **Consumes**: UsEquityStrategies, UsEquitySnapshotPipelines artifacts, QuantPlatformKit, QuantRuntimeSettings.
+- **Must not**: own strategy research logic or store credentials in Git.
+
 [Chinese README](README.zh-CN.md)
 
 > Investing involves risk. This project does not provide investment advice and is for education, research, and engineering review only.
