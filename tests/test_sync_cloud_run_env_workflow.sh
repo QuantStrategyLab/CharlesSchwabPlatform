@@ -25,10 +25,6 @@ grep -Fq 'for key, value in sorted(target["env"].items()):' "$workflow_file"
 grep -Fq 'target.get("remove_env_vars")' "$workflow_file"
 grep -Fq 'plan = json.loads(os.environ["SYNC_PLAN_JSON"])' "$workflow_file"
 grep -Fq 'scheduler = target.get("scheduler") or {}' "$workflow_file"
-grep -Fq 'Wait for Cloud Run deployment of current commit' "$workflow_file"
-grep -Fq 'target_sha="${GITHUB_SHA}"' "$workflow_file"
-grep -Fq "gcloud run services describe \"\${CLOUD_RUN_SERVICE}\" --region \"\${CLOUD_RUN_REGION}\" --format='value(spec.template.metadata.labels.commit-sha)'" "$workflow_file"
-grep -Fq 'Timed out waiting for Cloud Run service ${CLOUD_RUN_SERVICE} to deploy commit ${target_sha}. Last seen commit: ${deployed_sha:-<none>}' "$workflow_file"
 grep -Fq 'ENABLE_GITHUB_ENV_SYNC: ${{ vars.ENABLE_GITHUB_ENV_SYNC }}' "$workflow_file"
 grep -Fq 'CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}' "$workflow_file"
 grep -Fq 'CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}' "$workflow_file"
@@ -179,6 +175,20 @@ grep -Fq 'gcloud_args+=(--remove-secrets "$(IFS=,; echo "${remove_secret_vars[*]
 grep -Fq 'gcloud_args+=(--update-secrets "$(IFS=,; echo "${secret_pairs[*]}")")' "$workflow_file"
 grep -Fq 'GCP_SCHEDULER_SERVICE_ACCOUNT: schwab-platform-scheduler@charlesschwabquant.iam.gserviceaccount.com' "$workflow_file"
 grep -Fq 'MONITOR_DISPATCH_TARGETS_JSON=${monitor_targets_json}' "$workflow_file"
+grep -Fq 'Reconcile Cloud Run traffic' "$workflow_file"
+grep -Fq 'python3 scripts/reconcile_cloud_runtime.py reconcile-traffic' "$workflow_file"
+grep -Fq 'Remove legacy Cloud Scheduler jobs' "$workflow_file"
+grep -Fq 'python3 scripts/reconcile_cloud_runtime.py cleanup-schedulers' "$workflow_file"
+if grep -Fq 'legacy_jobs=(' "$workflow_file"; then
+  echo "unexpected inline legacy scheduler deletion logic still present" >&2
+  exit 1
+fi
+
+if grep -Fq 'gcloud scheduler jobs delete "${legacy_job}"' "$workflow_file"; then
+  echo "unexpected inline legacy scheduler deletion command still present" >&2
+  exit 1
+fi
+
 grep -Fq 'Sync Cloud Scheduler schedule' "$workflow_file"
 grep -Fq 'scheduler_location="${CLOUD_SCHEDULER_LOCATION:-${CLOUD_RUN_REGION}}"' "$workflow_file"
 grep -Fq 'print(str(scheduler.get("main_time")' "$workflow_file"
@@ -193,7 +203,6 @@ grep -Fq 'gcloud scheduler jobs update http "${job_name}"' "$workflow_file"
 grep -Fq 'gcloud scheduler jobs create http "${job_name}"' "$workflow_file"
 grep -Fq 'monitor_job_name="schwab-monitor-dispatcher-scheduler"' "$workflow_file"
 grep -Fq 'monitor_uri="${service_url}/monitor-dispatch"' "$workflow_file"
-grep -Fq 'gcloud scheduler jobs delete "${legacy_job}"' "$workflow_file"
 grep -Fq -- '--schedule="${desired_schedule}"' "$workflow_file"
 grep -Fq -- '--time-zone="${market_timezone}"' "$workflow_file"
 grep -Fq "if: steps.config.outputs.enabled == 'true'" "$workflow_file"

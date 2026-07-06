@@ -308,30 +308,6 @@ jobs:
             --labels="managed-by=github-actions,commit-sha=${GITHUB_SHA},github-run-id=${GITHUB_RUN_ID}" \
             --quiet
 
-      - name: Wait for Cloud Run deployment of current commit
-        if: steps.config.outputs.env_sync_enabled == 'true'
-        run: |
-          set -euo pipefail
-
-          target_sha="${GITHUB_SHA}"
-          deadline=$((SECONDS + 1800))
-
-          while true; do
-            deployed_sha="$(gcloud run services describe "${CLOUD_RUN_SERVICE}" --region "${CLOUD_RUN_REGION}" --format='value(spec.template.metadata.labels.commit-sha)' 2>/dev/null || true)"
-            if [ -n "${deployed_sha}" ] && [ "${deployed_sha}" = "${target_sha}" ]; then
-              echo "Cloud Run service ${CLOUD_RUN_SERVICE} is on commit ${deployed_sha}."
-              break
-            fi
-
-            if [ "${SECONDS}" -ge "${deadline}" ]; then
-              echo "Timed out waiting for Cloud Run service ${CLOUD_RUN_SERVICE} to deploy commit ${target_sha}. Last seen commit: ${deployed_sha:-<none>}" >&2
-              exit 1
-            fi
-
-            echo "Waiting for Cloud Run service ${CLOUD_RUN_SERVICE} to deploy commit ${target_sha}. Last seen commit: ${deployed_sha:-<none>}" >&2
-            sleep 10
-          done
-
       - name: Sync Cloud Run environment
         if: steps.config.outputs.env_sync_enabled == 'true'
         env:
@@ -715,6 +691,14 @@ jobs:
 
           gcloud "${gcloud_args[@]}"
 
+      - name: Reconcile Cloud Run traffic
+        if: steps.config.outputs.env_sync_enabled == 'true'
+        env:
+          SYNC_PLAN_JSON: ${{ steps.strategy_requirements.outputs.sync_plan_json }}
+        run: |
+          set -euo pipefail
+          python3 scripts/reconcile_cloud_runtime.py reconcile-traffic
+
       - name: Verify strategy plugin mounts
         if: steps.config.outputs.env_sync_enabled == 'true'
         env:
@@ -891,27 +875,13 @@ jobs:
               --quiet
           fi
 
-          legacy_jobs=(
-            "${CLOUD_RUN_SERVICE}-probe-scheduler"
-            "${CLOUD_RUN_SERVICE}-precheck-scheduler"
-          )
-          if [[ "${CLOUD_RUN_SERVICE}" == *-service ]]; then
-            legacy_jobs+=(
-              "${CLOUD_RUN_SERVICE%-service}-probe-scheduler"
-              "${CLOUD_RUN_SERVICE%-service}-precheck-scheduler"
-            )
-          fi
-          for legacy_job in "${legacy_jobs[@]}"; do
-            if gcloud scheduler jobs describe "${legacy_job}" \
-              --project="${GCP_PROJECT_ID}" \
-              --location="${scheduler_location}" >/dev/null 2>&1; then
-              echo "Deleting legacy Cloud Scheduler job ${legacy_job}; monitor dispatcher now owns probe/precheck."
-              gcloud scheduler jobs delete "${legacy_job}" \
-                --project="${GCP_PROJECT_ID}" \
-                --location="${scheduler_location}" \
-                --quiet
-            fi
-          done
+      - name: Remove legacy Cloud Scheduler jobs
+        if: steps.config.outputs.env_sync_enabled == 'true'
+        env:
+          SYNC_PLAN_JSON: ${{ steps.strategy_requirements.outputs.sync_plan_json }}
+        run: |
+          set -euo pipefail
+          python3 scripts/reconcile_cloud_runtime.py cleanup-schedulers
 
       - name: Prune old Cloud Run revisions
         if: steps.config.outputs.enabled == 'true'
