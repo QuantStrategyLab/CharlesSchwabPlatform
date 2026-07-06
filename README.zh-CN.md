@@ -1,5 +1,14 @@
 # CharlesSchwabPlatform
 
+
+## QSL 架构角色
+
+- **层级**：`执行平台`。
+- **职责**：Charles Schwab 美股执行运行时。
+- **事实源/归属**：Schwab 连接、token/runtime 集成、dry-run/live 控制。
+- **消费对象**：UsEquityStrategies、UsEquitySnapshotPipelines artifacts、QuantPlatformKit、QuantRuntimeSettings。
+- **禁止事项**：承载策略研究逻辑或把凭据写入 Git。
+
 [English README](README.md)
 
 > 投资有风险。本项目不构成投资建议，仅用于学习、研究和工程审阅。
