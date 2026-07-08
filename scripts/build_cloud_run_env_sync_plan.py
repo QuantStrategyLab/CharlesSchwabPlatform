@@ -66,7 +66,7 @@ REQUIRED_ENV = (
     "GLOBAL_TELEGRAM_CHAT_ID",
     "NOTIFY_LANG",
 )
-OPTIONAL_TARGET_ENV = (
+PLATFORM_GENERIC_ENV = (
     "SCHWAB_DRY_RUN_ONLY",
     "SCHWAB_FEATURE_SNAPSHOT_PATH",
     "SCHWAB_FEATURE_SNAPSHOT_MANIFEST_PATH",
@@ -108,8 +108,135 @@ SCHEDULER_TIME_ENV = {
     "precheck_time": "CLOUD_SCHEDULER_PRECHECK_TIME",
 }
 
+# Strategy-derived vars: auto-populated from platform-config.json defaults.
+def _derive_strategy_env_defaults(strategy_config: dict) -> dict[str, str]:
+    """Derive env var defaults from a strategy's platform-config.json entry."""
+    if not strategy_config:
+        return {}
+    features = strategy_config.get("features", {})
+    income = strategy_config.get("income_layer_defaults", {})
+    options = strategy_config.get("option_overlay_defaults", {})
+    dca = strategy_config.get("dca_defaults", {})
+    defaults: dict[str, str] = {}
+
+    # --- Features ---
+    for feat_key, env_key in (
+        ("income_layer", "INCOME_LAYER_ENABLED"),
+        ("option_overlay", "OPTION_OVERLAY_ENABLED"),
+    ):
+        if feat_key in features:
+            defaults[env_key] = str(features[feat_key]).lower()
+
+    # --- Income-layer defaults ---
+    for cfg_key, env_key in (
+        ("start_usd", "INCOME_LAYER_START_USD"),
+        ("max_ratio", "INCOME_LAYER_MAX_RATIO"),
+    ):
+        if cfg_key in income and income[cfg_key] is not None:
+            defaults[env_key] = str(income[cfg_key])
+
+    allocations = income.get("allocations") if isinstance(income, dict) else None
+    if isinstance(allocations, dict):
+        for symbol in ("QQQI", "SPYI"):
+            weight = allocations.get(symbol)
+            if weight is not None:
+                defaults[f"{symbol}_INCOME_RATIO"] = str(weight)
+
+    # --- Option-overlay defaults ---
+    for cfg_key, env_key in (
+        ("growth_enabled", "OPTION_GROWTH_OVERLAY_ENABLED"),
+        ("income_enabled", "OPTION_INCOME_OVERLAY_ENABLED"),
+        ("income_recipe", "OPTION_INCOME_OVERLAY_RECIPE"),
+        ("income_start_usd", "OPTION_INCOME_OVERLAY_START_USD"),
+        ("nav_risk_ratio", "OPTION_INCOME_OVERLAY_NAV_RISK_RATIO"),
+        ("growth_recipe", "OPTION_GROWTH_OVERLAY_RECIPE"),
+        ("growth_start_usd", "OPTION_GROWTH_OVERLAY_START_USD"),
+        ("nav_budget_ratio", "OPTION_GROWTH_OVERLAY_NAV_BUDGET_RATIO"),
+    ):
+        if cfg_key in options and options[cfg_key] is not None:
+            value = options[cfg_key]
+            defaults[env_key] = str(value).lower() if isinstance(value, bool) else str(value)
+
+    # --- DCA defaults ---
+    for cfg_key, env_key in (
+        ("default_mode", "DCA_MODE"),
+        ("default_base_investment_usd", "DCA_BASE_INVESTMENT_USD"),
+    ):
+        if cfg_key in dca and dca[cfg_key] is not None:
+            defaults[env_key] = str(dca[cfg_key])
+
+    return defaults
+
+
+# All vars that can appear as env values (union of platform-generic + strategy-derived).
+OPTIONAL_TARGET_ENV = PLATFORM_GENERIC_ENV + (
+    "INCOME_LAYER_ENABLED",
+    "INCOME_LAYER_START_USD",
+    "INCOME_LAYER_MAX_RATIO",
+    "INCOME_THRESHOLD_USD",
+    "QQQI_INCOME_RATIO",
+    "SPYI_INCOME_RATIO",
+    "OPTION_OVERLAY_ENABLED",
+    "OPTION_GROWTH_OVERLAY_ENABLED",
+    "OPTION_INCOME_OVERLAY_ENABLED",
+    "OPTION_INCOME_OVERLAY_RECIPE",
+    "OPTION_INCOME_OVERLAY_START_USD",
+    "OPTION_INCOME_OVERLAY_NAV_RISK_RATIO",
+    "OPTION_GROWTH_OVERLAY_RECIPE",
+    "OPTION_GROWTH_OVERLAY_START_USD",
+    "OPTION_GROWTH_OVERLAY_NAV_BUDGET_RATIO",
+    "DCA_MODE",
+    "DCA_BASE_INVESTMENT_USD",
+    "IBIT_ZSCORE_EXIT_ENABLED",
+    "IBIT_ZSCORE_EXIT_MODE",
+    "IBIT_ZSCORE_EXIT_PARKING_SYMBOL",
+    "IBIT_ZSCORE_EXIT_RISK_REDUCED_EXPOSURE",
+    "IBIT_ZSCORE_EXIT_RISK_OFF_EXPOSURE",
+    "IBIT_ZSCORE_EXIT_ALLOW_OUTSIDE_EXECUTION_WINDOW",
+)
+
+
+
+
+PLATFORM_CONFIG_ENV = "PLATFORM_CONFIG_JSON"
+
+
+def _load_platform_config(env: Mapping[str, str]) -> dict:
+    """Load platform-config.json, preferring explicit env var, falling back to a
+    bundled copy or fetching from the QuantRuntimeSettings repo."""
+    raw = str(env.get(PLATFORM_CONFIG_ENV, "") or "").strip()
+    if raw:
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            pass
+        path = Path(raw)
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
+        raise FileNotFoundError(f"PLATFORM_CONFIG_JSON file not found: {raw}")
+
+    bundled = ROOT / "platform-config.json"
+    if bundled.exists():
+        return json.loads(bundled.read_text(encoding="utf-8"))
+
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["gh", "api",
+             "repos/QuantStrategyLab/QuantRuntimeSettings/contents/platform-config.json",
+             "--jq", ".content"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            import base64
+            return json.loads(base64.b64decode(result.stdout.strip()).decode("utf-8"))
+    except Exception:
+        pass
+
+    return {}
 
 def build_sync_plan(env: Mapping[str, str] = os.environ) -> dict[str, object]:
+    platform_config = _load_platform_config(env)
     target_entries, defaults, per_service_mode = _load_target_entries(env)
     status_rows = {
         str(row["canonical_profile"]): {
@@ -128,6 +255,7 @@ def build_sync_plan(env: Mapping[str, str] = os.environ) -> dict[str, object]:
             env=env,
             status_rows=status_rows,
             per_service_mode=per_service_mode,
+            platform_config=platform_config,
         )
         for target in target_entries
     ]
@@ -177,6 +305,7 @@ def _build_target_plan(
     env: Mapping[str, str],
     status_rows: Mapping[str, Mapping[str, object]],
     per_service_mode: bool,
+    platform_config: dict,
 ) -> dict[str, object]:
     service_name = _first_non_empty(
         _target_field(target, defaults, "service"),
@@ -213,6 +342,17 @@ def _build_target_plan(
         raise ValueError(
             f"STRATEGY_PROFILE={raw_profile!r} is not eligible/enabled for {service_name}: {status}"
         )
+
+    # Resolve strategy defaults from platform-config.json
+    strategies_cfg = platform_config.get("strategies", {}) if platform_config else {}
+    strategy_config = strategies_cfg.get(canonical_profile, {})
+    strategy_defaults = _derive_strategy_env_defaults(strategy_config)
+
+    # Overrides from RUNTIME_TARGET_JSON take precedence over strategy defaults
+    overrides = runtime_target.get("overrides") if isinstance(runtime_target, Mapping) else None
+    if isinstance(overrides, Mapping):
+        for key, value in overrides.items():
+            strategy_defaults[str(key).upper()] = _coerce_env_value(value) or ""
 
     env_values: dict[str, str] = {}
     missing: list[str] = []
@@ -251,6 +391,15 @@ def _build_target_plan(
             dry_run_value = runtime_target.get("dry_run_only")
             if dry_run_value is not None:
                 value = _coerce_env_value(dry_run_value)
+        # 3. Strategy default from platform-config.json
+        if value is None:
+            value = strategy_defaults.get(name)
+        # 4. Override from RUNTIME_TARGET_JSON.overrides
+        if value is None and isinstance(overrides, Mapping):
+            override_value = overrides.get(name) or overrides.get(name.lower())
+            if override_value is not None:
+                value = _coerce_env_value(override_value)
+
         if value is None:
             remove_env_vars.append(name)
         else:
