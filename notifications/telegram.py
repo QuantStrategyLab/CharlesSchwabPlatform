@@ -37,7 +37,9 @@ SIGNAL_ICONS = {
 I18N = {
     "zh": {
         "trade_header": "🔔 【调仓指令】",
+        "rebalance_title": "🔔 【调仓指令】",
         "heartbeat_header": "💓 【心跳检测】",
+        "heartbeat_title": "💓 【心跳检测】",
         "error_header": "🚨 【策略异常】",
         "strategy_label": "🧭 策略: {name}",
         "signal_label": "信号",
@@ -198,7 +200,9 @@ I18N = {
     },
     "en": {
         "trade_header": "🔔 【Trade Execution Report】",
+        "rebalance_title": "🔔 【Trade Execution Report】",
         "heartbeat_header": "💓 【Heartbeat】",
+        "heartbeat_title": "💓 【Heartbeat】",
         "error_header": "🚨 【Strategy Error】",
         "strategy_label": "🧭 Strategy: {name}",
         "signal_label": "Signal",
