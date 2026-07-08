@@ -84,4 +84,11 @@ jobs:
           uv run --no-sync ruff check --exclude external .
 
       - name: Check QPK pin consistency
-        run: uv run --no-sync python scripts/check_qpk_pin_consistency.py
+        run: |
+          set -euo pipefail
+          uv run --no-sync python external/QuantPlatformKit/scripts/check_qpk_pin_consistency.py \
+            --root . \
+            --pin-file external/QuantPlatformKit/QPK_PIN
+
+      - name: Ensure uv.lock matches pyproject.toml
+        run: uv lock --check
