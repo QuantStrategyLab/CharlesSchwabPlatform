@@ -221,6 +221,7 @@ DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD = 1000.0
 MIN_NOTIONAL_BUY_USD = 1.0
 SMALL_ACCOUNT_SAFE_HAVEN_CASH_SUBSTITUTE_LIMIT_USD = 2000.0
 SMALL_ACCOUNT_EXISTING_WHOLE_SHARE_RETENTION_SYMBOLS = frozenset({"TQQQ", "SOXL"})
+_SMALL_ACCOUNT_RETENTION_MIN_TARGET_SHARE_RATIO_DEFAULT = 0.85
 SMALL_ACCOUNT_EXISTING_WHOLE_SHARE_RETENTION_MIN_TARGET_SHARE_RATIO_BY_SYMBOL = {
     "SOXX": 0.90,
 }
@@ -330,20 +331,40 @@ def _apply_safe_haven_cash_substitution(
     return adjusted_plan, adjusted_allocation
 
 
-def _should_retain_existing_whole_share(symbol, *, target_value, price) -> bool:
+def _should_retain_existing_whole_share(symbol, *, target_value, price, quantity=0.0) -> bool:
+    """Decide whether an existing whole-share position should be retained.
+
+    Universal rule: if the account already holds this symbol (>0 shares) and the
+    strategy wants to keep a meaningful fraction of a share (target >= 85% of
+    1-share price), retain the position.  This prevents the sell-then-fail-to-rebuy
+    cycle for small accounts where target < 1 share but still close to it.
+
+    Genuine reductions (target << 1 share) are NOT blocked.
+    The hardcoded lists act as overrides for symbols that need a different threshold.
+    """
     normalized_symbol = str(symbol or "").strip().upper()
+    held = float(quantity or 0.0)
+    target = float(target_value or 0.0)
+    quote_price = max(0.0, float(price or 0.0))
+
+    # Universal: held + positive target + target close to 1-share price -> retain
+    if held > 0.0 and target > 0.0 and quote_price > 0.0:
+        if target >= quote_price * _SMALL_ACCOUNT_RETENTION_MIN_TARGET_SHARE_RATIO_DEFAULT:
+            return True
+
+    # Legacy whitelist -- unconditional retention (safety net)
     if normalized_symbol in SMALL_ACCOUNT_EXISTING_WHOLE_SHARE_RETENTION_SYMBOLS:
         return True
 
+    # Legacy per-symbol ratio-based retention (override / tighter threshold)
     min_target_share_ratio = (
         SMALL_ACCOUNT_EXISTING_WHOLE_SHARE_RETENTION_MIN_TARGET_SHARE_RATIO_BY_SYMBOL.get(normalized_symbol)
     )
     if min_target_share_ratio is None:
         return False
-    quote_price = max(0.0, float(price or 0.0))
     if quote_price <= 0.0:
         return False
-    return max(0.0, float(target_value or 0.0)) >= quote_price * float(min_target_share_ratio)
+    return target >= quote_price * float(min_target_share_ratio)
 
 
 def _should_bootstrap_whole_share_buy(symbol, *, target_value, limit_price) -> bool:
@@ -456,7 +477,7 @@ def _apply_small_account_whole_share_compatibility(
         )
         # Skip bootstrap if the account cannot afford even 1 share at limit price.
         _can_afford_one_share = limit_price > 0.0 and _estimated_buying_power >= limit_price
-        if not _should_retain_existing_whole_share(symbol, target_value=target_value, price=price):
+        if not _should_retain_existing_whole_share(symbol, target_value=target_value, price=price, quantity=quantities.get(symbol, 0.0)):
             if (
                 quantities.get(symbol, 0.0) <= 0.0
                 and 0.0 < target_value < limit_price
