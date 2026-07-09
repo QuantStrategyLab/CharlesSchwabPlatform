@@ -24,8 +24,30 @@ from quant_platform_kit.common.port_adapters import (
     CallablePortfolioPort,
 )
 from quant_platform_kit.common.strategy_plugins import attach_strategy_plugin_metadata
+from quant_platform_kit.strategy_lifecycle.performance_monitor import try_record_platform_execution
 
 _DETAIL_FIELD_SPLIT_RE = re.compile(r"\s+(?=[^\s=:：]+[=:：])")
+
+
+def _record_platform_execution_telemetry(
+    config: SchwabRebalanceConfig,
+    execution_result: ExecutionCycleResult,
+) -> None:
+    profile = str(getattr(config, "strategy_profile", "") or "").strip()
+    if not profile:
+        return
+    execution = dict(execution_result.execution or {})
+    try_record_platform_execution(
+        profile,
+        {
+            "platform": "schwab",
+            "action_done": _has_submitted_orders(execution_result),
+            "effective_date": execution.get("effective_date"),
+            "signal_date": execution.get("signal_date"),
+            "dry_run_only": bool(getattr(config, "dry_run_only", False)),
+            "trade_logs_count": len(getattr(execution_result, "trade_logs", ()) or ()),
+        },
+    )
 
 
 def _plan_portfolio(plan):
@@ -552,4 +574,5 @@ def run_strategy_core(
             + json.dumps({"reason": "no_trade_or_error", "trade_logs_count": len(trade_logs)}, ensure_ascii=False),
             flush=True,
         )
+    _record_platform_execution_telemetry(config, execution_result)
     return execution_result
