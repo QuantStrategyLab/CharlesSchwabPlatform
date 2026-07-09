@@ -358,6 +358,63 @@ class StrategyRuntimeTests(unittest.TestCase):
         self.assertEqual(result.metadata["managed_symbols"], ("NVDA", "META", "BOXX"))
         self.assertEqual(result.metadata["status_icon"], "👑")
 
+    def test_evaluate_stamps_consecutive_losses_on_portfolio_snapshot(self):
+        from quant_platform_kit.common.models import PortfolioSnapshot
+
+        class _GlobalEntrypoint:
+            def __init__(self):
+                self.manifest = StrategyManifest(
+                    profile="global_etf_rotation",
+                    domain="us_equity",
+                    display_name="Global ETF Rotation",
+                    description="test",
+                    required_inputs=frozenset({"market_history", "portfolio_snapshot"}),
+                )
+                self.ctx = None
+
+            def evaluate(self, ctx):
+                self.ctx = ctx
+                return StrategyDecision()
+
+        entrypoint = _GlobalEntrypoint()
+        runtime = strategy_runtime_module.LoadedStrategyRuntime(
+            entrypoint=entrypoint,
+            runtime_adapter=StrategyRuntimeAdapter(
+                portfolio_input_name="portfolio_snapshot",
+                runtime_policy=StrategyRuntimePolicy(signal_effective_after_trading_days=0),
+            ),
+            runtime_settings=_build_runtime_settings("global_etf_rotation"),
+            logger=lambda _message: None,
+        )
+        snapshot = PortfolioSnapshot(
+            as_of=datetime.now(timezone.utc),
+            total_equity=10_000.0,
+            positions=(),
+            metadata={},
+        )
+        stamped = PortfolioSnapshot(
+            as_of=snapshot.as_of,
+            total_equity=snapshot.total_equity,
+            positions=(),
+            metadata={"consecutive_losses": 3},
+        )
+
+        with patch(
+            "quant_platform_kit.strategy_lifecycle.live_equity.stamp_consecutive_losses_on_snapshot",
+            return_value=stamped,
+        ) as stamp:
+            result = runtime.evaluate(
+                market_history=lambda *_args, **_kwargs: [1.0, 2.0],
+                portfolio_snapshot=snapshot,
+                signal_text_fn=str,
+                translator=lambda key, **_kwargs: key,
+            )
+
+        stamp.assert_called_once()
+        self.assertIs(entrypoint.ctx.portfolio, stamped)
+        self.assertEqual(entrypoint.ctx.portfolio.metadata["consecutive_losses"], 3)
+        self.assertEqual(result.metadata["strategy_profile"], "global_etf_rotation")
+
 
 if __name__ == "__main__":
     unittest.main()
