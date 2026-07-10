@@ -5,7 +5,7 @@ upgrade_ring = "ring_d"
 allow_legacy = false
 
 [qsl.requires]
-quant_platform_kit = "a10f4c76e7eacffcf19178df70515057d91fb0c1"
+quant_platform_kit = "2381aa4577e9fd6329053a73a1c888929170eaf3"
 us_equity_strategies = "17ddb86c72d44b2c7b78ba7a10d8f71b21180166"
 
 [qsl.compat]
