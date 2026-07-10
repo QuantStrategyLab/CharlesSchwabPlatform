@@ -10,6 +10,7 @@ import requests
 
 from quant_platform_kit.common.platform_runner import dispatch_due_monitors, load_monitor_targets
 from application.runtime_broker_adapters import build_runtime_broker_adapters
+from application.runtime_report_summary import summarize_execution_cycle_result
 from application.runtime_composer import build_runtime_composer
 from application.runtime_strategy_adapters import build_runtime_strategy_adapters
 from application.rebalance_service import run_strategy_core as run_rebalance_cycle
@@ -634,18 +635,7 @@ def _has_signal_snapshot_details(snapshot: dict[str, object]) -> bool:
 
 
 def _summarize_cycle_result_for_report(result, *, dry_run: bool) -> dict[str, object]:
-    trade_logs = tuple(getattr(result, "trade_logs", ()) or ())
-    order_events_count = len(trade_logs)
-    orders_previewed_count = order_events_count if dry_run else 0
-    return {
-        "action_done": bool(order_events_count),
-        "order_events_count": order_events_count,
-        "orders_previewed_count": orders_previewed_count,
-        "orders_skipped_count": 0,
-        "notes_count": 0,
-        "dry_run_order_preview_available": bool(dry_run and orders_previewed_count > 0),
-        "execution_status": "executed" if order_events_count else "no_action",
-    }
+    return summarize_execution_cycle_result(result, dry_run=dry_run)
 
 
 def persist_execution_report(report, *, dry_run_only_override: bool | None = None):

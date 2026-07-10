@@ -1,7 +1,7 @@
 [qsl]
 repo = "CharlesSchwabPlatform"
-tier = "runtime-platform"
-ring = 3
+tier = "runtime"
+upgrade_ring = "ring_d"
 allow_legacy = false
 
 [qsl.requires]
@@ -9,4 +9,4 @@ quant_platform_kit = "69a0256934d081b5ef309a885384b9eb9f62cf90"
 us_equity_strategies = "17ddb86c72d44b2c7b78ba7a10d8f71b21180166"
 
 [qsl.compat]
-bundle = "2026.07.2"
+bundle = "2026.07.3"
