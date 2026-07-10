@@ -9,10 +9,10 @@ def test_qsl_metadata_has_runtime_platform_fields() -> None:
     with qsl_path.open("rb") as f:
         qsl = tomllib.load(f)["qsl"]
 
-    assert qsl["tier"] == "runtime-platform"
-    assert qsl["ring"] == 3
+    assert qsl["tier"] == "runtime"
+    assert qsl["upgrade_ring"] == "ring_d"
     assert qsl.get("repo") == "CharlesSchwabPlatform"
-    assert qsl["compat"]["bundle"] == "2026.07.0"
+    assert qsl["compat"]["bundle"] == "2026.07.3"
     requires = qsl["requires"]
     assert "quant_platform_kit" in requires
     assert "us_equity_strategies" in requires
