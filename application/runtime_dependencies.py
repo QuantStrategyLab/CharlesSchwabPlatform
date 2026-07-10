@@ -40,4 +40,5 @@ class SchwabRebalanceRuntime:
     resolve_rebalance_plan: Callable[..., dict[str, Any]]
     notifications: NotificationPort
     execution_port_factory: Callable[[str], ExecutionPort] | None = None
+    order_status_fetcher_factory: Callable[[str], Callable[[str], Any] | None] | None = None
     submit_equity_order: Callable[..., Any] | None = None

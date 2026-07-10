@@ -148,6 +148,10 @@ class SchwabRuntimeComposer:
                 client,
                 account_hash,
             ),
+            order_status_fetcher_factory=lambda account_hash: self.broker_adapters.build_order_status_fetcher(
+                client,
+                account_hash,
+            ),
         )
 
     def build_rebalance_config(

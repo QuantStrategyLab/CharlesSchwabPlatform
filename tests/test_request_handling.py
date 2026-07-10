@@ -311,6 +311,9 @@ def install_stub_modules(strategy_plugin_mounts_json=None, notify_lang="en"):
     rebalance_service_module = types.ModuleType("application.rebalance_service")
     rebalance_service_module.run_strategy_core = lambda *args, **kwargs: None
 
+    runtime_report_summary_module = types.ModuleType("application.runtime_report_summary")
+    runtime_report_summary_module.summarize_execution_cycle_result = lambda *args, **kwargs: {}
+
     signal_snapshot_module = types.ModuleType("application.signal_snapshot")
     signal_snapshot_module.build_signal_snapshot = lambda *args, **kwargs: {}
 
@@ -324,7 +327,7 @@ def install_stub_modules(strategy_plugin_mounts_json=None, notify_lang="en"):
     telegram_module = types.ModuleType("notifications.telegram")
     telegram_module.build_signal_text = lambda translator: (lambda key, **kwargs: translator(key, **kwargs))
     telegram_module.build_strategy_display_name = lambda translator: (
-        lambda _profile, fallback_name="": fallback_name
+        lambda _profile, fallback_name="", metadata=None: fallback_name
     )
     telegram_module.build_translator = lambda _lang: (lambda key, **_kwargs: key)
 
@@ -332,6 +335,10 @@ def install_stub_modules(strategy_plugin_mounts_json=None, notify_lang="en"):
     quant_platform_kit_module.__path__ = []
     qpk_common_module = types.ModuleType("quant_platform_kit.common")
     qpk_common_module.__path__ = []
+
+    qpk_platform_runner_module = types.ModuleType("quant_platform_kit.common.platform_runner")
+    qpk_platform_runner_module.dispatch_due_monitors = lambda *args, **kwargs: {"ok": True, "dispatched": []}
+    qpk_platform_runner_module.load_monitor_targets = lambda *args, **kwargs: []
 
     qpk_plugin_alerts_module = types.ModuleType("quant_platform_kit.notifications.strategy_plugin_alerts")
     qpk_plugin_alerts_module.StrategyPluginAlertStateSettings = FakeStrategyPluginAlertStateSettings
@@ -345,9 +352,15 @@ def install_stub_modules(strategy_plugin_mounts_json=None, notify_lang="en"):
     qpk_schwab_module = types.ModuleType("quant_platform_kit.schwab")
     qpk_schwab_module.fetch_account_snapshot = lambda *args, **kwargs: None
     qpk_schwab_module.fetch_default_daily_price_history_candles = lambda *args, **kwargs: []
+    qpk_schwab_module.fetch_order_status = lambda *args, **kwargs: None
     qpk_schwab_module.fetch_quotes = lambda *args, **kwargs: {}
     qpk_schwab_module.get_client_from_secret = lambda *args, **kwargs: None
     qpk_schwab_module.submit_equity_order = lambda *args, **kwargs: None
+
+    qpk_notifications_module = types.ModuleType("quant_platform_kit.notifications")
+    qpk_notifications_module.__path__ = []
+    qpk_cycle_channel_module = types.ModuleType("quant_platform_kit.notifications.cycle_channel")
+    qpk_cycle_channel_module.resolve_cycle_channel_and_url = lambda **kwargs: ("telegram", None)
 
     qpk_runtime_reports_module = types.ModuleType("quant_platform_kit.common.runtime_reports")
     qpk_runtime_reports_module.append_runtime_report_error = _append_runtime_report_error
@@ -368,8 +381,10 @@ def install_stub_modules(strategy_plugin_mounts_json=None, notify_lang="en"):
         strategy_profile="tqqq_growth_income",
         strategy_display_name="TQQQ Growth Income",
         strategy_domain="us_equity",
+        strategy_metadata=None,
         notify_lang=notify_lang,
         dry_run_only=False,
+        cash_only_execution=True,
         reserved_cash_floor_usd=150.0,
         reserved_cash_ratio=0.03,
         strategy_plugin_mounts_json=strategy_plugin_mounts_json,
@@ -380,6 +395,7 @@ def install_stub_modules(strategy_plugin_mounts_json=None, notify_lang="en"):
         strategy_plugin_alert_sms_account_id=None,
         strategy_plugin_alert_sms_auth_token=None,
         runtime_target=None,
+        runtime_target_enabled=True,
     )
 
     strategy_runtime_module = types.ModuleType("strategy_runtime")
@@ -438,12 +454,16 @@ def install_stub_modules(strategy_plugin_mounts_json=None, notify_lang="en"):
         "application.runtime_composer": runtime_composer_module,
         "application.runtime_strategy_adapters": runtime_strategy_adapters_module,
         "application.rebalance_service": rebalance_service_module,
+        "application.runtime_report_summary": runtime_report_summary_module,
         "application.signal_snapshot": signal_snapshot_module,
         "decision_mapper": decision_mapper_module,
         "entrypoints.cloud_run": cloud_run_module,
         "notifications.telegram": telegram_module,
         "quant_platform_kit": quant_platform_kit_module,
         "quant_platform_kit.common": qpk_common_module,
+        "quant_platform_kit.common.platform_runner": qpk_platform_runner_module,
+        "quant_platform_kit.notifications": qpk_notifications_module,
+        "quant_platform_kit.notifications.cycle_channel": qpk_cycle_channel_module,
         "quant_platform_kit.notifications.strategy_plugin_alerts": qpk_plugin_alerts_module,
         "quant_platform_kit.schwab": qpk_schwab_module,
         "quant_platform_kit.common.runtime_reports": qpk_runtime_reports_module,

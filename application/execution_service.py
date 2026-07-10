@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from quant_platform_kit.common.order_status import compute_confirmed_sell_release_value
+
 try:
     from quant_platform_kit.common.cash_sweep import should_sell_cash_sweep_to_fund_whole_share_buy
 except ImportError:  # pragma: no cover - compatibility with older pinned shared wheels
@@ -602,6 +604,7 @@ def execute_rebalance_cycle(
     market_data_port,
     load_plan,
     execution_port=None,
+    fetch_order_status=None,
     submit_equity_order=None,
     translator,
     limit_buy_premium,
@@ -848,6 +851,8 @@ def execute_rebalance_cycle(
     cash_sweep_symbol = str(portfolio["cash_sweep_symbol"])
     dry_run_sale_events = []
     post_sell_buying_power_released = None
+    confirmed_sell_release_value = 0.0
+    pre_sell_buying_power = buying_power_from_plan(portfolio, execution)
     buy_order_symbols = tuple(
         allocation.get("income_symbols", ()) + allocation.get("risk_symbols", ())
     )
@@ -972,6 +977,7 @@ def execute_rebalance_cycle(
             refresh_interval = max(0.0, float(post_sell_refresh_interval_sec or 0.0))
             best_refreshed_state = None
             best_buying_power = previous_buying_power
+            projected_sell_release_value = 0.0
             for attempt in range(refresh_attempts):
                 sleeper(sell_settle_delay_sec if attempt == 0 else refresh_interval)
                 snapshot = fetch_managed_snapshot(client)
@@ -980,13 +986,25 @@ def execute_rebalance_cycle(
                     refreshed_state[1],
                     refreshed_state[2],
                 )
+                projected_sell_release_value = max(
+                    projected_sell_release_value,
+                    compute_confirmed_sell_release_value(
+                        submitted_sell_orders=tuple(
+                            order for order in submitted_orders if str(order.get("side") or "").lower() == "sell"
+                        ),
+                        fetch_order_status=fetch_order_status,
+                    ),
+                )
                 if best_refreshed_state is None or refreshed_buying_power > best_buying_power:
                     best_refreshed_state = refreshed_state
                     best_buying_power = refreshed_buying_power
                 if refreshed_buying_power > previous_buying_power:
                     best_refreshed_state = refreshed_state
                     break
-            post_sell_buying_power_released = best_buying_power > previous_buying_power
+            confirmed_sell_release_value = projected_sell_release_value
+            post_sell_buying_power_released = (
+                best_buying_power > previous_buying_power or confirmed_sell_release_value > 0.0
+            )
             plan, portfolio, execution, allocation = best_refreshed_state
             plan, allocation = _apply_safe_haven_cash_substitution(
                 plan=plan,
@@ -1017,6 +1035,11 @@ def execute_rebalance_cycle(
     liquid_cash = float(portfolio["liquid_cash"])
     reserved_cash = float(execution.get("reserved_cash", 0))
     estimated_buying_power = max(0, liquid_cash - reserved_cash)
+    if confirmed_sell_release_value > 0.0:
+        estimated_buying_power = max(
+            estimated_buying_power,
+            pre_sell_buying_power + confirmed_sell_release_value,
+        )
     pending_sell_release_symbols = list(dict.fromkeys(pending_sell_release_symbols))
     buy_needed_symbols = [
         symbol

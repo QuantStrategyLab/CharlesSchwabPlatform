@@ -357,6 +357,7 @@ def run_strategy_core(
     fetch_managed_quotes=None,
     resolve_rebalance_plan=None,
     submit_equity_order=None,
+    fetch_order_status=None,
     send_tg_message=None,
     translator=None,
     strategy_display_name=None,
@@ -396,6 +397,19 @@ def run_strategy_core(
             notifications=CallableNotificationPort(send_tg_message),
             execution_port_factory=lambda account_hash: CallableExecutionPort(
                 lambda order_intent: submit_equity_order(client, account_hash, order_intent)
+            ),
+            order_status_fetcher_factory=(
+                (
+                    lambda account_hash: (
+                        lambda broker_order_id: fetch_order_status(
+                            client,
+                            account_hash,
+                            broker_order_id,
+                        )
+                    )
+                )
+                if fetch_order_status is not None
+                else None
             ),
             submit_equity_order=lambda account_hash, order_intent: submit_equity_order(client, account_hash, order_intent),
         )
@@ -441,6 +455,11 @@ def run_strategy_core(
     execution_port = (
         runtime.execution_port_factory(plan["account_hash"])
         if runtime.execution_port_factory is not None
+        else None
+    )
+    order_status_fetcher = (
+        runtime.order_status_fetcher_factory(plan["account_hash"])
+        if runtime.order_status_fetcher_factory is not None
         else None
     )
     execution_marker_key = _build_execution_marker_key(config=config, execution=execution, plan=plan)
@@ -493,6 +512,7 @@ def run_strategy_core(
             market_data_port=runtime.market_data_port,
             load_plan=load_plan,
             execution_port=execution_port,
+            fetch_order_status=order_status_fetcher,
             submit_equity_order=(
                 (lambda _client, account_hash, order_intent: runtime.submit_equity_order(account_hash, order_intent))
                 if runtime.submit_equity_order is not None
