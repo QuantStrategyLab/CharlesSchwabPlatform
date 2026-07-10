@@ -31,6 +31,7 @@ from quant_platform_kit.notifications.strategy_plugin_alerts import (
 from quant_platform_kit.schwab import (
     fetch_account_snapshot,
     fetch_default_daily_price_history_candles,
+    fetch_order_status,
     fetch_quotes,
     get_client_from_secret,
     submit_equity_order,
@@ -323,6 +324,7 @@ def build_broker_adapters():
         fetch_quotes_fn=fetch_quotes,
         fetch_daily_price_history_fn=fetch_default_daily_price_history_candles,
         submit_equity_order_fn=submit_equity_order,
+        fetch_order_status_fn=fetch_order_status,
     )
 
 
