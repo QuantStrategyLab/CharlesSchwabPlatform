@@ -55,6 +55,7 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders():
             build_market_data_port=lambda client: ("market-data-port", client),
             build_portfolio_port=lambda client: ("portfolio-port", client),
             build_execution_port=lambda client, account_hash: ("execution-port", client, account_hash),
+            build_order_status_fetcher=lambda client, account_hash: ("order-status-fetcher", client, account_hash),
         ),
         strategy_adapters=SimpleNamespace(
             translator=lambda key, **_kwargs: key,
@@ -106,6 +107,7 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders():
     assert runtime.fetch_reference_history() == ("reference-history", ("market-data-port", "client"))
     assert runtime.portfolio_port == ("portfolio-port", "client")
     assert runtime.execution_port_factory("hash-1") == ("execution-port", "client", "hash-1")
+    assert runtime.order_status_fetcher_factory("hash-1") == ("order-status-fetcher", "client", "hash-1")
     assert runtime.notifications == "notification-port"
     assert config.extra_notification_lines == ("plugin-line", "plugin-error:bad config")
     assert config.strategy_display_name == "TQQQ 增长收益"

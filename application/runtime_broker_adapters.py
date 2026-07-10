@@ -49,6 +49,7 @@ class SchwabRuntimeBrokerAdapters:
     fetch_quotes_fn: Any
     fetch_daily_price_history_fn: Any
     submit_equity_order_fn: Any
+    fetch_order_status_fn: Any | None = None
     clock: Any = _utcnow
 
     def fetch_managed_snapshot(self, client):
@@ -211,6 +212,15 @@ class SchwabRuntimeBrokerAdapters:
             lambda order_intent: self.submit_equity_order_fn(client, account_hash, order_intent)
         )
 
+    def build_order_status_fetcher(self, client, account_hash: str):
+        if self.fetch_order_status_fn is None:
+            return None
+        return lambda broker_order_id: self.fetch_order_status_fn(
+            client,
+            account_hash,
+            broker_order_id,
+        )
+
 
 def build_runtime_broker_adapters(
     *,
@@ -219,6 +229,7 @@ def build_runtime_broker_adapters(
     fetch_quotes_fn,
     fetch_daily_price_history_fn,
     submit_equity_order_fn,
+    fetch_order_status_fn=None,
     clock=_utcnow,
 ) -> SchwabRuntimeBrokerAdapters:
     return SchwabRuntimeBrokerAdapters(
@@ -227,5 +238,6 @@ def build_runtime_broker_adapters(
         fetch_quotes_fn=fetch_quotes_fn,
         fetch_daily_price_history_fn=fetch_daily_price_history_fn,
         submit_equity_order_fn=submit_equity_order_fn,
+        fetch_order_status_fn=fetch_order_status_fn,
         clock=clock,
     )

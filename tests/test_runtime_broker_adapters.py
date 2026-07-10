@@ -136,3 +136,26 @@ def test_market_data_port_retries_rate_limited_quote_batch(monkeypatch):
     assert quote.last_price == 10.0
     assert observed_calls == [("SOXL", "SOXX"), ("SOXL", "SOXX")]
     assert sleeps == [0.5]
+
+
+def test_build_order_status_fetcher_curries_client_and_account_hash():
+    observed = {}
+
+    def fetch_order_status(client, account_hash, order_id):
+        observed["call"] = (client, account_hash, order_id)
+        return {"status": "FILLED", "executed_qty": 1.0, "executed_price": 100.0}
+
+    adapters = build_runtime_broker_adapters(
+        managed_symbols=("SOXL",),
+        fetch_account_snapshot_fn=None,
+        fetch_quotes_fn=lambda _client, _symbols: {},
+        fetch_daily_price_history_fn=lambda _client, _symbol: [],
+        submit_equity_order_fn=None,
+        fetch_order_status_fn=fetch_order_status,
+    )
+
+    fetcher = adapters.build_order_status_fetcher("client-1", "acct-1")
+
+    assert fetcher is not None
+    fetcher("order-1")
+    assert observed["call"] == ("client-1", "acct-1", "order-1")
