@@ -22,7 +22,8 @@ jobs:
       allow_unconfigured_backend: false
       api_fallback_enabled: "false"
       direct_api_primary_enabled: "false"
-    secrets: inherit
+    secrets:
+      CODEX_AUDIT_SERVICE_URL: ${{ secrets.CODEX_AUDIT_SERVICE_URL }}
     permissions:
       contents: read
       id-token: write
