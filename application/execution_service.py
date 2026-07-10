@@ -380,6 +380,61 @@ def _should_bootstrap_whole_share_buy(symbol, *, target_value, limit_price) -> b
     return max(0.0, float(target_value or 0.0)) >= effective_limit_price * float(min_target_share_ratio)
 
 
+def _should_top_up_existing_whole_share_buy(
+    symbol,
+    *,
+    target_value,
+    current_value,
+    quantity=0.0,
+    limit_price,
+) -> bool:
+    del symbol
+    held_quantity = max(0.0, float(quantity or 0.0))
+    effective_limit_price = max(0.0, float(limit_price or 0.0))
+    if held_quantity < 1.0 or effective_limit_price <= 0.0:
+        return False
+    remaining_value = max(0.0, float(target_value or 0.0) - float(current_value or 0.0))
+    if remaining_value <= 0.0 or remaining_value >= effective_limit_price:
+        return False
+    held_whole_shares = int(held_quantity)
+    if held_whole_shares <= 0:
+        return False
+    target_quantity = max(0.0, float(target_value or 0.0)) / effective_limit_price
+    return target_quantity >= held_whole_shares + 0.5
+
+
+def _planned_buy_order_quantity(
+    symbol,
+    *,
+    target_value,
+    current_value,
+    quantity=0.0,
+    amount_to_spend,
+    available_buying_power,
+    limit_price,
+    allow_top_up=False,
+) -> int:
+    effective_limit_price = max(0.0, float(limit_price or 0.0))
+    if effective_limit_price <= 0.0:
+        return 0
+    planned_quantity = int(max(0.0, float(amount_to_spend or 0.0)) // effective_limit_price)
+    if planned_quantity > 0:
+        return planned_quantity
+    if not allow_top_up:
+        return 0
+    if max(0.0, float(available_buying_power or 0.0)) < effective_limit_price:
+        return 0
+    if _should_top_up_existing_whole_share_buy(
+        symbol,
+        target_value=target_value,
+        current_value=current_value,
+        quantity=quantity,
+        limit_price=effective_limit_price,
+    ):
+        return 1
+    return 0
+
+
 def _format_symbol_with_suffix(symbol, *, suffix=".US") -> str:
     normalized = str(symbol or "").strip().upper()
     if not normalized:
@@ -987,7 +1042,16 @@ def execute_rebalance_cycle(
             limit_price = _limit_buy_price(
                 symbol, ask, limit_buy_premium, limit_buy_premium_by_symbol
             )
-            quantity = int(amount_to_spend // limit_price) if limit_price > 0 else 0
+            quantity = _planned_buy_order_quantity(
+                symbol,
+                target_value=target_val,
+                current_value=market_values[symbol],
+                quantity=quantities.get(symbol, 0.0),
+                amount_to_spend=amount_to_spend,
+                available_buying_power=estimated_buying_power,
+                limit_price=limit_price,
+                allow_top_up=sell_executed,
+            )
             if quantity > 0:
                 estimated_buy_cost += quantity * limit_price
         if estimated_buy_cost > estimated_buying_power:
@@ -1021,7 +1085,16 @@ def execute_rebalance_cycle(
                         continue
                     ask = quotes[symbol]["askPrice"]
                     limit_price = _limit_buy_price(symbol, ask, limit_buy_premium, limit_buy_premium_by_symbol)
-                    quantity = int(amount_to_spend // limit_price) if limit_price > 0 else 0
+                    quantity = _planned_buy_order_quantity(
+                        symbol,
+                        target_value=target_val,
+                        current_value=market_values[symbol],
+                        quantity=quantities.get(symbol, 0.0),
+                        amount_to_spend=amount_to_spend,
+                        available_buying_power=estimated_buying_power,
+                        limit_price=limit_price,
+                        allow_top_up=sell_executed,
+                    )
                     if quantity > 0:
                         order_cost = quantity * limit_price
                         if order_cost > estimated_buying_power:
