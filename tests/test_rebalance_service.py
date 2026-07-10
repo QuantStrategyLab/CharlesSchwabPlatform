@@ -436,6 +436,63 @@ class RebalanceServiceTests(unittest.TestCase):
         self.assertEqual(sell_orders[0].symbol, "TQQQ")
         self.assertEqual(sell_orders[0].quantity, 6)
 
+    def test_existing_position_top_up_buys_one_share_when_target_rounds_up(self):
+        plan = {
+            "account_hash": "demo",
+            "allocation": {
+                "target_mode": "value",
+                "strategy_symbols": ("SOXL", "SOXX"),
+                "risk_symbols": ("SOXL", "SOXX"),
+                "income_symbols": (),
+                "safe_haven_symbols": (),
+                "targets": {"SOXL": 0.0, "SOXX": 260.0},
+            },
+            "portfolio": {
+                "market_values": {"SOXL": 120.0, "SOXX": 200.0},
+                "quantities": {"SOXL": 3, "SOXX": 2},
+                "liquid_cash": 10.0,
+                "cash_sweep_symbol": "",
+            },
+            "execution": {
+                "trade_threshold_value": 10.0,
+                "reserved_cash": 0.0,
+            },
+        }
+
+        result = execute_rebalance_cycle(
+            client=object(),
+            plan=plan,
+            portfolio=plan["portfolio"],
+            execution=plan["execution"],
+            allocation=plan["allocation"],
+            fetch_managed_snapshot=lambda _client: None,
+            market_data_port=CallableMarketDataPort(
+                quote_loader=lambda symbol: QuoteSnapshot(
+                    symbol=symbol,
+                    as_of="2026-07-10",
+                    last_price={"SOXL": 40.0, "SOXX": 100.0}[symbol],
+                    ask_price={"SOXL": 40.0, "SOXX": 100.0}[symbol],
+                )
+            ),
+            load_plan=lambda _snapshot: (plan, plan["portfolio"], plan["execution"], plan["allocation"]),
+            execution_port=CallableExecutionPort(
+                lambda _order_intent: (_ for _ in ()).throw(
+                    AssertionError("dry run should not submit")
+                )
+            ),
+            translator=build_translator("en"),
+            limit_buy_premium=1.0,
+            sell_settle_delay_sec=0,
+            dry_run_only=True,
+            publish_order_issue=lambda _message: None,
+        )
+
+        self.assertTrue(bool(result.submitted_orders))
+        self.assertEqual(
+            [(order["side"], order["symbol"], order["quantity"]) for order in result.submitted_orders],
+            [("sell", "SOXL", 3), ("buy", "SOXX", 1)],
+        )
+
     def test_cash_sweep_rebuy_skips_when_only_risk_target_is_unbuyable(self):
         submitted_orders = []
         plan = {
