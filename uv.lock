@@ -17,7 +17,7 @@ resolution-markers = [
 ]
 
 [manifest]
-overrides = [{ name = "quant-platform-kit", git = "https://github.com/QuantStrategyLab/QuantPlatformKit.git?rev=56a03364d517fd0e2efb2c4d4add8a785fc5e857" }]
+overrides = [{ name = "quant-platform-kit", git = "https://github.com/QuantStrategyLab/QuantPlatformKit.git?rev=618b786d9d95c87ba5c4d08c088c8bcac7817644" }]
 
 [[package]]
 name = "anyio"
@@ -186,7 +186,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'test'" },
     { name = "pytest-cov", marker = "extra == 'test'" },
     { name = "pytz" },
-    { name = "quant-platform-kit", git = "https://github.com/QuantStrategyLab/QuantPlatformKit.git?rev=56a03364d517fd0e2efb2c4d4add8a785fc5e857" },
+    { name = "quant-platform-kit", git = "https://github.com/QuantStrategyLab/QuantPlatformKit.git?rev=618b786d9d95c87ba5c4d08c088c8bcac7817644" },
     { name = "requests" },
     { name = "ruff", marker = "extra == 'test'" },
     { name = "schwab-py" },
@@ -1320,7 +1320,7 @@ wheels = [
 [[package]]
 name = "quant-platform-kit"
 version = "0.10.0"
-source = { git = "https://github.com/QuantStrategyLab/QuantPlatformKit.git?rev=56a03364d517fd0e2efb2c4d4add8a785fc5e857#56a03364d517fd0e2efb2c4d4add8a785fc5e857" }
+source = { git = "https://github.com/QuantStrategyLab/QuantPlatformKit.git?rev=618b786d9d95c87ba5c4d08c088c8bcac7817644#618b786d9d95c87ba5c4d08c088c8bcac7817644" }
 
 [[package]]
 name = "requests"
