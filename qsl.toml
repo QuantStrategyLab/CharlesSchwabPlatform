@@ -9,4 +9,4 @@ quant_platform_kit = "651c9ac4f37ce6e7fe1bac84dc7646cd5abc9e6e"
 us_equity_strategies = "17ddb86c72d44b2c7b78ba7a10d8f71b21180166"
 
 [qsl.compat]
-bundle = "2026.07.3"
+bundle = "2026.07.4"
