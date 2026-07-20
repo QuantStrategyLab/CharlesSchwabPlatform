@@ -30,44 +30,79 @@ jobs:
           REVIEWER: Pigbibi
         run: |
           set -euo pipefail
-          latest_review_request_actor() {
+          review_events() {
             gh api --paginate \
               "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/timeline?per_page=100" |
-              jq -sr --arg reviewer "${REVIEWER}" \
-                '[.[][] | select(.event == "review_requested" and .requested_reviewer.login == $reviewer)][-1].actor.login // ""'
+              jq -sc --arg reviewer "${REVIEWER}" '
+                [.[][] | select(
+                  (.event == "review_requested" or .event == "review_request_removed") and
+                  .requested_reviewer.login == $reviewer
+                )]
+              '
           }
 
-          review_requests="$(gh pr view "${PR_NUMBER}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --json reviewRequests \
-            --jq '.reviewRequests[].login')"
+          current_review_requests() {
+            gh pr view "${PR_NUMBER}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --json reviewRequests \
+              --jq '.reviewRequests[].login'
+          }
+
+          review_requests="$(current_review_requests)"
           if ! grep -Fqx "${REVIEWER}" <<<"${review_requests}"; then
             echo "No review request for ${REVIEWER}; nothing to dismiss." >> "${GITHUB_STEP_SUMMARY}"
             exit 0
           fi
 
-          latest_request_actor="$(latest_review_request_actor)"
-          case "${latest_request_actor}" in
-            'dependabot[bot]'|'app/dependabot') ;;
+          events_before="$(review_events)"
+          latest_event="$(jq -r '.[-1].event // ""' <<<"${events_before}")"
+          latest_actor="$(jq -r '.[-1].actor.login // ""' <<<"${events_before}")"
+          case "${latest_event}:${latest_actor}" in
+            'review_requested:dependabot[bot]'|'review_requested:app/dependabot') ;;
             *)
-              echo "Latest review request was made by ${latest_request_actor:-<unknown>}; preserving it." >> "${GITHUB_STEP_SUMMARY}"
+              echo "Latest review event was ${latest_event:-<unknown>} by ${latest_actor:-<unknown>}; preserving the request." >> "${GITHUB_STEP_SUMMARY}"
               exit 0
               ;;
           esac
+          baseline_count="$(jq 'length' <<<"${events_before}")"
 
-          gh api --method DELETE \
+          review_requests="$(current_review_requests)"
+          if ! grep -Fqx "${REVIEWER}" <<<"${review_requests}"; then
+            echo "Review request was removed during cleanup; nothing to dismiss." >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          if ! gh api --method DELETE \
             "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/requested_reviewers" \
-            -f "reviewers[]=${REVIEWER}"
+            -f "reviewers[]=${REVIEWER}"; then
+            review_requests="$(current_review_requests)"
+            if ! grep -Fqx "${REVIEWER}" <<<"${review_requests}"; then
+              echo "Review request was removed concurrently; nothing to dismiss." >> "${GITHUB_STEP_SUMMARY}"
+              exit 0
+            fi
+            exit 1
+          fi
 
-          latest_request_actor="$(latest_review_request_actor)"
-          case "${latest_request_actor}" in
-            'dependabot[bot]'|'app/dependabot')
-              echo "Dismissed Dependabot review request for ${REVIEWER}." >> "${GITHUB_STEP_SUMMARY}"
-              ;;
-            *)
+          events_after="$(review_events)"
+          human_intent="$(jq -r --argjson baseline "${baseline_count}" '
+            [.[$baseline:][] | select(
+              .actor.login != "dependabot[bot]" and
+              .actor.login != "app/dependabot" and
+              .actor.login != "github-actions[bot]" and
+              .actor.login != "github-actions"
+            )][-1].event // ""
+          ' <<<"${events_after}")"
+
+          if [ "${human_intent}" = 'review_requested' ]; then
+            review_requests="$(current_review_requests)"
+            if ! grep -Fqx "${REVIEWER}" <<<"${review_requests}"; then
               gh api --method POST \
                 "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/requested_reviewers" \
                 -f "reviewers[]=${REVIEWER}"
-              echo "Restored review request made by ${latest_request_actor:-<unknown>}." >> "${GITHUB_STEP_SUMMARY}"
-              ;;
-          esac
+            fi
+            echo "Preserved a concurrent human review request." >> "${GITHUB_STEP_SUMMARY}"
+          elif [ "${human_intent}" = 'review_request_removed' ]; then
+            echo "Preserved a concurrent human review removal." >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "Dismissed Dependabot review request for ${REVIEWER}." >> "${GITHUB_STEP_SUMMARY}"
+          fi
