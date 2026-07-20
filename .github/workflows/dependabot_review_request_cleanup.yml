@@ -1,0 +1,56 @@
+name: Dismiss Dependabot Review Request
+
+"on":
+  pull_request_target:
+    types: [review_requested]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  dismiss-review-request:
+    if: >-
+      (github.event.pull_request.user.login == 'dependabot[bot]' ||
+       github.event.pull_request.user.login == 'app/dependabot') &&
+      github.event.requested_reviewer.login == 'Pigbibi' &&
+      (github.actor == 'dependabot[bot]' || github.actor == 'app/dependabot')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Dismiss Pigbibi review request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REVIEWER: Pigbibi
+        run: |
+          set -euo pipefail
+          review_requests="$(gh pr view "${PR_NUMBER}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --json reviewRequests \
+            --jq '.reviewRequests[].login')"
+          if ! grep -Fqx "${REVIEWER}" <<<"${review_requests}"; then
+            echo "No review request for ${REVIEWER}; nothing to dismiss." >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          latest_request_actor="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/timeline?per_page=100" \
+            --jq '[.[] | select(.event == "review_requested" and .requested_reviewer.login == "Pigbibi")][-1].actor.login // ""')"
+          case "${latest_request_actor}" in
+            'dependabot[bot]'|'app/dependabot') ;;
+            *)
+              echo "Latest review request was made by ${latest_request_actor:-<unknown>}; preserving it." >> "${GITHUB_STEP_SUMMARY}"
+              exit 0
+              ;;
+          esac
+
+          gh api --method DELETE \
+            "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/requested_reviewers" \
+            -f "reviewers[]=${REVIEWER}"
+          echo "Dismissed Dependabot review request for ${REVIEWER}." >> "${GITHUB_STEP_SUMMARY}"
