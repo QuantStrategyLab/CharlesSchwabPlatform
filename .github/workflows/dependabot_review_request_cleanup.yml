@@ -30,6 +30,13 @@ jobs:
           REVIEWER: Pigbibi
         run: |
           set -euo pipefail
+          latest_review_request_actor() {
+            gh api --paginate \
+              "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/timeline?per_page=100" |
+              jq -sr --arg reviewer "${REVIEWER}" \
+                '[.[][] | select(.event == "review_requested" and .requested_reviewer.login == $reviewer)][-1].actor.login // ""'
+          }
+
           review_requests="$(gh pr view "${PR_NUMBER}" \
             --repo "${GITHUB_REPOSITORY}" \
             --json reviewRequests \
@@ -39,9 +46,7 @@ jobs:
             exit 0
           fi
 
-          latest_request_actor="$(gh api \
-            "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/timeline?per_page=100" \
-            --jq '[.[] | select(.event == "review_requested" and .requested_reviewer.login == "Pigbibi")][-1].actor.login // ""')"
+          latest_request_actor="$(latest_review_request_actor)"
           case "${latest_request_actor}" in
             'dependabot[bot]'|'app/dependabot') ;;
             *)
@@ -53,4 +58,16 @@ jobs:
           gh api --method DELETE \
             "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/requested_reviewers" \
             -f "reviewers[]=${REVIEWER}"
-          echo "Dismissed Dependabot review request for ${REVIEWER}." >> "${GITHUB_STEP_SUMMARY}"
+
+          latest_request_actor="$(latest_review_request_actor)"
+          case "${latest_request_actor}" in
+            'dependabot[bot]'|'app/dependabot')
+              echo "Dismissed Dependabot review request for ${REVIEWER}." >> "${GITHUB_STEP_SUMMARY}"
+              ;;
+            *)
+              gh api --method POST \
+                "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/requested_reviewers" \
+                -f "reviewers[]=${REVIEWER}"
+              echo "Restored review request made by ${latest_request_actor:-<unknown>}." >> "${GITHUB_STEP_SUMMARY}"
+              ;;
+          esac
