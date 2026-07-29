@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_dir="$(cd "$(dirname "$0")/.." && pwd)"
 workflow_file="$repo_dir/.github/workflows/sync-cloud-run-env.yml"
+runtime_reconciler="$repo_dir/scripts/reconcile_cloud_runtime.py"
 
 grep -Fq 'GCP_WORKLOAD_IDENTITY_PROVIDER: projects/401309731911/locations/global/workloadIdentityPools/github-actions/providers/github-main' "$workflow_file"
 grep -Fq 'GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: schwab-platform-deploy@charlesschwabquant.iam.gserviceaccount.com' "$workflow_file"
@@ -19,8 +20,8 @@ grep -Fq 'name: Resolve Cloud Run sync targets' "$workflow_file"
 grep -Fq 'scripts/build_cloud_run_env_sync_plan.py --json' "$workflow_file"
 grep -Fq 'sync_plan_json<<__SYNC_PLAN_JSON__' "$workflow_file"
 grep -Fq 'SYNC_PLAN_JSON: ${{ steps.strategy_requirements.outputs.sync_plan_json }}' "$workflow_file"
-grep -Fq 'Cloud Run env sync did not resolve any targets' "$workflow_file"
-grep -Fq 'Cloud Run sync target is missing service_name' "$workflow_file"
+grep -Fq 'Cloud Run env sync did not resolve any targets' "$runtime_reconciler"
+grep -Fq 'Cloud Run sync target is missing service_name' "$runtime_reconciler"
 grep -Fq 'for key, value in sorted(target["env"].items()):' "$workflow_file"
 grep -Fq 'target.get("remove_env_vars")' "$workflow_file"
 grep -Fq 'plan = json.loads(os.environ["SYNC_PLAN_JSON"])' "$workflow_file"
@@ -94,9 +95,19 @@ grep -Fq 'STRATEGY_PLUGIN_ALERT_EMAIL_SENDER_PASSWORD: ${{ secrets.STRATEGY_PLUG
 grep -Fq 'STRATEGY_PLUGIN_ALERT_SMS_AUTH_TOKEN: ${{ secrets.STRATEGY_PLUGIN_ALERT_SMS_AUTH_TOKEN }}' "$workflow_file"
 grep -Fq 'STRATEGY_PLUGIN_ALERT_PUSH_APP_TOKEN: ${{ secrets.STRATEGY_PLUGIN_ALERT_PUSH_APP_TOKEN }}' "$workflow_file"
 grep -Fq 'STRATEGY_PLUGIN_ALERT_PUSH_ACCESS_TOKEN: ${{ secrets.STRATEGY_PLUGIN_ALERT_PUSH_ACCESS_TOKEN }}' "$workflow_file"
-grep -Fq 'STRATEGY_PLUGIN_ALERT_TELEGRAM_BOT_TOKEN: ${{ secrets.STRATEGY_PLUGIN_ALERT_TELEGRAM_BOT_TOKEN }}' "$workflow_file"
+grep -Fq 'STRATEGY_PLUGIN_ALERT_TELEGRAM_BOT_TOKEN: ${{ secrets.TG_TOKEN }}' "$workflow_file"
 grep -Fq "Skipping Cloud Run automation because ENABLE_GITHUB_CLOUD_RUN_DEPLOY and ENABLE_GITHUB_ENV_SYNC are not true." "$workflow_file"
 grep -Fq "Cloud Run env sync is enabled, but these values are missing:" "$workflow_file"
+grep -Fq 'from scripts.reconcile_cloud_runtime import select_sync_target' "$workflow_file"
+grep -Fq 'target = select_sync_target(plan, os.environ["CLOUD_RUN_SERVICE"])' "$workflow_file"
+if grep -Fq 'targets[0]' "$workflow_file"; then
+  echo "workflow must select the current service instead of the first sync target" >&2
+  exit 1
+fi
+if grep -Fq 'len(targets) != 1' "$workflow_file"; then
+  echo "workflow must support multi-target sync plans" >&2
+  exit 1
+fi
 grep -Fq 'missing_vars+=("TELEGRAM_TOKEN_SECRET_NAME or TELEGRAM_TOKEN")' "$workflow_file"
 grep -Fq 'missing_vars+=("SCHWAB_API_KEY_SECRET_NAME or SCHWAB_API_KEY")' "$workflow_file"
 grep -Fq 'missing_vars+=("SCHWAB_APP_SECRET_SECRET_NAME or SCHWAB_APP_SECRET")' "$workflow_file"
@@ -201,10 +212,44 @@ grep -Fq 'print(" ".join(time_fields))' "$workflow_file"
 grep -Fq 'print(" ".join([*time_fields, *current_fields[2:]]))' "$workflow_file"
 grep -Fq 'gcloud scheduler jobs update http "${job_name}"' "$workflow_file"
 grep -Fq 'gcloud scheduler jobs create http "${job_name}"' "$workflow_file"
+grep -Fq 'runtime_target_enabled="${scheduler_config[4]}"' "$workflow_file"
+grep -Fq 'desired_probe_schedule="$(CURRENT_SCHEDULE="${desired_schedule}" SCHEDULE_TIME="${probe_time}" python - <<' "$workflow_file"
+grep -Fq 'desired_precheck_schedule="$(CURRENT_SCHEDULE="${desired_schedule}" SCHEDULE_TIME="${precheck_time}" python - <<' "$workflow_file"
+grep -Fq 'probe_job_name="${CLOUD_RUN_SERVICE}-probe-scheduler"' "$workflow_file"
+grep -Fq 'probe_uri="${service_url}/probe"' "$workflow_file"
+grep -Fq 'precheck_job_name="${CLOUD_RUN_SERVICE}-precheck-scheduler"' "$workflow_file"
+grep -Fq 'precheck_uri="${service_url}/dry-run"' "$workflow_file"
+grep -Fq 'managed_scheduler_jobs=("${job_name}")' "$workflow_file"
+grep -Fq 'if [ "${DIRECT_MONITOR_MIGRATION_COMPLETE:-}" = "true" ]; then' "$workflow_file"
+grep -Fq 'managed_scheduler_jobs+=("${probe_job_name}" "${precheck_job_name}")' "$workflow_file"
+grep -Fq 'id: scheduler_sync' "$workflow_file"
 grep -Fq 'monitor_job_name="schwab-monitor-dispatcher-scheduler"' "$workflow_file"
 grep -Fq 'monitor_uri="${service_url}/monitor-dispatch"' "$workflow_file"
+grep -Fq -- '--schedule="*/5 * * * *"' "$workflow_file"
+grep -Fq 'echo "direct_monitors_reconciled=true" >> "${GITHUB_OUTPUT}"' "$workflow_file"
+grep -Fq 'DIRECT_MONITOR_SCHEDULERS_RECONCILED: ${{ steps.scheduler_sync.outputs.direct_monitors_reconciled }}' "$workflow_file"
+grep -Fq 'gcloud scheduler jobs resume "${managed_job_name}"' "$workflow_file"
+grep -Fq 'gcloud scheduler jobs pause "${managed_job_name}"' "$workflow_file"
+if grep -Fq 'managed_scheduler_jobs+=("${monitor_job_name}")' "$workflow_file"; then
+  echo "shared dispatcher must not inherit one target's enabled state" >&2
+  exit 1
+fi
+grep -Fq 'DIRECT_MONITOR_MIGRATION_COMPLETE: ${{ vars.DIRECT_MONITOR_MIGRATION_COMPLETE }}' "$workflow_file"
+if grep -Fq 'DIRECT_MONITOR_MIGRATION_COMPLETE: "true"' "$workflow_file"; then
+  echo "direct monitor migration must not be enabled implicitly" >&2
+  exit 1
+fi
 grep -Fq -- '--schedule="${desired_schedule}"' "$workflow_file"
 grep -Fq -- '--time-zone="${market_timezone}"' "$workflow_file"
+direct_gate_line="$(grep -n -F 'if [ "${DIRECT_MONITOR_MIGRATION_COMPLETE:-}" = "true" ]; then' "$workflow_file" | head -1 | cut -d: -f1)"
+probe_schedule_line="$(grep -n -F 'desired_probe_schedule="$(CURRENT_SCHEDULE=' "$workflow_file" | head -1 | cut -d: -f1)"
+precheck_schedule_line="$(grep -n -F 'desired_precheck_schedule="$(CURRENT_SCHEDULE=' "$workflow_file" | head -1 | cut -d: -f1)"
+test "${direct_gate_line}" -lt "${probe_schedule_line}"
+test "${direct_gate_line}" -lt "${precheck_schedule_line}"
 grep -Fq "if: steps.config.outputs.enabled == 'true'" "$workflow_file"
 grep -Fq 'remove_env_vars=(' "$workflow_file"
 grep -Fq '"TELEGRAM_CHAT_ID"' "$workflow_file"
+
+validate_line="$(grep -n 'name: Validate env sync inputs' "$workflow_file" | head -1 | cut -d: -f1)"
+sync_line="$(grep -n 'name: Sync Cloud Run environment' "$workflow_file" | head -1 | cut -d: -f1)"
+test "${validate_line}" -lt "${sync_line}"

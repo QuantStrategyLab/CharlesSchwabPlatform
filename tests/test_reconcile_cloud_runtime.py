@@ -22,15 +22,78 @@ def _completed(
 
 
 class ReconcileCloudRuntimeTests(unittest.TestCase):
+    def test_select_sync_target_matches_current_service_in_multi_target_plan(self) -> None:
+        current_service = "charles-schwab-secondary-service"
+        plan = {
+            "targets": [
+                {"service_name": "charles-schwab-primary-service", "env": {}},
+                {"service_name": current_service, "env": {"TARGET": "current"}},
+            ]
+        }
+
+        target = runtime.select_sync_target(plan, current_service)
+
+        self.assertEqual(target["env"], {"TARGET": "current"})
+
+    def test_select_sync_target_rejects_missing_service(self) -> None:
+        plan = {
+            "targets": [
+                {"service_name": "charles-schwab-primary-service", "env": {}},
+            ]
+        }
+
+        with self.assertRaisesRegex(RuntimeError, "Expected exactly one sync target"):
+            runtime.select_sync_target(plan, "charles-schwab-missing-service")
+
+    def test_select_sync_target_rejects_duplicate_service(self) -> None:
+        service = "charles-schwab-service"
+        plan = {
+            "targets": [
+                {"service_name": service, "env": {}},
+                {"service_name": service, "env": {}},
+            ]
+        }
+
+        with self.assertRaisesRegex(RuntimeError, "Expected exactly one sync target"):
+            runtime.select_sync_target(plan, service)
+
+    def test_service_name_matches_current_service_in_multi_target_plan(self) -> None:
+        current_service = "charles-schwab-secondary-service"
+        env = {
+            "CLOUD_RUN_SERVICE": current_service,
+            "SYNC_PLAN_JSON": json.dumps(
+                {
+                    "targets": [
+                        {"service_name": "charles-schwab-primary-service"},
+                        {"service_name": current_service},
+                    ]
+                }
+            ),
+        }
+
+        self.assertEqual(runtime._service_name(env), current_service)
+
+    def test_service_name_rejects_configured_service_missing_from_plan(self) -> None:
+        env = {
+            "CLOUD_RUN_SERVICE": "charles-schwab-missing-service",
+            "SYNC_PLAN_JSON": json.dumps(
+                {"targets": [{"service_name": "charles-schwab-service"}]}
+            ),
+        }
+
+        with self.assertRaisesRegex(RuntimeError, "does not match any SYNC_PLAN_JSON target"):
+            runtime._service_name(env)
+
     def test_reconcile_traffic_updates_to_latest_ready_revision(self) -> None:
         service = "charles-schwab-service"
         revision = "charles-schwab-service-00002"
         target_sha = "abc123def456"
         env = {
             "SYNC_PLAN_JSON": json.dumps({"targets": [{"service_name": service}]}),
-            "CLOUD_RUN_SERVICE": "ignored-by-plan",
+            "CLOUD_RUN_SERVICE": service,
             "GCP_PROJECT_ID": "charlesschwabquant",
             "CLOUD_RUN_REGION": "us-central1",
+            "DIRECT_MONITOR_MIGRATION_COMPLETE": "true",
             "GITHUB_SHA": target_sha,
         }
 
@@ -89,10 +152,15 @@ class ReconcileCloudRuntimeTests(unittest.TestCase):
             "SYNC_PLAN_JSON": json.dumps({"targets": [{"service_name": service}]}),
             "GCP_PROJECT_ID": "charlesschwabquant",
             "CLOUD_RUN_REGION": "us-central1",
+            "DIRECT_MONITOR_MIGRATION_COMPLETE": "true",
+            "DIRECT_MONITOR_SCHEDULERS_RECONCILED": "true",
         }
         existing_jobs = {
             "charles-schwab-service-probe-scheduler",
+            "charles-schwab-service-precheck-scheduler",
             "charles-schwab-probe-scheduler",
+            "charles-schwab-precheck-scheduler",
+            "schwab-monitor-dispatcher-scheduler",
         }
         deleted_jobs: list[str] = []
 
@@ -113,7 +181,226 @@ class ReconcileCloudRuntimeTests(unittest.TestCase):
         self.assertEqual(
             deleted_jobs,
             [
-                "charles-schwab-service-probe-scheduler",
                 "charles-schwab-probe-scheduler",
+                "charles-schwab-precheck-scheduler",
+                "schwab-monitor-dispatcher-scheduler",
             ],
         )
+
+    def test_cleanup_schedulers_keeps_dispatcher_until_direct_jobs_exist(self) -> None:
+        service = "charles-schwab-service"
+        env = {
+            "SYNC_PLAN_JSON": json.dumps({"targets": [{"service_name": service}]}),
+            "GCP_PROJECT_ID": "charlesschwabquant",
+            "CLOUD_RUN_REGION": "us-central1",
+            "DIRECT_MONITOR_MIGRATION_COMPLETE": "true",
+            "DIRECT_MONITOR_SCHEDULERS_RECONCILED": "true",
+        }
+        existing_jobs = {
+            "charles-schwab-service-probe-scheduler",
+            "schwab-monitor-dispatcher-scheduler",
+        }
+        deleted_jobs: list[str] = []
+
+        def fake_run(command, text, capture_output, check):
+            if command[:4] == ["gcloud", "scheduler", "jobs", "describe"]:
+                return _completed(
+                    command,
+                    returncode=0 if command[4] in existing_jobs else 1,
+                    stderr="" if command[4] in existing_jobs else "NOT_FOUND: job does not exist",
+                )
+            if command[:4] == ["gcloud", "scheduler", "jobs", "delete"]:
+                deleted_jobs.append(command[4])
+                return _completed(command)
+            raise AssertionError(f"unexpected command: {command}")
+
+        with patch.object(runtime.subprocess, "run", side_effect=fake_run):
+            runtime.cleanup_schedulers(env)
+
+        self.assertNotIn("schwab-monitor-dispatcher-scheduler", deleted_jobs)
+
+    def test_cleanup_schedulers_keeps_dispatcher_without_current_sync_proof(self) -> None:
+        service = "charles-schwab-service"
+        env = {
+            "SYNC_PLAN_JSON": json.dumps({"targets": [{"service_name": service}]}),
+            "GCP_PROJECT_ID": "charlesschwabquant",
+            "CLOUD_RUN_REGION": "us-central1",
+            "DIRECT_MONITOR_MIGRATION_COMPLETE": "true",
+        }
+        existing_jobs = {
+            "charles-schwab-service-probe-scheduler",
+            "charles-schwab-service-precheck-scheduler",
+            "schwab-monitor-dispatcher-scheduler",
+        }
+        deleted_jobs: list[str] = []
+
+        def fake_run(command, text, capture_output, check):
+            if command[:4] == ["gcloud", "scheduler", "jobs", "describe"]:
+                return _completed(
+                    command,
+                    returncode=0 if command[4] in existing_jobs else 1,
+                    stderr="" if command[4] in existing_jobs else "NOT_FOUND: job does not exist",
+                )
+            if command[:4] == ["gcloud", "scheduler", "jobs", "delete"]:
+                deleted_jobs.append(command[4])
+                return _completed(command)
+            raise AssertionError(f"unexpected command: {command}")
+
+        with patch.object(runtime.subprocess, "run", side_effect=fake_run):
+            runtime.cleanup_schedulers(env)
+
+        self.assertNotIn("schwab-monitor-dispatcher-scheduler", deleted_jobs)
+
+    def test_cleanup_schedulers_keeps_dispatcher_without_migration_confirmation(self) -> None:
+        service = "charles-schwab-service"
+        env = {
+            "SYNC_PLAN_JSON": json.dumps({"targets": [{"service_name": service}]}),
+            "GCP_PROJECT_ID": "charlesschwabquant",
+            "CLOUD_RUN_REGION": "us-central1",
+        }
+        existing_jobs = {
+            "charles-schwab-service-probe-scheduler",
+            "charles-schwab-service-precheck-scheduler",
+            "schwab-monitor-dispatcher-scheduler",
+        }
+        deleted_jobs: list[str] = []
+
+        def fake_run(command, text, capture_output, check):
+            if command[:4] == ["gcloud", "scheduler", "jobs", "describe"]:
+                return _completed(
+                    command,
+                    returncode=0 if command[4] in existing_jobs else 1,
+                    stderr="" if command[4] in existing_jobs else "NOT_FOUND: job does not exist",
+                )
+            if command[:4] == ["gcloud", "scheduler", "jobs", "delete"]:
+                deleted_jobs.append(command[4])
+                return _completed(command)
+            raise AssertionError(f"unexpected command: {command}")
+
+        with patch.object(runtime.subprocess, "run", side_effect=fake_run):
+            runtime.cleanup_schedulers(env)
+
+        self.assertNotIn("schwab-monitor-dispatcher-scheduler", deleted_jobs)
+        self.assertIn("charles-schwab-service-probe-scheduler", deleted_jobs)
+        self.assertIn("charles-schwab-service-precheck-scheduler", deleted_jobs)
+
+    def test_cleanup_schedulers_requires_exact_lowercase_migration_confirmation(self) -> None:
+        service = "charles-schwab-service"
+        env = {
+            "SYNC_PLAN_JSON": json.dumps({"targets": [{"service_name": service}]}),
+            "GCP_PROJECT_ID": "charlesschwabquant",
+            "CLOUD_RUN_REGION": "us-central1",
+            "DIRECT_MONITOR_MIGRATION_COMPLETE": "TRUE",
+            "DIRECT_MONITOR_SCHEDULERS_RECONCILED": "true",
+        }
+        existing_jobs = {
+            "charles-schwab-service-probe-scheduler",
+            "charles-schwab-service-precheck-scheduler",
+            "schwab-monitor-dispatcher-scheduler",
+        }
+        deleted_jobs: list[str] = []
+
+        def fake_run(command, text, capture_output, check):
+            if command[:4] == ["gcloud", "scheduler", "jobs", "describe"]:
+                return _completed(
+                    command,
+                    returncode=0 if command[4] in existing_jobs else 1,
+                    stderr="" if command[4] in existing_jobs else "NOT_FOUND: job does not exist",
+                )
+            if command[:4] == ["gcloud", "scheduler", "jobs", "delete"]:
+                deleted_jobs.append(command[4])
+                return _completed(command)
+            raise AssertionError(f"unexpected command: {command}")
+
+        with patch.object(runtime.subprocess, "run", side_effect=fake_run):
+            runtime.cleanup_schedulers(env)
+
+        self.assertNotIn("schwab-monitor-dispatcher-scheduler", deleted_jobs)
+        self.assertIn("charles-schwab-service-probe-scheduler", deleted_jobs)
+        self.assertIn("charles-schwab-service-precheck-scheduler", deleted_jobs)
+
+    def test_cleanup_schedulers_keeps_dispatcher_for_partial_multi_target_migration(
+        self,
+    ) -> None:
+        service = "charles-schwab-service"
+        secondary_service = "charles-schwab-secondary-service"
+        env = {
+            "SYNC_PLAN_JSON": json.dumps(
+                {
+                    "targets": [
+                        {"service_name": service},
+                        {"service_name": secondary_service},
+                    ]
+                }
+            ),
+            "GCP_PROJECT_ID": "charlesschwabquant",
+            "CLOUD_RUN_REGION": "us-central1",
+            "DIRECT_MONITOR_MIGRATION_COMPLETE": "true",
+            "DIRECT_MONITOR_SCHEDULERS_RECONCILED": "true",
+        }
+        existing_jobs = {
+            "charles-schwab-service-probe-scheduler",
+            "charles-schwab-service-precheck-scheduler",
+            "schwab-monitor-dispatcher-scheduler",
+        }
+        deleted_jobs: list[str] = []
+
+        def fake_run(command, text, capture_output, check):
+            if command[:4] == ["gcloud", "scheduler", "jobs", "describe"]:
+                return _completed(
+                    command,
+                    returncode=0 if command[4] in existing_jobs else 1,
+                    stderr="" if command[4] in existing_jobs else "NOT_FOUND: job does not exist",
+                )
+            if command[:4] == ["gcloud", "scheduler", "jobs", "delete"]:
+                deleted_jobs.append(command[4])
+                return _completed(command)
+            raise AssertionError(f"unexpected command: {command}")
+
+        with patch.object(runtime.subprocess, "run", side_effect=fake_run):
+            runtime.cleanup_schedulers(env)
+
+        self.assertNotIn("schwab-monitor-dispatcher-scheduler", deleted_jobs)
+
+    def test_cleanup_schedulers_deletes_dispatcher_after_all_targets_migrate(self) -> None:
+        service = "charles-schwab-service"
+        secondary_service = "charles-schwab-secondary-service"
+        env = {
+            "SYNC_PLAN_JSON": json.dumps(
+                {
+                    "targets": [
+                        {"service_name": service},
+                        {"service_name": secondary_service},
+                    ]
+                }
+            ),
+            "GCP_PROJECT_ID": "charlesschwabquant",
+            "CLOUD_RUN_REGION": "us-central1",
+            "DIRECT_MONITOR_MIGRATION_COMPLETE": "true",
+            "DIRECT_MONITOR_SCHEDULERS_RECONCILED": "true",
+        }
+        existing_jobs = {
+            f"{service}-probe-scheduler",
+            f"{service}-precheck-scheduler",
+            f"{secondary_service}-probe-scheduler",
+            f"{secondary_service}-precheck-scheduler",
+            "schwab-monitor-dispatcher-scheduler",
+        }
+        deleted_jobs: list[str] = []
+
+        def fake_run(command, text, capture_output, check):
+            if command[:4] == ["gcloud", "scheduler", "jobs", "describe"]:
+                return _completed(
+                    command,
+                    returncode=0 if command[4] in existing_jobs else 1,
+                    stderr="" if command[4] in existing_jobs else "NOT_FOUND: job does not exist",
+                )
+            if command[:4] == ["gcloud", "scheduler", "jobs", "delete"]:
+                deleted_jobs.append(command[4])
+                return _completed(command)
+            raise AssertionError(f"unexpected command: {command}")
+
+        with patch.object(runtime.subprocess, "run", side_effect=fake_run):
+            runtime.cleanup_schedulers(env)
+
+        self.assertIn("schwab-monitor-dispatcher-scheduler", deleted_jobs)

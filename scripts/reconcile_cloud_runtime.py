@@ -41,13 +41,73 @@ def _first_non_empty(*values: object) -> str:
     return ""
 
 
+def _validated_sync_targets(plan: Mapping[str, Any]) -> list[dict[str, Any]]:
+    targets = plan.get("targets")
+    if not isinstance(targets, list) or not targets:
+        raise RuntimeError("Cloud Run env sync did not resolve any targets")
+
+    validated_targets: list[dict[str, Any]] = []
+    service_names: set[str] = set()
+    for candidate in targets:
+        if not isinstance(candidate, Mapping):
+            raise RuntimeError("Cloud Run sync target must be an object")
+        candidate_service = _first_non_empty(candidate.get("service_name"))
+        if not candidate_service:
+            raise RuntimeError("Cloud Run sync target is missing service_name")
+        if candidate_service in service_names:
+            raise RuntimeError(
+                "Expected exactly one sync target per service; "
+                f"duplicate service_name {candidate_service!r}"
+            )
+        service_names.add(candidate_service)
+        validated_target = dict(candidate)
+        validated_target["service_name"] = candidate_service
+        validated_targets.append(validated_target)
+    return validated_targets
+
+
+def select_sync_target(plan: Mapping[str, Any], service: str) -> dict[str, Any]:
+    service_name = _first_non_empty(service)
+    if not service_name:
+        raise RuntimeError("CLOUD_RUN_SERVICE is required")
+
+    matches = [
+        candidate
+        for candidate in _validated_sync_targets(plan)
+        if candidate["service_name"] == service_name
+    ]
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"Expected exactly one sync target for {service_name!r}; found {len(matches)}"
+        )
+    return matches[0]
+
+
 def _service_name(env: Mapping[str, str]) -> str:
+    configured_service = _first_non_empty(env.get("CLOUD_RUN_SERVICE"))
+    targets = _load_sync_plan(env).get("targets")
+    if configured_service and isinstance(targets, list):
+        for candidate in targets:
+            if not isinstance(candidate, Mapping):
+                continue
+            candidate_service = _first_non_empty(
+                candidate.get("service_name"),
+                candidate.get("service"),
+                candidate.get("cloud_run_service"),
+            )
+            if candidate_service == configured_service:
+                return configured_service
+        if targets:
+            raise RuntimeError(
+                f"CLOUD_RUN_SERVICE {configured_service} does not match any SYNC_PLAN_JSON target"
+            )
+
     target = _primary_target(env)
     service = _first_non_empty(
         target.get("service_name"),
         target.get("service"),
         target.get("cloud_run_service"),
-        env.get("CLOUD_RUN_SERVICE"),
+        configured_service,
     )
     if not service:
         raise RuntimeError("CLOUD_RUN_SERVICE or SYNC_PLAN_JSON.targets[0].service_name is required")
@@ -221,10 +281,7 @@ def _legacy_scheduler_jobs(service: str) -> list[str]:
     service_name = service.strip()
     if not service_name:
         return []
-    candidates = [
-        f"{service_name}-probe-scheduler",
-        f"{service_name}-precheck-scheduler",
-    ]
+    candidates = []
     if service_name.endswith("-service"):
         base_service = service_name.removesuffix("-service")
         candidates.extend(
@@ -233,7 +290,33 @@ def _legacy_scheduler_jobs(service: str) -> list[str]:
                 f"{base_service}-precheck-scheduler",
             ]
         )
+    candidates.append("schwab-monitor-dispatcher-scheduler")
     return list(dict.fromkeys(candidates))
+
+
+def _scheduler_job_exists(*, job_name: str, project: str, location: str) -> bool:
+    result = subprocess.run(
+        [
+            "gcloud",
+            "scheduler",
+            "jobs",
+            "describe",
+            job_name,
+            "--project",
+            project,
+            "--location",
+            location,
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return True
+    if _is_not_found(result):
+        return False
+    detail = (result.stderr or result.stdout or "").strip()
+    raise RuntimeError(detail or f"gcloud scheduler jobs describe {job_name} failed")
 
 
 def cleanup_schedulers(env: Mapping[str, str] = os.environ) -> None:
@@ -243,28 +326,53 @@ def cleanup_schedulers(env: Mapping[str, str] = os.environ) -> None:
     if not location:
         raise RuntimeError("CLOUD_SCHEDULER_LOCATION or CLOUD_RUN_REGION is required")
 
-    for job_name in _legacy_scheduler_jobs(service):
-        result = subprocess.run(
-            [
-                "gcloud",
-                "scheduler",
-                "jobs",
-                "describe",
-                job_name,
-                "--project",
-                project,
-                "--location",
-                location,
-            ],
-            text=True,
-            capture_output=True,
-            check=False,
+    legacy_jobs = _legacy_scheduler_jobs(service)
+    dispatcher_job = "schwab-monitor-dispatcher-scheduler"
+    direct_jobs = (
+        f"{service}-probe-scheduler",
+        f"{service}-precheck-scheduler",
+    )
+    sync_plan = _load_sync_plan(env)
+    target_services = (
+        [target["service_name"] for target in _validated_sync_targets(sync_plan)]
+        if sync_plan
+        else [service]
+    )
+    all_direct_jobs = tuple(
+        job
+        for target_service in target_services
+        for job in (
+            f"{target_service}-probe-scheduler",
+            f"{target_service}-precheck-scheduler",
         )
-        if result.returncode != 0:
-            if _is_not_found(result):
-                continue
-            detail = (result.stderr or result.stdout or "").strip()
-            raise RuntimeError(detail or f"gcloud scheduler jobs describe {job_name} failed")
+    )
+    migration_confirmed = (
+        str(env.get("DIRECT_MONITOR_MIGRATION_COMPLETE") or "").strip() == "true"
+    )
+    current_sync_confirmed = (
+        str(env.get("DIRECT_MONITOR_SCHEDULERS_RECONCILED") or "").strip().lower()
+        == "true"
+    )
+    if not migration_confirmed:
+        legacy_jobs = list(dict.fromkeys([*direct_jobs, *legacy_jobs]))
+    direct_migration_complete = (
+        migration_confirmed
+        and current_sync_confirmed
+        # The dispatcher is shared, so partial multi-target cutovers must keep it.
+        and all(
+            _scheduler_job_exists(job_name=job, project=project, location=location)
+            for job in all_direct_jobs
+        )
+    )
+    if dispatcher_job in legacy_jobs and not direct_migration_complete:
+        legacy_jobs.remove(dispatcher_job)
+        print(
+            f"Keeping legacy Cloud Scheduler job {dispatcher_job} until direct monitor jobs exist."
+        )
+
+    for job_name in legacy_jobs:
+        if not _scheduler_job_exists(job_name=job_name, project=project, location=location):
+            continue
         print(f"Deleting legacy Cloud Scheduler job {job_name}.")
         _gcloud(
             [
