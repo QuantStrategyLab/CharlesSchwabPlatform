@@ -252,6 +252,7 @@ class ReconcileCloudRuntimeTests(unittest.TestCase):
             "GCP_PROJECT_ID": "charlesschwabquant",
             "CLOUD_RUN_REGION": "us-central1",
             "DIRECT_MONITOR_MIGRATION_COMPLETE": "true",
+            "DIRECT_MONITOR_CUTOVER_VERIFIED": "true",
             "DIRECT_MONITOR_SCHEDULERS_RECONCILED": "true",
         }
         existing_jobs = {
@@ -305,6 +306,7 @@ class ReconcileCloudRuntimeTests(unittest.TestCase):
             "GCP_PROJECT_ID": "charlesschwabquant",
             "CLOUD_RUN_REGION": "us-central1",
             "DIRECT_MONITOR_MIGRATION_COMPLETE": "true",
+            "DIRECT_MONITOR_CUTOVER_VERIFIED": "true",
             "DIRECT_MONITOR_SCHEDULERS_RECONCILED": "true",
         }
         existing_jobs = {
@@ -345,6 +347,7 @@ class ReconcileCloudRuntimeTests(unittest.TestCase):
             "GCP_PROJECT_ID": "charlesschwabquant",
             "CLOUD_RUN_REGION": "us-central1",
             "DIRECT_MONITOR_MIGRATION_COMPLETE": "true",
+            "DIRECT_MONITOR_CUTOVER_VERIFIED": "true",
         }
         existing_jobs = {
             "charles-schwab-service-probe-scheduler",
@@ -370,6 +373,48 @@ class ReconcileCloudRuntimeTests(unittest.TestCase):
                     returncode=0 if command[4] in existing_jobs else 1,
                     stdout=stdout,
                     stderr="" if command[4] in existing_jobs else "NOT_FOUND: job does not exist",
+                )
+            if command[:4] == ["gcloud", "scheduler", "jobs", "delete"]:
+                deleted_jobs.append(command[4])
+                return _completed(command)
+            raise AssertionError(f"unexpected command: {command}")
+
+        with patch.object(runtime.subprocess, "run", side_effect=fake_run):
+            runtime.cleanup_schedulers(env)
+
+        self.assertNotIn("schwab-monitor-dispatcher-scheduler", deleted_jobs)
+
+    def test_cleanup_schedulers_keeps_dispatcher_without_cutover_verification(
+        self,
+    ) -> None:
+        service = "charles-schwab-service"
+        env = {
+            "SYNC_PLAN_JSON": json.dumps({"targets": [{"service_name": service}]}),
+            "GCP_PROJECT_ID": "charlesschwabquant",
+            "CLOUD_RUN_REGION": "us-central1",
+            "DIRECT_MONITOR_MIGRATION_COMPLETE": "true",
+            "DIRECT_MONITOR_SCHEDULERS_RECONCILED": "true",
+        }
+        existing_jobs = {
+            f"{service}-probe-scheduler",
+            f"{service}-precheck-scheduler",
+            "schwab-monitor-dispatcher-scheduler",
+        }
+        deleted_jobs: list[str] = []
+
+        def fake_run(command, text, capture_output, check):
+            if command[:4] == ["gcloud", "scheduler", "jobs", "describe"]:
+                job_name = command[4]
+                return _completed(
+                    command,
+                    returncode=0 if job_name in existing_jobs else 1,
+                    stdout=(
+                        runtime.DIRECT_MONITOR_SCHEDULER_DESCRIPTION
+                        if "--format=value(description)" in command
+                        and job_name != "schwab-monitor-dispatcher-scheduler"
+                        else ""
+                    ),
+                    stderr="" if job_name in existing_jobs else "NOT_FOUND: job does not exist",
                 )
             if command[:4] == ["gcloud", "scheduler", "jobs", "delete"]:
                 deleted_jobs.append(command[4])
@@ -421,6 +466,7 @@ class ReconcileCloudRuntimeTests(unittest.TestCase):
             "GCP_PROJECT_ID": "charlesschwabquant",
             "CLOUD_RUN_REGION": "us-central1",
             "DIRECT_MONITOR_MIGRATION_COMPLETE": "TRUE",
+            "DIRECT_MONITOR_CUTOVER_VERIFIED": "true",
             "DIRECT_MONITOR_SCHEDULERS_RECONCILED": "true",
         }
         existing_jobs = {
@@ -466,6 +512,7 @@ class ReconcileCloudRuntimeTests(unittest.TestCase):
             "GCP_PROJECT_ID": "charlesschwabquant",
             "CLOUD_RUN_REGION": "us-central1",
             "DIRECT_MONITOR_MIGRATION_COMPLETE": "true",
+            "DIRECT_MONITOR_CUTOVER_VERIFIED": "true",
             "DIRECT_MONITOR_SCHEDULERS_RECONCILED": "true",
         }
         existing_jobs = {
@@ -518,6 +565,7 @@ class ReconcileCloudRuntimeTests(unittest.TestCase):
             "GCP_PROJECT_ID": "charlesschwabquant",
             "CLOUD_RUN_REGION": "us-central1",
             "DIRECT_MONITOR_MIGRATION_COMPLETE": "true",
+            "DIRECT_MONITOR_CUTOVER_VERIFIED": "true",
             "DIRECT_MONITOR_SCHEDULERS_RECONCILED": "true",
         }
         existing_jobs = {
@@ -572,6 +620,7 @@ class ReconcileCloudRuntimeTests(unittest.TestCase):
             "GCP_PROJECT_ID": "charlesschwabquant",
             "CLOUD_RUN_REGION": "us-central1",
             "DIRECT_MONITOR_MIGRATION_COMPLETE": "true",
+            "DIRECT_MONITOR_CUTOVER_VERIFIED": "true",
             "DIRECT_MONITOR_SCHEDULERS_RECONCILED": "true",
         }
         existing_jobs = {
@@ -605,6 +654,78 @@ class ReconcileCloudRuntimeTests(unittest.TestCase):
 
         self.assertIn("schwab-monitor-dispatcher-scheduler", deleted_jobs)
 
+    def test_cleanup_schedulers_keeps_dispatcher_for_active_disabled_target_jobs(
+        self,
+    ) -> None:
+        service = "charles-schwab-service"
+        disabled_service = "charles-schwab-disabled-service"
+        env = {
+            "SYNC_PLAN_JSON": json.dumps(
+                {
+                    "targets": [
+                        {"service_name": service},
+                        {
+                            "service_name": disabled_service,
+                            "env": {"RUNTIME_TARGET_ENABLED": "false"},
+                        },
+                    ]
+                }
+            ),
+            "GCP_PROJECT_ID": "charlesschwabquant",
+            "CLOUD_RUN_REGION": "us-central1",
+            "DIRECT_MONITOR_MIGRATION_COMPLETE": "true",
+            "DIRECT_MONITOR_CUTOVER_VERIFIED": "true",
+            "DIRECT_MONITOR_SCHEDULERS_RECONCILED": "true",
+        }
+        enabled_jobs = {
+            f"{service}-probe-scheduler",
+            f"{service}-precheck-scheduler",
+        }
+        disabled_jobs = {
+            f"{disabled_service}-probe-scheduler",
+            f"{disabled_service}-precheck-scheduler",
+        }
+        existing_jobs = {
+            *enabled_jobs,
+            *disabled_jobs,
+            "schwab-monitor-dispatcher-scheduler",
+        }
+        deleted_jobs: list[str] = []
+
+        def fake_run(command, text, capture_output, check):
+            if command[:4] == ["gcloud", "scheduler", "jobs", "describe"]:
+                job_name = command[4]
+                if job_name not in existing_jobs:
+                    return _completed(
+                        command,
+                        returncode=1,
+                        stderr="NOT_FOUND: job does not exist",
+                    )
+                if "--format=value(description)" in command:
+                    return _completed(
+                        command,
+                        stdout=(
+                            runtime.DIRECT_MONITOR_SCHEDULER_DESCRIPTION
+                            if job_name in enabled_jobs
+                            else ""
+                        ),
+                    )
+                if "--format=json" in command:
+                    return _completed(
+                        command,
+                        stdout=json.dumps({"description": "", "state": "ENABLED"}),
+                    )
+                return _completed(command)
+            if command[:4] == ["gcloud", "scheduler", "jobs", "delete"]:
+                deleted_jobs.append(command[4])
+                return _completed(command)
+            raise AssertionError(f"unexpected command: {command}")
+
+        with patch.object(runtime.subprocess, "run", side_effect=fake_run):
+            runtime.cleanup_schedulers(env)
+
+        self.assertNotIn("schwab-monitor-dispatcher-scheduler", deleted_jobs)
+
     def test_cleanup_schedulers_keeps_dispatcher_for_unmarked_direct_jobs(self) -> None:
         service = "charles-schwab-service"
         secondary_service = "charles-schwab-secondary-service"
@@ -620,6 +741,7 @@ class ReconcileCloudRuntimeTests(unittest.TestCase):
             "GCP_PROJECT_ID": "charlesschwabquant",
             "CLOUD_RUN_REGION": "us-central1",
             "DIRECT_MONITOR_MIGRATION_COMPLETE": "true",
+            "DIRECT_MONITOR_CUTOVER_VERIFIED": "true",
             "DIRECT_MONITOR_SCHEDULERS_RECONCILED": "true",
         }
         existing_jobs = {

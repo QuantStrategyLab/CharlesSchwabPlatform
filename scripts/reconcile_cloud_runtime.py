@@ -448,6 +448,47 @@ def _scheduler_job_has_direct_monitor_marker(
     raise RuntimeError(detail or f"gcloud scheduler jobs describe {job_name} failed")
 
 
+def _disabled_direct_monitor_job_is_safe(
+    *,
+    job_name: str,
+    project: str,
+    location: str,
+) -> bool:
+    result = subprocess.run(
+        [
+            "gcloud",
+            "scheduler",
+            "jobs",
+            "describe",
+            job_name,
+            "--project",
+            project,
+            "--location",
+            location,
+            "--format=json",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if _is_not_found(result):
+        return True
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(detail or f"gcloud scheduler jobs describe {job_name} failed")
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"gcloud returned invalid scheduler JSON: {exc}") from exc
+    if not isinstance(payload, Mapping):
+        raise RuntimeError("gcloud returned invalid scheduler payload")
+    return (
+        _first_non_empty(payload.get("description"))
+        == DIRECT_MONITOR_SCHEDULER_DESCRIPTION
+        and _first_non_empty(payload.get("state")).upper() == "PAUSED"
+    )
+
+
 def cleanup_schedulers(env: Mapping[str, str] = os.environ) -> None:
     service = _service_name(env)
     project = _project_id(env)
@@ -462,18 +503,26 @@ def cleanup_schedulers(env: Mapping[str, str] = os.environ) -> None:
         f"{service}-precheck-scheduler",
     )
     sync_plan = _load_sync_plan(env)
-    target_services = (
-        [
-            target["service_name"]
-            for target in _validated_sync_targets(sync_plan)
-            if _sync_target_enabled(target)
-        ]
+    sync_targets = (
+        _validated_sync_targets(sync_plan)
         if sync_plan
-        else [service]
+        else [{"service_name": service, "env": {}}]
     )
-    all_direct_jobs = tuple(
+    enabled_direct_jobs = tuple(
         job
-        for target_service in target_services
+        for target in sync_targets
+        if _sync_target_enabled(target)
+        for target_service in [target["service_name"]]
+        for job in (
+            f"{target_service}-probe-scheduler",
+            f"{target_service}-precheck-scheduler",
+        )
+    )
+    disabled_direct_jobs = tuple(
+        job
+        for target in sync_targets
+        if not _sync_target_enabled(target)
+        for target_service in [target["service_name"]]
         for job in (
             f"{target_service}-probe-scheduler",
             f"{target_service}-precheck-scheduler",
@@ -486,10 +535,14 @@ def cleanup_schedulers(env: Mapping[str, str] = os.environ) -> None:
         str(env.get("DIRECT_MONITOR_SCHEDULERS_RECONCILED") or "").strip().lower()
         == "true"
     )
+    cutover_verified = (
+        str(env.get("DIRECT_MONITOR_CUTOVER_VERIFIED") or "").strip() == "true"
+    )
     if not migration_confirmed:
         legacy_jobs = list(dict.fromkeys([*direct_jobs, *legacy_jobs]))
     direct_migration_complete = (
         migration_confirmed
+        and cutover_verified
         and current_sync_confirmed
         # The dispatcher is shared, so partial multi-target cutovers must keep it.
         and all(
@@ -498,7 +551,15 @@ def cleanup_schedulers(env: Mapping[str, str] = os.environ) -> None:
                 project=project,
                 location=location,
             )
-            for job in all_direct_jobs
+            for job in enabled_direct_jobs
+        )
+        and all(
+            _disabled_direct_monitor_job_is_safe(
+                job_name=job,
+                project=project,
+                location=location,
+            )
+            for job in disabled_direct_jobs
         )
     )
     if dispatcher_job in legacy_jobs and not direct_migration_complete:

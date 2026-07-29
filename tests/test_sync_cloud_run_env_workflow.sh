@@ -29,8 +29,11 @@ grep -Fq 'scheduler = target.get("scheduler") or {}' "$workflow_file"
 grep -Fq 'ENABLE_GITHUB_ENV_SYNC: ${{ vars.ENABLE_GITHUB_ENV_SYNC }}' "$workflow_file"
 grep -Fq 'CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}' "$workflow_file"
 grep -Fq 'CLOUD_RUN_SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}' "$workflow_file"
-grep -Fq 'CLOUD_RUN_SERVICES: ${{ vars.CLOUD_RUN_SERVICES }}' "$workflow_file"
 grep -Fq 'CLOUD_RUN_SERVICE_TARGETS_JSON: ${{ vars.CLOUD_RUN_SERVICE_TARGETS_JSON }}' "$workflow_file"
+if grep -Fq 'CLOUD_RUN_SERVICES: ${{ vars.CLOUD_RUN_SERVICES }}' "$workflow_file"; then
+  echo "deploy workflow must not reuse the runtime-guard fleet list" >&2
+  exit 1
+fi
 grep -Fq 'CLOUD_SCHEDULER_LOCATION: ${{ vars.CLOUD_SCHEDULER_LOCATION }}' "$workflow_file"
 grep -Fq 'CLOUD_SCHEDULER_MAIN_TIME: ${{ vars.CLOUD_SCHEDULER_MAIN_TIME }}' "$workflow_file"
 grep -Fq 'CLOUD_SCHEDULER_PROBE_TIME: ${{ vars.CLOUD_SCHEDULER_PROBE_TIME }}' "$workflow_file"
@@ -240,6 +243,7 @@ if grep -Fq 'managed_scheduler_jobs+=("${monitor_job_name}")' "$workflow_file"; 
   exit 1
 fi
 grep -Fq 'DIRECT_MONITOR_MIGRATION_COMPLETE: ${{ vars.DIRECT_MONITOR_MIGRATION_COMPLETE }}' "$workflow_file"
+grep -Fq 'DIRECT_MONITOR_CUTOVER_VERIFIED: ${{ vars.DIRECT_MONITOR_CUTOVER_VERIFIED }}' "$workflow_file"
 if grep -Fq 'DIRECT_MONITOR_MIGRATION_COMPLETE: "true"' "$workflow_file"; then
   echo "direct monitor migration must not be enabled implicitly" >&2
   exit 1
