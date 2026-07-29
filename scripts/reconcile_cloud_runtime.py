@@ -448,6 +448,37 @@ def _scheduler_job_has_direct_monitor_marker(
     raise RuntimeError(detail or f"gcloud scheduler jobs describe {job_name} failed")
 
 
+def _scheduler_job_is_enabled(
+    *,
+    job_name: str,
+    project: str,
+    location: str,
+) -> bool:
+    result = subprocess.run(
+        [
+            "gcloud",
+            "scheduler",
+            "jobs",
+            "describe",
+            job_name,
+            "--project",
+            project,
+            "--location",
+            location,
+            "--format=value(state)",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return (result.stdout or "").strip().upper() == "ENABLED"
+    if _is_not_found(result):
+        return False
+    detail = (result.stderr or result.stdout or "").strip()
+    raise RuntimeError(detail or f"gcloud scheduler jobs describe {job_name} failed")
+
+
 def _disabled_direct_monitor_job_is_safe(
     *,
     job_name: str,
@@ -547,6 +578,11 @@ def cleanup_schedulers(env: Mapping[str, str] = os.environ) -> None:
         # The dispatcher is shared, so partial multi-target cutovers must keep it.
         and all(
             _scheduler_job_has_direct_monitor_marker(
+                job_name=job,
+                project=project,
+                location=location,
+            )
+            and _scheduler_job_is_enabled(
                 job_name=job,
                 project=project,
                 location=location,

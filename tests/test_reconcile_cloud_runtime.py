@@ -278,6 +278,9 @@ class ReconcileCloudRuntimeTests(unittest.TestCase):
                             runtime.DIRECT_MONITOR_SCHEDULER_DESCRIPTION
                             if "--format=value(description)" in command
                             and job_name in marked_jobs
+                            else "ENABLED"
+                            if "--format=value(state)" in command
+                            and job_name in marked_jobs
                             else ""
                         ),
                     )
@@ -322,6 +325,9 @@ class ReconcileCloudRuntimeTests(unittest.TestCase):
                     runtime.DIRECT_MONITOR_SCHEDULER_DESCRIPTION
                     if "--format=value(description)" in command
                     and command[4] in marked_jobs
+                    else "ENABLED"
+                    if "--format=value(state)" in command
+                    and command[4] in marked_jobs
                     else ""
                 )
                 return _completed(
@@ -365,6 +371,9 @@ class ReconcileCloudRuntimeTests(unittest.TestCase):
                 stdout = (
                     runtime.DIRECT_MONITOR_SCHEDULER_DESCRIPTION
                     if "--format=value(description)" in command
+                    and command[4] in marked_jobs
+                    else "ENABLED"
+                    if "--format=value(state)" in command
                     and command[4] in marked_jobs
                     else ""
                 )
@@ -411,6 +420,9 @@ class ReconcileCloudRuntimeTests(unittest.TestCase):
                     stdout=(
                         runtime.DIRECT_MONITOR_SCHEDULER_DESCRIPTION
                         if "--format=value(description)" in command
+                        and job_name != "schwab-monitor-dispatcher-scheduler"
+                        else "ENABLED"
+                        if "--format=value(state)" in command
                         and job_name != "schwab-monitor-dispatcher-scheduler"
                         else ""
                     ),
@@ -532,6 +544,9 @@ class ReconcileCloudRuntimeTests(unittest.TestCase):
                     runtime.DIRECT_MONITOR_SCHEDULER_DESCRIPTION
                     if "--format=value(description)" in command
                     and command[4] in marked_jobs
+                    else "ENABLED"
+                    if "--format=value(state)" in command
+                    and command[4] in marked_jobs
                     else ""
                 )
                 return _completed(
@@ -584,6 +599,9 @@ class ReconcileCloudRuntimeTests(unittest.TestCase):
                     runtime.DIRECT_MONITOR_SCHEDULER_DESCRIPTION
                     if "--format=value(description)" in command
                     and command[4] in marked_jobs
+                    else "ENABLED"
+                    if "--format=value(state)" in command
+                    and command[4] in marked_jobs
                     else ""
                 )
                 return _completed(
@@ -601,6 +619,71 @@ class ReconcileCloudRuntimeTests(unittest.TestCase):
             runtime.cleanup_schedulers(env)
 
         self.assertIn("schwab-monitor-dispatcher-scheduler", deleted_jobs)
+
+    def test_cleanup_schedulers_keeps_dispatcher_for_paused_enabled_target(self) -> None:
+        service = "charles-schwab-service"
+        secondary_service = "charles-schwab-secondary-service"
+        env = {
+            "SYNC_PLAN_JSON": json.dumps(
+                {
+                    "targets": [
+                        {"service_name": service},
+                        {"service_name": secondary_service},
+                    ]
+                }
+            ),
+            "GCP_PROJECT_ID": "charlesschwabquant",
+            "CLOUD_RUN_REGION": "us-central1",
+            "DIRECT_MONITOR_MIGRATION_COMPLETE": "true",
+            "DIRECT_MONITOR_CUTOVER_VERIFIED": "true",
+            "DIRECT_MONITOR_SCHEDULERS_RECONCILED": "true",
+        }
+        direct_jobs = {
+            f"{service}-probe-scheduler",
+            f"{service}-precheck-scheduler",
+            f"{secondary_service}-probe-scheduler",
+            f"{secondary_service}-precheck-scheduler",
+        }
+        paused_jobs = {
+            f"{secondary_service}-probe-scheduler",
+            f"{secondary_service}-precheck-scheduler",
+        }
+        existing_jobs = {*direct_jobs, "schwab-monitor-dispatcher-scheduler"}
+        deleted_jobs: list[str] = []
+
+        def fake_run(command, text, capture_output, check):
+            if command[:4] == ["gcloud", "scheduler", "jobs", "describe"]:
+                job_name = command[4]
+                if job_name not in existing_jobs:
+                    return _completed(
+                        command,
+                        returncode=1,
+                        stderr="NOT_FOUND: job does not exist",
+                    )
+                if "--format=value(description)" in command:
+                    return _completed(
+                        command,
+                        stdout=(
+                            runtime.DIRECT_MONITOR_SCHEDULER_DESCRIPTION
+                            if job_name in direct_jobs
+                            else ""
+                        ),
+                    )
+                if "--format=value(state)" in command:
+                    return _completed(
+                        command,
+                        stdout="PAUSED" if job_name in paused_jobs else "ENABLED",
+                    )
+                return _completed(command)
+            if command[:4] == ["gcloud", "scheduler", "jobs", "delete"]:
+                deleted_jobs.append(command[4])
+                return _completed(command)
+            raise AssertionError(f"unexpected command: {command}")
+
+        with patch.object(runtime.subprocess, "run", side_effect=fake_run):
+            runtime.cleanup_schedulers(env)
+
+        self.assertNotIn("schwab-monitor-dispatcher-scheduler", deleted_jobs)
 
     def test_cleanup_schedulers_ignores_disabled_targets_for_cutover(self) -> None:
         service = "charles-schwab-service"
@@ -639,6 +722,9 @@ class ReconcileCloudRuntimeTests(unittest.TestCase):
                     stdout=(
                         runtime.DIRECT_MONITOR_SCHEDULER_DESCRIPTION
                         if "--format=value(description)" in command
+                        and job_name != "schwab-monitor-dispatcher-scheduler"
+                        else "ENABLED"
+                        if "--format=value(state)" in command
                         and job_name != "schwab-monitor-dispatcher-scheduler"
                         else ""
                     ),
@@ -709,6 +795,11 @@ class ReconcileCloudRuntimeTests(unittest.TestCase):
                             if job_name in enabled_jobs
                             else ""
                         ),
+                    )
+                if "--format=value(state)" in command:
+                    return _completed(
+                        command,
+                        stdout="ENABLED" if job_name in enabled_jobs else "PAUSED",
                     )
                 if "--format=json" in command:
                     return _completed(
