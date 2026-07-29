@@ -88,6 +88,20 @@ def select_sync_target(plan: Mapping[str, Any], service: str) -> dict[str, Any]:
     return matches[0]
 
 
+def _sync_target_enabled(target: Mapping[str, Any]) -> bool:
+    target_env = target.get("env") or {}
+    if not isinstance(target_env, Mapping):
+        service = _first_non_empty(target.get("service_name")) or "<unknown>"
+        raise RuntimeError(f"Cloud Run sync target {service} is missing env")
+    raw = _first_non_empty(target_env.get("RUNTIME_TARGET_ENABLED")) or "true"
+    normalized = raw.lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError("RUNTIME_TARGET_ENABLED must be true or false")
+
+
 def _service_name(env: Mapping[str, str]) -> str:
     configured_service = _first_non_empty(env.get("CLOUD_RUN_SERVICE"))
     targets = _load_sync_plan(env).get("targets")
@@ -191,10 +205,12 @@ def build_monitor_targets(env: Mapping[str, str] = os.environ) -> dict[str, Any]
     plan = _load_sync_plan(env)
     targets = _validated_sync_targets(plan)
     project = _project_id(env)
-    region = _region(env)
+    default_region = _region(env)
     payloads: list[dict[str, Any]] = []
 
     for target in targets:
+        if not _sync_target_enabled(target):
+            continue
         service = target["service_name"]
         target_env = target.get("env") or {}
         if not isinstance(target_env, Mapping):
@@ -223,7 +239,12 @@ def build_monitor_targets(env: Mapping[str, str] = os.environ) -> dict[str, Any]
                 "service_url": _cloud_run_service_url(
                     service=service,
                     project=project,
-                    region=region,
+                    region=_first_non_empty(
+                        target.get("region"),
+                        target.get("cloud_run_region"),
+                        target.get("location"),
+                        default_region,
+                    ),
                 ),
                 "strategy_profile": target.get("strategy_profile")
                 or target_env.get("STRATEGY_PROFILE"),
@@ -442,7 +463,11 @@ def cleanup_schedulers(env: Mapping[str, str] = os.environ) -> None:
     )
     sync_plan = _load_sync_plan(env)
     target_services = (
-        [target["service_name"] for target in _validated_sync_targets(sync_plan)]
+        [
+            target["service_name"]
+            for target in _validated_sync_targets(sync_plan)
+            if _sync_target_enabled(target)
+        ]
         if sync_plan
         else [service]
     )

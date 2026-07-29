@@ -418,7 +418,7 @@ def _build_target_plan(
             + "\n".join(f"  - {item}" for item in missing)
         )
 
-    return {
+    target_plan = {
         "service_name": service_name,
         "strategy_profile": canonical_profile,
         "env": env_values,
@@ -431,6 +431,17 @@ def _build_target_plan(
         ),
         "remove_env_vars": sorted(set(remove_env_vars) - set(env_values)),
     }
+    target_region = _first_non_empty(
+        _target_field(target, defaults, "region"),
+        _target_field(target, defaults, "cloud_run_region"),
+        _target_field(target, defaults, "location"),
+        runtime_target.get("region"),
+        runtime_target.get("cloud_run_region"),
+        runtime_target.get("location"),
+    )
+    if target_region is not None:
+        target_plan["region"] = str(target_region).strip()
+    return target_plan
 
 
 def _build_scheduler_plan(
