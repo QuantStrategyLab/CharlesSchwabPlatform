@@ -260,6 +260,7 @@ class ReconcileCloudRuntimeTests(unittest.TestCase):
             "charles-schwab-service-precheck-scheduler",
             "charles-schwab-probe-scheduler",
             "charles-schwab-precheck-scheduler",
+            "schwab-pre-market-dry-run",
             "schwab-monitor-dispatcher-scheduler",
         }
         marked_jobs = {
@@ -298,6 +299,7 @@ class ReconcileCloudRuntimeTests(unittest.TestCase):
             [
                 "charles-schwab-probe-scheduler",
                 "charles-schwab-precheck-scheduler",
+                "schwab-pre-market-dry-run",
                 "schwab-monitor-dispatcher-scheduler",
             ],
         )
