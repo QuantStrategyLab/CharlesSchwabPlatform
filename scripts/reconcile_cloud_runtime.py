@@ -388,6 +388,7 @@ def _legacy_scheduler_jobs(service: str) -> list[str]:
                 f"{base_service}-precheck-scheduler",
             ]
         )
+    candidates.append("schwab-pre-market-dry-run")
     candidates.append("schwab-monitor-dispatcher-scheduler")
     return list(dict.fromkeys(candidates))
 
