@@ -10,6 +10,11 @@ from collections.abc import Mapping
 from typing import Any
 
 
+DIRECT_MONITOR_SCHEDULER_DESCRIPTION = (
+    "Managed by CharlesSchwabPlatform direct-monitor-v1"
+)
+
+
 def _load_sync_plan(env: Mapping[str, str]) -> dict[str, Any]:
     raw = (env.get("SYNC_PLAN_JSON") or "").strip()
     if not raw:
@@ -159,6 +164,78 @@ def _gcloud_json(args: list[str]) -> Any:
         return json.loads(payload)
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"gcloud returned invalid JSON: {exc}") from exc
+
+
+def _cloud_run_service_url(*, service: str, project: str, region: str) -> str:
+    payload = _gcloud_json(
+        [
+            "run",
+            "services",
+            "describe",
+            service,
+            "--project",
+            project,
+            "--region",
+            region,
+            "--format=json",
+        ]
+    )
+    status = payload.get("status") if isinstance(payload, Mapping) else None
+    url = _first_non_empty(status.get("url") if isinstance(status, Mapping) else None)
+    if not url:
+        raise RuntimeError(f"Cloud Run service {service!r} did not report a URL")
+    return url
+
+
+def build_monitor_targets(env: Mapping[str, str] = os.environ) -> dict[str, Any]:
+    plan = _load_sync_plan(env)
+    targets = _validated_sync_targets(plan)
+    project = _project_id(env)
+    region = _region(env)
+    payloads: list[dict[str, Any]] = []
+
+    for target in targets:
+        service = target["service_name"]
+        target_env = target.get("env") or {}
+        if not isinstance(target_env, Mapping):
+            raise RuntimeError(f"Cloud Run sync target {service} is missing env")
+
+        runtime_target_raw = target_env.get("RUNTIME_TARGET_JSON") or "{}"
+        if isinstance(runtime_target_raw, Mapping):
+            runtime_target = runtime_target_raw
+        else:
+            try:
+                runtime_target = json.loads(str(runtime_target_raw))
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    f"RUNTIME_TARGET_JSON for {service} is invalid: {exc}"
+                ) from exc
+        if not isinstance(runtime_target, Mapping):
+            raise RuntimeError(f"RUNTIME_TARGET_JSON for {service} must be an object")
+
+        scheduler = target.get("scheduler") or {}
+        if not isinstance(scheduler, Mapping):
+            raise RuntimeError(f"Cloud Run sync target {service} has invalid scheduler")
+
+        payloads.append(
+            {
+                "service_name": service,
+                "service_url": _cloud_run_service_url(
+                    service=service,
+                    project=project,
+                    region=region,
+                ),
+                "strategy_profile": target.get("strategy_profile")
+                or target_env.get("STRATEGY_PROFILE"),
+                "account_scope": runtime_target.get("account_scope"),
+                "runtime_target_enabled": target_env.get(
+                    "RUNTIME_TARGET_ENABLED", "true"
+                ),
+                "scheduler": dict(scheduler),
+            }
+        )
+
+    return {"targets": payloads}
 
 
 def _revision_commit_sha(
@@ -319,6 +396,37 @@ def _scheduler_job_exists(*, job_name: str, project: str, location: str) -> bool
     raise RuntimeError(detail or f"gcloud scheduler jobs describe {job_name} failed")
 
 
+def _scheduler_job_has_direct_monitor_marker(
+    *,
+    job_name: str,
+    project: str,
+    location: str,
+) -> bool:
+    result = subprocess.run(
+        [
+            "gcloud",
+            "scheduler",
+            "jobs",
+            "describe",
+            job_name,
+            "--project",
+            project,
+            "--location",
+            location,
+            "--format=value(description)",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode == 0:
+        return (result.stdout or "").strip() == DIRECT_MONITOR_SCHEDULER_DESCRIPTION
+    if _is_not_found(result):
+        return False
+    detail = (result.stderr or result.stdout or "").strip()
+    raise RuntimeError(detail or f"gcloud scheduler jobs describe {job_name} failed")
+
+
 def cleanup_schedulers(env: Mapping[str, str] = os.environ) -> None:
     service = _service_name(env)
     project = _project_id(env)
@@ -360,7 +468,11 @@ def cleanup_schedulers(env: Mapping[str, str] = os.environ) -> None:
         and current_sync_confirmed
         # The dispatcher is shared, so partial multi-target cutovers must keep it.
         and all(
-            _scheduler_job_exists(job_name=job, project=project, location=location)
+            _scheduler_job_has_direct_monitor_marker(
+                job_name=job,
+                project=project,
+                location=location,
+            )
             for job in all_direct_jobs
         )
     )
@@ -392,11 +504,17 @@ def cleanup_schedulers(env: Mapping[str, str] = os.environ) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Reconcile Cloud Run runtime state.")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers.add_parser(
+        "build-monitor-targets",
+        help="Resolve every sync target into a monitor dispatcher payload.",
+    )
     subparsers.add_parser("reconcile-traffic", help="Ensure latest Cloud Run revision receives traffic.")
     subparsers.add_parser("cleanup-schedulers", help="Delete whitelisted legacy Cloud Scheduler jobs.")
     args = parser.parse_args(argv)
 
-    if args.command == "reconcile-traffic":
+    if args.command == "build-monitor-targets":
+        print(json.dumps(build_monitor_targets(), separators=(",", ":")))
+    elif args.command == "reconcile-traffic":
         reconcile_traffic()
     elif args.command == "cleanup-schedulers":
         cleanup_schedulers()

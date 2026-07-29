@@ -650,35 +650,8 @@ jobs:
             printf '%s' "${output}"
           }
 
-          service_url="$(gcloud run services describe "${CLOUD_RUN_SERVICE}" \
-            --project="${GCP_PROJECT_ID}" \
-            --region="${CLOUD_RUN_REGION}" \
-            --format='value(status.url)' 2>/dev/null || true)"
-          if [ -z "${service_url}" ]; then
-            echo "Unable to resolve Cloud Run service URL for ${CLOUD_RUN_SERVICE}; cannot sync monitor dispatcher targets." >&2
-            exit 1
-          fi
           monitor_targets_json="$(
-            SERVICE_URL="${service_url}" python - <<'PY'
-          import json
-          import os
-
-          from scripts.reconcile_cloud_runtime import select_sync_target
-
-          plan = json.loads(os.environ["SYNC_PLAN_JSON"])
-          target = select_sync_target(plan, os.environ["CLOUD_RUN_SERVICE"])
-          env = target.get("env") or {}
-          runtime_target = json.loads(env.get("RUNTIME_TARGET_JSON") or "{}")
-          payload = {
-              "service_name": target.get("service_name") or os.environ.get("CLOUD_RUN_SERVICE"),
-              "service_url": os.environ.get("SERVICE_URL"),
-              "strategy_profile": target.get("strategy_profile") or env.get("STRATEGY_PROFILE"),
-              "account_scope": runtime_target.get("account_scope"),
-              "runtime_target_enabled": env.get("RUNTIME_TARGET_ENABLED", "true"),
-              "scheduler": target.get("scheduler") or {},
-          }
-          print(json.dumps({"targets": [payload]}, separators=(",", ":")))
-          PY
+            python3 scripts/reconcile_cloud_runtime.py build-monitor-targets
           )"
           env_pairs+=("MONITOR_DISPATCH_TARGETS_JSON=${monitor_targets_json}")
 
@@ -857,6 +830,7 @@ jobs:
           fi
 
           managed_scheduler_jobs=("${job_name}")
+          direct_monitor_description="Managed by CharlesSchwabPlatform direct-monitor-v1"
           if [ "${DIRECT_MONITOR_MIGRATION_COMPLETE:-}" = "true" ]; then
             desired_precheck_schedule="$(CURRENT_SCHEDULE="${desired_schedule}" SCHEDULE_TIME="${precheck_time}" python - <<'PY'
           import os
@@ -909,6 +883,7 @@ jobs:
                 --http-method=POST \
                 --oidc-service-account-email="${GCP_SCHEDULER_SERVICE_ACCOUNT}" \
                 --oidc-token-audience="${service_url}" \
+                --description="${direct_monitor_description}" \
                 --attempt-deadline=180s \
                 --max-retry-attempts=0 \
                 --max-retry-duration=0s \
@@ -924,6 +899,7 @@ jobs:
                 --http-method=POST \
                 --oidc-service-account-email="${GCP_SCHEDULER_SERVICE_ACCOUNT}" \
                 --oidc-token-audience="${service_url}" \
+                --description="${direct_monitor_description}" \
                 --attempt-deadline=180s \
                 --max-retry-attempts=0 \
                 --max-retry-duration=0s \
@@ -945,6 +921,7 @@ jobs:
                 --http-method=POST \
                 --oidc-service-account-email="${GCP_SCHEDULER_SERVICE_ACCOUNT}" \
                 --oidc-token-audience="${service_url}" \
+                --description="${direct_monitor_description}" \
                 --attempt-deadline=180s \
                 --max-retry-attempts=0 \
                 --max-retry-duration=0s \
@@ -960,6 +937,7 @@ jobs:
                 --http-method=POST \
                 --oidc-service-account-email="${GCP_SCHEDULER_SERVICE_ACCOUNT}" \
                 --oidc-token-audience="${service_url}" \
+                --description="${direct_monitor_description}" \
                 --attempt-deadline=180s \
                 --max-retry-attempts=0 \
                 --max-retry-duration=0s \
