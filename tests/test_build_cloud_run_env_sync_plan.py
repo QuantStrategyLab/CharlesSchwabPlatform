@@ -93,6 +93,7 @@ def test_build_cloud_run_env_sync_plan_requires_target_snapshot_in_per_service_m
         "defaults": {
             "GLOBAL_TELEGRAM_CHAT_ID": "5992562050",
             "NOTIFY_LANG": "zh",
+            "region": "us-central1",
         },
         "targets": [
             {
@@ -132,10 +133,12 @@ def test_build_cloud_run_env_sync_plan_skips_snapshot_requirements_for_disabled_
         "defaults": {
             "GLOBAL_TELEGRAM_CHAT_ID": "5992562050",
             "NOTIFY_LANG": "zh",
+            "region": "us-central1",
         },
         "targets": [
             {
                 "service": "charles-schwab-live-u7654-mega-service",
+                "cloud_run_region": "asia-east1",
                 "runtime_target_enabled": "false",
                 "runtime_target": json.loads(
                     runtime_target_json(
@@ -167,6 +170,7 @@ def test_build_cloud_run_env_sync_plan_skips_snapshot_requirements_for_disabled_
     plan = json.loads(result.stdout)
     target = plan["targets"][0]
     assert target["service_name"] == "charles-schwab-live-u7654-mega-service"
+    assert target["region"] == "asia-east1"
     assert target["env"]["RUNTIME_TARGET_ENABLED"] == "false"
     assert "SCHWAB_FEATURE_SNAPSHOT_PATH" not in target["env"]
     assert "SCHWAB_FEATURE_SNAPSHOT_MANIFEST_PATH" not in target["env"]

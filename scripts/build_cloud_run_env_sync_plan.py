@@ -418,7 +418,7 @@ def _build_target_plan(
             + "\n".join(f"  - {item}" for item in missing)
         )
 
-    return {
+    target_plan = {
         "service_name": service_name,
         "strategy_profile": canonical_profile,
         "env": env_values,
@@ -431,6 +431,16 @@ def _build_target_plan(
         ),
         "remove_env_vars": sorted(set(remove_env_vars) - set(env_values)),
     }
+    target_region = _first_non_empty(
+        *(_entry_field(target, name) for name in ("region", "cloud_run_region", "location")),
+        *(_entry_field(defaults, name) for name in ("region", "cloud_run_region", "location")),
+        runtime_target.get("region"),
+        runtime_target.get("cloud_run_region"),
+        runtime_target.get("location"),
+    )
+    if target_region is not None:
+        target_plan["region"] = str(target_region).strip()
+    return target_plan
 
 
 def _build_scheduler_plan(
@@ -546,6 +556,13 @@ def _target_field(
     name: str,
 ) -> object | None:
     for source in (target, _coerce_mapping(target.get("env") or {}), defaults, _coerce_mapping(defaults.get("env") or {})):
+        if name in source:
+            return source[name]
+    return None
+
+
+def _entry_field(entry: Mapping[str, object], name: str) -> object | None:
+    for source in (entry, _coerce_mapping(entry.get("env") or {})):
         if name in source:
             return source[name]
     return None
