@@ -26,6 +26,7 @@ def test_scheduler_job_pattern_includes_service_alias():
     assert re.search(pattern, "charles-schwab-service-scheduler")
     assert re.search(pattern, "charles-schwab-scheduler")
     assert not re.search(pattern, "other-platform-scheduler")
+    assert not re.search(pattern, "charles-schwab-secondary-service-scheduler")
 
 
 def test_telegram_token_falls_back_to_secret_manager(monkeypatch):
@@ -124,6 +125,31 @@ def test_load_services_ignores_disabled_runtime_targets(monkeypatch):
     assert guard._load_services() == ["enabled-service"]
 
 
+def test_load_services_removes_explicit_services_disabled_by_target_defaults(
+    monkeypatch,
+):
+    monkeypatch.delenv("RUNTIME_GUARD_CLOUD_RUN_SERVICES", raising=False)
+    monkeypatch.delenv("CLOUD_RUN_SERVICE", raising=False)
+    monkeypatch.setenv("CLOUD_RUN_SERVICES", "enabled-service,disabled-service")
+    monkeypatch.setenv(
+        "CLOUD_RUN_SERVICE_TARGETS_JSON",
+        json.dumps(
+            {
+                "defaults": {"runtime_target_enabled": False},
+                "targets": [
+                    {
+                        "service": "enabled-service",
+                        "runtime_target_enabled": True,
+                    },
+                    {"service": "disabled-service"},
+                ],
+            }
+        ),
+    )
+
+    assert guard._load_services() == ["enabled-service"]
+
+
 def test_scheduler_entry_since_uses_matching_service_revision_window():
     fallback = dt.datetime(2026, 7, 1, 1, 0, tzinfo=dt.timezone.utc)
     service_since = dt.datetime(2026, 7, 1, 2, 0, tzinfo=dt.timezone.utc)
@@ -135,6 +161,19 @@ def test_scheduler_entry_since_uses_matching_service_revision_window():
     )
     assert (
         guard._scheduler_entry_since(entry, {"other-service": service_since}, fallback)
+        == fallback
+    )
+    prefixed_entry = {
+        "resource": {
+            "labels": {"job_id": "enabled-service-secondary-service-scheduler"}
+        }
+    }
+    assert (
+        guard._scheduler_entry_since(
+            prefixed_entry,
+            {"enabled-service": service_since},
+            fallback,
+        )
         == fallback
     )
 
@@ -163,6 +202,28 @@ def test_scheduler_failure_for_other_service_is_not_duplicate():
     scheduler_entry = {
         "timestamp": "2026-07-29T19:45:03Z",
         "resource": {"labels": {"job_id": "other-platform-scheduler"}},
+    }
+    cloud_run_failures = {
+        "test-service": [
+            {
+                "timestamp": "2026-07-29T19:45:01Z",
+                "resource": {"labels": {"service_name": "test-service"}},
+            }
+        ]
+    }
+
+    assert not guard._is_duplicate_scheduler_failure(
+        scheduler_entry,
+        cloud_run_failures,
+    )
+
+
+def test_scheduler_failure_for_prefixed_service_is_not_duplicate():
+    scheduler_entry = {
+        "timestamp": "2026-07-29T19:45:03Z",
+        "resource": {
+            "labels": {"job_id": "test-secondary-service-scheduler"}
+        },
     }
     cloud_run_failures = {
         "test-service": [
