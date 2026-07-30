@@ -17,9 +17,10 @@ def test_required_services_skip_disabled_runtime_targets(monkeypatch):
         "CLOUD_RUN_SERVICE_TARGETS_JSON",
         json.dumps(
             {
+                "defaults": {"RUNTIME_TARGET_ENABLED": "false"},
                 "targets": [
                     {"service": "schwab-enabled-service", "RUNTIME_TARGET_ENABLED": "true"},
-                    {"service": "schwab-disabled-service", "RUNTIME_TARGET_ENABLED": "false"},
+                    {"service": "schwab-disabled-service"},
                 ]
             }
         ),
@@ -61,6 +62,73 @@ def test_heartbeat_skips_when_runtime_target_json_is_disabled(monkeypatch, capsy
     output = capsys.readouterr().out
     assert "Execution report heartbeat skipped for CharlesSchwab disabled runtime" in output
     assert "runtime target is disabled" in output
+
+
+def test_heartbeat_skips_when_all_configured_targets_are_disabled(
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.delenv("RUNTIME_TARGET_ENABLED", raising=False)
+    monkeypatch.delenv("RUNTIME_TARGET_JSON", raising=False)
+    monkeypatch.setenv("RUNTIME_HEARTBEAT_NAME", "CharlesSchwab disabled targets")
+    monkeypatch.setenv(
+        "CLOUD_RUN_SERVICE_TARGETS_JSON",
+        json.dumps(
+            {
+                "defaults": {"runtime_target_enabled": False},
+                "targets": [{"service": "disabled-service"}],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        heartbeat,
+        "_list_gcs_objects",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("GCS should not be queried")
+        ),
+    )
+
+    result = heartbeat.main(
+        now=dt.datetime(2026, 6, 20, 23, 10, tzinfo=dt.timezone.utc)
+    )
+
+    assert result == 0
+    assert "no enabled runtime target matches this heartbeat" in capsys.readouterr().out
+
+
+def test_incomplete_target_schedule_uses_deployed_scheduler_cron(monkeypatch):
+    targets = [
+        {
+            "service": "charles-schwab-service",
+            "scheduler": {
+                "main_time": "45 15",
+                "timezone": "America/New_York",
+            },
+        }
+    ]
+    monkeypatch.setattr(
+        heartbeat,
+        "_describe_scheduler_job",
+        lambda job_name, **_kwargs: (
+            {
+                "name": job_name,
+                "schedule": "45 15 25-29 * *",
+                "timeZone": "America/New_York",
+            }
+            if job_name == "charles-schwab-service-scheduler"
+            else None
+        ),
+    )
+
+    hydrated = heartbeat._hydrate_runtime_target_schedules(
+        targets,
+        project="test-project",
+    )
+
+    assert hydrated[0]["scheduler"] == {
+        "main_time": "45 15 25-29 * *",
+        "timezone": "America/New_York",
+    }
 
 
 def test_heartbeat_skips_outside_runtime_target_scheduler_day(monkeypatch, capsys):
