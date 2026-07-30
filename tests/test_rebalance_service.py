@@ -21,6 +21,26 @@ from quant_platform_kit.common.port_adapters import CallableExecutionPort, Calla
 
 
 class RebalanceServiceTests(unittest.TestCase):
+    def test_notification_delivery_summary_keeps_failed_transport_receipt(self):
+        payload = rebalance_service._build_notification_delivery_summary(
+            [
+                {
+                    "sink": "telegram",
+                    "delivery_status": "failed",
+                    "transport_acknowledged": False,
+                    "error_type": "RuntimeError",
+                    "compact_text_sha256": "a" * 64,
+                    "compact_text_length": 42,
+                }
+            ]
+        )
+
+        self.assertEqual(payload["attempted_count"], 1)
+        self.assertEqual(payload["sent_count"], 0)
+        self.assertEqual(payload["failed_count"], 1)
+        self.assertFalse(payload["all_acknowledged"])
+        self.assertNotIn("compact_text", payload["delivery_events"][0])
+
     def test_sell_uses_position_quantity_when_market_value_is_stale_below_quote(self):
         submitted_orders = []
         plan = {

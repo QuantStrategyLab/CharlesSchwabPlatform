@@ -57,26 +57,25 @@ class SchwabRuntimeComposer:
     printer: Callable[..., Any] = print
     notification_channel: str = "telegram"
     webhook_url: str | None = None
-    sender_builder: Callable[..., Callable[[str], None]] | None = None
+    sender_builder: Callable[..., Callable[[str], bool | None]] | None = None
     notification_builder: Callable[..., Any] = build_runtime_notification_adapters
     reporting_builder: Callable[..., Any] = build_runtime_reporting_adapters
     runtime_target: RuntimeTarget | None = None
     limit_buy_premium_by_symbol: dict[str, float] | None = None
     extra_reporting_fields: dict[str, Any] = field(default_factory=dict)
 
-    def send_message(self, message: str) -> None:
+    def send_message(self, message: str) -> bool:
         """Send a cycle notification through the configured channel."""
         if self.sender_builder is not None:
             sender = self.sender_builder(self.tg_token, self.tg_chat_id)
-            sender(message)
-            return
+            return sender(message) is not False
         sender = build_cycle_sender(
             channel=self.notification_channel,
             telegram_token=self.tg_token,
             telegram_chat_id=self.tg_chat_id,
             webhook_url=self.webhook_url,
         )
-        sender(message)
+        return sender(message)
 
     send_tg_message = send_message  # backward-compat alias
 
@@ -151,6 +150,11 @@ class SchwabRuntimeComposer:
             order_status_fetcher_factory=lambda account_hash: self.broker_adapters.build_order_status_fetcher(
                 client,
                 account_hash,
+            ),
+            notification_delivery_events=getattr(
+                notification_adapters,
+                "delivery_events",
+                [],
             ),
         )
 

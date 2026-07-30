@@ -52,4 +52,7 @@ def summarize_execution_cycle_result(result: object, *, dry_run: bool) -> dict[s
         value = execution.get(field_name)
         if value is not None and value != "":
             summary[field_name] = value
+    notification_delivery_summary = _as_mapping(execution.get("notification_delivery_summary"))
+    if notification_delivery_summary:
+        summary["notification_delivery_summary"] = notification_delivery_summary
     return summary

@@ -52,6 +52,32 @@ def _record_platform_execution_telemetry(
     )
 
 
+def _build_notification_delivery_summary(delivery_events: list[dict]) -> dict:
+    safe_fields = (
+        "sink",
+        "delivery_status",
+        "transport_acknowledged",
+        "error_type",
+        "compact_text_sha256",
+        "compact_text_length",
+    )
+    events = [
+        {key: event[key] for key in safe_fields if key in event}
+        for event in (dict(item) for item in delivery_events)
+    ]
+    if not events:
+        return {}
+    sent_count = sum(event.get("delivery_status") == "sent" for event in events)
+    failed_count = sum(event.get("delivery_status") == "failed" for event in events)
+    return {
+        "attempted_count": len(events),
+        "sent_count": sent_count,
+        "failed_count": failed_count,
+        "all_acknowledged": failed_count == 0 and sent_count == len(events),
+        "delivery_events": events,
+    }
+
+
 def _plan_portfolio(plan):
     return dict(plan.get("portfolio") or {})
 
@@ -596,5 +622,10 @@ def run_strategy_core(
             + json.dumps({"reason": "no_trade_or_error", "trade_logs_count": len(trade_logs)}, ensure_ascii=False),
             flush=True,
         )
+    notification_delivery_summary = _build_notification_delivery_summary(
+        getattr(runtime, "notification_delivery_events", []) or []
+    )
+    if notification_delivery_summary:
+        execution["notification_delivery_summary"] = notification_delivery_summary
     _record_platform_execution_telemetry(config, execution_result)
     return execution_result

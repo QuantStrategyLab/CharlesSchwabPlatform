@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from quant_platform_kit.common.ports import ExecutionPort, MarketDataPort, NotificationPort, PortfolioPort
@@ -42,3 +42,4 @@ class SchwabRebalanceRuntime:
     execution_port_factory: Callable[[str], ExecutionPort] | None = None
     order_status_fetcher_factory: Callable[[str], Callable[[str], Any] | None] | None = None
     submit_equity_order: Callable[..., Any] | None = None
+    notification_delivery_events: list[dict[str, Any]] = field(default_factory=list)
