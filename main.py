@@ -407,7 +407,7 @@ def send_tg_message(message):
 
 
 def publish_notification(*, detailed_text, compact_text):
-    build_composer().build_notification_adapters().publish_cycle_notification(
+    return build_composer().build_notification_adapters().publish_cycle_notification(
         detailed_text=detailed_text,
         compact_text=compact_text,
     )
@@ -469,22 +469,35 @@ def _notify_runtime_error(exc: Exception, *, route_label: str) -> bool:
         print("Schwab runtime error notification skipped: no Telegram target configured.", flush=True)
         return False
     message = _runtime_error_notification_message(exc, route_label=route_label)
+    outcomes = []
     for token, chat_id in targets:
         try:
-            requests.post(
+            response = requests.post(
                 f"https://api.telegram.org/bot{token}/sendMessage",
                 json={"chat_id": chat_id, "text": message},
                 timeout=15,
             )
+            status_code = int(getattr(response, "status_code", 200) or 200)
+            acknowledged = 200 <= status_code < 300
+            load_payload = getattr(response, "json", None)
+            payload = load_payload() if acknowledged and callable(load_payload) else None
+            if isinstance(payload, dict) and payload.get("ok") is False:
+                acknowledged = False
+            outcomes.append(acknowledged)
         except Exception as send_exc:
-            print(f"Schwab runtime error Telegram send failed: {send_exc}", flush=True)
-    return True
+            print(
+                f"Schwab runtime error Telegram send failed: {type(send_exc).__name__}",
+                flush=True,
+            )
+            outcomes.append(False)
+    return bool(outcomes) and all(outcomes)
 
 
 def _publish_runtime_failure_notification(*, detailed_text: str, compact_text: str, exc: Exception) -> bool:
     try:
-        publish_notification(detailed_text=detailed_text, compact_text=compact_text)
-        return True
+        if publish_notification(detailed_text=detailed_text, compact_text=compact_text):
+            return True
+        return _notify_runtime_error(exc, route_label="strategy_cycle")
     except Exception as notification_exc:
         print(f"Schwab runtime error notification fallback: {notification_exc}", flush=True)
         return _notify_runtime_error(exc, route_label="strategy_cycle")

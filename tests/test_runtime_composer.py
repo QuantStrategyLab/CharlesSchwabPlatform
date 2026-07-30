@@ -80,15 +80,19 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders():
         }.get(name, default),
         sleeper=lambda _seconds: None,
         printer=lambda *_args, **_kwargs: None,
-        sender_builder=lambda token, chat_id: lambda message: observed.setdefault(
-            "sent_message",
-            (token, chat_id, message),
-        ),
+        sender_builder=lambda token, chat_id: lambda message: (
+            observed.setdefault(
+                "sent_message",
+                (token, chat_id, message),
+            ),
+            False,
+        )[1],
         notification_builder=fake_notification_builder,
         reporting_builder=fake_reporting_builder,
     )
 
-    composer.send_tg_message("hello")
+    sent = composer.send_tg_message("hello")
+    assert sent is False
     runtime = composer.build_rebalance_runtime("client")
     config = composer.build_rebalance_config(
         strategy_plugin_signals=("plugin-line",),

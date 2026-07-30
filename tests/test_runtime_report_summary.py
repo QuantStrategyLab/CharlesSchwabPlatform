@@ -59,3 +59,21 @@ def test_summarize_execution_cycle_result_handles_empty_result() -> None:
     assert summary["submitted_order_side_counts"] == {}
     assert summary["submitted_order_type_counts"] == {}
     assert summary["no_op_reason"] == "market_closed"
+
+
+def test_summarize_execution_cycle_result_preserves_notification_delivery_summary() -> None:
+    delivery_summary = {
+        "event_count": 1,
+        "sent_count": 0,
+        "failed_count": 1,
+        "all_acknowledged": False,
+    }
+    result = SimpleNamespace(
+        execution={"notification_delivery_summary": delivery_summary},
+        submitted_orders=(),
+        trade_logs=(),
+    )
+
+    summary = summarize_execution_cycle_result(result, dry_run=False)
+
+    assert summary["notification_delivery_summary"] == delivery_summary

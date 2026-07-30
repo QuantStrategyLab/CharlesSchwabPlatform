@@ -417,17 +417,28 @@ def build_sender(token, chat_id, *, requests_module=None):
     if requests_module is None:
         import requests as requests_module
 
-    def send_tg_message(message):
+    def send_tg_message(message) -> bool:
         if not token or not chat_id:
-            return
+            return False
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         try:
-            requests_module.post(
+            response = requests_module.post(
                 url,
                 json={"chat_id": chat_id, "text": _break_telegram_market_symbol_auto_links(message)},
                 timeout=15,
             )
+            status_code = int(getattr(response, "status_code", 200) or 200)
+            if status_code < 200 or status_code >= 300:
+                print(f"Telegram send failed: HTTP {status_code}", flush=True)
+                return False
+            load_payload = getattr(response, "json", None)
+            payload = load_payload() if callable(load_payload) else None
+            if isinstance(payload, dict) and payload.get("ok") is False:
+                print("Telegram send failed: negative API acknowledgement", flush=True)
+                return False
         except Exception as exc:
             print(f"Telegram send failed: {type(exc).__name__}", flush=True)
+            return False
+        return True
 
     return send_tg_message
