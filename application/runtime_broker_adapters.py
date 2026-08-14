@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
@@ -25,6 +26,9 @@ def _utcnow() -> datetime:
 _NEW_YORK_TZ = ZoneInfo("America/New_York")
 _QUOTE_RATE_LIMIT_MAX_ATTEMPTS = 3
 _QUOTE_RATE_LIMIT_BACKOFF_SECONDS = (0.5, 1.5)
+_ACCOUNT_TRANSIENT_MAX_ATTEMPTS = 4
+_ACCOUNT_TRANSIENT_BACKOFF_SECONDS = (1.0, 2.0, 4.0)
+_SCHWAB_TRANSIENT_STATUS_PATTERN = re.compile(r"\b(?:429|500|502|503|504)\b")
 
 
 def _market_date(value: datetime) -> date:
@@ -42,6 +46,16 @@ def _is_quote_rate_limit_error(exc: Exception) -> bool:
     return "429" in str(exc)
 
 
+def _is_transient_schwab_account_error(exc: Exception) -> bool:
+    status_code = getattr(exc, "status_code", None)
+    if status_code in {429, 500, 502, 503, 504}:
+        return True
+    response = getattr(exc, "response", None)
+    if getattr(response, "status_code", None) in {429, 500, 502, 503, 504}:
+        return True
+    return _SCHWAB_TRANSIENT_STATUS_PATTERN.search(str(exc)) is not None
+
+
 @dataclass(frozen=True)
 class SchwabRuntimeBrokerAdapters:
     managed_symbols: tuple[str, ...]
@@ -53,7 +67,20 @@ class SchwabRuntimeBrokerAdapters:
     clock: Any = _utcnow
 
     def fetch_managed_snapshot(self, client):
-        return self.fetch_account_snapshot_fn(client, strategy_symbols=list(self.managed_symbols))
+        for attempt in range(_ACCOUNT_TRANSIENT_MAX_ATTEMPTS):
+            try:
+                return self.fetch_account_snapshot_fn(
+                    client,
+                    strategy_symbols=list(self.managed_symbols),
+                )
+            except Exception as exc:
+                if (
+                    attempt >= _ACCOUNT_TRANSIENT_MAX_ATTEMPTS - 1
+                    or not _is_transient_schwab_account_error(exc)
+                ):
+                    raise
+                time.sleep(_ACCOUNT_TRANSIENT_BACKOFF_SECONDS[attempt])
+        raise RuntimeError("Schwab account snapshot retry loop exhausted")  # pragma: no cover
 
     def build_market_data_port(self, client):
         quote_cache: dict[str, QuoteSnapshot] = {}

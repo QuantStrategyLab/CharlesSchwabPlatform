@@ -138,6 +138,68 @@ def test_market_data_port_retries_rate_limited_quote_batch(monkeypatch):
     assert sleeps == [0.5]
 
 
+def test_fetch_managed_snapshot_retries_transient_schwab_server_error(monkeypatch):
+    observed_calls = []
+    sleeps = []
+
+    def fetch_account_snapshot(_client, *, strategy_symbols):
+        observed_calls.append(tuple(strategy_symbols))
+        if len(observed_calls) < 3:
+            raise RuntimeError("Account numbers failed: 503 connection termination")
+        return SimpleNamespace(account_hash="abc123")
+
+    monkeypatch.setattr(
+        broker_adapters_module.time,
+        "sleep",
+        lambda seconds: sleeps.append(seconds),
+    )
+    adapters = build_runtime_broker_adapters(
+        managed_symbols=("SOXL", "SOXX"),
+        fetch_account_snapshot_fn=fetch_account_snapshot,
+        fetch_quotes_fn=lambda _client, _symbols: {},
+        fetch_daily_price_history_fn=lambda _client, _symbol: [],
+        submit_equity_order_fn=None,
+    )
+
+    snapshot = adapters.fetch_managed_snapshot(object())
+
+    assert snapshot.account_hash == "abc123"
+    assert observed_calls == [("SOXL", "SOXX")] * 3
+    assert sleeps == [1.0, 2.0]
+
+
+def test_fetch_managed_snapshot_does_not_retry_non_transient_error(monkeypatch):
+    observed_calls = []
+    sleeps = []
+
+    def fetch_account_snapshot(_client, *, strategy_symbols):
+        observed_calls.append(tuple(strategy_symbols))
+        raise RuntimeError("Account numbers failed: 401 unauthorized")
+
+    monkeypatch.setattr(
+        broker_adapters_module.time,
+        "sleep",
+        lambda seconds: sleeps.append(seconds),
+    )
+    adapters = build_runtime_broker_adapters(
+        managed_symbols=("SOXL",),
+        fetch_account_snapshot_fn=fetch_account_snapshot,
+        fetch_quotes_fn=lambda _client, _symbols: {},
+        fetch_daily_price_history_fn=lambda _client, _symbol: [],
+        submit_equity_order_fn=None,
+    )
+
+    try:
+        adapters.fetch_managed_snapshot(object())
+    except RuntimeError as exc:
+        assert "401" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("Expected non-transient account failure")
+
+    assert observed_calls == [("SOXL",)]
+    assert sleeps == []
+
+
 def test_build_order_status_fetcher_curries_client_and_account_hash():
     observed = {}
 
