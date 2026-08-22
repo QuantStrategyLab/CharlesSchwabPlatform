@@ -914,7 +914,12 @@ def _handle_schwab_probe(*, response_body: str = "Probe OK"):
             execution_window="probe",
         )
         client = composer.build_client()
-        snapshot = fetch_account_snapshot(client, strategy_symbols=MANAGED_SYMBOLS)
+        # Route probes through the same guarded broker adapter as execution and
+        # portfolio reads.  Calling the raw Schwab helper here bypassed the
+        # bounded retry policy for transient 5xx responses (including the
+        # provider's JS-SetBackendUrl fault), causing the runtime guard to
+        # report a healthy service as failed on one transient response.
+        snapshot = build_broker_adapters().fetch_managed_snapshot(client)
         finalize_runtime_report(
             report,
             status="ok",
