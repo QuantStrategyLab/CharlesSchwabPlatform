@@ -22,6 +22,35 @@ def _completed(
 
 
 class ReconcileCloudRuntimeTests(unittest.TestCase):
+    def test_execution_concurrency_invariants_accept_serial_single_instance(self) -> None:
+        runtime._assert_execution_concurrency_invariants(
+            {
+                "spec": {
+                    "template": {
+                        "metadata": {
+                            "annotations": {"autoscaling.knative.dev/maxScale": "1"}
+                        },
+                        "spec": {"containerConcurrency": 1},
+                    }
+                }
+            }
+        )
+
+    def test_execution_concurrency_invariants_reject_threaded_requests(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "containerConcurrency=8"):
+            runtime._assert_execution_concurrency_invariants(
+                {
+                    "spec": {
+                        "template": {
+                            "metadata": {
+                                "annotations": {"autoscaling.knative.dev/maxScale": "1"}
+                            },
+                            "spec": {"containerConcurrency": 8},
+                        }
+                    }
+                }
+            )
+
     def test_select_sync_target_matches_current_service_in_multi_target_plan(self) -> None:
         current_service = "charles-schwab-secondary-service"
         plan = {
@@ -203,6 +232,14 @@ class ReconcileCloudRuntimeTests(unittest.TestCase):
             }
         }
         service_payload_final = {
+            "spec": {
+                "template": {
+                    "metadata": {
+                        "annotations": {"autoscaling.knative.dev/maxScale": "1"}
+                    },
+                    "spec": {"containerConcurrency": 1},
+                }
+            },
             "status": {
                 "latestReadyRevisionName": revision,
                 "traffic": [{"revisionName": revision, "percent": 100}],

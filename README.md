@@ -17,6 +17,8 @@
 
 CharlesSchwabPlatform is a QuantStrategyLab Charles Schwab US equity execution platform. It runs runtime-enabled US equity profiles through Schwab token, order, notification, and Cloud Run integrations.
 
+Live execution is fail-closed behind a durable atomic execution claim. Cloud Run must keep both request concurrency and maximum instances at `1`; the claim is the cross-revision guard that prevents duplicate broker submission if requests overlap. An unresolved claim never expires automatically and requires order/report reconciliation before manual recovery.
+
 It is an execution layer, not a strategy research repository. Strategy logic comes from `UsEquityStrategies`; snapshot and validation artifacts come from `UsEquitySnapshotPipelines` when a profile requires them.
 
 ## Runtime boundary

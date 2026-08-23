@@ -7,6 +7,7 @@ import json
 from datetime import datetime, timezone
 
 from application.execution_service import execute_rebalance_cycle, ExecutionCycleResult
+from application.execution_claim import claim_execution_marker
 from application.runtime_dependencies import SchwabRebalanceConfig, SchwabRebalanceRuntime
 from application.signal_snapshot import build_signal_snapshot
 from notifications.events import NotificationPublisher, RenderedNotification
@@ -318,12 +319,6 @@ def _execution_already_recorded_message(*, config: SchwabRebalanceConfig, execut
     return message
 
 
-def _should_record_execution_marker(*, result: ExecutionCycleResult, config: SchwabRebalanceConfig) -> bool:
-    if not getattr(config, "execution_dedup_enabled", False):
-        return False
-    return bool(tuple(getattr(result, "trade_logs", ()) or ()))
-
-
 def _has_submitted_orders(result: ExecutionCycleResult) -> bool:
     return bool(tuple(getattr(result, "submitted_orders", ()) or ()))
 
@@ -491,14 +486,18 @@ def run_strategy_core(
     execution_marker_key = _build_execution_marker_key(config=config, execution=execution, plan=plan)
     execution_state_store = getattr(config, "execution_state_store", None)
     execution_already_recorded = False
-    if execution_marker_key and execution_state_store:
+    execution_claim_acquired = False
+    if getattr(config, "execution_dedup_enabled", False):
+        if not execution_marker_key:
+            raise RuntimeError("Execution deduplication requires a stable execution marker key")
+        if not execution_state_store:
+            raise RuntimeError("Execution deduplication requires an execution state store")
         try:
             execution_already_recorded = bool(execution_state_store.has_marker(execution_marker_key))
         except Exception as exc:
-            print(
-                f"Execution marker read failed\nMarker: {execution_marker_key}\n{type(exc).__name__}: {exc}",
-                flush=True,
-            )
+            raise RuntimeError(
+                f"Execution marker read failed before broker submission: {type(exc).__name__}"
+            ) from exc
         if not execution_already_recorded and hasattr(execution_state_store, "has_prior_execution_report"):
             try:
                 execution_already_recorded = bool(
@@ -512,10 +511,22 @@ def run_strategy_core(
                     )
                 )
             except Exception as exc:
-                print(
-                    f"Execution report dedup read failed\nMarker: {execution_marker_key}\n{type(exc).__name__}: {exc}",
-                    flush=True,
-                )
+                raise RuntimeError(
+                    f"Execution report dedup read failed before broker submission: {type(exc).__name__}"
+                ) from exc
+        if not execution_already_recorded:
+            execution_claim_acquired = claim_execution_marker(
+                execution_state_store,
+                execution_marker_key,
+                metadata={
+                    "strategy_profile": getattr(config, "strategy_profile", ""),
+                    "account_scope": _resolve_execution_account_scope(config=config, plan=plan),
+                    "dry_run_only": bool(getattr(config, "dry_run_only", False)),
+                    "signal_date": str(execution.get("signal_date") or ""),
+                    "effective_date": str(execution.get("effective_date") or ""),
+                },
+            )
+            execution_already_recorded = not execution_claim_acquired
 
     if execution_already_recorded:
         message = _execution_already_recorded_message(config=config, execution=execution)
@@ -562,7 +573,7 @@ def run_strategy_core(
                 )
             ),
         )
-        if _should_record_execution_marker(result=execution_result, config=config):
+        if execution_claim_acquired:
             _record_execution_marker(
                 config=config,
                 marker_key=execution_marker_key,
