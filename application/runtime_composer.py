@@ -178,6 +178,15 @@ class SchwabRuntimeComposer:
         )
         plugin_error_lines = tuple(build_plugin_error_lines(strategy_plugin_error))
         execution_state_account_scope = "PAPER" if self.dry_run_only else "LIVE"
+        execution_state_store = build_execution_marker_store_from_env(
+            platform_env_prefix="SCHWAB",
+            env_reader=self.env_reader,
+            project_id=self.project_id,
+        )
+        if not self.dry_run_only and not str(execution_state_store.cloud_prefix_uri or "").startswith("gs://"):
+            raise RuntimeError(
+                "Schwab live execution requires a gs:// execution state URI for atomic claims"
+            )
         return SchwabRebalanceConfig(
             translator=self.strategy_adapters.translator,
             strategy_display_name=self.strategy_display_name_localized,
@@ -195,17 +204,17 @@ class SchwabRuntimeComposer:
             strategy_plugin_signals=tuple(strategy_plugin_signals or ()),
             cash_only_execution=bool(cash_only_execution),
             notional_buy_execution=notional_buy_execution_enabled(self.strategy_profile),
-            execution_dedup_enabled=resolve_execution_dedup_enabled(
-                platform_env_prefix="SCHWAB",
-                env_reader=self.env_reader,
-                dry_run_only=self.dry_run_only,
-                account_scope=execution_state_account_scope,
+            execution_dedup_enabled=(
+                True
+                if not self.dry_run_only
+                else resolve_execution_dedup_enabled(
+                    platform_env_prefix="SCHWAB",
+                    env_reader=self.env_reader,
+                    dry_run_only=self.dry_run_only,
+                    account_scope=execution_state_account_scope,
+                )
             ),
-            execution_state_store=build_execution_marker_store_from_env(
-                platform_env_prefix="SCHWAB",
-                env_reader=self.env_reader,
-                project_id=self.project_id,
-            ),
+            execution_state_store=execution_state_store,
             execution_state_account_scope=execution_state_account_scope,
         )
 

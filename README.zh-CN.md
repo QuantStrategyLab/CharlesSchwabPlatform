@@ -17,6 +17,8 @@
 
 CharlesSchwabPlatform 是 QuantStrategyLab 的Charles Schwab 美股执行平台。通过 Schwab token、订单、通知和 Cloud Run 集成执行 runtime-enabled 美股 profile。
 
+实盘执行必须先取得持久化原子 claim，失败时关闭执行。Cloud Run 的请求并发数和最大实例数都必须保持为 `1`；原子 claim 负责阻止新旧 revision 重叠时重复向券商提交。未完成的 claim 不会自动过期，必须先核对订单和执行报告，再由人工恢复。
+
 它属于执行层，不是策略研究仓库。策略逻辑来自 `UsEquityStrategies`；如果 profile 依赖 snapshot，验证和产物来自 `UsEquitySnapshotPipelines`。
 
 ## 运行边界

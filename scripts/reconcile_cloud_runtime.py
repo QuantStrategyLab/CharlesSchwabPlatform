@@ -316,6 +316,23 @@ def _traffic_matches_latest(service_payload: Mapping[str, Any], revision: str) -
     return False
 
 
+def _assert_execution_concurrency_invariants(service_payload: Mapping[str, Any]) -> None:
+    template = service_payload.get("spec", {}).get("template", {})
+    spec = template.get("spec", {}) if isinstance(template, Mapping) else {}
+    metadata = template.get("metadata", {}) if isinstance(template, Mapping) else {}
+    annotations = metadata.get("annotations", {}) if isinstance(metadata, Mapping) else {}
+    try:
+        container_concurrency = int(spec.get("containerConcurrency") or 0)
+        max_scale = int(annotations.get("autoscaling.knative.dev/maxScale") or 0)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("Cloud Run execution concurrency settings are invalid") from exc
+    if container_concurrency != 1 or max_scale != 1:
+        raise RuntimeError(
+            "Cloud Run execution safety invariant failed: "
+            f"containerConcurrency={container_concurrency}, maxScale={max_scale}; both must be 1"
+        )
+
+
 def reconcile_traffic(env: Mapping[str, str] = os.environ) -> None:
     service = _service_name(env)
     project = _project_id(env)
@@ -371,6 +388,8 @@ def reconcile_traffic(env: Mapping[str, str] = os.environ) -> None:
             f"Cloud Run latest ready revision {latest_revision} on {service} has commit {latest_sha or '<none>'}, "
             f"expected {target_sha}"
         )
+
+    _assert_execution_concurrency_invariants(payload)
 
     print(f"Cloud Run service {service} is routed to latest ready revision {latest_revision}.")
 

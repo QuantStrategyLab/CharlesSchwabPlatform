@@ -1,4 +1,5 @@
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -118,5 +119,62 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders():
     assert config.dry_run_only is True
     assert config.safe_haven_cash_substitute_threshold_usd == 1000.0
     assert config.notify_no_trade_cycles is False
+    assert config.execution_dedup_enabled is True
     assert reporting_adapters == "reporting-adapters"
     assert built_client[0][:4] == ("project-1", "schwab_token", "app-key", "app-secret")
+
+    live_composer = replace(composer, dry_run_only=False)
+    live_config = live_composer.build_rebalance_config()
+    assert live_config.execution_dedup_enabled is True
+    assert live_config.execution_state_store.cloud_prefix_uri == "gs://bucket/runtime-reports"
+
+
+def test_runtime_composer_parks_live_without_durable_execution_claim_backend():
+    class MinimalComposer(SchwabRuntimeComposer):
+        pass
+
+    # Reuse dataclass construction without invoking any broker builders.
+    fields = {
+        "project_id": "project-1",
+        "service_name": "schwab",
+        "secret_id": "token",
+        "app_key": None,
+        "app_secret": None,
+        "token_path": "/tmp/token.json",
+        "strategy_profile": "profile",
+        "strategy_domain": "us_equity",
+        "strategy_display_name": "Profile",
+        "strategy_display_name_localized": "Profile",
+        "notify_lang": "en",
+        "tg_token": None,
+        "tg_chat_id": None,
+        "managed_symbols": (),
+        "benchmark_symbol": "QQQ",
+        "signal_effective_after_trading_days": 1,
+        "dry_run_only": False,
+        "limit_buy_premium": 1.0,
+        "sell_settle_delay_sec": 0.0,
+        "post_sell_refresh_attempts": 1,
+        "post_sell_refresh_interval_sec": 0.0,
+        "safe_haven_cash_substitute_threshold_usd": 0.0,
+        "broker_adapters": SimpleNamespace(),
+        "strategy_adapters": SimpleNamespace(
+            translator=lambda key, **_kwargs: key,
+            build_strategy_plugin_notification_lines=lambda _signals: (),
+            build_strategy_plugin_error_notification_lines=lambda _error: (),
+        ),
+        "client_builder": lambda *_args, **_kwargs: None,
+        "run_id_builder": lambda: "run",
+        "event_logger": None,
+        "report_builder": None,
+        "report_persister": None,
+        "env_reader": lambda _name, default="": default,
+    }
+    composer = MinimalComposer(**fields)
+
+    try:
+        composer.build_rebalance_config()
+    except RuntimeError as exc:
+        assert "requires a gs:// execution state URI" in str(exc)
+    else:
+        raise AssertionError("live execution must fail closed without durable atomic claims")
