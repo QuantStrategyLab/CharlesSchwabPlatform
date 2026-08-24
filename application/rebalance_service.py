@@ -43,7 +43,10 @@ def _record_platform_execution_telemetry(
         profile,
         {
             "platform": "schwab",
-            "action_done": _has_submitted_orders(execution_result),
+            "action_done": False,
+            "broker_submission_done": bool(execution.get("broker_submission_done")),
+            "execution_status": execution.get("execution_status"),
+            "orders_pending_count": int(execution.get("orders_pending_count") or 0),
             "effective_date": execution.get("effective_date"),
             "signal_date": execution.get("signal_date"),
             "dry_run_only": bool(getattr(config, "dry_run_only", False)),
@@ -342,6 +345,15 @@ def _record_execution_marker(
                 "account_scope": _resolve_execution_account_scope(config=config, plan=plan),
                 "dry_run_only": bool(getattr(config, "dry_run_only", False)),
                 "trade_logs_count": len(tuple(getattr(result, "trade_logs", ()) or ())),
+                "execution_status": str(
+                    dict(getattr(result, "execution", {}) or {}).get("execution_status") or ""
+                ),
+                "broker_submission_done": bool(
+                    dict(getattr(result, "execution", {}) or {}).get("broker_submission_done")
+                ),
+                "orders_pending_count": int(
+                    dict(getattr(result, "execution", {}) or {}).get("orders_pending_count") or 0
+                ),
                 "signal_date": str(dict(getattr(result, "execution", {}) or {}).get("signal_date") or ""),
                 "effective_date": str(dict(getattr(result, "execution", {}) or {}).get("effective_date") or ""),
             },

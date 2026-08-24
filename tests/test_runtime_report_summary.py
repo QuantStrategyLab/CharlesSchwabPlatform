@@ -49,6 +49,24 @@ def test_summarize_execution_cycle_result_marks_dry_run_preview() -> None:
     assert summary["dry_run_preview"] is True
 
 
+def test_summarize_execution_cycle_result_marks_broker_acknowledgement_pending() -> None:
+    result = SimpleNamespace(
+        execution={
+            "execution_status": "pending_reconciliation",
+            "broker_submission_done": True,
+        },
+        submitted_orders=({"symbol": "SOXL", "side": "buy", "order_type": "limit", "status": "accepted"},),
+        trade_logs=(),
+    )
+
+    summary = summarize_execution_cycle_result(result, dry_run=False)
+
+    assert summary["result"] == "pending_reconciliation"
+    assert summary["broker_submission_done"] is True
+    assert summary["orders_pending_count"] == 1
+    assert summary["order_events_count"] == 0
+
+
 def test_summarize_execution_cycle_result_handles_empty_result() -> None:
     result = SimpleNamespace(execution={"no_op_reason": "market_closed"}, submitted_orders=(), trade_logs=())
 

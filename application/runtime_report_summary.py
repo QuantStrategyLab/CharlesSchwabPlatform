@@ -35,11 +35,19 @@ def summarize_execution_cycle_result(result: object, *, dry_run: bool) -> dict[s
 
     execution_status = str(execution.get("execution_status") or "").strip()
     no_op_reason = str(execution.get("no_op_reason") or "").strip()
+    pending_reconciliation = execution_status == "pending_reconciliation"
     summary: dict[str, object] = {
         "result": execution_status or ("dry_run" if dry_run and submitted_orders else "ok"),
         "execution_status": execution_status or None,
         "no_op_reason": no_op_reason or None,
         "orders_submitted_count": len(submitted_orders),
+        "broker_submission_done": bool(execution.get("broker_submission_done")),
+        "orders_pending_count": (
+            int(execution.get("orders_pending_count") or len(submitted_orders))
+            if pending_reconciliation
+            else 0
+        ),
+        "order_events_count": 0 if pending_reconciliation else None,
         "orders_previewed_count": len(submitted_orders) if dry_run else 0,
         "dry_run_order_preview_available": bool(dry_run and submitted_orders),
         "dry_run_preview": bool(dry_run and submitted_orders),

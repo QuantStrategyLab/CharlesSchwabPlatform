@@ -1195,10 +1195,26 @@ def execute_rebalance_cycle(
     )
     trade_logs.extend(format_small_account_allocation_drift_notes(drift_notes, translator=translator))
 
+    result_execution = dict(execution or {})
+    if submitted_orders:
+        if dry_run_only:
+            result_execution.setdefault("execution_status", "dry_run")
+        else:
+            # Schwab accepts an order before it is filled.  Keep the physical
+            # submission records, but never present that acknowledgement as a
+            # completed strategy action.
+            result_execution.update(
+                {
+                    "execution_status": "pending_reconciliation",
+                    "broker_submission_done": True,
+                    "orders_pending_count": len(submitted_orders),
+                }
+            )
+
     return ExecutionCycleResult(
         plan=dict(plan or {}),
         portfolio=dict(portfolio or {}),
-        execution=dict(execution or {}),
+        execution=result_execution,
         allocation=dict(allocation or {}),
         trade_logs=tuple(trade_logs),
         submitted_orders=tuple(submitted_orders),
