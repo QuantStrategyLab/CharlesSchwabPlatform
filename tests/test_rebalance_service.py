@@ -65,7 +65,7 @@ class RebalanceServiceTests(unittest.TestCase):
             },
         }
 
-        execute_rebalance_cycle(
+        result = execute_rebalance_cycle(
             client=object(),
             plan=plan,
             portfolio=plan["portfolio"],
@@ -103,6 +103,9 @@ class RebalanceServiceTests(unittest.TestCase):
         self.assertEqual(submitted_orders[0].symbol, "SOXL")
         self.assertEqual(submitted_orders[0].side, "sell")
         self.assertEqual(submitted_orders[0].quantity, 3)
+        self.assertEqual(result.execution["execution_status"], "pending_reconciliation")
+        self.assertTrue(result.execution["broker_submission_done"])
+        self.assertEqual(result.execution["orders_pending_count"], 1)
 
     def test_safe_haven_target_below_cash_substitute_threshold_stays_cash(self):
         submitted_orders = []
