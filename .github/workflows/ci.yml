@@ -78,6 +78,19 @@ jobs:
           set -euo pipefail
           uv pip install --no-deps -e external/QuantPlatformKit -e external/UsEquityStrategies
 
+      - name: Run PAPER admission integration contract tests
+        run: |
+          set -euo pipefail
+          uv run --no-sync pytest -q \
+            tests/test_runtime_config_support.py::RuntimeConfigSupportTests::test_reads_schwab_dry_run_only_flag \
+            tests/test_runtime_config_support.py::RuntimeConfigSupportTests::test_reads_runtime_target_enabled_flag \
+            tests/test_runtime_composer.py \
+            tests/test_rebalance_service.py::RebalanceServiceTests::test_run_strategy_core_dry_run_skips_submit_and_marks_message \
+            tests/test_rebalance_service.py::RebalanceServiceTests::test_run_strategy_skips_when_execution_marker_already_exists \
+            tests/test_request_handling.py::RequestHandlingTests::test_handle_schwab_dry_run_uses_dry_run_override \
+            tests/test_request_handling.py::RequestHandlingTests::test_handle_schwab_dry_run_stays_silent_when_market_closed \
+            tests/test_runtime_broker_adapters.py
+
       - name: Run ruff
         run: |
           set -euo pipefail
