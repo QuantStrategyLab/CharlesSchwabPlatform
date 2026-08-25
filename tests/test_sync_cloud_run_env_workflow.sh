@@ -7,6 +7,12 @@ runtime_reconciler="$repo_dir/scripts/reconcile_cloud_runtime.py"
 dockerfile="$repo_dir/Dockerfile"
 gunicorn_config="$repo_dir/gunicorn.conf.py"
 
+if grep -Fq 'workflow_run:' "$workflow_file"; then
+  echo "deploy workflow must require a manual dispatch" >&2
+  exit 1
+fi
+grep -Fq "if: github.event_name == 'workflow_dispatch'" "$workflow_file"
+
 grep -Fq 'GCP_WORKLOAD_IDENTITY_PROVIDER: projects/401309731911/locations/global/workloadIdentityPools/github-actions/providers/github-main' "$workflow_file"
 grep -Fq 'GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: schwab-platform-deploy@charlesschwabquant.iam.gserviceaccount.com' "$workflow_file"
 grep -Fq 'permissions:' "$workflow_file"
