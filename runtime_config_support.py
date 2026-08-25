@@ -42,6 +42,7 @@ class PlatformRuntimeSettings:
     notify_lang: str
     dry_run_only: bool
     runtime_target_enabled: bool = True
+    paper_execution_admission_enabled: bool = False
     reserved_cash_floor_usd: float = DEFAULT_RESERVED_CASH_FLOOR_USD
     reserved_cash_ratio: float = DEFAULT_RESERVED_CASH_RATIO
     safe_haven_cash_substitute_threshold_usd: float = DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD
@@ -182,6 +183,17 @@ def resolve_strategy_profile(raw_value: str | None = None) -> str:
 
 def load_platform_runtime_settings() -> PlatformRuntimeSettings:
     runtime_target = resolve_runtime_target_from_env(env=os.environ, expected_platform_id=SCHWAB_PLATFORM)
+    dry_run_only = resolve_dry_run_env(os.environ, "SCHWAB_DRY_RUN_ONLY")
+    paper_execution_admission_enabled = resolve_optional_bool_env(
+        "SCHWAB_PAPER_EXECUTION_ADMISSION_ENABLED",
+        default=False,
+    )
+    if paper_execution_admission_enabled and (
+        not dry_run_only or str(runtime_target.execution_mode or "").strip().lower() != "paper"
+    ):
+        raise EnvironmentError(
+            "SCHWAB_PAPER_EXECUTION_ADMISSION_ENABLED requires a dry-run PAPER runtime target"
+        )
     strategy_definition = resolve_strategy_definition(
         runtime_target.strategy_profile,
         platform_id=SCHWAB_PLATFORM,
@@ -204,8 +216,9 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
         strategy_domain=runtime_paths.strategy_domain,
         strategy_metadata=strategy_metadata,
         notify_lang=os.getenv("QSL_NOTIFY_LANG") or os.getenv("NOTIFY_LANG", DEFAULT_NOTIFY_LANG),
-        dry_run_only=resolve_dry_run_env(os.environ, "SCHWAB_DRY_RUN_ONLY"),
+        dry_run_only=dry_run_only,
         runtime_target_enabled=_runtime_target_enabled_env(),
+        paper_execution_admission_enabled=paper_execution_admission_enabled,
         reserved_cash_floor_usd=_resolve_non_negative_float_env(
             "SCHWAB_MIN_RESERVED_CASH_USD",
             default=DEFAULT_RESERVED_CASH_FLOOR_USD,

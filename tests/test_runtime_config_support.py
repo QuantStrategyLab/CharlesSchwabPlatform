@@ -101,6 +101,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(settings.runtime_target.platform_id, "schwab")
         self.assertEqual(settings.runtime_target.execution_mode, "live")
         self.assertTrue(settings.runtime_target_enabled)
+        self.assertFalse(settings.paper_execution_admission_enabled)
         self.assertEqual(settings.reserved_cash_floor_usd, DEFAULT_RESERVED_CASH_FLOOR_USD)
         self.assertEqual(settings.reserved_cash_ratio, DEFAULT_RESERVED_CASH_RATIO)
         self.assertEqual(
@@ -224,6 +225,34 @@ class RuntimeConfigSupportTests(unittest.TestCase):
             settings = load_platform_runtime_settings()
 
         self.assertTrue(settings.dry_run_only)
+
+    def test_paper_execution_admission_requires_enabled_paper_runtime(self):
+        with patch.dict(
+            os.environ,
+            {
+                "RUNTIME_TARGET_JSON": runtime_target_json(
+                    SAMPLE_STRATEGY_PROFILE,
+                    dry_run_only=True,
+                ),
+                "SCHWAB_DRY_RUN_ONLY": "true",
+                "SCHWAB_PAPER_EXECUTION_ADMISSION_ENABLED": "true",
+            },
+            clear=True,
+        ):
+            settings = load_platform_runtime_settings()
+
+        self.assertTrue(settings.paper_execution_admission_enabled)
+
+        with patch.dict(
+            os.environ,
+            {
+                "RUNTIME_TARGET_JSON": runtime_target_json(SAMPLE_STRATEGY_PROFILE),
+                "SCHWAB_PAPER_EXECUTION_ADMISSION_ENABLED": "true",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(EnvironmentError, "requires a dry-run PAPER"):
+                load_platform_runtime_settings()
 
     def test_reads_runtime_target_enabled_flag(self):
         with patch.dict(
