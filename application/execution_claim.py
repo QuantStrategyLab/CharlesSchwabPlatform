@@ -127,7 +127,11 @@ def claim_execution_marker(
         raise ExecutionClaimUnavailableError("execution claim requires a store and marker key")
 
     native_claim = getattr(store, "claim_marker", None)
-    if callable(native_claim):
+    # Test and adapter callers may provide a concrete GCS client through the
+    # legacy store hook.  The shared object-store implementation intentionally
+    # owns normal runtime credentials, so keep this narrow fallback only when
+    # that explicit client hook is present.
+    if callable(native_claim) and getattr(store, "client_factory", None) is None:
         try:
             return bool(native_claim(marker_key, metadata=dict(metadata or {})))
         except Exception as exc:

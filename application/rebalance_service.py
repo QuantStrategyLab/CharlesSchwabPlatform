@@ -326,7 +326,7 @@ def _has_submitted_orders(result: ExecutionCycleResult) -> bool:
     return bool(tuple(getattr(result, "submitted_orders", ()) or ()))
 
 
-def _record_execution_marker(
+def _record_execution_outcome(
     *,
     config: SchwabRebalanceConfig,
     marker_key: str,
@@ -338,7 +338,7 @@ def _record_execution_marker(
     if not store or not marker_key:
         return
     try:
-        store.record_marker(
+        store.record_outcome(
             marker_key,
             metadata={
                 "strategy_profile": getattr(config, "strategy_profile", ""),
@@ -360,7 +360,7 @@ def _record_execution_marker(
         )
     except Exception as exc:
         notify_issue(
-            "Execution marker write failed",
+            "Execution outcome write failed",
             f"Marker: {marker_key}\n{type(exc).__name__}: {exc}",
         )
 
@@ -586,7 +586,7 @@ def run_strategy_core(
             ),
         )
         if execution_claim_acquired:
-            _record_execution_marker(
+            _record_execution_outcome(
                 config=config,
                 marker_key=execution_marker_key,
                 result=execution_result,

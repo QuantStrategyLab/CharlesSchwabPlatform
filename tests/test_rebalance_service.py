@@ -21,6 +21,47 @@ from quant_platform_kit.common.port_adapters import CallableExecutionPort, Calla
 
 
 class RebalanceServiceTests(unittest.TestCase):
+    def test_execution_outcome_uses_append_only_store_operation(self):
+        outcomes = []
+        notifications = []
+
+        class FakeStore:
+            def record_outcome(self, marker_key, *, metadata):
+                outcomes.append((marker_key, dict(metadata)))
+                return True
+
+            def record_marker(self, *_args, **_kwargs):
+                raise AssertionError("post-claim execution must not overwrite the deduplication marker")
+
+        rebalance_service._record_execution_outcome(
+            config=SimpleNamespace(
+                execution_state_store=FakeStore(),
+                strategy_profile="soxl_soxx_trend_income",
+                dry_run_only=False,
+                execution_state_account_scope="LIVE",
+            ),
+            marker_key="v1/schwab/account/soxl_soxx_trend_income/live/2026-08-24/2026-08-25/next_trading_day",
+            result=SimpleNamespace(
+                trade_logs=("submitted",),
+                execution={
+                    "execution_status": "submitted",
+                    "broker_submission_done": True,
+                    "orders_pending_count": 1,
+                    "signal_date": "2026-08-24",
+                    "effective_date": "2026-08-25",
+                },
+            ),
+            plan={"account_hash": "account"},
+            notify_issue=lambda title, detail: notifications.append((title, detail)),
+        )
+
+        self.assertEqual(notifications, [])
+        self.assertEqual(len(outcomes), 1)
+        marker_key, metadata = outcomes[0]
+        self.assertIn("soxl_soxx_trend_income", marker_key)
+        self.assertTrue(metadata["broker_submission_done"])
+        self.assertEqual(metadata["orders_pending_count"], 1)
+
     def test_notification_delivery_summary_keeps_failed_transport_receipt(self):
         payload = rebalance_service._build_notification_delivery_summary(
             [
