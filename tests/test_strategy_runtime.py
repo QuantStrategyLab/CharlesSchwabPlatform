@@ -1,9 +1,12 @@
 import unittest
+from dataclasses import replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import strategy_runtime as strategy_runtime_module
+from quant_platform_kit.common.models import PortfolioSnapshot
+from quant_platform_kit.common.runtime_target import build_runtime_target
 from quant_platform_kit.strategy_contracts import (
     StrategyDecision,
     StrategyManifest,
@@ -102,6 +105,90 @@ def _build_runtime_settings(
 
 
 class StrategyRuntimeTests(unittest.TestCase):
+    def test_runtime_attaches_v2_capital_evidence_only_for_broker_liquidation_value(self):
+        entrypoint = _FakeEntrypoint()
+        runtime = strategy_runtime_module.LoadedStrategyRuntime(
+            entrypoint=entrypoint,
+            runtime_adapter=StrategyRuntimeAdapter(portfolio_input_name="portfolio_snapshot"),
+            runtime_settings=replace(
+                _build_runtime_settings("tqqq_growth_income"),
+                runtime_target=build_runtime_target(
+                    platform_id="schwab",
+                    strategy_profile="tqqq_growth_income",
+                    dry_run_only=False,
+                    account_scope="live-account-scope",
+                    service_name="schwab-live-service",
+                ),
+            ),
+        )
+        snapshot = PortfolioSnapshot(
+            as_of=datetime(2026, 8, 27, tzinfo=timezone.utc),
+            total_equity=1_000.0,
+            buying_power=100.0,
+            cash_balance=100.0,
+            metadata={
+                "total_equity_source": "broker_liquidation_value",
+                "source_digest_sha256": "a" * 64,
+            },
+        )
+
+        result = runtime.evaluate(
+            benchmark_history=[{"close": 1.0, "high": 1.0, "low": 1.0}],
+            portfolio_snapshot=snapshot,
+            signal_text_fn=str,
+            translator=lambda key, **_kwargs: key,
+        )
+
+        self.assertEqual(result.metadata["capital_base_status"], "verified:broker_account_net_liquidation")
+        self.assertEqual(
+            entrypoint.ctx.capabilities["capital_base"].to_safe_dict()["valuation_basis"],
+            "broker_account_net_liquidation",
+        )
+        self.assertEqual(
+            entrypoint.ctx.capabilities["capital_base_binding"].capital_scope.value,
+            "account",
+        )
+
+    def test_runtime_withholds_v2_capital_evidence_for_reconstructed_equity(self):
+        entrypoint = _FakeEntrypoint()
+        runtime = strategy_runtime_module.LoadedStrategyRuntime(
+            entrypoint=entrypoint,
+            runtime_adapter=StrategyRuntimeAdapter(portfolio_input_name="portfolio_snapshot"),
+            runtime_settings=replace(
+                _build_runtime_settings("tqqq_growth_income"),
+                runtime_target=build_runtime_target(
+                    platform_id="schwab",
+                    strategy_profile="tqqq_growth_income",
+                    dry_run_only=False,
+                    account_scope="live-account-scope",
+                    service_name="schwab-live-service",
+                ),
+            ),
+        )
+        snapshot = PortfolioSnapshot(
+            as_of=datetime(2026, 8, 27, tzinfo=timezone.utc),
+            total_equity=1_000.0,
+            buying_power=100.0,
+            cash_balance=100.0,
+            metadata={
+                "total_equity_source": "cash_available_plus_all_position_market_values",
+                "source_digest_sha256": "a" * 64,
+            },
+        )
+
+        result = runtime.evaluate(
+            benchmark_history=[{"close": 1.0, "high": 1.0, "low": 1.0}],
+            portfolio_snapshot=snapshot,
+            signal_text_fn=str,
+            translator=lambda key, **_kwargs: key,
+        )
+
+        self.assertEqual(
+            result.metadata["capital_base_status"],
+            "unavailable:non_broker_liquidation_value",
+        )
+        self.assertEqual(entrypoint.ctx.capabilities, {})
+
     def test_runtime_exposes_managed_symbols_and_benchmark(self):
         class _FixedDatetime:
             @classmethod

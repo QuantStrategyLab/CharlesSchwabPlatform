@@ -9,6 +9,12 @@ from quant_platform_kit.common.feature_snapshot_runtime import (
     FeatureSnapshotRuntimeSettings,
     evaluate_feature_snapshot_strategy,
 )
+from quant_platform_kit.common.capital_base import (
+    CapitalBaseBinding,
+    CapitalScope,
+    CapitalValuationBasis,
+    build_capital_base_snapshot,
+)
 from quant_platform_kit.strategy_contracts import (
     StrategyDecision,
     StrategyEntrypoint,
@@ -71,6 +77,70 @@ class LoadedStrategyRuntime:
         )
         return resolved
 
+    def _build_capital_base_capabilities(
+        self,
+        available_inputs: Mapping[str, Any],
+    ) -> tuple[dict[str, Any], str]:
+        """Adapt a verified Schwab account snapshot into v2 capital evidence.
+
+        A managed-symbol portfolio is intentionally insufficient here.  The
+        common Schwab adapter marks account snapshots that came directly from
+        the broker's liquidation value; only those snapshots can become an
+        account-level value-target denominator.  Missing or ambiguous facts
+        leave capabilities empty, which keeps strict strategies fail-closed.
+        """
+
+        snapshot = available_inputs.get("portfolio_snapshot")
+        runtime_target = self.runtime_settings.runtime_target
+        if snapshot is None:
+            return {}, "unavailable:portfolio_snapshot"
+        if runtime_target is None:
+            return {}, "unavailable:runtime_target"
+
+        account_scope = str(runtime_target.account_scope or "").strip()
+        runtime_scope = str(
+            runtime_target.service_name or runtime_target.deployment_selector or ""
+        ).strip()
+        if not account_scope or not runtime_scope:
+            return {}, "unavailable:runtime_scope"
+
+        metadata = getattr(snapshot, "metadata", {})
+        if not isinstance(metadata, Mapping):
+            return {}, "unavailable:portfolio_metadata"
+        if metadata.get("total_equity_source") != "broker_liquidation_value":
+            return {}, "unavailable:non_broker_liquidation_value"
+        source_digest = str(metadata.get("source_digest_sha256") or "").strip()
+        if not source_digest:
+            return {}, "unavailable:source_digest"
+
+        try:
+            capital_base = build_capital_base_snapshot(
+                snapshot,
+                account_scope=account_scope,
+                runtime_scope=runtime_scope,
+                strategy_scope=self.profile,
+                reported_currency="USD",
+                target_currency="USD",
+                fx_rate_to_target=1.0,
+                source_digest_sha256=source_digest,
+                capital_scope=CapitalScope.ACCOUNT,
+                valuation_basis=CapitalValuationBasis.BROKER_ACCOUNT_NET_LIQUIDATION,
+            )
+            binding = CapitalBaseBinding(
+                account_scope=account_scope,
+                runtime_scope=runtime_scope,
+                strategy_scope=self.profile,
+                target_currency="USD",
+                capital_scope=CapitalScope.ACCOUNT,
+                valuation_basis=CapitalValuationBasis.BROKER_ACCOUNT_NET_LIQUIDATION,
+            )
+        except (TypeError, ValueError):
+            return {}, "unavailable:invalid_capital_evidence"
+        return {
+            "capital_base": capital_base,
+            "capital_base_binding": binding,
+        }, "verified:broker_account_net_liquidation"
+
     def evaluate(
         self,
         *,
@@ -98,18 +168,23 @@ class LoadedStrategyRuntime:
                 logger=self.logger,
             )
         )
+        capabilities, capital_base_status = self._build_capital_base_capabilities(
+            resolved_available_inputs
+        )
         ctx = build_strategy_context_from_available_inputs(
             entrypoint=self.entrypoint,
             runtime_adapter=self.runtime_adapter,
             as_of=as_of,
             available_inputs=resolved_available_inputs,
             runtime_config=runtime_config,
+            capabilities=capabilities,
         )
         decision = self.entrypoint.evaluate(ctx)
         return StrategyEvaluationResult(
             decision=decision,
             metadata={
                 "strategy_profile": self.profile,
+                "capital_base_status": capital_base_status,
                 **build_execution_timing_metadata(
                     signal_date=as_of,
                     signal_effective_after_trading_days=(
