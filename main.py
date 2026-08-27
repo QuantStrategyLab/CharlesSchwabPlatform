@@ -4,6 +4,7 @@ import os
 import tempfile
 import time
 import traceback
+from zoneinfo import ZoneInfo
 
 from flask import Flask
 import requests
@@ -14,6 +15,9 @@ from application.runtime_report_summary import summarize_execution_cycle_result
 from application.runtime_composer import build_runtime_composer
 from application.runtime_strategy_adapters import build_runtime_strategy_adapters
 from application.rebalance_service import run_strategy_core as run_rebalance_cycle
+from application.paper_execution_command_consumer import (
+    consume_due_paper_execution_commands,
+)
 from application.signal_snapshot import build_signal_snapshot
 from decision_mapper import map_strategy_decision_to_plan
 from entrypoints.cloud_run import is_market_open_now
@@ -42,6 +46,8 @@ from quant_platform_kit.common.runtime_reports import (
     finalize_runtime_report,
     persist_runtime_report,
 )
+from quant_platform_kit.common.execution_commands import build_execution_command_store_from_env
+from quant_platform_kit.common.strategy_release import build_runtime_loaded_receipt
 from quant_platform_kit.common.strategy_plugins import (
     build_strategy_plugin_report_payload,
     load_configured_strategy_plugin_signals,
@@ -898,6 +904,125 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
             print(f"failed to persist execution report: {persist_exc}", flush=True)
 
 
+def _paper_command_consumer_runtime_is_isolated() -> bool:
+    runtime_target = getattr(RUNTIME_SETTINGS, "runtime_target", None)
+    return bool(
+        not getattr(RUNTIME_SETTINGS, "runtime_target_enabled", True)
+        and getattr(RUNTIME_SETTINGS, "dry_run_only", False)
+        and CASH_ONLY_EXECUTION
+        and str(getattr(runtime_target, "execution_mode", "") or "").strip().lower() == "paper"
+    )
+
+
+def _paper_command_consumer_session_date() -> str:
+    return datetime.now(ZoneInfo("America/New_York")).date().isoformat()
+
+
+def _paper_command_consumer_binding() -> dict[str, str] | None:
+    runtime_target = getattr(RUNTIME_SETTINGS, "runtime_target", None)
+    account_scope = str(getattr(runtime_target, "account_scope", "") or "").strip()
+    if not account_scope:
+        return None
+    return {
+        "platform": "schwab",
+        "account_scope": account_scope,
+        "strategy_profile": STRATEGY_PROFILE,
+    }
+
+
+def _handle_paper_execution_command_consumer():
+    """Run the isolated Schwab paper consumer without constructing an order port."""
+
+    if not _paper_command_consumer_runtime_is_isolated():
+        raise RuntimeError(
+            "paper command consumer requires a disabled runtime target with PAPER dry-run settings"
+        )
+    if not getattr(RUNTIME_SETTINGS, "paper_execution_command_consumer_enabled", False):
+        raise RuntimeError("paper command consumer is not enabled")
+
+    composer = build_composer()
+    reporting_adapters = composer.build_reporting_adapters()
+    log_context, report = reporting_adapters.start_run()
+    expected_release = getattr(getattr(RUNTIME_SETTINGS, "runtime_target", None), "strategy_release", None)
+    runtime_release_receipt = (
+        build_runtime_loaded_receipt(strategy_release=expected_release)
+        if expected_release is not None
+        else None
+    )
+    client_box: dict[str, object] = {}
+    market_data_box: dict[str, object] = {}
+
+    def _client():
+        if "client" not in client_box:
+            client_box["client"] = composer.build_client()
+        return client_box["client"]
+
+    def _portfolio_loader():
+        return composer.broker_adapters.build_portfolio_port(_client()).get_portfolio_snapshot()
+
+    def _market_data_port_loader():
+        if "market_data_port" not in market_data_box:
+            market_data_box["market_data_port"] = composer.broker_adapters.build_market_data_port(_client())
+        return market_data_box["market_data_port"]
+
+    try:
+        reporting_adapters.log_event(
+            log_context,
+            "paper_execution_command_consumer_started",
+            message="Starting isolated Schwab paper execution command consumer",
+        )
+        result = consume_due_paper_execution_commands(
+            store=build_execution_command_store_from_env(
+                platform_env_prefix="SCHWAB",
+                env_reader=os.getenv,
+                project_id=PROJECT_ID,
+            ),
+            as_of_session=_paper_command_consumer_session_date(),
+            claimant=str(os.getenv("K_SERVICE") or "schwab-paper-command-consumer"),
+            portfolio_loader=_portfolio_loader,
+            market_data_port_loader=_market_data_port_loader,
+            managed_symbols=MANAGED_SYMBOLS,
+            runtime_release_receipt=runtime_release_receipt,
+            expected_strategy_release=expected_release,
+            expected_command_binding=_paper_command_consumer_binding(),
+        )
+        finalize_runtime_report(
+            report,
+            status="ok" if result.get("status") == "ok" else "skipped",
+            summary={"paper_execution_command_consumer": result},
+        )
+        reporting_adapters.log_event(
+            log_context,
+            "paper_execution_command_consumer_completed",
+            message="Isolated Schwab paper execution command consumer completed",
+            result_status=result.get("status"),
+            commands_count=len(tuple(result.get("commands") or ())),
+        )
+        return "Paper Command Consumer OK", 200
+    except Exception as exc:
+        append_runtime_report_error(
+            report,
+            stage="paper_execution_command_consumer",
+            message=str(exc),
+            error_type=type(exc).__name__,
+        )
+        finalize_runtime_report(report, status="error")
+        reporting_adapters.log_event(
+            log_context,
+            "paper_execution_command_consumer_failed",
+            message="Isolated Schwab paper execution command consumer failed",
+            severity="ERROR",
+            error_type=type(exc).__name__,
+        )
+        return "Paper Command Consumer Error", 500
+    finally:
+        try:
+            report_path = reporting_adapters.persist_execution_report(report)
+            print(f"execution_report {report_path}", flush=True)
+        except Exception as persist_exc:
+            print(f"failed to persist execution report: {persist_exc}", flush=True)
+
+
 def _handle_schwab_probe(*, response_body: str = "Probe OK"):
     composer = None
     log_context = None
@@ -992,6 +1117,11 @@ def handle_schwab_dry_run():
         response_body="Dry Run OK",
         route_label="POST /dry-run",
     )
+
+
+@app.route("/paper-command-consumer", methods=["POST"])
+def handle_paper_execution_command_consumer():
+    return _handle_paper_execution_command_consumer()
 
 
 @app.route("/probe", methods=["POST", "GET"])

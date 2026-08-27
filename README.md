@@ -44,6 +44,11 @@ Direct runtime profiles can usually run from market history or portfolio state. 
 
 - `tests/`: unit, contract, and regression tests.
 - `.github/workflows/`: CI, scheduled jobs, release, or deployment workflows.
+
+## Paper command consumer
+
+The isolated, default-disabled Schwab paper command consumer is documented in
+[`docs/paper_execution_command_consumer.md`](docs/paper_execution_command_consumer.md).
 - `scripts/`: operator scripts and local helpers.
 - `research/`: research configs and non-live candidate artifacts.
 
