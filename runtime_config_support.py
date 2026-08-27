@@ -43,6 +43,7 @@ class PlatformRuntimeSettings:
     dry_run_only: bool
     runtime_target_enabled: bool = True
     paper_execution_admission_enabled: bool = False
+    paper_execution_command_consumer_enabled: bool = False
     reserved_cash_floor_usd: float = DEFAULT_RESERVED_CASH_FLOOR_USD
     reserved_cash_ratio: float = DEFAULT_RESERVED_CASH_RATIO
     safe_haven_cash_substitute_threshold_usd: float = DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD
@@ -188,11 +189,21 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
         "SCHWAB_PAPER_EXECUTION_ADMISSION_ENABLED",
         default=False,
     )
+    paper_execution_command_consumer_enabled = resolve_optional_bool_env(
+        "SCHWAB_PAPER_EXECUTION_COMMAND_CONSUMER_ENABLED",
+        default=False,
+    )
     if paper_execution_admission_enabled and (
         not dry_run_only or str(runtime_target.execution_mode or "").strip().lower() != "paper"
     ):
         raise EnvironmentError(
             "SCHWAB_PAPER_EXECUTION_ADMISSION_ENABLED requires a dry-run PAPER runtime target"
+        )
+    if paper_execution_command_consumer_enabled and (
+        not dry_run_only or str(runtime_target.execution_mode or "").strip().lower() != "paper"
+    ):
+        raise EnvironmentError(
+            "SCHWAB_PAPER_EXECUTION_COMMAND_CONSUMER_ENABLED requires a dry-run PAPER runtime target"
         )
     strategy_definition = resolve_strategy_definition(
         runtime_target.strategy_profile,
@@ -219,6 +230,7 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
         dry_run_only=dry_run_only,
         runtime_target_enabled=_runtime_target_enabled_env(),
         paper_execution_admission_enabled=paper_execution_admission_enabled,
+        paper_execution_command_consumer_enabled=paper_execution_command_consumer_enabled,
         reserved_cash_floor_usd=_resolve_non_negative_float_env(
             "SCHWAB_MIN_RESERVED_CASH_USD",
             default=DEFAULT_RESERVED_CASH_FLOOR_USD,
