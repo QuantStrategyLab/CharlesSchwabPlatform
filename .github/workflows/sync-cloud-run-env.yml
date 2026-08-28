@@ -32,6 +32,7 @@ jobs:
     env:
       ENABLE_GITHUB_CLOUD_RUN_DEPLOY: ${{ vars.ENABLE_GITHUB_CLOUD_RUN_DEPLOY }}
       ENABLE_GITHUB_ENV_SYNC: ${{ vars.ENABLE_GITHUB_ENV_SYNC }}
+      CLOUD_RUN_CLEANUP_ENABLED: ${{ vars.CLOUD_RUN_CLEANUP_ENABLED }}
       ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION: ${{ vars.ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION }}
       QSL_ENABLE_CLOUD_RUN_AUTOMATION: ${{ vars.QSL_ENABLE_CLOUD_RUN_AUTOMATION }}
       GCP_ARTIFACT_REGISTRY_HOSTNAME: ${{ vars.GCP_ARTIFACT_REGISTRY_HOSTNAME }}
@@ -242,6 +243,7 @@ jobs:
           fi
 
       - name: Validate deploy inputs
+        if: steps.config.outputs.deploy_enabled == 'true'
         run: |
           set -euo pipefail
 
@@ -275,6 +277,7 @@ jobs:
 
 
       - name: Build, push, and deploy Cloud Run image
+        if: steps.config.outputs.deploy_enabled == 'true'
         run: |
           set -euo pipefail
 
@@ -1015,7 +1018,7 @@ jobs:
           python3 scripts/reconcile_cloud_runtime.py cleanup-schedulers
 
       - name: Prune old Cloud Run revisions
-        if: steps.config.outputs.enabled == 'true'
+        if: steps.config.outputs.deploy_enabled == 'true' && env.CLOUD_RUN_CLEANUP_ENABLED == 'true'
         run: |
           set -euo pipefail
 
@@ -1064,6 +1067,7 @@ jobs:
           done
 
       - name: Clean up old Cloud Run images
+        if: steps.config.outputs.deploy_enabled == 'true' && env.CLOUD_RUN_CLEANUP_ENABLED == 'true'
         run: |
           set -euo pipefail
 
