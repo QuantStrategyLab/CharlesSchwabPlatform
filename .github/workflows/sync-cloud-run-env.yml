@@ -168,13 +168,13 @@ jobs:
           ref: ${{ github.sha }}
 
       - name: Set up Python for strategy requirement resolution
-        if: steps.config.outputs.env_sync_enabled == 'true'
+        if: steps.config.outputs.enabled == 'true'
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Install strategy status dependencies
-        if: steps.config.outputs.env_sync_enabled == 'true'
+        if: steps.config.outputs.enabled == 'true'
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip uv
@@ -274,6 +274,15 @@ jobs:
         with:
           project_id: ${{ env.GCP_PROJECT_ID }}
           version: ">= 416.0.0"
+
+      - name: Verify deployed runtime target admission before traffic shift
+        if: steps.config.outputs.deploy_enabled == 'true'
+        run: |
+          set -euo pipefail
+          uv run --no-sync python scripts/verify_deployed_runtime_target_admission.py \
+            --project="${GCP_PROJECT_ID}" \
+            --region="${CLOUD_RUN_REGION}" \
+            --service="${CLOUD_RUN_SERVICE}"
 
 
       - name: Build, push, and deploy Cloud Run image
