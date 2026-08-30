@@ -47,7 +47,9 @@ jobs:
       TELEGRAM_TOKEN_SECRET_NAME: ${{ vars.TELEGRAM_TOKEN_SECRET_NAME }}
       SCHWAB_API_KEY_SECRET_NAME: ${{ vars.SCHWAB_API_KEY_SECRET_NAME }}
       SCHWAB_APP_SECRET_SECRET_NAME: ${{ vars.SCHWAB_APP_SECRET_SECRET_NAME }}
-      RUNTIME_TARGET_JSON: ${{ secrets.RUNTIME_TARGET_JSON }}
+      # This is validated deployment intent, not credential material. Prefer the
+      # control-plane variable while retaining a legacy-secret fallback during migration.
+      RUNTIME_TARGET_JSON: ${{ vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}
       SCHWAB_DRY_RUN_ONLY: ${{ vars.SCHWAB_DRY_RUN_ONLY }}
       SCHWAB_FEATURE_SNAPSHOT_PATH: ${{ vars.SCHWAB_FEATURE_SNAPSHOT_PATH }}
       SCHWAB_FEATURE_SNAPSHOT_MANIFEST_PATH: ${{ vars.SCHWAB_FEATURE_SNAPSHOT_MANIFEST_PATH }}

@@ -24,7 +24,7 @@ jobs:
       id-token: write
     env:
       RUNTIME_TARGET_ENABLED: ${{ vars.RUNTIME_TARGET_ENABLED }}
-      RUNTIME_TARGET_JSON: ${{ secrets.RUNTIME_TARGET_JSON }}
+      RUNTIME_TARGET_JSON: ${{ vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}
       SCHWAB_DRY_RUN_ONLY: ${{ vars.SCHWAB_DRY_RUN_ONLY }}
       CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
       CLOUD_RUN_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
