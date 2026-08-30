@@ -95,8 +95,10 @@ jobs:
           RUNTIME_GUARD_FAIL_WORKFLOW_ON_ALERT: "true"
         run: |
           set -uo pipefail
+          set +e
           python scripts/cloud_run_runtime_guard.py > runtime-guard.log 2>&1
           exit_code=$?
+          set -e
           cat runtime-guard.log
           if [ "$exit_code" -eq 0 ]; then
             status=pass
@@ -129,8 +131,10 @@ jobs:
             exit 0
           fi
 
+          set +e
           python scripts/execution_report_heartbeat.py > execution-heartbeat.log 2>&1
           exit_code=$?
+          set -e
           cat execution-heartbeat.log
           if [ "$exit_code" -eq 0 ] && grep -qi 'heartbeat skipped' execution-heartbeat.log; then
             status=not_due
