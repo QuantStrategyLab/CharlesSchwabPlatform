@@ -848,7 +848,10 @@ def execute_rebalance_cycle(
     append_small_account_bootstrap_notes(allocation)
     target_values = dict(allocation["targets"])
     threshold = float(execution.get("trade_threshold_value", 0))
-    cash_sweep_symbol = str(portfolio["cash_sweep_symbol"])
+    # An omitted cash-sweep setting is represented as None by some broker
+    # account payloads.  Treat it as disabled instead of looking up a
+    # fictitious "NONE" quote later in the rebalance cycle.
+    cash_sweep_symbol = str(portfolio.get("cash_sweep_symbol") or "").strip().upper()
     dry_run_sale_events = []
     post_sell_buying_power_released = None
     confirmed_sell_release_value = 0.0
