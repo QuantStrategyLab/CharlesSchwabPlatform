@@ -21,6 +21,7 @@ from quant_platform_kit.common.runtime_target import (
     RuntimeTarget,
     resolve_runtime_target_from_env,
 )
+from quant_platform_kit.common.live_continuity import runtime_target_permits_standard_execution
 from strategy_registry import (
     SCHWAB_PLATFORM,
     resolve_strategy_definition,
@@ -228,7 +229,10 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
         strategy_metadata=strategy_metadata,
         notify_lang=os.getenv("QSL_NOTIFY_LANG") or os.getenv("NOTIFY_LANG", DEFAULT_NOTIFY_LANG),
         dry_run_only=dry_run_only,
-        runtime_target_enabled=_runtime_target_enabled_env(),
+        runtime_target_enabled=(
+            _runtime_target_enabled_env()
+            and runtime_target_permits_standard_execution(runtime_target)
+        ),
         paper_execution_admission_enabled=paper_execution_admission_enabled,
         paper_execution_command_consumer_enabled=paper_execution_command_consumer_enabled,
         reserved_cash_floor_usd=_resolve_non_negative_float_env(
