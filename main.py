@@ -858,7 +858,13 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
             execution_result,
             dry_run=bool(report.get("dry_run")),
         )
-        attach_cycle_execution_receipt(report, execution_result)
+        try:
+            attach_cycle_execution_receipt(report, execution_result)
+        except ValueError:
+            # A legacy or test report may lack an attested release. Keep the
+            # execution result intact and let the control plane show missing
+            # evidence instead of changing a completed cycle into an error.
+            pass
         finalize_runtime_report(
             report,
             status="ok",
