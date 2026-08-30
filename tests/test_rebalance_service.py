@@ -395,7 +395,7 @@ class RebalanceServiceTests(unittest.TestCase):
                 "market_values": {"SOXL": 0.0},
                 "quantities": {"SOXL": 0},
                 "liquid_cash": 1000.0,
-                "cash_sweep_symbol": "",
+                "cash_sweep_symbol": None,
             },
             "execution": {
                 "trade_threshold_value": 10.0,
