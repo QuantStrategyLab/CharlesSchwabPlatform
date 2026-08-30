@@ -10,6 +10,10 @@ from flask import Flask
 import requests
 
 from quant_platform_kit.common.platform_runner import dispatch_due_monitors, load_monitor_targets
+from application.execution_receipt_adapter import (
+    attach_cycle_execution_receipt,
+    attach_terminal_fallback_execution_receipt,
+)
 from application.runtime_broker_adapters import build_runtime_broker_adapters
 from application.runtime_report_summary import summarize_execution_cycle_result
 from application.runtime_composer import build_runtime_composer
@@ -854,6 +858,13 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
             execution_result,
             dry_run=bool(report.get("dry_run")),
         )
+        try:
+            attach_cycle_execution_receipt(report, execution_result)
+        except ValueError:
+            # A legacy or test report may lack an attested release. Keep the
+            # execution result intact and let the control plane show missing
+            # evidence instead of changing a completed cycle into an error.
+            pass
         finalize_runtime_report(
             report,
             status="ok",
@@ -894,6 +905,13 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
         )
         return "Error", 500
     finally:
+        if "execution_receipt" not in report:
+            try:
+                attach_terminal_fallback_execution_receipt(report)
+            except ValueError:
+                # An unattested legacy target remains evidence-missing; the
+                # report-only path must not alter execution behavior.
+                pass
         try:
             if dry_run_only_override is None:
                 report_path = persist_execution_report(report)
