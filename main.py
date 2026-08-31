@@ -14,6 +14,11 @@ from application.execution_receipt_adapter import (
     attach_cycle_execution_receipt,
     attach_terminal_fallback_execution_receipt,
 )
+from application.broker_reconciliation import (
+    SchwabReconciliationReadError,
+    build_reconciliation_candidate,
+    collect_read_only_reconciliation_observations,
+)
 from application.runtime_broker_adapters import build_runtime_broker_adapters
 from application.runtime_report_summary import summarize_execution_cycle_result
 from application.runtime_composer import build_runtime_composer
@@ -1117,6 +1122,91 @@ def _handle_schwab_probe(*, response_body: str = "Probe OK"):
             print(f"failed to persist execution report: {persist_exc}", flush=True)
 
 
+def _handle_reconciliation():
+    """Collect a no-order, fail-closed recovery candidate for Schwab.
+
+    The response intentionally contains only contract digests and reason codes.
+    It cannot change the runtime target, reset a breaker, or submit an order.
+    """
+
+    composer = build_composer(dry_run_only_override=True)
+    reporting_adapters = composer.build_reporting_adapters()
+    log_context, report = reporting_adapters.start_run()
+    try:
+        runtime_target = RUNTIME_SETTINGS.runtime_target
+        if runtime_target is None:
+            raise SchwabReconciliationReadError(
+                "Schwab reconciliation requires an explicit runtime target."
+            )
+        if str(getattr(getattr(runtime_target, "live_continuity", None), "state", "")).upper() != "RECONCILE_ONLY":
+            raise SchwabReconciliationReadError(
+                "Schwab reconciliation is only available for a frozen baseline."
+            )
+        reporting_adapters.log_event(
+            log_context,
+            "broker_reconciliation_received",
+            message="Received read-only broker reconciliation request",
+            execution_window="reconciliation",
+        )
+        observations = collect_read_only_reconciliation_observations(
+            composer.build_client(),
+            fetch_account_snapshot=fetch_account_snapshot,
+        )
+        candidate = build_reconciliation_candidate(
+            observations=observations,
+            runtime_target=runtime_target,
+            project_id=PROJECT_ID,
+        )
+        payload = candidate.to_safe_dict()
+        finalize_runtime_report(
+            report,
+            status="ok",
+            summary={
+                "broker_reconciliation_permits_active_lkg": candidate.permits_active_lkg,
+                "broker_reconciliation_blockers_count": len(candidate.recovery_blockers),
+                "broker_reconciliation_ledger_records_count": candidate.execution_ledger_records_count,
+            },
+            diagnostics={"broker_reconciliation": payload},
+        )
+        reporting_adapters.log_event(
+            log_context,
+            "broker_reconciliation_completed",
+            message="Read-only broker reconciliation completed",
+            execution_window="reconciliation",
+            permits_active_lkg=candidate.permits_active_lkg,
+            blockers=[finding.value for finding in candidate.recovery_blockers],
+        )
+        return json.dumps(payload, ensure_ascii=False), 200, {"Content-Type": "application/json"}
+    except Exception as exc:
+        append_runtime_report_error(
+            report,
+            stage="broker_reconciliation",
+            message="Read-only broker reconciliation did not complete.",
+            error_type=type(exc).__name__,
+            failure_category="broker_reconciliation",
+        )
+        finalize_runtime_report(
+            report,
+            status="error",
+            diagnostics={"broker_reconciliation_failure": type(exc).__name__},
+        )
+        reporting_adapters.log_event(
+            log_context,
+            "broker_reconciliation_failed",
+            message="Read-only broker reconciliation failed",
+            severity="ERROR",
+            execution_window="reconciliation",
+            error_type=type(exc).__name__,
+        )
+        return "Reconciliation Unavailable", 503
+    finally:
+        try:
+            report_path = persist_execution_report(report, dry_run_only_override=True)
+            print(f"execution_report {report_path}", flush=True)
+        except Exception as persist_exc:
+            print(f"failed to persist reconciliation report: {type(persist_exc).__name__}", flush=True)
+
+
 @app.route("/", methods=["POST", "GET"])
 @app.route("/run", methods=["POST", "GET"])
 def handle_schwab():
@@ -1148,6 +1238,11 @@ def handle_schwab_probe():
         _handle_schwab_probe,
         route_label="POST /probe",
     )
+
+
+@app.route("/reconcile", methods=["POST"])
+def handle_reconciliation():
+    return _handle_reconciliation()
 
 
 @app.route("/monitor-dispatch", methods=["POST", "GET"])
