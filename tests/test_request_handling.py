@@ -20,7 +20,9 @@ if str(UES_SRC) not in sys.path:
     sys.path.insert(0, str(UES_SRC))
 
 
-def install_stub_modules(strategy_plugin_mounts_json=None, notify_lang="en"):
+def install_stub_modules(
+    strategy_plugin_mounts_json=None, notify_lang="en", flask_module_override=None
+):
     flask_module = types.ModuleType("flask")
 
     class Flask:
@@ -308,8 +310,20 @@ def install_stub_modules(strategy_plugin_mounts_json=None, notify_lang="en"):
     runtime_strategy_adapters_module = types.ModuleType("application.runtime_strategy_adapters")
     runtime_strategy_adapters_module.build_runtime_strategy_adapters = lambda **kwargs: FakeStrategyAdapters(**kwargs)
 
+    runtime_reporting_adapters_module = types.ModuleType(
+        "application.runtime_reporting_adapters"
+    )
+
     rebalance_service_module = types.ModuleType("application.rebalance_service")
     rebalance_service_module.run_strategy_core = lambda *args, **kwargs: None
+
+    broker_reconciliation_module = types.ModuleType("application.broker_reconciliation")
+    broker_reconciliation_module.SchwabReconciliationReadError = RuntimeError
+    broker_reconciliation_module.build_reconciliation_candidate = lambda *args, **kwargs: None
+    broker_reconciliation_module.collect_read_only_reconciliation_observations = lambda *args, **kwargs: ()
+
+    paper_execution_command_consumer_module = types.ModuleType("application.paper_execution_command_consumer")
+    paper_execution_command_consumer_module.consume_due_paper_execution_commands = lambda *args, **kwargs: None
 
     runtime_report_summary_module = types.ModuleType("application.runtime_report_summary")
     runtime_report_summary_module.summarize_execution_cycle_result = lambda *args, **kwargs: {}
@@ -339,6 +353,16 @@ def install_stub_modules(strategy_plugin_mounts_json=None, notify_lang="en"):
     qpk_platform_runner_module = types.ModuleType("quant_platform_kit.common.platform_runner")
     qpk_platform_runner_module.dispatch_due_monitors = lambda *args, **kwargs: {"ok": True, "dispatched": []}
     qpk_platform_runner_module.load_monitor_targets = lambda *args, **kwargs: []
+
+    qpk_execution_receipts_module = types.ModuleType("quant_platform_kit.common.execution_receipts")
+    qpk_execution_receipts_module.resolve_execution_receipt_fact = lambda **_kwargs: ("unknown", "unconfirmed")
+    qpk_execution_receipts_module.attach_runtime_execution_receipt = lambda report, **_kwargs: report
+
+    qpk_execution_commands_module = types.ModuleType("quant_platform_kit.common.execution_commands")
+    qpk_execution_commands_module.build_execution_command_store_from_env = lambda **_kwargs: None
+
+    qpk_strategy_release_module = types.ModuleType("quant_platform_kit.common.strategy_release")
+    qpk_strategy_release_module.build_runtime_loaded_receipt = lambda **_kwargs: None
 
     qpk_plugin_alerts_module = types.ModuleType("quant_platform_kit.notifications.strategy_plugin_alerts")
     qpk_plugin_alerts_module.StrategyPluginAlertStateSettings = FakeStrategyPluginAlertStateSettings
@@ -447,13 +471,16 @@ def install_stub_modules(strategy_plugin_mounts_json=None, notify_lang="en"):
     runtime_execution_policy_module.dca_execution_unsupported_reason = lambda _profile: None
 
     modules = {
-        "flask": flask_module,
+        "flask": flask_module_override or flask_module,
         "requests": requests_module,
         "pandas": pandas_module,
         "application.runtime_broker_adapters": runtime_broker_adapters_module,
         "application.runtime_composer": runtime_composer_module,
+        "application.runtime_reporting_adapters": runtime_reporting_adapters_module,
         "application.runtime_strategy_adapters": runtime_strategy_adapters_module,
         "application.rebalance_service": rebalance_service_module,
+        "application.broker_reconciliation": broker_reconciliation_module,
+        "application.paper_execution_command_consumer": paper_execution_command_consumer_module,
         "application.runtime_report_summary": runtime_report_summary_module,
         "application.signal_snapshot": signal_snapshot_module,
         "decision_mapper": decision_mapper_module,
@@ -461,7 +488,10 @@ def install_stub_modules(strategy_plugin_mounts_json=None, notify_lang="en"):
         "notifications.telegram": telegram_module,
         "quant_platform_kit": quant_platform_kit_module,
         "quant_platform_kit.common": qpk_common_module,
+        "quant_platform_kit.common.execution_receipts": qpk_execution_receipts_module,
+        "quant_platform_kit.common.execution_commands": qpk_execution_commands_module,
         "quant_platform_kit.common.platform_runner": qpk_platform_runner_module,
+        "quant_platform_kit.common.strategy_release": qpk_strategy_release_module,
         "quant_platform_kit.notifications": qpk_notifications_module,
         "quant_platform_kit.notifications.cycle_channel": qpk_cycle_channel_module,
         "quant_platform_kit.notifications.strategy_plugin_alerts": qpk_plugin_alerts_module,
@@ -513,8 +543,8 @@ class RequestHandlingTests(unittest.TestCase):
     def test_cloud_run_route_contracts_are_registered(self):
         module = load_module()
 
-        self.assertIs(module.app._routes[("/", ("POST", "GET"))], module.handle_schwab)
-        self.assertIs(module.app._routes[("/run", ("POST", "GET"))], module.handle_schwab)
+        self.assertIs(module.app._routes[("/", ("POST",))], module.handle_schwab)
+        self.assertIs(module.app._routes[("/run", ("POST",))], module.handle_schwab)
         self.assertIs(
             module.app._routes[("/precheck", ("POST", "GET"))],
             module.handle_schwab_dry_run,
@@ -524,7 +554,7 @@ class RequestHandlingTests(unittest.TestCase):
             module.handle_schwab_dry_run,
         )
         self.assertIs(
-            module.app._routes[("/probe", ("POST", "GET"))],
+            module.app._routes[("/probe", ("POST",))],
             module.handle_schwab_probe,
         )
         self.assertIs(
@@ -532,6 +562,7 @@ class RequestHandlingTests(unittest.TestCase):
             module.handle_monitor_dispatch,
         )
         self.assertIs(module.app._routes[("/health", ("GET",))], module.health)
+        self.assertIs(module.app._routes[("/healthz", ("GET",))], module.health)
 
     def test_handle_monitor_dispatch_post_dispatches_due_targets(self):
         module = load_module()
@@ -559,6 +590,52 @@ class RequestHandlingTests(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertEqual(body, "OK")
+
+    def test_get_runtime_routes_are_rejected_without_strategy_or_broker_side_effects(
+        self,
+    ):
+        real_flask_module = importlib.import_module("flask")
+        with install_stub_modules(flask_module_override=real_flask_module):
+            with patch.dict(
+                os.environ,
+                {
+                    "SCHWAB_API_KEY": "app-key",
+                    "SCHWAB_APP_SECRET": "app-secret",
+                    "GLOBAL_TELEGRAM_CHAT_ID": "shared-chat-id",
+                    "GOOGLE_CLOUD_PROJECT": "test-project",
+                },
+                clear=False,
+            ):
+                sys.modules.pop("main", None)
+                module = importlib.import_module("main")
+                side_effect_calls = []
+
+                def fail_on_call(*args, **kwargs):
+                    side_effect_calls.append((args, kwargs))
+                    raise AssertionError("GET must not invoke strategy or broker code")
+
+                for name in (
+                    "_route_with_runtime_error_fallback",
+                    "_handle_schwab_cycle",
+                    "_handle_schwab_probe",
+                    "get_client_from_secret",
+                    "fetch_account_snapshot",
+                    "submit_equity_order",
+                    "run_rebalance_cycle",
+                ):
+                    setattr(module, name, fail_on_call)
+
+                client = module.app.test_client()
+                statuses = {
+                    path: client.get(path).status_code
+                    for path in ("/", "/run", "/probe", "/health", "/healthz")
+                }
+
+        self.assertEqual(
+            statuses,
+            {"/": 405, "/run": 405, "/probe": 405, "/health": 200, "/healthz": 200},
+        )
+        self.assertEqual(side_effect_calls, [])
 
     def test_build_strategy_runtime_overrides_applies_dca_settings(self):
         module = load_module()
