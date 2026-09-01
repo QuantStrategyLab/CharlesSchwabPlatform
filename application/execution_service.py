@@ -622,12 +622,22 @@ def execute_rebalance_cycle(
     def load_quotes(symbols):
         quotes = {}
         for symbol in symbols:
-            snapshot = market_data_port.get_quote(symbol)
+            try:
+                snapshot = market_data_port.get_quote(symbol)
+            except Exception:
+                snapshot = None
             quotes[symbol] = {
-                "lastPrice": snapshot.last_price,
-                "askPrice": snapshot.ask_price or snapshot.last_price,
+                "lastPrice": getattr(snapshot, "last_price", None),
+                "askPrice": getattr(snapshot, "ask_price", None)
+                or getattr(snapshot, "last_price", None),
             }
         return quotes
+
+    def quote_has_usable_last_price(quote):
+        try:
+            return float(dict(quote or {}).get("lastPrice")) > 0.0
+        except (TypeError, ValueError):
+            return False
 
     def buying_power_from_plan(current_portfolio, current_execution):
         current_liquid_cash = float(current_portfolio["liquid_cash"])
@@ -640,6 +650,35 @@ def execute_rebalance_cycle(
     submitted_orders: list[dict] = []
     small_account_cash_note_messages: set[str] = set()
     small_account_bootstrap_note_messages: set[str] = set()
+
+    unavailable_quote_symbols = tuple(
+        symbol for symbol in strategy_symbols if not quote_has_usable_last_price(quotes.get(symbol))
+    )
+    if unavailable_quote_symbols:
+        message = translator(
+            "market_data_unavailable",
+            symbols=", ".join(unavailable_quote_symbols),
+        )
+        trade_logs.append(message)
+        publish_order_issue(message)
+        result_execution = dict(execution or {})
+        result_execution.update(
+            {
+                "execution_status": "deferred_market_data",
+                "broker_submission_done": False,
+                "orders_pending_count": 0,
+                "market_data_retry_required": True,
+                "market_data_missing_symbols": list(unavailable_quote_symbols),
+            }
+        )
+        return ExecutionCycleResult(
+            plan=dict(plan or {}),
+            portfolio=dict(portfolio or {}),
+            execution=result_execution,
+            allocation=dict(allocation or {}),
+            trade_logs=tuple(trade_logs),
+            submitted_orders=(),
+        )
 
     def append_small_account_cash_notes(current_allocation):
         for message in format_small_account_cash_substitution_notes(
