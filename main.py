@@ -1207,8 +1207,8 @@ def _handle_reconciliation():
             print(f"failed to persist reconciliation report: {type(persist_exc).__name__}", flush=True)
 
 
-@app.route("/", methods=["POST", "GET"])
-@app.route("/run", methods=["POST", "GET"])
+@app.route("/", methods=["POST"])
+@app.route("/run", methods=["POST"])
 def handle_schwab():
     return _route_with_runtime_error_fallback(
         _handle_schwab_cycle,
@@ -1232,7 +1232,7 @@ def handle_paper_execution_command_consumer():
     return _handle_paper_execution_command_consumer()
 
 
-@app.route("/probe", methods=["POST", "GET"])
+@app.route("/probe", methods=["POST"])
 def handle_schwab_probe():
     return _route_with_runtime_error_fallback(
         _handle_schwab_probe,
