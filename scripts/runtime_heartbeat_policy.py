@@ -49,6 +49,14 @@ def _enabled(value: Any, *, default: bool = True) -> bool:
     return str(value).strip().lower() not in {"0", "false", "no", "n", "off"}
 
 
+def runtime_target_permits_standard_execution(runtime_target: Mapping[str, Any]) -> bool:
+    """Return whether the generic execution heartbeat should require a receipt."""
+
+    continuity = _mapping(runtime_target.get("live_continuity"))
+    state = str(continuity.get("state") or "").strip().upper()
+    return not state or state in {"ACTIVE_LKG", "ROLLBACK_LKG"}
+
+
 def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
@@ -317,7 +325,7 @@ def runtime_target_configuration_has_enabled_targets(
         )
         if enabled_value is None:
             enabled_value = runtime_target.get("runtime_target_enabled")
-        if _enabled(enabled_value):
+        if _enabled(enabled_value) and runtime_target_permits_standard_execution(runtime_target):
             return True
     return False
 
@@ -342,7 +350,10 @@ def load_runtime_targets(
         )
         if enabled_value is None:
             enabled_value = runtime_target.get("runtime_target_enabled")
-        enabled = _enabled(enabled_value)
+        enabled = (
+            _enabled(enabled_value)
+            and runtime_target_permits_standard_execution(runtime_target)
+        )
         if not enabled and not include_disabled:
             continue
         target_scope = _first_value(
