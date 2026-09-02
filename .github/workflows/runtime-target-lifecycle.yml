@@ -47,6 +47,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+
       - name: Resolve declared no-order target state
         id: target_state
         run: |
@@ -88,6 +91,11 @@ jobs:
         with:
           project_id: ${{ env.GCP_PROJECT_ID }}
 
+      - name: Install locked runtime dependencies
+        run: |
+          set -euo pipefail
+          uv sync --frozen --no-dev
+
       - name: Check Cloud Run runtime without notification side effects
         id: runtime_guard
         env:
@@ -96,7 +104,7 @@ jobs:
         run: |
           set -uo pipefail
           set +e
-          python scripts/cloud_run_runtime_guard.py > runtime-guard.log 2>&1
+          uv run --no-sync python scripts/cloud_run_runtime_guard.py > runtime-guard.log 2>&1
           exit_code=$?
           set -e
           cat runtime-guard.log
