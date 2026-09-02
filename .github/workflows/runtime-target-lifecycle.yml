@@ -47,6 +47,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+
       - name: Resolve declared no-order target state
         id: target_state
         run: |
@@ -88,6 +91,11 @@ jobs:
         with:
           project_id: ${{ env.GCP_PROJECT_ID }}
 
+      - name: Install locked runtime dependencies
+        run: |
+          set -euo pipefail
+          uv sync --frozen --no-dev
+
       - name: Check Cloud Run runtime without notification side effects
         id: runtime_guard
         env:
@@ -96,25 +104,19 @@ jobs:
         run: |
           set -uo pipefail
           set +e
-          python scripts/cloud_run_runtime_guard.py > runtime-guard.log 2>&1
+          uv run --no-sync python scripts/cloud_run_runtime_guard.py > runtime-guard.log 2>&1
           exit_code=$?
           set -e
           cat runtime-guard.log
           if [ "$exit_code" -eq 0 ]; then
             status=pass
-          elif grep -Eqi 'log query failed|internal error|network|timed out|unable to list' runtime-guard.log; then
+          elif grep -Eqi 'traceback|importerror|modulenotfounderror|log query failed|internal error|network|timed out|unable to list' runtime-guard.log; then
             status=unavailable
           else
             status=attention
           fi
           echo "status=$status" >> "$GITHUB_OUTPUT"
           exit 0
-
-      - name: Install market calendar for enabled heartbeat
-        if: ${{ steps.target_state.outputs.configured_state == 'enabled' }}
-        run: >-
-          python -m pip install --disable-pip-version-check
-          --retries 3 --timeout 30 "pandas-market-calendars==5.4.0"
 
       - name: Check enabled execution heartbeat without notification side effects
         id: execution_heartbeat
@@ -132,7 +134,7 @@ jobs:
           fi
 
           set +e
-          python scripts/execution_report_heartbeat.py > execution-heartbeat.log 2>&1
+          uv run --no-sync python scripts/execution_report_heartbeat.py > execution-heartbeat.log 2>&1
           exit_code=$?
           set -e
           cat execution-heartbeat.log
@@ -140,7 +142,7 @@ jobs:
             status=not_due
           elif [ "$exit_code" -eq 0 ]; then
             status=pass
-          elif grep -Eqi 'gcloud|storage|network|timed out|internal error|unable to list' execution-heartbeat.log; then
+          elif grep -Eqi 'traceback|importerror|modulenotfounderror|gcloud|storage|network|timed out|internal error|unable to list' execution-heartbeat.log; then
             status=unavailable
           else
             status=attention

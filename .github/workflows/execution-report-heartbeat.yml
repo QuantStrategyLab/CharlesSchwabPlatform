@@ -87,14 +87,16 @@ jobs:
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v3
 
-      - name: Install market calendar
-        continue-on-error: true
-        run: >-
-          python -m pip install --disable-pip-version-check
-          --retries 3 --timeout 30 "pandas-market-calendars==5.4.0"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+
+      - name: Install locked runtime dependencies
+        run: |
+          set -euo pipefail
+          uv sync --frozen --no-dev
 
       - name: Check recent execution report
-        run: python scripts/execution_report_heartbeat.py
+        run: uv run --no-sync python scripts/execution_report_heartbeat.py
 
       - name: Publish read-only runtime execution evidence
         uses: QuantStrategyLab/QuantRuntimeSettings/actions/publish-runtime-execution-evidence@30586b189027cac1ba93aff3853140f4e01bd3a2
