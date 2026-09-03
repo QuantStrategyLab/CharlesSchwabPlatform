@@ -100,7 +100,7 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertTrue(settings.dry_run_only)
         self.assertEqual(settings.runtime_target.platform_id, "schwab")
         self.assertEqual(settings.runtime_target.execution_mode, "live")
-        self.assertTrue(settings.runtime_target_enabled)
+        self.assertFalse(settings.runtime_target_enabled)
         self.assertFalse(settings.paper_execution_admission_enabled)
         self.assertFalse(settings.paper_execution_command_consumer_enabled)
         self.assertEqual(settings.reserved_cash_floor_usd, DEFAULT_RESERVED_CASH_FLOOR_USD)
