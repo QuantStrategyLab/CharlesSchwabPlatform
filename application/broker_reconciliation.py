@@ -27,6 +27,7 @@ from quant_platform_kit.common.execution_state import build_execution_marker_sto
 SCHWAB_RECONCILIATION_EXPECTED_DIGESTS_ENV = "SCHWAB_RECONCILIATION_EXPECTED_DIGESTS_JSON"
 SCHWAB_RECONCILIATION_ENABLED_ENV = "SCHWAB_BROKER_RECONCILIATION_ENABLED"
 _EXPECTED_DIGEST_KEYS = (
+    "account_scope_sha256",
     "positions_sha256",
     "cash_sha256",
     "open_orders_sha256",
@@ -333,11 +334,15 @@ def build_reconciliation_candidate(
         now=timestamp,
         expected_platform_id=platform_id,
         expected_strategy_profile=strategy_profile,
-        expected_account_scope_sha256=calculate_broker_observation_sha256(observations.account_scope),
+        expected_account_scope_sha256=(expected or {}).get("account_scope_sha256"),
         expected_baseline_id=baseline_id,
         expected_runtime_target_sha256=runtime_target_sha256,
         baseline_reference_available=expected is not None,
-        **{f"expected_{key}": (expected or {}).get(key) for key in _EXPECTED_DIGEST_KEYS},
+        **{
+            f"expected_{key}": (expected or {}).get(key)
+            for key in _EXPECTED_DIGEST_KEYS
+            if key != "account_scope_sha256"
+        },
     )
     return SchwabReconciliationCandidate(
         evidence=evidence,
