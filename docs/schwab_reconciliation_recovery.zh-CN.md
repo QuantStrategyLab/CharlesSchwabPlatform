@@ -4,6 +4,10 @@
 `schwab_reconciliation_candidate.v1`。它只读取账户身份、全部持仓、现金/购买力、
 近七日订单与成交，以及本地幂等执行账本；不会调用下单、撤单、策略、插件或状态切换。
 
+该入口默认关闭。只有显式设置 `SCHWAB_BROKER_RECONCILIATION_ENABLED=true`、
+只读 collector 可用且运行目标仍为 `RECONCILE_ONLY` 时，才会创建券商客户端。
+返回成功前还必须通过 QPK `broker_reconciliation_evidence.v1` 回执校验。
+
 响应和运行报告只包含 SHA-256、布尔核验结果、记录数量及稳定原因码。账户 hash、余额、
 仓位、订单与成交明细不得写入响应、日志、通知或公开工件。
 

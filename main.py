@@ -18,6 +18,8 @@ from application.broker_reconciliation import (
     SchwabReconciliationReadError,
     build_reconciliation_candidate,
     collect_read_only_reconciliation_observations,
+    validate_reconciliation_candidate,
+    validate_reconciliation_preconditions,
 )
 from application.runtime_broker_adapters import build_runtime_broker_adapters
 from application.runtime_report_summary import summarize_execution_cycle_result
@@ -68,6 +70,10 @@ from runtime_logging import build_run_id, emit_runtime_log
 from strategy_runtime import load_strategy_runtime
 
 app = Flask(__name__)
+
+READ_ONLY_BROKER_RECONCILIATION_COLLECTOR = (
+    collect_read_only_reconciliation_observations
+)
 
 
 def get_project_id():
@@ -1129,26 +1135,26 @@ def _handle_reconciliation():
     It cannot change the runtime target, reset a breaker, or submit an order.
     """
 
+    runtime_target = RUNTIME_SETTINGS.runtime_target
+    try:
+        validate_reconciliation_preconditions(
+            runtime_target=runtime_target,
+            collector=READ_ONLY_BROKER_RECONCILIATION_COLLECTOR,
+        )
+    except SchwabReconciliationReadError:
+        return "Reconciliation Unavailable", 503
+
     composer = build_composer(dry_run_only_override=True)
     reporting_adapters = composer.build_reporting_adapters()
     log_context, report = reporting_adapters.start_run()
     try:
-        runtime_target = RUNTIME_SETTINGS.runtime_target
-        if runtime_target is None:
-            raise SchwabReconciliationReadError(
-                "Schwab reconciliation requires an explicit runtime target."
-            )
-        if str(getattr(getattr(runtime_target, "live_continuity", None), "state", "")).upper() != "RECONCILE_ONLY":
-            raise SchwabReconciliationReadError(
-                "Schwab reconciliation is only available for a frozen baseline."
-            )
         reporting_adapters.log_event(
             log_context,
             "broker_reconciliation_received",
             message="Received read-only broker reconciliation request",
             execution_window="reconciliation",
         )
-        observations = collect_read_only_reconciliation_observations(
+        observations = READ_ONLY_BROKER_RECONCILIATION_COLLECTOR(
             composer.build_client(),
             fetch_account_snapshot=fetch_account_snapshot,
         )
@@ -1157,7 +1163,7 @@ def _handle_reconciliation():
             runtime_target=runtime_target,
             project_id=PROJECT_ID,
         )
-        payload = candidate.to_safe_dict()
+        payload = validate_reconciliation_candidate(candidate)
         finalize_runtime_report(
             report,
             status="ok",

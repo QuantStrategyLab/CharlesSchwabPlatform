@@ -321,6 +321,17 @@ def install_stub_modules(
     broker_reconciliation_module.SchwabReconciliationReadError = RuntimeError
     broker_reconciliation_module.build_reconciliation_candidate = lambda *args, **kwargs: None
     broker_reconciliation_module.collect_read_only_reconciliation_observations = lambda *args, **kwargs: ()
+    broker_reconciliation_module.validate_reconciliation_candidate = lambda candidate: candidate.to_safe_dict()
+
+    def validate_reconciliation_preconditions(*, runtime_target, collector):
+        if os.getenv("SCHWAB_BROKER_RECONCILIATION_ENABLED", "").strip().lower() != "true":
+            raise RuntimeError("disabled")
+        if not callable(collector):
+            raise RuntimeError("collector unavailable")
+        if runtime_target is None:
+            raise RuntimeError("runtime target unavailable")
+
+    broker_reconciliation_module.validate_reconciliation_preconditions = validate_reconciliation_preconditions
 
     paper_execution_command_consumer_module = types.ModuleType("application.paper_execution_command_consumer")
     paper_execution_command_consumer_module.consume_due_paper_execution_commands = lambda *args, **kwargs: None
@@ -558,6 +569,10 @@ class RequestHandlingTests(unittest.TestCase):
             module.handle_schwab_probe,
         )
         self.assertIs(
+            module.app._routes[("/reconcile", ("POST",))],
+            module.handle_reconciliation,
+        )
+        self.assertIs(
             module.app._routes[("/monitor-dispatch", ("POST", "GET"))],
             module.handle_monitor_dispatch,
         )
@@ -590,6 +605,38 @@ class RequestHandlingTests(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertEqual(body, "OK")
+
+    def test_reconciliation_defaults_off_before_building_broker_context(self):
+        module = load_module()
+        module.build_composer = lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("disabled reconciliation must not build broker context")
+        )
+
+        with patch.dict(
+            os.environ,
+            {"SCHWAB_BROKER_RECONCILIATION_ENABLED": ""},
+            clear=False,
+        ):
+            body, status = module.handle_reconciliation()
+
+        self.assertEqual((body, status), ("Reconciliation Unavailable", 503))
+
+    def test_reconciliation_requires_collector_before_building_broker_context(self):
+        module = load_module()
+        module.RUNTIME_SETTINGS = types.SimpleNamespace(runtime_target=object())
+        module.READ_ONLY_BROKER_RECONCILIATION_COLLECTOR = None
+        module.build_composer = lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("missing collector must not build broker context")
+        )
+
+        with patch.dict(
+            os.environ,
+            {"SCHWAB_BROKER_RECONCILIATION_ENABLED": "true"},
+            clear=False,
+        ):
+            body, status = module.handle_reconciliation()
+
+        self.assertEqual((body, status), ("Reconciliation Unavailable", 503))
 
     def test_get_runtime_routes_are_rejected_without_strategy_or_broker_side_effects(
         self,

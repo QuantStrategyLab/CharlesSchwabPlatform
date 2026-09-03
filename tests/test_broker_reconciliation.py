@@ -9,6 +9,8 @@ from application.broker_reconciliation import (
     SchwabReconciliationReadError,
     build_reconciliation_candidate,
     collect_read_only_reconciliation_observations,
+    validate_reconciliation_candidate,
+    validate_reconciliation_preconditions,
 )
 from quant_platform_kit.common.live_continuity import runtime_target_fingerprint
 from quant_platform_kit.common.runtime_target import build_runtime_target
@@ -124,6 +126,31 @@ def test_missing_order_history_support_fails_closed():
         )
 
 
+def test_reconciliation_preconditions_default_off_and_require_collector():
+    with pytest.raises(SchwabReconciliationReadError, match="disabled"):
+        validate_reconciliation_preconditions(
+            runtime_target=_target(),
+            collector=collect_read_only_reconciliation_observations,
+            env_reader=lambda _name, default=None: default,
+        )
+
+    with pytest.raises(SchwabReconciliationReadError, match="collector"):
+        validate_reconciliation_preconditions(
+            runtime_target=_target(),
+            collector=None,
+            env_reader=lambda _name, default=None: "true",
+        )
+
+    with pytest.raises(SchwabReconciliationReadError, match="frozen"):
+        validate_reconciliation_preconditions(
+            runtime_target=SimpleNamespace(
+                live_continuity=SimpleNamespace(state="ACTIVE_LKG")
+            ),
+            collector=collect_read_only_reconciliation_observations,
+            env_reader=lambda _name, default=None: "true",
+        )
+
+
 def test_candidate_stays_frozen_without_private_expected_digests(tmp_path):
     observations = collect_read_only_reconciliation_observations(
         _Client(), fetch_account_snapshot=_snapshot
@@ -181,3 +208,25 @@ def test_candidate_can_pass_only_with_all_matching_private_digests(tmp_path):
         env_reader=configured_env,
     )
     assert candidate.permits_active_lkg is True
+    assert (
+        validate_reconciliation_candidate(candidate)["evidence"]["schema_version"]
+        == "broker_reconciliation_evidence.v1"
+    )
+    unsafe_payload = candidate.to_safe_dict()
+    unsafe_payload["unexpected_detail"] = "must-not-propagate"
+    with pytest.raises(SchwabReconciliationReadError, match="receipt"):
+        validate_reconciliation_candidate(
+            SimpleNamespace(to_safe_dict=lambda: unsafe_payload)
+        )
+
+
+def test_reconciliation_candidate_requires_canonical_receipt_schema():
+    candidate = SimpleNamespace(
+        to_safe_dict=lambda: {
+            "schema_version": "schwab_reconciliation_candidate.v1",
+            "evidence": {"schema_version": "unexpected.v1"},
+        }
+    )
+
+    with pytest.raises(SchwabReconciliationReadError, match="receipt"):
+        validate_reconciliation_candidate(candidate)

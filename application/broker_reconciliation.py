@@ -25,6 +25,7 @@ from quant_platform_kit.common.execution_state import build_execution_marker_sto
 
 
 SCHWAB_RECONCILIATION_EXPECTED_DIGESTS_ENV = "SCHWAB_RECONCILIATION_EXPECTED_DIGESTS_JSON"
+SCHWAB_RECONCILIATION_ENABLED_ENV = "SCHWAB_BROKER_RECONCILIATION_ENABLED"
 _EXPECTED_DIGEST_KEYS = (
     "positions_sha256",
     "cash_sha256",
@@ -32,11 +33,69 @@ _EXPECTED_DIGEST_KEYS = (
     "recent_executions_sha256",
     "local_execution_ledger_sha256",
 )
+_SAFE_CANDIDATE_KEYS = frozenset(
+    {
+        "schema_version",
+        "permits_active_lkg",
+        "expected_digests_configured",
+        "execution_ledger_records_count",
+        "recovery_blockers",
+        "evidence",
+    }
+)
 _TERMINAL_ORDER_STATUSES = frozenset({"CANCELED", "REJECTED", "EXPIRED", "FILLED", "REPLACED"})
 
 
 class SchwabReconciliationReadError(RuntimeError):
     """A required read-only Schwab surface was unavailable or malformed."""
+
+
+def validate_reconciliation_preconditions(
+    *,
+    runtime_target: object,
+    collector: object,
+    env_reader: Callable[[str, str | None], str | None] = os.getenv,
+) -> None:
+    """Fail before building any broker context unless reconciliation is safe."""
+
+    enabled = _text(env_reader(SCHWAB_RECONCILIATION_ENABLED_ENV, None)).lower()
+    if enabled != "true":
+        raise SchwabReconciliationReadError("Schwab broker reconciliation is disabled.")
+    if not callable(collector):
+        raise SchwabReconciliationReadError("Schwab broker reconciliation collector is unavailable.")
+    if runtime_target is None:
+        raise SchwabReconciliationReadError(
+            "Schwab reconciliation requires an explicit runtime target."
+        )
+    continuity_state = _text(
+        getattr(getattr(runtime_target, "live_continuity", None), "state", "")
+    ).upper()
+    if continuity_state != "RECONCILE_ONLY":
+        raise SchwabReconciliationReadError(
+            "Schwab reconciliation is only available for a frozen baseline."
+        )
+
+
+def validate_reconciliation_candidate(candidate: object) -> dict[str, object]:
+    """Require the canonical redacted QPK receipt before reporting success."""
+
+    try:
+        payload = candidate.to_safe_dict()
+        evidence_payload = payload["evidence"]
+        evidence = BrokerReconciliationEvidence.from_dict(evidence_payload)
+    except Exception as exc:
+        raise SchwabReconciliationReadError(
+            "Schwab reconciliation receipt is invalid."
+        ) from exc
+    if set(payload) != _SAFE_CANDIDATE_KEYS:
+        raise SchwabReconciliationReadError("Schwab reconciliation receipt is invalid.")
+    if payload.get("schema_version") != "schwab_reconciliation_candidate.v1":
+        raise SchwabReconciliationReadError("Schwab reconciliation receipt is invalid.")
+    if evidence.platform_id != "schwab":
+        raise SchwabReconciliationReadError("Schwab reconciliation receipt is invalid.")
+    normalized = dict(payload)
+    normalized["evidence"] = evidence.to_dict()
+    return normalized
 
 
 def _text(value: object) -> str:
