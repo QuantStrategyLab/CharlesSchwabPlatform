@@ -336,6 +336,7 @@ def build_reconciliation_candidate(
         expected_account_scope_sha256=calculate_broker_observation_sha256(observations.account_scope),
         expected_baseline_id=baseline_id,
         expected_runtime_target_sha256=runtime_target_sha256,
+        baseline_reference_available=expected is not None,
         **{f"expected_{key}": (expected or {}).get(key) for key in _EXPECTED_DIGEST_KEYS},
     )
     return SchwabReconciliationCandidate(
