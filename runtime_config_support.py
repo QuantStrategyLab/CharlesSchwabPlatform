@@ -42,7 +42,7 @@ class PlatformRuntimeSettings:
     strategy_domain: str
     notify_lang: str
     dry_run_only: bool
-    runtime_target_enabled: bool = True
+    runtime_target_enabled: bool = False
     paper_execution_admission_enabled: bool = False
     paper_execution_command_consumer_enabled: bool = False
     reserved_cash_floor_usd: float = DEFAULT_RESERVED_CASH_FLOOR_USD
@@ -140,7 +140,7 @@ def _optional_non_negative_float_env(name: str) -> float | None:
 
 
 def _runtime_target_enabled_env() -> bool:
-    return resolve_optional_bool_env("RUNTIME_TARGET_ENABLED", default=True)
+    return resolve_optional_bool_env("RUNTIME_TARGET_ENABLED", default=False)
 
 
 def _optional_bool_env(name: str) -> bool | None:
