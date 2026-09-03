@@ -190,7 +190,7 @@ requires-dist = [
     { name = "requests" },
     { name = "ruff", marker = "extra == 'test'" },
     { name = "schwab-py" },
-    { name = "us-equity-strategies", git = "https://github.com/QuantStrategyLab/UsEquityStrategies.git?rev=18dc01711f0776a07903a7a6524bab5455c09fb1" },
+    { name = "us-equity-strategies", git = "https://github.com/QuantStrategyLab/UsEquityStrategies.git?rev=7c2f036ed4cfba0ff1784a8b16a966aed6d45b3c" },
 ]
 provides-extras = ["test"]
 
@@ -1485,7 +1485,7 @@ wheels = [
 [[package]]
 name = "us-equity-strategies"
 version = "0.7.60"
-source = { git = "https://github.com/QuantStrategyLab/UsEquityStrategies.git?rev=18dc01711f0776a07903a7a6524bab5455c09fb1#18dc01711f0776a07903a7a6524bab5455c09fb1" }
+source = { git = "https://github.com/QuantStrategyLab/UsEquityStrategies.git?rev=7c2f036ed4cfba0ff1784a8b16a966aed6d45b3c#7c2f036ed4cfba0ff1784a8b16a966aed6d45b3c" }
 dependencies = [
     { name = "pandas" },
     { name = "pytz" },
