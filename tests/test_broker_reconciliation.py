@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -204,6 +205,7 @@ def test_candidate_can_pass_only_with_all_matching_private_digests(tmp_path):
     expected = {
         key: seed.evidence.to_dict()[key]
         for key in (
+            "account_scope_sha256",
             "positions_sha256",
             "cash_sha256",
             "open_orders_sha256",
@@ -236,6 +238,49 @@ def test_candidate_can_pass_only_with_all_matching_private_digests(tmp_path):
         validate_reconciliation_candidate(
             SimpleNamespace(to_safe_dict=lambda: unsafe_payload)
         )
+
+
+def test_candidate_rejects_a_different_account_scope_despite_matching_other_digests(tmp_path):
+    observations = collect_read_only_reconciliation_observations(
+        _Client(), fetch_account_snapshot=_snapshot
+    )
+
+    def empty_env(name, default=None):
+        return str(tmp_path) if name == "SCHWAB_EXECUTION_STATE_DIR" else default
+
+    seed = build_reconciliation_candidate(
+        observations=observations,
+        runtime_target=_target(),
+        project_id=None,
+        env_reader=empty_env,
+    )
+    expected = {
+        key: seed.evidence.to_dict()[key]
+        for key in (
+            "account_scope_sha256",
+            "positions_sha256",
+            "cash_sha256",
+            "open_orders_sha256",
+            "recent_executions_sha256",
+            "local_execution_ledger_sha256",
+        )
+    }
+
+    def configured_env(name, default=None):
+        if name == "SCHWAB_EXECUTION_STATE_DIR":
+            return str(tmp_path)
+        if name == "SCHWAB_RECONCILIATION_EXPECTED_DIGESTS_JSON":
+            return json.dumps(expected)
+        return default
+
+    candidate = build_reconciliation_candidate(
+        observations=replace(observations, account_scope={"account_hash": "other-account"}),
+        runtime_target=_target(),
+        project_id=None,
+        env_reader=configured_env,
+    )
+
+    assert candidate.permits_active_lkg is False
 
 
 def test_reconciliation_candidate_requires_canonical_receipt_schema():
