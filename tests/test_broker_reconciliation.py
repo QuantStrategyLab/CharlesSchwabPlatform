@@ -12,6 +12,7 @@ from application.broker_reconciliation import (
     validate_reconciliation_candidate,
     validate_reconciliation_preconditions,
 )
+from quant_platform_kit.common.broker_reconciliation import BrokerReconciliationFinding
 from quant_platform_kit.common.live_continuity import runtime_target_fingerprint
 from quant_platform_kit.common.runtime_target import build_runtime_target
 
@@ -167,6 +168,23 @@ def test_candidate_stays_frozen_without_private_expected_digests(tmp_path):
     assert candidate.permits_active_lkg is False
     assert candidate.expected_digests_configured is False
     assert candidate.to_safe_dict()["evidence"]["positions_sha256"]
+
+
+def test_missing_private_baseline_is_a_single_stable_blocker(tmp_path):
+    observations = collect_read_only_reconciliation_observations(
+        _Client(), fetch_account_snapshot=_snapshot
+    )
+
+    candidate = build_reconciliation_candidate(
+        observations=observations,
+        runtime_target=_target(),
+        project_id=None,
+        env_reader=lambda name, default=None: str(tmp_path)
+        if name == "SCHWAB_EXECUTION_STATE_DIR"
+        else default,
+    )
+
+    assert candidate.recovery_blockers == (BrokerReconciliationFinding.BASELINE_UNAVAILABLE,)
 
 
 def test_candidate_can_pass_only_with_all_matching_private_digests(tmp_path):
