@@ -15,7 +15,7 @@ from quant_platform_kit.common.capital_base import (
     CapitalValuationBasis,
     build_capital_base_snapshot,
 )
-from quant_platform_kit.strategy_contracts import (
+from quant_platform_kit.common.strategy_contracts import (
     StrategyDecision,
     StrategyEntrypoint,
     StrategyRuntimeAdapter,

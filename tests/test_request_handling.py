@@ -408,7 +408,7 @@ def install_stub_modules(
     qpk_strategy_plugins_module.load_configured_strategy_plugin_signals = lambda raw_mounts, *args, **kwargs: _load_strategy_plugin_signals(raw_mounts)[0]
     qpk_strategy_plugins_module.parse_strategy_plugin_mounts = lambda raw_mounts, *args, **kwargs: _parse_strategy_plugin_mounts(raw_mounts)
 
-    qpk_strategy_contracts_module = types.ModuleType("quant_platform_kit.strategy_contracts")
+    qpk_strategy_contracts_module = types.ModuleType("quant_platform_kit.common.runtime_inputs")
     qpk_strategy_contracts_module.build_strategy_evaluation_inputs = lambda *args, **kwargs: {}
 
     runtime_config_support_module = types.ModuleType("runtime_config_support")
@@ -509,7 +509,7 @@ def install_stub_modules(
         "quant_platform_kit.schwab": qpk_schwab_module,
         "quant_platform_kit.common.runtime_reports": qpk_runtime_reports_module,
         "quant_platform_kit.common.strategy_plugins": qpk_strategy_plugins_module,
-        "quant_platform_kit.strategy_contracts": qpk_strategy_contracts_module,
+        "quant_platform_kit.common.runtime_inputs": qpk_strategy_contracts_module,
         "runtime_config_support": runtime_config_support_module,
         "runtime_execution_policy": runtime_execution_policy_module,
         "strategy_runtime": strategy_runtime_module,
