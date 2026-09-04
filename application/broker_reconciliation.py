@@ -137,6 +137,37 @@ def _normalize_position(position: object) -> dict[str, object]:
     }
 
 
+def _position_accounting_facts(
+    positions: tuple[Mapping[str, object], ...],
+) -> tuple[dict[str, object], ...]:
+    """Keep frozen-baseline equality scoped to stable position facts."""
+
+    normalized = []
+    for position in positions:
+        symbol = _text(position.get("symbol")).upper()
+        if not symbol:
+            raise SchwabReconciliationReadError("Schwab reconciliation received a position without a symbol.")
+        normalized.append(
+            {
+                "symbol": symbol,
+                "quantity": _number(
+                    position.get("quantity"), field_name="position quantity"
+                ),
+            }
+        )
+    return _canonical_records(normalized)
+
+
+def _cash_accounting_facts(cash: Mapping[str, object]) -> dict[str, object]:
+    """Keep frozen-baseline equality scoped to stable cash facts."""
+
+    return {
+        "cash_balance": _number(
+            cash.get("cash_balance"), field_name="cash balance"
+        )
+    }
+
+
 def _normalize_order_leg(leg: Mapping[str, object]) -> dict[str, object]:
     instrument = leg.get("instrument")
     if not isinstance(instrument, Mapping):
@@ -301,8 +332,12 @@ def build_reconciliation_candidate(
         raise SchwabReconciliationReadError("Schwab reconciliation runtime target is incomplete.")
     baseline_id, baseline_target_sha256, runtime_target_sha256 = _continuity_fields(runtime_target)
     digests = {
-        "positions_sha256": calculate_broker_observation_sha256(observations.positions),
-        "cash_sha256": calculate_broker_observation_sha256(observations.cash),
+        "positions_sha256": calculate_broker_observation_sha256(
+            _position_accounting_facts(observations.positions)
+        ),
+        "cash_sha256": calculate_broker_observation_sha256(
+            _cash_accounting_facts(observations.cash)
+        ),
         "open_orders_sha256": calculate_broker_observation_sha256(observations.open_orders),
         "recent_executions_sha256": calculate_broker_observation_sha256(observations.recent_executions),
     }
