@@ -2,6 +2,40 @@ name: Deploy Cloud Run
 
 on:
   workflow_dispatch:
+    inputs:
+      approved_ref:
+        description: Exact Git ref approved for this operation, for example refs/heads/main.
+        required: true
+        type: string
+      expected_sha:
+        description: Exact 40-character commit SHA approved for this operation.
+        required: true
+        type: string
+      approve_image_deploy:
+        description: Create a new Cloud Run revision without traffic.
+        default: false
+        required: true
+        type: boolean
+      approve_env_secret_sync:
+        description: Apply Cloud Run environment and Secret Manager reference changes.
+        default: false
+        required: true
+        type: boolean
+      approve_scheduler_iam_sync:
+        description: Apply Cloud Scheduler and Cloud Run IAM changes.
+        default: false
+        required: true
+        type: boolean
+      approve_traffic_shift:
+        description: Shift Cloud Run traffic to the latest revision.
+        default: false
+        required: true
+        type: boolean
+      approve_cleanup:
+        description: Delete old Cloud Run revisions, images, or legacy Scheduler jobs.
+        default: false
+        required: true
+        type: boolean
 
 permissions:
   contents: read
@@ -33,6 +67,13 @@ jobs:
       ENABLE_GITHUB_CLOUD_RUN_DEPLOY: ${{ vars.ENABLE_GITHUB_CLOUD_RUN_DEPLOY }}
       ENABLE_GITHUB_ENV_SYNC: ${{ vars.ENABLE_GITHUB_ENV_SYNC }}
       CLOUD_RUN_CLEANUP_ENABLED: ${{ vars.CLOUD_RUN_CLEANUP_ENABLED }}
+      APPROVED_REF: ${{ inputs.approved_ref }}
+      EXPECTED_SHA: ${{ inputs.expected_sha }}
+      APPROVE_IMAGE_DEPLOY: ${{ inputs.approve_image_deploy }}
+      APPROVE_ENV_SECRET_SYNC: ${{ inputs.approve_env_secret_sync }}
+      APPROVE_SCHEDULER_IAM_SYNC: ${{ inputs.approve_scheduler_iam_sync }}
+      APPROVE_TRAFFIC_SHIFT: ${{ inputs.approve_traffic_shift }}
+      APPROVE_CLEANUP: ${{ inputs.approve_cleanup }}
       ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION: ${{ vars.ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION }}
       QSL_ENABLE_CLOUD_RUN_AUTOMATION: ${{ vars.QSL_ENABLE_CLOUD_RUN_AUTOMATION }}
       GCP_ARTIFACT_REGISTRY_HOSTNAME: ${{ vars.GCP_ARTIFACT_REGISTRY_HOSTNAME }}
@@ -133,6 +174,9 @@ jobs:
 
           deploy_enabled=false
           env_sync_enabled=false
+          scheduler_iam_sync_enabled=false
+          traffic_shift_enabled=false
+          cleanup_enabled=false
 
           # QSL_ENABLE_CLOUD_RUN_AUTOMATION overrides ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION
           ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION="${QSL_ENABLE_CLOUD_RUN_AUTOMATION:-$ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION}"
@@ -145,21 +189,36 @@ jobs:
             exit 0
           fi
 
-          if [ "${ENABLE_GITHUB_CLOUD_RUN_DEPLOY:-}" = "true" ]; then
+          if [ "${ENABLE_GITHUB_CLOUD_RUN_DEPLOY:-}" = "true" ] && [ "${APPROVE_IMAGE_DEPLOY:-false}" = "true" ]; then
             deploy_enabled=true
           fi
 
-          if [ "${ENABLE_GITHUB_ENV_SYNC:-}" = "true" ]; then
+          if [ "${ENABLE_GITHUB_ENV_SYNC:-}" = "true" ] && [ "${APPROVE_ENV_SECRET_SYNC:-false}" = "true" ]; then
             env_sync_enabled=true
+          fi
+
+          if [ "${ENABLE_GITHUB_ENV_SYNC:-}" = "true" ] && [ "${APPROVE_SCHEDULER_IAM_SYNC:-false}" = "true" ]; then
+            scheduler_iam_sync_enabled=true
+          fi
+
+          if [ "${ENABLE_GITHUB_ENV_SYNC:-}" = "true" ] && [ "${APPROVE_TRAFFIC_SHIFT:-false}" = "true" ]; then
+            traffic_shift_enabled=true
+          fi
+
+          if [ "${deploy_enabled}" = "true" ] && [ "${CLOUD_RUN_CLEANUP_ENABLED:-}" = "true" ] && [ "${APPROVE_CLEANUP:-false}" = "true" ]; then
+            cleanup_enabled=true
           fi
 
           write_github_output \
             "deploy_enabled=${deploy_enabled}" \
-            "env_sync_enabled=${env_sync_enabled}"
+            "env_sync_enabled=${env_sync_enabled}" \
+            "scheduler_iam_sync_enabled=${scheduler_iam_sync_enabled}" \
+            "traffic_shift_enabled=${traffic_shift_enabled}" \
+            "cleanup_enabled=${cleanup_enabled}"
 
-          if [ "${deploy_enabled}" != "true" ] && [ "${env_sync_enabled}" != "true" ]; then
+          if [ "${deploy_enabled}" != "true" ] && [ "${env_sync_enabled}" != "true" ] && [ "${scheduler_iam_sync_enabled}" != "true" ] && [ "${traffic_shift_enabled}" != "true" ] && [ "${cleanup_enabled}" != "true" ]; then
             write_github_output "enabled=false"
-            echo "Skipping Cloud Run automation because ENABLE_GITHUB_CLOUD_RUN_DEPLOY and ENABLE_GITHUB_ENV_SYNC are not true." >&2
+            echo "Skipping Cloud Run automation because no matching explicit approval is true." >&2
             exit 0
           fi
 
@@ -170,6 +229,26 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
+
+      - name: Verify approved source
+        if: steps.config.outputs.enabled == 'true'
+        run: |
+          set -euo pipefail
+
+          if [[ ! "${EXPECTED_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "expected_sha must be a 40-character lowercase commit SHA." >&2
+            exit 1
+          fi
+          if [ "${APPROVED_REF}" != "${GITHUB_REF}" ]; then
+            echo "approved_ref does not match the dispatched Git ref." >&2
+            exit 1
+          fi
+
+          checked_out_sha="$(git rev-parse HEAD)"
+          if [ "${EXPECTED_SHA}" != "${GITHUB_SHA}" ] || [ "${EXPECTED_SHA}" != "${checked_out_sha}" ]; then
+            echo "expected_sha does not match the dispatched and checked-out commit." >&2
+            exit 1
+          fi
 
       - name: Set up Python for strategy requirement resolution
         if: steps.config.outputs.enabled == 'true'
@@ -186,7 +265,7 @@ jobs:
 
       - name: Resolve Cloud Run sync targets
         id: strategy_requirements
-        if: steps.config.outputs.env_sync_enabled == 'true'
+        if: steps.config.outputs.env_sync_enabled == 'true' || steps.config.outputs.scheduler_iam_sync_enabled == 'true' || steps.config.outputs.traffic_shift_enabled == 'true'
         run: |
           set -euo pipefail
           sync_plan_json="$(uv run --no-sync python scripts/build_cloud_run_env_sync_plan.py --json)"
@@ -279,6 +358,19 @@ jobs:
           project_id: ${{ env.GCP_PROJECT_ID }}
           version: ">= 416.0.0"
 
+      - name: Capture no-traffic deployment baseline
+        if: steps.config.outputs.deploy_enabled == 'true'
+        env:
+          DEPLOY_READBACK_FILE: ${{ runner.temp }}/cloud-run-no-traffic-baseline.json
+        run: |
+          set -euo pipefail
+          python3 scripts/verify_cloud_run_no_traffic_deploy.py capture \
+            --project="${GCP_PROJECT_ID}" \
+            --region="${CLOUD_RUN_REGION}" \
+            --service="${CLOUD_RUN_SERVICE}" \
+            --scheduler-location="${CLOUD_SCHEDULER_LOCATION:-${CLOUD_RUN_REGION}}" \
+            --output="${DEPLOY_READBACK_FILE}"
+
       - name: Verify deployed runtime target admission before traffic shift
         if: steps.config.outputs.deploy_enabled == 'true'
         run: |
@@ -290,6 +382,7 @@ jobs:
 
 
       - name: Build, push, and deploy Cloud Run image
+        id: deploy
         if: steps.config.outputs.deploy_enabled == 'true'
         run: |
           set -euo pipefail
@@ -301,6 +394,12 @@ jobs:
           gcloud auth configure-docker "${artifact_registry_hostname}" --quiet
           docker build --pull -t "${image}" .
           docker push "${image}"
+          image_digest="$(gcloud artifacts docker images describe "${image}" --project="${GCP_PROJECT_ID}" --format='value(image_summary.digest)')"
+          if [[ ! "${image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Artifact Registry did not return a valid image digest." >&2
+            exit 1
+          fi
+          echo "image_digest=${image_digest}" >> "${GITHUB_OUTPUT}"
 
           gcloud run deploy "${CLOUD_RUN_SERVICE}" \
             --project="${GCP_PROJECT_ID}" \
@@ -316,7 +415,24 @@ jobs:
             --cpu=1 \
             --timeout=300s \
             --labels="managed-by=github-actions,commit-sha=${GITHUB_SHA},github-run-id=${GITHUB_RUN_ID}" \
+            --no-traffic \
             --quiet
+
+      - name: Verify no-traffic deployment readback
+        if: steps.config.outputs.deploy_enabled == 'true'
+        env:
+          DEPLOY_READBACK_FILE: ${{ runner.temp }}/cloud-run-no-traffic-baseline.json
+          EXPECTED_IMAGE_DIGEST: ${{ steps.deploy.outputs.image_digest }}
+        run: |
+          set -euo pipefail
+          python3 scripts/verify_cloud_run_no_traffic_deploy.py verify \
+            --project="${GCP_PROJECT_ID}" \
+            --region="${CLOUD_RUN_REGION}" \
+            --service="${CLOUD_RUN_SERVICE}" \
+            --scheduler-location="${CLOUD_SCHEDULER_LOCATION:-${CLOUD_RUN_REGION}}" \
+            --before="${DEPLOY_READBACK_FILE}" \
+            --expected-sha="${EXPECTED_SHA}" \
+            --expected-image-digest="${EXPECTED_IMAGE_DIGEST}"
 
       - name: Sync Cloud Run environment
         if: steps.config.outputs.env_sync_enabled == 'true'
@@ -681,7 +797,7 @@ jobs:
           gcloud "${gcloud_args[@]}"
 
       - name: Reconcile Cloud Run traffic
-        if: steps.config.outputs.env_sync_enabled == 'true'
+        if: steps.config.outputs.traffic_shift_enabled == 'true'
         env:
           SYNC_PLAN_JSON: ${{ steps.strategy_requirements.outputs.sync_plan_json }}
         run: |
@@ -698,7 +814,7 @@ jobs:
 
       - name: Sync Cloud Scheduler schedule
         id: scheduler_sync
-        if: steps.config.outputs.env_sync_enabled == 'true'
+        if: steps.config.outputs.scheduler_iam_sync_enabled == 'true'
         env:
           SYNC_PLAN_JSON: ${{ steps.strategy_requirements.outputs.sync_plan_json }}
           DIRECT_MONITOR_MIGRATION_COMPLETE: ${{ vars.DIRECT_MONITOR_MIGRATION_COMPLETE }}
@@ -1024,7 +1140,7 @@ jobs:
           fi
 
       - name: Remove legacy Cloud Scheduler jobs
-        if: steps.config.outputs.env_sync_enabled == 'true'
+        if: steps.config.outputs.cleanup_enabled == 'true'
         env:
           SYNC_PLAN_JSON: ${{ steps.strategy_requirements.outputs.sync_plan_json }}
           DIRECT_MONITOR_MIGRATION_COMPLETE: ${{ vars.DIRECT_MONITOR_MIGRATION_COMPLETE }}
@@ -1035,7 +1151,7 @@ jobs:
           python3 scripts/reconcile_cloud_runtime.py cleanup-schedulers
 
       - name: Prune old Cloud Run revisions
-        if: steps.config.outputs.deploy_enabled == 'true' && env.CLOUD_RUN_CLEANUP_ENABLED == 'true'
+        if: steps.config.outputs.cleanup_enabled == 'true'
         run: |
           set -euo pipefail
 
@@ -1084,7 +1200,7 @@ jobs:
           done
 
       - name: Clean up old Cloud Run images
-        if: steps.config.outputs.deploy_enabled == 'true' && env.CLOUD_RUN_CLEANUP_ENABLED == 'true'
+        if: steps.config.outputs.cleanup_enabled == 'true'
         run: |
           set -euo pipefail
 
