@@ -23,6 +23,8 @@ grep -Fq 'steps.config.outputs.traffic_shift_enabled == '\''true'\''' "$workflow
 grep -Fq 'steps.config.outputs.cleanup_enabled == '\''true'\''' "$workflow"
 
 deploy_block="$(sed -n '/gcloud run deploy "${CLOUD_RUN_SERVICE}"/,/--quiet/p' "$workflow")"
+grep -Fq 'immutable_image="${image_repo}@${image_digest}"' "$workflow"
+grep -Fq -- '--image="${immutable_image}"' <<<"$deploy_block"
 grep -Fq -- '--no-traffic' <<<"$deploy_block"
 if grep -Fq -- '--to-latest' <<<"$deploy_block"; then
   echo "image deploy must not shift traffic" >&2
