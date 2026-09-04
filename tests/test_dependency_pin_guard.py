@@ -63,3 +63,16 @@ def test_dependency_pin_guard_is_blocking_in_ci() -> None:
 
     assert "check_qpk_pin_consistency.py" in step
     assert "continue-on-error" not in step
+
+
+def test_ci_uses_locked_shared_dependency_refs_for_checkouts_and_pin_guard() -> None:
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    step_start = workflow.index("name: Check QPK pin consistency")
+    next_step = workflow.find("\n      - name:", step_start + 1)
+    step = workflow[step_start : next_step if next_step != -1 else len(workflow)]
+
+    assert 'ref="main"' not in workflow
+    assert "uv.lock" in workflow
+    assert "external/QuantPlatformKit/QPK_PIN" not in step
+    assert "git -C external/QuantPlatformKit rev-parse HEAD" in step
+    assert 'steps.quant-platform-kit-ref.outputs.ref' in step
