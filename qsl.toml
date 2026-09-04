@@ -5,8 +5,8 @@ upgrade_ring = "ring_d"
 allow_legacy = false
 
 [qsl.requires]
-quant_platform_kit = "ac1d07c6b0188c8b0abc682e99315bdc056879b5"
-us_equity_strategies = "8e2db9996635dc0908432d379cb6305e65a167fb"
+quant_platform_kit = "1e5ecacd3843691fe1a82e620ab00e72794c0407"
+us_equity_strategies = "b54195c04c98483fbec275751055da765ab98ceb"
 
 [qsl.compat]
 bundle = "2026.09.1"
