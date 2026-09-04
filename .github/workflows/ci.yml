@@ -28,20 +28,34 @@ jobs:
         id: quant-platform-kit-ref
         run: |
           set -euo pipefail
-          ref="main"
-          if [ -n "${GITHUB_HEAD_REF:-}" ] && git ls-remote --exit-code --heads https://github.com/QuantStrategyLab/QuantPlatformKit.git "${GITHUB_HEAD_REF}" >/dev/null 2>&1; then
-            ref="${GITHUB_HEAD_REF}"
-          fi
+          ref="$(python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          lockfile = Path("uv.lock").read_text(encoding="utf-8")
+          refs = set(re.findall(r"QuantPlatformKit\.git\?rev=([a-f0-9]{40})", lockfile))
+          if len(refs) != 1:
+              raise SystemExit("uv.lock must contain exactly one QuantPlatformKit git ref")
+          print(refs.pop())
+          PY
+          )"
           echo "ref=${ref}" >> "$GITHUB_OUTPUT"
 
       - name: Resolve UsEquityStrategies ref
         id: us-equity-strategies-ref
         run: |
           set -euo pipefail
-          ref="main"
-          if [ -n "${GITHUB_HEAD_REF:-}" ] && git ls-remote --exit-code --heads https://github.com/QuantStrategyLab/UsEquityStrategies.git "${GITHUB_HEAD_REF}" >/dev/null 2>&1; then
-            ref="${GITHUB_HEAD_REF}"
-          fi
+          ref="$(python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          lockfile = Path("uv.lock").read_text(encoding="utf-8")
+          refs = set(re.findall(r"UsEquityStrategies\.git\?rev=([a-f0-9]{40})", lockfile))
+          if len(refs) != 1:
+              raise SystemExit("uv.lock must contain exactly one UsEquityStrategies git ref")
+          print(refs.pop())
+          PY
+          )"
           echo "ref=${ref}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout QuantPlatformKit
@@ -82,8 +96,13 @@ jobs:
           PY
 
       - name: Install editable shared repositories
+        env:
+          QPK_REF: ${{ steps.quant-platform-kit-ref.outputs.ref }}
+          UES_REF: ${{ steps.us-equity-strategies-ref.outputs.ref }}
         run: |
           set -euo pipefail
+          test "$(git -C external/QuantPlatformKit rev-parse HEAD)" = "${QPK_REF}"
+          test "$(git -C external/UsEquityStrategies rev-parse HEAD)" = "${UES_REF}"
           uv pip install --no-deps -e external/QuantPlatformKit -e external/UsEquityStrategies
 
       - name: Run PAPER admission integration contract tests
@@ -105,11 +124,15 @@ jobs:
           uv run --no-sync ruff check --exclude external .
 
       - name: Check QPK pin consistency
+        env:
+          QPK_REF: ${{ steps.quant-platform-kit-ref.outputs.ref }}
         run: |
           set -euo pipefail
+          test "$(git -C external/QuantPlatformKit rev-parse HEAD)" = "${QPK_REF}"
+          printf '%s\n' "${QPK_REF}" > "$RUNNER_TEMP/qpk-pin"
           uv run --no-sync python external/QuantPlatformKit/scripts/check_qpk_pin_consistency.py \
             --root . \
-            --pin-file external/QuantPlatformKit/QPK_PIN
+            --pin-file "$RUNNER_TEMP/qpk-pin"
 
       - name: Ensure uv.lock matches pyproject.toml
         run: uv lock --check

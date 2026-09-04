@@ -13,7 +13,10 @@ from application.broker_reconciliation import (
     validate_reconciliation_candidate,
     validate_reconciliation_preconditions,
 )
-from quant_platform_kit.common.broker_reconciliation import BrokerReconciliationFinding
+from quant_platform_kit.common.broker_reconciliation import (
+    BrokerReconciliationFinding,
+    calculate_broker_observation_sha256,
+)
 from quant_platform_kit.common.live_continuity import runtime_target_fingerprint
 from quant_platform_kit.common.runtime_target import build_runtime_target
 
@@ -240,6 +243,164 @@ def test_candidate_can_pass_only_with_all_matching_private_digests(tmp_path):
         )
 
 
+def test_candidate_ignores_valuation_only_changes_to_a_matching_baseline(tmp_path):
+    observations = collect_read_only_reconciliation_observations(
+        _Client(), fetch_account_snapshot=_snapshot
+    )
+
+    def empty_env(name, default=None):
+        return str(tmp_path) if name == "SCHWAB_EXECUTION_STATE_DIR" else default
+
+    seed = build_reconciliation_candidate(
+        observations=observations,
+        runtime_target=_target(),
+        project_id=None,
+        env_reader=empty_env,
+    )
+    expected = {
+        key: seed.evidence.to_dict()[key]
+        for key in (
+            "account_scope_sha256",
+            "positions_sha256",
+            "cash_sha256",
+            "open_orders_sha256",
+            "recent_executions_sha256",
+            "local_execution_ledger_sha256",
+        )
+    }
+
+    def configured_env(name, default=None):
+        if name == "SCHWAB_EXECUTION_STATE_DIR":
+            return str(tmp_path)
+        if name == "SCHWAB_RECONCILIATION_EXPECTED_DIGESTS_JSON":
+            return json.dumps(expected)
+        return default
+
+    valuation_only_change = replace(
+        observations,
+        positions=({"symbol": "SOXL", "quantity": 10.0, "market_value": 300.0},),
+        cash={"cash_balance": 100.0, "buying_power": 150.0, "total_equity": 400.0},
+    )
+    candidate = build_reconciliation_candidate(
+        observations=valuation_only_change,
+        runtime_target=_target(),
+        project_id=None,
+        env_reader=configured_env,
+    )
+
+    assert candidate.permits_active_lkg is True
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    (
+        ("market_value", None),
+        ("market_value", float("nan")),
+        ("buying_power", float("inf")),
+        ("total_equity", float("nan")),
+    ),
+)
+def test_collection_rejects_missing_or_non_finite_valuation_inputs(field_name, value):
+    def invalid_snapshot(client, *, strategy_symbols=()):
+        snapshot = _snapshot(client, strategy_symbols=strategy_symbols)
+        if field_name == "market_value":
+            return SimpleNamespace(
+                cash_balance=snapshot.cash_balance,
+                buying_power=snapshot.buying_power,
+                total_equity=snapshot.total_equity,
+                positions=(
+                    SimpleNamespace(
+                        symbol="SOXL", quantity=10.0, market_value=value
+                    ),
+                ),
+                metadata=snapshot.metadata,
+            )
+        return SimpleNamespace(
+            cash_balance=snapshot.cash_balance,
+            buying_power=value if field_name == "buying_power" else snapshot.buying_power,
+            total_equity=value if field_name == "total_equity" else snapshot.total_equity,
+            positions=snapshot.positions,
+            metadata=snapshot.metadata,
+        )
+
+    with pytest.raises(SchwabReconciliationReadError):
+        collect_read_only_reconciliation_observations(
+            _Client(), fetch_account_snapshot=invalid_snapshot
+        )
+
+
+def test_candidate_still_blocks_quantity_cash_order_and_ledger_changes(tmp_path):
+    observations = collect_read_only_reconciliation_observations(
+        _Client(), fetch_account_snapshot=_snapshot
+    )
+
+    def empty_env(name, default=None):
+        return str(tmp_path) if name == "SCHWAB_EXECUTION_STATE_DIR" else default
+
+    seed = build_reconciliation_candidate(
+        observations=observations,
+        runtime_target=_target(),
+        project_id=None,
+        env_reader=empty_env,
+    )
+    expected = {
+        key: seed.evidence.to_dict()[key]
+        for key in (
+            "account_scope_sha256",
+            "positions_sha256",
+            "cash_sha256",
+            "open_orders_sha256",
+            "recent_executions_sha256",
+            "local_execution_ledger_sha256",
+        )
+    }
+
+    def candidate_for(changed_observations, configured_expected=expected):
+        def configured_env(name, default=None):
+            if name == "SCHWAB_EXECUTION_STATE_DIR":
+                return str(tmp_path)
+            if name == "SCHWAB_RECONCILIATION_EXPECTED_DIGESTS_JSON":
+                return json.dumps(configured_expected)
+            return default
+
+        return build_reconciliation_candidate(
+            observations=changed_observations,
+            runtime_target=_target(),
+            project_id=None,
+            env_reader=configured_env,
+        )
+
+    quantity_change = candidate_for(
+        replace(
+            observations,
+            positions=(
+                {"symbol": "SOXL", "quantity": 11.0, "market_value": 250.0},
+            ),
+        )
+    )
+    cash_change = candidate_for(
+        replace(
+            observations,
+            cash={"cash_balance": 99.0, "buying_power": 100.0, "total_equity": 350.0},
+        )
+    )
+    order_change = candidate_for(replace(observations, open_orders=()))
+    ledger_expected = dict(expected)
+    ledger_expected["local_execution_ledger_sha256"] = "0" * 64
+    ledger_change = candidate_for(observations, ledger_expected)
+
+    assert quantity_change.recovery_blockers == (
+        BrokerReconciliationFinding.POSITIONS_MISMATCH,
+    )
+    assert cash_change.recovery_blockers == (BrokerReconciliationFinding.CASH_MISMATCH,)
+    assert order_change.recovery_blockers == (
+        BrokerReconciliationFinding.OPEN_ORDERS_MISMATCH,
+    )
+    assert ledger_change.recovery_blockers == (
+        BrokerReconciliationFinding.LOCAL_EXECUTION_LEDGER_MISMATCH,
+    )
+
+
 def test_candidate_rejects_a_different_account_scope_despite_matching_other_digests(tmp_path):
     observations = collect_read_only_reconciliation_observations(
         _Client(), fetch_account_snapshot=_snapshot
@@ -281,6 +442,55 @@ def test_candidate_rejects_a_different_account_scope_despite_matching_other_dige
     )
 
     assert candidate.permits_active_lkg is False
+
+
+def test_old_full_observation_baseline_does_not_silently_match_new_accounting_digest(tmp_path):
+    observations = collect_read_only_reconciliation_observations(
+        _Client(), fetch_account_snapshot=_snapshot
+    )
+
+    def empty_env(name, default=None):
+        return str(tmp_path) if name == "SCHWAB_EXECUTION_STATE_DIR" else default
+
+    seed = build_reconciliation_candidate(
+        observations=observations,
+        runtime_target=_target(),
+        project_id=None,
+        env_reader=empty_env,
+    )
+    expected = {
+        key: seed.evidence.to_dict()[key]
+        for key in (
+            "account_scope_sha256",
+            "positions_sha256",
+            "cash_sha256",
+            "open_orders_sha256",
+            "recent_executions_sha256",
+            "local_execution_ledger_sha256",
+        )
+    }
+    expected["positions_sha256"] = calculate_broker_observation_sha256(
+        observations.positions
+    )
+    expected["cash_sha256"] = calculate_broker_observation_sha256(observations.cash)
+
+    def configured_env(name, default=None):
+        if name == "SCHWAB_EXECUTION_STATE_DIR":
+            return str(tmp_path)
+        if name == "SCHWAB_RECONCILIATION_EXPECTED_DIGESTS_JSON":
+            return json.dumps(expected)
+        return default
+
+    candidate = build_reconciliation_candidate(
+        observations=observations,
+        runtime_target=_target(),
+        project_id=None,
+        env_reader=configured_env,
+    )
+
+    assert candidate.permits_active_lkg is False
+    assert BrokerReconciliationFinding.POSITIONS_MISMATCH in candidate.recovery_blockers
+    assert BrokerReconciliationFinding.CASH_MISMATCH in candidate.recovery_blockers
 
 
 def test_reconciliation_candidate_requires_canonical_receipt_schema():
