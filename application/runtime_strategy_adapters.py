@@ -14,7 +14,7 @@ from quant_platform_kit.common.strategy_plugins import (
     should_alert_strategy_plugin_signal,
     translate_strategy_plugin_value,
 )
-from quant_platform_kit.strategy_contracts import build_account_state_from_portfolio_snapshot
+from quant_platform_kit.common.runtime_inputs import build_account_state_from_portfolio_snapshot
 from us_equity_strategies.cash_only_equity import (
     normalize_account_state_from_snapshot,
 )

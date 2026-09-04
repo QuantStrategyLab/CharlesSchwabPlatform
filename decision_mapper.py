@@ -7,10 +7,12 @@ from us_equity_strategies.cash_only_equity import (
     build_portfolio_inputs_from_snapshot,
     resolve_weight_translation_equity,
 )
-from quant_platform_kit.strategy_contracts import (
+from quant_platform_kit.common.strategy_contracts import (
     PositionTarget,
     StrategyDecision,
     ValueTargetExecutionAnnotations,
+)
+from quant_platform_kit.common.execution_translation import (
     build_value_target_runtime_plan,
     resolve_decision_target_mode,
     translate_decision_to_target_mode,

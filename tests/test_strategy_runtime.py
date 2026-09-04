@@ -7,7 +7,7 @@ from unittest.mock import patch
 import strategy_runtime as strategy_runtime_module
 from quant_platform_kit.common.models import PortfolioSnapshot
 from quant_platform_kit.common.runtime_target import build_runtime_target
-from quant_platform_kit.strategy_contracts import (
+from quant_platform_kit.common.strategy_contracts import (
     StrategyDecision,
     StrategyManifest,
     StrategyRuntimeAdapter,

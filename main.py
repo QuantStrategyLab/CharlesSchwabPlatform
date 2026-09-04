@@ -64,7 +64,7 @@ from quant_platform_kit.common.strategy_plugins import (
     load_configured_strategy_plugin_signals,
     parse_strategy_plugin_mounts,
 )
-from quant_platform_kit.strategy_contracts import build_strategy_evaluation_inputs
+from quant_platform_kit.common.runtime_inputs import build_strategy_evaluation_inputs
 from runtime_config_support import load_platform_runtime_settings
 from runtime_logging import build_run_id, emit_runtime_log
 from strategy_runtime import load_strategy_runtime
