@@ -18,3 +18,7 @@
 恢复既有基线仍按共享 QPK 契约进行：两份有时间间隔的收据、独立复核、双审、账户持有人
 确认、确认后的新收据，以及控制面精确 CAS
 `RECONCILE_ONLY -> ACTIVE_LKG`。该端点不实现 CAS，也不提供订单权限。
+
+运行 `Runtime Target Lifecycle` 只会发布无订单的健康状态，不会调用
+`POST /reconcile`。当目标仍为 `RECONCILE_ONLY`，它必须报告为 `disabled`（但保留
+原本的 `live` 预期执行通道），因此常规执行心跳不会把冻结基线误报为已启用。

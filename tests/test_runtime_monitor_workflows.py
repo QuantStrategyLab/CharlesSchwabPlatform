@@ -61,3 +61,10 @@ def test_lifecycle_classifies_import_failures_as_unavailable() -> None:
 
     assert workflow.count("status=unavailable") >= 2
     assert workflow.count("traceback|importerror|modulenotfounderror") == 2
+
+
+def test_lifecycle_uses_fail_closed_reconcile_only_state_resolver() -> None:
+    workflow = (ROOT / ".github/workflows/runtime-target-lifecycle.yml").read_text()
+
+    assert "python3 scripts/runtime_target_lifecycle_state.py" in workflow
+    assert 'or "true"' not in workflow

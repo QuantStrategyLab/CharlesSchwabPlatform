@@ -54,31 +54,7 @@ jobs:
         id: target_state
         run: |
           set -euo pipefail
-          python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import json
-          import os
-
-          target = {}
-          raw_target = (os.environ.get("RUNTIME_TARGET_JSON") or "").strip()
-          if raw_target:
-              try:
-                  decoded = json.loads(raw_target)
-              except json.JSONDecodeError as error:
-                  raise SystemExit(f"RUNTIME_TARGET_JSON is invalid: {error}") from error
-              if isinstance(decoded, dict):
-                  target = decoded
-
-          enabled = (os.environ.get("RUNTIME_TARGET_ENABLED") or target.get("runtime_target_enabled") or target.get("RUNTIME_TARGET_ENABLED") or "true").strip().lower()
-          if enabled not in {"true", "false"}:
-              raise SystemExit("RUNTIME_TARGET_ENABLED must be true or false")
-
-          mode = str(target.get("execution_mode") or "").strip()
-          if mode not in {"dry_run", "paper", "live"}:
-              mode = "dry_run" if (os.environ.get("SCHWAB_DRY_RUN_ONLY") or "").strip().lower() == "true" else "live"
-
-          print(f"configured_state={'enabled' if enabled == 'true' else 'disabled'}")
-          print(f"execution_mode={mode}")
-          PY
+          python3 scripts/runtime_target_lifecycle_state.py >> "$GITHUB_OUTPUT"
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
