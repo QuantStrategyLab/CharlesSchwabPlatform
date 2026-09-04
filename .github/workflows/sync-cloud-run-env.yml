@@ -399,13 +399,14 @@ jobs:
             echo "Artifact Registry did not return a valid image digest." >&2
             exit 1
           fi
+          immutable_image="${image_repo}@${image_digest}"
           echo "image_digest=${image_digest}" >> "${GITHUB_OUTPUT}"
 
           gcloud run deploy "${CLOUD_RUN_SERVICE}" \
             --project="${GCP_PROJECT_ID}" \
             --region="${CLOUD_RUN_REGION}" \
             --platform=managed \
-            --image="${image}" \
+            --image="${immutable_image}" \
             --service-account="${GCP_RUNTIME_SERVICE_ACCOUNT}" \
             --ingress=internal \
             --no-allow-unauthenticated \
