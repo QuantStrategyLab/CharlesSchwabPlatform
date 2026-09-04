@@ -40,6 +40,22 @@ def _digest(value: object) -> str:
     return hashlib.sha256(_canonical(value).encode("utf-8")).hexdigest()
 
 
+def _active_traffic(traffic: object) -> list[dict[str, object]]:
+    if not isinstance(traffic, list):
+        raise RuntimeError("Cloud Run traffic readback returned a non-list payload")
+    active: list[dict[str, object]] = []
+    for entry in traffic:
+        if not isinstance(entry, dict):
+            raise RuntimeError("Cloud Run traffic readback contained a non-object entry")
+        try:
+            percent = int(entry.get("percent", 0))
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("Cloud Run traffic readback contained an invalid percent") from exc
+        if percent > 0:
+            active.append({"revisionName": entry.get("revisionName"), "percent": percent})
+    return sorted(active, key=_canonical)
+
+
 def _snapshot(args: argparse.Namespace) -> dict[str, object]:
     service = _run_json([
         "gcloud", "run", "services", "describe", args.service,
@@ -60,7 +76,10 @@ def _snapshot(args: argparse.Namespace) -> dict[str, object]:
     # endpoint URIs, and secret-reference names are needed for comparison but
     # must not be persisted or printed by this verification helper.
     return {
-        "traffic": _digest(status.get("traffic")),
+        # A no-traffic revision is allowed to appear as a zero-percent status
+        # entry.  Compare only effective traffic, otherwise a correct deploy
+        # would fail its own readback merely because the new revision exists.
+        "traffic": _digest(_active_traffic(status.get("traffic"))),
         "configuration": _digest(service.get("spec")),
         "iam": _digest(iam),
         "scheduler": _digest(scheduler),

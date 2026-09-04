@@ -40,6 +40,8 @@ grep -Fq 'traffic changed during no-traffic deployment' "$readback"
 grep -Fq 'scheduler changed during no-traffic deployment' "$readback"
 grep -Fq 'iam changed during no-traffic deployment' "$readback"
 grep -Fq 'configuration changed during no-traffic deployment' "$readback"
+grep -Fq 'Compare only effective traffic' "$readback"
+grep -Fq 'if percent > 0:' "$readback"
 if grep -Fq 'secrets versions access' "$readback" || grep -Fq 'containers.env.value,' "$readback"; then
   echo "readback must not access Secret Manager values or plaintext environment values" >&2
   exit 1
