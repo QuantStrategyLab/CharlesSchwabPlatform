@@ -117,7 +117,8 @@ jobs:
             tests/test_request_handling.py::RequestHandlingTests::test_handle_schwab_dry_run_uses_dry_run_override \
             tests/test_request_handling.py::RequestHandlingTests::test_handle_schwab_dry_run_stays_silent_when_market_closed \
             tests/test_runtime_broker_adapters.py \
-            tests/test_broker_reconciliation.py
+            tests/test_broker_reconciliation.py \
+            tests/test_deployed_runtime_target_admission.py
 
       - name: Run ruff
         run: |
