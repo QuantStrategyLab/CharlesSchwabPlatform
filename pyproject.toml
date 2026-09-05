@@ -19,8 +19,8 @@ dependencies = [
     "google-cloud-storage",
     "google-auth",
     "numpy",
-    "quant-platform-kit @ git+https://github.com/QuantStrategyLab/QuantPlatformKit.git@7f140f07ac89f0b4b88347a903906825dde11c39",
-    "us-equity-strategies @ git+https://github.com/QuantStrategyLab/UsEquityStrategies.git@59a6e4341bf12cf1e27953b9c2d3705bc0335d96",
+    "quant-platform-kit @ git+https://github.com/QuantStrategyLab/QuantPlatformKit.git@cd6edbb32bb85ec6d280c2dafea4dd8ecd3ccdab",
+    "us-equity-strategies @ git+https://github.com/QuantStrategyLab/UsEquityStrategies.git@9d1664aaf1e282f249966c2bb78afd3bedc13d86",
 ]
 
 [project.optional-dependencies]
@@ -61,5 +61,5 @@ include = [
 
 [tool.uv]
 override-dependencies = [
-  "quant-platform-kit @ git+https://github.com/QuantStrategyLab/QuantPlatformKit.git@7f140f07ac89f0b4b88347a903906825dde11c39",
+  "quant-platform-kit @ git+https://github.com/QuantStrategyLab/QuantPlatformKit.git@cd6edbb32bb85ec6d280c2dafea4dd8ecd3ccdab",
 ]
