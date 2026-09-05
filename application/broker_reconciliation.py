@@ -215,6 +215,8 @@ class SchwabReconciliationObservations:
     cash: Mapping[str, object]
     open_orders: tuple[Mapping[str, object], ...]
     recent_executions: tuple[Mapping[str, object], ...]
+    open_orders_complete: bool = False
+    recent_executions_complete: bool = False
 
 
 @dataclass(frozen=True)
@@ -246,7 +248,7 @@ def collect_read_only_reconciliation_observations(
     now: datetime | None = None,
     lookback: timedelta = timedelta(days=7),
 ) -> SchwabReconciliationObservations:
-    """Read account and order surfaces without submitting or changing anything."""
+    """Read account and bounded order observations, not a complete order/fill ledger."""
 
     get_account_numbers = getattr(client, "get_account_numbers", None)
     get_orders_for_account = getattr(client, "get_orders_for_account", None)
@@ -273,7 +275,6 @@ def collect_read_only_reconciliation_observations(
         raise SchwabReconciliationReadError("Schwab reconciliation received invalid recent orders.")
     normalized_orders = [_normalize_order(order) for order in orders_payload]
     open_orders = [order for order in normalized_orders if order["status"] not in _TERMINAL_ORDER_STATUSES]
-    recent_executions = [order for order in normalized_orders if order["status"] == "FILLED" or float(order["filled_quantity"]) > 0.0]
     cash = {
         "cash_balance": _number(getattr(snapshot, "cash_balance", None), field_name="cash balance"),
         "buying_power": _number(getattr(snapshot, "buying_power", None), field_name="buying power"),
@@ -285,7 +286,11 @@ def collect_read_only_reconciliation_observations(
         positions=_canonical_records([_normalize_position(position) for position in (getattr(snapshot, "positions", ()) or ())]),
         cash=cash,
         open_orders=_canonical_records(open_orders),
-        recent_executions=_canonical_records(recent_executions),
+        # Entry-time filtering misses older GTC orders and old orders filled now.
+        # Cumulative filled quantity is not a timestamped execution record.
+        recent_executions=(),
+        open_orders_complete=False,
+        recent_executions_complete=False,
     )
 
 
@@ -359,8 +364,8 @@ def build_reconciliation_candidate(
         account_identity_match=observations.account_identity_match,
         positions_match=expected is not None and expected["positions_sha256"] == digests["positions_sha256"],
         cash_match=expected is not None and expected["cash_sha256"] == digests["cash_sha256"],
-        open_orders_match=expected is not None and expected["open_orders_sha256"] == digests["open_orders_sha256"],
-        recent_executions_match=expected is not None and expected["recent_executions_sha256"] == digests["recent_executions_sha256"],
+        open_orders_match=observations.open_orders_complete is True and expected is not None and expected["open_orders_sha256"] == digests["open_orders_sha256"],
+        recent_executions_match=observations.recent_executions_complete is True and expected is not None and expected["recent_executions_sha256"] == digests["recent_executions_sha256"],
         local_execution_ledger_match=expected is not None and expected["local_execution_ledger_sha256"] == digests["local_execution_ledger_sha256"],
         **digests,
     )
