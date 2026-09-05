@@ -109,7 +109,7 @@ def _target():
     )
 
 
-def test_collects_all_required_read_only_surfaces():
+def test_collects_partial_read_only_surfaces_without_claiming_completeness():
     observations = collect_read_only_reconciliation_observations(
         _Client(), fetch_account_snapshot=_snapshot
     )
@@ -118,7 +118,9 @@ def test_collects_all_required_read_only_surfaces():
     assert observations.account_scope == {"account_hash": "acct-hash"}
     assert len(observations.positions) == 1
     assert len(observations.open_orders) == 1
-    assert len(observations.recent_executions) == 1
+    assert observations.recent_executions == ()
+    assert observations.open_orders_complete is False
+    assert observations.recent_executions_complete is False
 
 
 def test_missing_order_history_support_fails_closed():
@@ -191,10 +193,18 @@ def test_missing_private_baseline_is_a_single_stable_blocker(tmp_path):
     assert candidate.recovery_blockers == (BrokerReconciliationFinding.BASELINE_UNAVAILABLE,)
 
 
-def test_candidate_can_pass_only_with_all_matching_private_digests(tmp_path):
-    observations = collect_read_only_reconciliation_observations(
-        _Client(), fetch_account_snapshot=_snapshot
+def _synthetic_complete_observations():
+    # Test-only complete facts for comparison logic; not proof of broker API coverage.
+    return replace(
+        collect_read_only_reconciliation_observations(_Client(), fetch_account_snapshot=_snapshot),
+        open_orders_complete=True,
+        recent_executions_complete=True,
+        recent_executions=({"execution_id": "synthetic-fill", "quantity": 3.0},),
     )
+
+
+def test_candidate_can_pass_only_with_all_matching_private_digests(tmp_path):
+    observations = _synthetic_complete_observations()
 
     def empty_env(name, default=None):
         return str(tmp_path) if name == "SCHWAB_EXECUTION_STATE_DIR" else default
@@ -244,9 +254,7 @@ def test_candidate_can_pass_only_with_all_matching_private_digests(tmp_path):
 
 
 def test_candidate_ignores_valuation_only_changes_to_a_matching_baseline(tmp_path):
-    observations = collect_read_only_reconciliation_observations(
-        _Client(), fetch_account_snapshot=_snapshot
-    )
+    observations = _synthetic_complete_observations()
 
     def empty_env(name, default=None):
         return str(tmp_path) if name == "SCHWAB_EXECUTION_STATE_DIR" else default
@@ -330,9 +338,7 @@ def test_collection_rejects_missing_or_non_finite_valuation_inputs(field_name, v
 
 
 def test_candidate_still_blocks_quantity_cash_order_and_ledger_changes(tmp_path):
-    observations = collect_read_only_reconciliation_observations(
-        _Client(), fetch_account_snapshot=_snapshot
-    )
+    observations = _synthetic_complete_observations()
 
     def empty_env(name, default=None):
         return str(tmp_path) if name == "SCHWAB_EXECUTION_STATE_DIR" else default
@@ -402,9 +408,7 @@ def test_candidate_still_blocks_quantity_cash_order_and_ledger_changes(tmp_path)
 
 
 def test_candidate_rejects_a_different_account_scope_despite_matching_other_digests(tmp_path):
-    observations = collect_read_only_reconciliation_observations(
-        _Client(), fetch_account_snapshot=_snapshot
-    )
+    observations = _synthetic_complete_observations()
 
     def empty_env(name, default=None):
         return str(tmp_path) if name == "SCHWAB_EXECUTION_STATE_DIR" else default
@@ -445,9 +449,7 @@ def test_candidate_rejects_a_different_account_scope_despite_matching_other_dige
 
 
 def test_old_full_observation_baseline_does_not_silently_match_new_accounting_digest(tmp_path):
-    observations = collect_read_only_reconciliation_observations(
-        _Client(), fetch_account_snapshot=_snapshot
-    )
+    observations = _synthetic_complete_observations()
 
     def empty_env(name, default=None):
         return str(tmp_path) if name == "SCHWAB_EXECUTION_STATE_DIR" else default
@@ -503,3 +505,77 @@ def test_reconciliation_candidate_requires_canonical_receipt_schema():
 
     with pytest.raises(SchwabReconciliationReadError, match="receipt"):
         validate_reconciliation_candidate(candidate)
+
+
+@pytest.mark.parametrize("outside_window_status", ["WORKING", "FILLED"])
+def test_entered_window_cannot_authorize_recovery_even_when_all_digests_match(tmp_path, outside_window_status):
+    from datetime import datetime, timezone
+    from copy import deepcopy
+    now = datetime(2026, 9, 5, tzinfo=timezone.utc)
+
+    class WindowedClient(_Client):
+        def get_orders_for_account(self, account_hash, **kwargs):
+            visible = super().get_orders_for_account(account_hash, **kwargs).json()
+            hidden = deepcopy(visible[0])
+            hidden.update(orderId=99, status=outside_window_status,
+                          enteredTime="2026-07-01T00:00:00Z",
+                          closeTime="2026-09-04T12:00:00Z" if outside_window_status == "FILLED" else "",
+                          filledQuantity=2 if outside_window_status == "FILLED" else 0)
+            # The broker really has an old GTC, or an old order filled yesterday.
+            # Filtering by entry date excludes it in both cases.
+            return _Response([order for order in [*visible, hidden]
+                              if kwargs["from_entered_datetime"] <= datetime.fromisoformat(order["enteredTime"].replace("Z", "+00:00")) <= kwargs["to_entered_datetime"]])
+
+    observations = collect_read_only_reconciliation_observations(
+        WindowedClient(), fetch_account_snapshot=_snapshot, now=now,
+    )
+    assert all(order["order_id"] != "99" for order in observations.open_orders)
+    def empty_env(name, default=None):
+        return str(tmp_path) if name == "SCHWAB_EXECUTION_STATE_DIR" else default
+    seed = build_reconciliation_candidate(
+        observations=observations, runtime_target=_target(), project_id=None,
+        env_reader=empty_env, observed_at=now,
+    )
+    expected = {key: seed.evidence.to_dict()[key] for key in (
+        "account_scope_sha256", "positions_sha256", "cash_sha256", "open_orders_sha256",
+        "recent_executions_sha256", "local_execution_ledger_sha256",
+    )}
+    def configured_env(name, default=None):
+        if name == "SCHWAB_RECONCILIATION_EXPECTED_DIGESTS_JSON":
+            return json.dumps(expected)
+        return empty_env(name, default)
+    candidate = build_reconciliation_candidate(
+        observations=observations, runtime_target=_target(), project_id=None,
+        env_reader=configured_env, observed_at=now,
+    )
+    assert candidate.permits_active_lkg is False
+    assert BrokerReconciliationFinding.OPEN_ORDERS_MISMATCH in candidate.recovery_blockers
+    assert BrokerReconciliationFinding.RECENT_EXECUTIONS_MISMATCH in candidate.recovery_blockers
+
+
+@pytest.mark.parametrize("field,finding", [
+    ("open_orders_complete", BrokerReconciliationFinding.OPEN_ORDERS_MISMATCH),
+    ("recent_executions_complete", BrokerReconciliationFinding.RECENT_EXECUTIONS_MISMATCH),
+])
+@pytest.mark.parametrize("incomplete", [False, None, "false"])
+def test_each_surface_requires_explicit_completeness(tmp_path, field, finding, incomplete):
+    observations = _synthetic_complete_observations()
+    def empty_env(name, default=None):
+        return str(tmp_path) if name == "SCHWAB_EXECUTION_STATE_DIR" else default
+    seed = build_reconciliation_candidate(
+        observations=observations, runtime_target=_target(), project_id=None, env_reader=empty_env,
+    )
+    expected = {key: seed.evidence.to_dict()[key] for key in (
+        "account_scope_sha256", "positions_sha256", "cash_sha256", "open_orders_sha256",
+        "recent_executions_sha256", "local_execution_ledger_sha256",
+    )}
+    def configured_env(name, default=None):
+        if name == "SCHWAB_RECONCILIATION_EXPECTED_DIGESTS_JSON":
+            return json.dumps(expected)
+        return empty_env(name, default)
+    candidate = build_reconciliation_candidate(
+        observations=replace(observations, **{field: incomplete}), runtime_target=_target(),
+        project_id=None, env_reader=configured_env,
+    )
+    assert candidate.permits_active_lkg is False
+    assert candidate.recovery_blockers == (finding,)
