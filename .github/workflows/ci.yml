@@ -116,7 +116,8 @@ jobs:
             tests/test_rebalance_service.py::RebalanceServiceTests::test_run_strategy_skips_when_execution_marker_already_exists \
             tests/test_request_handling.py::RequestHandlingTests::test_handle_schwab_dry_run_uses_dry_run_override \
             tests/test_request_handling.py::RequestHandlingTests::test_handle_schwab_dry_run_stays_silent_when_market_closed \
-            tests/test_runtime_broker_adapters.py
+            tests/test_runtime_broker_adapters.py \
+            tests/test_broker_reconciliation.py
 
       - name: Run ruff
         run: |
