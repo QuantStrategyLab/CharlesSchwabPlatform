@@ -14,12 +14,12 @@ from pathlib import Path
 SERVICE_FORMAT = (
     "json(status.traffic,spec.template.spec.serviceAccountName,"
     "spec.template.spec.containerConcurrency,spec.template.spec.timeoutSeconds,"
-    "spec.template.spec.containers.resources,spec.template.spec.containers.env.name,"
-    "spec.template.spec.containers.env.valueFrom.secretKeyRef)"
+    "spec.template.spec.containers[].resources,spec.template.spec.containers[].env[].name,"
+    "spec.template.spec.containers[].env[].valueFrom.secretKeyRef)"
 )
-IAM_FORMAT = "json(bindings.role,bindings.members,bindings.condition)"
+IAM_FORMAT = "json(bindings[].role,bindings[].members,bindings[].condition)"
 SCHEDULER_FORMAT = "json(name,state,schedule,timeZone,httpTarget.uri,httpTarget.oidcToken)"
-REVISION_FORMAT = "json(metadata.name,metadata.labels,spec.containers.image)"
+REVISION_FORMAT = "json(metadata.name,metadata.labels,spec.containers[].image)"
 
 
 def _run_json(command: list[str]) -> object:
