@@ -68,3 +68,34 @@ def test_lifecycle_uses_fail_closed_reconcile_only_state_resolver() -> None:
 
     assert "python3 scripts/runtime_target_lifecycle_state.py" in workflow
     assert 'or "true"' not in workflow
+
+
+def test_lifecycle_observes_completed_sync_regardless_of_conclusion() -> None:
+    workflow = (ROOT / ".github/workflows/runtime-target-lifecycle.yml").read_text()
+    sync = (ROOT / ".github/workflows/sync-cloud-run-env.yml").read_text()
+    sync_name = sync.splitlines()[0].removeprefix("name: ")
+
+    assert f'workflows: ["{sync_name}"]' in workflow
+    assert "types: [completed]" in workflow
+    assert "github.event.workflow_run.conclusion" not in workflow
+    assert "github.event.workflow_run.head_sha" not in workflow
+
+
+def test_lifecycle_publishes_read_only_observation_for_exact_service() -> None:
+    workflow = (ROOT / ".github/workflows/runtime-target-lifecycle.yml").read_text()
+    publisher = workflow.split("- name: Publish lifecycle to the unified control plane", 1)[1]
+    publisher = publisher.split("\n      - name:", 1)[0]
+
+    for line in (
+        "observe-gcp: 'true'",
+        "gcp-project: ${{ env.GCP_PROJECT_ID }}",
+        "cloud-run-region: ${{ env.CLOUD_RUN_REGION }}",
+        "cloud-run-service: ${{ env.CLOUD_RUN_SERVICE }}",
+        "scheduler-location: ${{ env.RUNTIME_HEARTBEAT_SCHEDULER_LOCATION }}",
+    ):
+        assert line in publisher
+    assert "CLOUD_RUN_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}" in workflow
+    assert "RUNTIME_HEARTBEAT_SCHEDULER_LOCATION: ${{ vars.RUNTIME_HEARTBEAT_SCHEDULER_LOCATION || vars.CLOUD_RUN_REGION || 'us-central1' }}" in workflow
+    assert "CLOUD_RUN_SERVICES" not in publisher
+    assert "gcloud scheduler jobs update" not in workflow
+    assert "gcloud run deploy" not in workflow
