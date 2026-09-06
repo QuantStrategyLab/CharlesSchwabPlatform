@@ -12,7 +12,7 @@ from application.runtime_dependencies import SchwabRebalanceConfig, SchwabRebala
 from application.signal_snapshot import build_signal_snapshot
 from notifications.events import NotificationPublisher, RenderedNotification
 from notifications import renderers as notification_renderers
-from quant_platform_kit.common.execution_state import build_execution_marker_key
+from quant_platform_kit.common.execution_state import build_execution_marker_key, claim_account_owner
 from quant_platform_kit.common.models import QuoteSnapshot
 from quant_platform_kit.common.notification_localization import (
     localize_notification_text as _base_localize_notification_text,
@@ -504,8 +504,38 @@ def run_strategy_core(
             raise RuntimeError("Execution deduplication requires a stable execution marker key")
         if not execution_state_store:
             raise RuntimeError("Execution deduplication requires an execution state store")
+        account_id = str(plan.get("account_hash") or "").strip()
+        if not account_id:
+            raise RuntimeError("Account owner fence requires plan account_hash")
+        owner_id = str(getattr(config, "strategy_profile", "") or "").strip() or "unknown"
         try:
-            execution_already_recorded = bool(execution_state_store.has_marker(execution_marker_key))
+            owner_claim = claim_account_owner(
+                execution_state_store,
+                broker="schwab",
+                account_id=account_id,
+                owner_id=owner_id,
+                metadata={
+                    "platform": "schwab",
+                    "strategy_profile": owner_id,
+                    "dry_run_only": bool(getattr(config, "dry_run_only", False)),
+                },
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Account owner fence failed before broker submission: {type(exc).__name__}"
+            ) from exc
+        if not owner_claim.allowed:
+            print(
+                (
+                    f"Account owner fence blocked submission for account={account_id}: "
+                    f"owner={owner_claim.owner_id!r} contested_by={owner_id!r}"
+                ),
+                flush=True,
+            )
+            execution_already_recorded = True
+        try:
+            if not execution_already_recorded:
+                execution_already_recorded = bool(execution_state_store.has_marker(execution_marker_key))
         except Exception as exc:
             raise RuntimeError(
                 f"Execution marker read failed before broker submission: {type(exc).__name__}"

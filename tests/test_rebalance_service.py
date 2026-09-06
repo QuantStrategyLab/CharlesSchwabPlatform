@@ -2098,6 +2098,13 @@ class RebalanceServiceTests(unittest.TestCase):
                 checked_keys.append(marker_key)
                 return True
 
+            def claim_marker(self, marker_key, *, metadata=None):
+                # Account-owner fence runs before signal dedup; allow this profile.
+                return True
+
+            def read_marker(self, marker_key):
+                return None
+
             def record_marker(self, *_args, **_kwargs):
                 raise AssertionError("duplicate run must not record a new marker")
 
