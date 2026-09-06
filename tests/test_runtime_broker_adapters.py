@@ -3,12 +3,95 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+import pytest
+
 from application import runtime_broker_adapters as broker_adapters_module
+from application.rebalance_service import run_strategy_core
 from application.runtime_broker_adapters import build_runtime_broker_adapters
+from quant_platform_kit.risk.engine import RiskEngine
+from quant_platform_kit.schwab.portfolio import fetch_account_snapshot
 
 
 def _candle(ts: datetime, close: float) -> dict[str, float]:
     return {"datetime": int(ts.timestamp() * 1000), "close": close}
+
+
+def _balance_adapters(balances):
+    calls = []
+    submitted = []
+
+    def response(payload):
+        return SimpleNamespace(status_code=200, text="", json=lambda: payload)
+
+    def account_numbers():
+        calls.append("account_numbers")
+        return response([{"hashValue": "synthetic-account"}])
+
+    def account(_account_hash, *, fields):
+        calls.append("account")
+        return response({"securitiesAccount": {"currentBalances": balances, "positions": []}})
+
+    client = SimpleNamespace(get_account_numbers=account_numbers, get_account=account)
+    adapters = build_runtime_broker_adapters(
+        managed_symbols=("SOXL",),
+        fetch_account_snapshot_fn=fetch_account_snapshot,
+        fetch_quotes_fn=lambda _client, _symbols: {},
+        fetch_daily_price_history_fn=lambda _client, _symbol: [],
+        submit_equity_order_fn=lambda *args: submitted.append(args),
+    )
+    return adapters, client, calls, submitted
+
+
+@pytest.mark.parametrize("field", ["cashAvailableForTrading", "cashAvailableForWithdrawal", "liquidationValue"])
+@pytest.mark.parametrize("value", [None, True, "invalid-balance", "NaN", "inf", "1e1000"])
+def test_invalid_broker_balance_stops_rebalance_without_retry_or_submit(monkeypatch, field, value):
+    balances = {"cashAvailableForTrading": 1000.0, "cashAvailableForWithdrawal": 800.0, "liquidationValue": 1000.0}
+    balances[field] = value
+    _assert_balance_stops_rebalance(monkeypatch, balances, field)
+
+
+def test_missing_trading_cash_stops_rebalance_without_retry_or_submit(monkeypatch):
+    _assert_balance_stops_rebalance(monkeypatch, {"liquidationValue": 1000.0}, "cashAvailableForTrading")
+
+
+def _assert_balance_stops_rebalance(monkeypatch, balances, field):
+    adapters, client, calls, submitted = _balance_adapters(balances)
+    sleeps = []
+    plans = []
+    monkeypatch.setattr(broker_adapters_module.time, "sleep", sleeps.append)
+
+    with pytest.raises(ValueError, match=f"^Invalid Schwab balance: {field}$"):
+        run_strategy_core(
+            client=client,
+            fetch_reference_history=lambda _client: [],
+            fetch_managed_snapshot=adapters.fetch_managed_snapshot,
+            fetch_managed_quotes=lambda _client: {},
+            resolve_rebalance_plan=lambda **kwargs: plans.append(kwargs),
+            submit_equity_order=adapters.submit_equity_order_fn,
+            send_tg_message=lambda _message: None,
+        )
+
+    assert calls == ["account_numbers", "account"]
+    assert sleeps == []
+    assert plans == []
+    assert submitted == []
+
+
+@pytest.mark.parametrize("equity", [0.0, -250.0])
+def test_broker_nonpositive_equity_is_preserved_and_rejected_by_real_risk_engine(equity):
+    adapters, client, calls, submitted = _balance_adapters(
+        {"cashAvailableForTrading": 1000.0, "liquidationValue": equity}
+    )
+    snapshot = adapters.build_portfolio_port(client).get_portfolio_snapshot()
+    assessment = RiskEngine().assess({}, snapshot)
+
+    assert snapshot.total_equity == equity
+    assert snapshot.metadata["cash_available_for_withdrawal"] is None
+    assert assessment.action == "reject"
+    assert assessment.reason == "invalid_portfolio_snapshot"
+    assert (assessment.budget_scalar, assessment.leverage_scalar, assessment.risk_asset_scalar) == (0.0, 0.0, 0.0)
+    assert calls == ["account_numbers", "account"]
+    assert submitted == []
 
 
 def test_price_history_appends_current_market_quote_when_daily_history_is_previous_day():
