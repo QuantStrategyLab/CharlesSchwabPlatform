@@ -121,6 +121,10 @@ def test_collects_partial_read_only_surfaces_without_claiming_completeness():
     assert observations.recent_executions == ()
     assert observations.open_orders_complete is False
     assert observations.recent_executions_complete is False
+    assert observations.coverage["open_orders_complete"] is False
+    assert observations.coverage["recent_executions_complete"] is False
+    assert observations.coverage["order_lookback_days"] == 7
+    assert "entered_time_window_may_miss_older_gtc_open_orders" in observations.coverage["reason_codes"]
 
 
 def test_missing_order_history_support_fails_closed():
