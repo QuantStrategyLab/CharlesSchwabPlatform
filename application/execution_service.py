@@ -5,6 +5,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from application.account_new_risk_gate_support import (
+    build_snapshot_from_portfolio,
+    evaluate_cycle_new_risk_admission,
+    evaluate_portfolio_new_risk_admission,
+    is_account_new_risk_gate_enabled,
+    new_risk_buy_prohibited,
+    set_cycle_snapshot,
+)
 from quant_platform_kit.common.order_status import compute_confirmed_sell_release_value
 
 try:
@@ -680,6 +688,16 @@ def execute_rebalance_cycle(
             submitted_orders=(),
         )
 
+    account_new_risk_buy_blocked = False
+    account_new_risk_reason_codes: tuple[str, ...] = ()
+    if is_account_new_risk_gate_enabled():
+        admission = evaluate_portfolio_new_risk_admission(portfolio, execution=execution)
+        account_new_risk_buy_blocked = new_risk_buy_prohibited(admission)
+        account_new_risk_reason_codes = tuple(admission.reason_codes)
+        set_cycle_snapshot(build_snapshot_from_portfolio(portfolio, execution=execution))
+    else:
+        set_cycle_snapshot(None)
+
     def append_small_account_cash_notes(current_allocation):
         for message in format_small_account_cash_substitution_notes(
             dict(current_allocation or {}).get("small_account_whole_share_cash_notes") or (),
@@ -739,6 +757,13 @@ def execute_rebalance_cycle(
             if float(quantity or 0.0) < MIN_NOTIONAL_BUY_USD:
                 return False
         elif quantity <= 0:
+            return False
+        if (
+            is_account_new_risk_gate_enabled()
+            and action_type != "SELL"
+            and new_risk_buy_prohibited(evaluate_cycle_new_risk_admission())
+        ):
+            record_submitted_order(symbol, action_type, quantity, price, status="rejected")
             return False
         try:
             price_text = "{:.2f}".format(price) if price else None
@@ -903,6 +928,8 @@ def execute_rebalance_cycle(
         for symbol in buy_order_symbols
         if symbol != cash_sweep_symbol and (target_values.get(symbol, 0) - market_values.get(symbol, 0)) > threshold
     ]
+    if account_new_risk_buy_blocked:
+        funding_buy_candidates = []
 
     def cash_sweep_sale_quantity_to_fund_buy(max_quantity, candidate_symbols):
         if max_quantity <= 0 or not cash_sweep_symbol:
@@ -1135,6 +1162,15 @@ def execute_rebalance_cycle(
                 cash=f"{liquid_cash:,.2f}",
             )
         )
+    if account_new_risk_buy_blocked and buy_needed_symbols and buys_blocked_reason is None:
+        buys_blocked_reason = "account_new_risk_gate"
+        reason_text = ", ".join(account_new_risk_reason_codes) or "NEW_RISK_PROHIBITED"
+        trade_logs.append(
+            translator(
+                "buy_deferred",
+                detail=f"[Account new-risk gate] {reason_text}",
+            )
+        )
     buy_executed = False
     if not buys_blocked_reason:
         for symbol in buy_order_symbols:
@@ -1253,6 +1289,7 @@ def execute_rebalance_cycle(
                 }
             )
 
+    set_cycle_snapshot(None)
     return ExecutionCycleResult(
         plan=dict(plan or {}),
         portfolio=dict(portfolio or {}),
