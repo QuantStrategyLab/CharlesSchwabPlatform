@@ -22,3 +22,13 @@
 运行 `Runtime Target Lifecycle` 只会发布无订单的健康状态，不会调用
 `POST /reconcile`。当目标仍为 `RECONCILE_ONLY`，它必须报告为 `disabled`（但保留
 原本的 `live` 预期执行通道），因此常规执行心跳不会把冻结基线误报为已启用。
+
+## 覆盖完整性（EX-06）
+
+只读采集对挂单/成交仍标记 `open_orders_complete=false` 与
+`recent_executions_complete=false`。候选 `to_safe_dict()` 额外暴露脱敏
+`coverage` 诊断（回看天数、查询语义、原因码），**不**把完整性升格为 true。
+
+关闭条件仍是：官方确认有效挂单全量覆盖/截断信号，以及成交流水字段与时效语义。
+在此之前不得靠扩大时间窗宣称 PASS，也不得新建平行对账框架。
+

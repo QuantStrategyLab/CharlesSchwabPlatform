@@ -10,7 +10,7 @@ import json
 import math
 import os
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -42,6 +42,7 @@ _SAFE_CANDIDATE_KEYS = frozenset(
         "execution_ledger_records_count",
         "recovery_blockers",
         "evidence",
+        "coverage",
     }
 )
 _TERMINAL_ORDER_STATUSES = frozenset({"CANCELED", "REJECTED", "EXPIRED", "FILLED", "REPLACED"})
@@ -217,6 +218,7 @@ class SchwabReconciliationObservations:
     recent_executions: tuple[Mapping[str, object], ...]
     open_orders_complete: bool = False
     recent_executions_complete: bool = False
+    coverage: Mapping[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -225,6 +227,7 @@ class SchwabReconciliationCandidate:
     recovery_blockers: tuple[BrokerReconciliationFinding, ...]
     expected_digests_configured: bool
     execution_ledger_records_count: int
+    coverage: Mapping[str, object] = field(default_factory=dict)
 
     @property
     def permits_active_lkg(self) -> bool:
@@ -238,6 +241,7 @@ class SchwabReconciliationCandidate:
             "execution_ledger_records_count": self.execution_ledger_records_count,
             "recovery_blockers": [finding.value for finding in self.recovery_blockers],
             "evidence": self.evidence.to_dict(),
+            "coverage": dict(self.coverage),
         }
 
 
@@ -280,6 +284,18 @@ def collect_read_only_reconciliation_observations(
         "buying_power": _number(getattr(snapshot, "buying_power", None), field_name="buying power"),
         "total_equity": _number(getattr(snapshot, "total_equity", None), field_name="total equity"),
     }
+    coverage = {
+        "order_lookback_days": int(lookback.total_seconds() // 86400),
+        "open_orders_complete": False,
+        "recent_executions_complete": False,
+        "open_orders_query": "entered_time_window",
+        "recent_executions_query": "omitted_incomplete_coverage",
+        "reason_codes": (
+            "entered_time_window_may_miss_older_gtc_open_orders",
+            "order_fill_quantity_is_not_a_timestamped_execution_stream",
+            "official_open_order_and_fill_coverage_rules_unverified",
+        ),
+    }
     return SchwabReconciliationObservations(
         account_scope={"account_hash": account_hash},
         account_identity_match=account_hash in known_hashes,
@@ -291,6 +307,7 @@ def collect_read_only_reconciliation_observations(
         recent_executions=(),
         open_orders_complete=False,
         recent_executions_complete=False,
+        coverage=coverage,
     )
 
 
@@ -389,4 +406,5 @@ def build_reconciliation_candidate(
         recovery_blockers=blockers,
         expected_digests_configured=expected is not None,
         execution_ledger_records_count=records_count,
+        coverage=dict(observations.coverage),
     )
