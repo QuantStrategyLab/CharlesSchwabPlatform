@@ -212,9 +212,10 @@ class ReconcileCloudRuntimeTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "does not match any SYNC_PLAN_JSON target"):
             runtime._service_name(env)
 
-    def test_reconcile_traffic_updates_to_latest_ready_revision(self) -> None:
+    def test_reconcile_traffic_updates_to_commit_revision(self) -> None:
         service = "charles-schwab-service"
         revision = "charles-schwab-service-00002"
+        stale = "charles-schwab-service-00001"
         target_sha = "abc123def456"
         env = {
             "SYNC_PLAN_JSON": json.dumps({"targets": [{"service_name": service}]}),
@@ -227,8 +228,8 @@ class ReconcileCloudRuntimeTests(unittest.TestCase):
 
         service_payload_initial = {
             "status": {
-                "latestReadyRevisionName": revision,
-                "traffic": [{"revisionName": "charles-schwab-service-00001", "percent": 100}],
+                "latestReadyRevisionName": stale,
+                "traffic": [{"revisionName": stale, "percent": 100}],
             }
         }
         service_payload_final = {
@@ -241,21 +242,30 @@ class ReconcileCloudRuntimeTests(unittest.TestCase):
                 }
             },
             "status": {
-                "latestReadyRevisionName": revision,
+                "latestReadyRevisionName": stale,
                 "traffic": [{"revisionName": revision, "percent": 100}],
             }
         }
-        revision_payload = {"metadata": {"labels": {"commit-sha": target_sha}}}
-        service_describes = [service_payload_initial, service_payload_initial, service_payload_final]
+        revisions_list = [
+            {
+                "metadata": {"name": revision, "labels": {"commit-sha": target_sha}},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            },
+            {
+                "metadata": {"name": stale, "labels": {"commit-sha": "old999"}},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            },
+        ]
+        service_describes = [service_payload_initial, service_payload_final]
         commands: list[list[str]] = []
 
         def fake_run(command, text, capture_output, check):
             commands.append(command)
+            if command[:4] == ["gcloud", "run", "revisions", "list"]:
+                return _completed(command, stdout=json.dumps(revisions_list))
             if command[:4] == ["gcloud", "run", "services", "describe"]:
                 payload = service_describes.pop(0)
                 return _completed(command, stdout=json.dumps(payload))
-            if command[:4] == ["gcloud", "run", "revisions", "describe"]:
-                return _completed(command, stdout=json.dumps(revision_payload))
             if command[:4] == ["gcloud", "run", "services", "update-traffic"]:
                 return _completed(command)
             raise AssertionError(f"unexpected command: {command}")
@@ -274,13 +284,13 @@ class ReconcileCloudRuntimeTests(unittest.TestCase):
                 "charlesschwabquant",
                 "--region",
                 "us-central1",
-                "--to-latest",
+                f"--to-revisions={revision}=100",
                 "--quiet",
             ],
             commands,
         )
-        self.assertEqual(commands[0][:4], ["gcloud", "run", "services", "describe"])
-        self.assertEqual(commands[1][:4], ["gcloud", "run", "revisions", "describe"])
+        self.assertEqual(commands[0][:4], ["gcloud", "run", "revisions", "list"])
+        self.assertNotIn("--to-latest", [part for cmd in commands for part in cmd])
 
     def test_cleanup_schedulers_deletes_only_whitelisted_legacy_jobs(self) -> None:
         service = "charles-schwab-service"

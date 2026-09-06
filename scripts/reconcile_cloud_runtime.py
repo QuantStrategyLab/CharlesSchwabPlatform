@@ -259,18 +259,31 @@ def build_monitor_targets(env: Mapping[str, str] = os.environ) -> dict[str, Any]
     return {"targets": payloads}
 
 
-def _revision_commit_sha(
+def _revision_is_ready(revision: Mapping[str, Any]) -> bool:
+    conditions = revision.get("status", {}).get("conditions") or []
+    if not isinstance(conditions, list):
+        return False
+    for condition in conditions:
+        if not isinstance(condition, Mapping):
+            continue
+        if str(condition.get("type") or "") == "Ready" and str(condition.get("status") or "") == "True":
+            return True
+    return False
+
+
+def _resolve_revision_for_commit(
     *,
     project: str,
     region: str,
-    revision: str,
+    service: str,
+    target_sha: str,
 ) -> str:
-    payload = _gcloud_json(
+    revisions = _gcloud_json(
         [
             "run",
             "revisions",
-            "describe",
-            revision,
+            "list",
+            f"--service={service}",
             "--project",
             project,
             "--region",
@@ -278,12 +291,26 @@ def _revision_commit_sha(
             "--format=json",
         ]
     )
-    if not isinstance(payload, dict):
+    if not isinstance(revisions, list):
         return ""
-    labels = payload.get("metadata", {}).get("labels", {})
-    if not isinstance(labels, dict):
-        return ""
-    return str(labels.get("commit-sha") or "").strip()
+    for revision in revisions:
+        if not isinstance(revision, Mapping):
+            continue
+        if not _revision_is_ready(revision):
+            continue
+        metadata = revision.get("metadata") or {}
+        if not isinstance(metadata, Mapping):
+            continue
+        labels = metadata.get("labels") or {}
+        if not isinstance(labels, Mapping):
+            continue
+        commit = str(labels.get("commit-sha") or "").strip()
+        if commit != target_sha:
+            continue
+        name = str(metadata.get("name") or "").strip()
+        if name:
+            return name
+    return ""
 
 
 def _service_status(*, project: str, region: str, service: str) -> dict[str, Any]:
@@ -303,7 +330,7 @@ def _service_status(*, project: str, region: str, service: str) -> dict[str, Any
     return payload if isinstance(payload, dict) else {}
 
 
-def _traffic_matches_latest(service_payload: Mapping[str, Any], revision: str) -> bool:
+def _traffic_on_revision(service_payload: Mapping[str, Any], revision: str) -> bool:
     traffic = service_payload.get("status", {}).get("traffic", [])
     if not isinstance(traffic, list):
         return False
@@ -311,7 +338,7 @@ def _traffic_matches_latest(service_payload: Mapping[str, Any], revision: str) -
         if not isinstance(item, dict):
             continue
         percent = int(item.get("percent") or 0)
-        if percent == 100 and (item.get("latestRevision") is True or item.get("revisionName") == revision):
+        if percent == 100 and str(item.get("revisionName") or "").strip() == revision:
             return True
     return False
 
@@ -342,25 +369,25 @@ def reconcile_traffic(env: Mapping[str, str] = os.environ) -> None:
         raise RuntimeError("GITHUB_SHA is required")
 
     deadline = time.monotonic() + 1800
-    latest_revision = ""
-    latest_sha = ""
+    target_revision = ""
     while True:
-        payload = _service_status(project=project, region=region, service=service)
-        latest_revision = str(payload.get("status", {}).get("latestReadyRevisionName") or "").strip()
-        if latest_revision:
-            latest_sha = _revision_commit_sha(project=project, region=region, revision=latest_revision)
-            if latest_sha == target_sha:
-                break
+        target_revision = _resolve_revision_for_commit(
+            project=project,
+            region=region,
+            service=service,
+            target_sha=target_sha,
+        )
+        if target_revision:
+            break
         if time.monotonic() >= deadline:
             raise RuntimeError(
-                "Timed out waiting for Cloud Run revision "
-                f"{latest_revision or '<none>'} on {service} to match commit {target_sha}. "
-                f"Last seen commit: {latest_sha or '<none>'}"
+                "Timed out waiting for a Ready Cloud Run revision "
+                f"on {service} with commit {target_sha}."
             )
         time.sleep(10)
 
     payload = _service_status(project=project, region=region, service=service)
-    if not _traffic_matches_latest(payload, latest_revision):
+    if not _traffic_on_revision(payload, target_revision):
         _gcloud(
             [
                 "run",
@@ -371,27 +398,20 @@ def reconcile_traffic(env: Mapping[str, str] = os.environ) -> None:
                 project,
                 "--region",
                 region,
-                "--to-latest",
+                f"--to-revisions={target_revision}=100",
                 "--quiet",
             ]
         )
 
     payload = _service_status(project=project, region=region, service=service)
-    if not _traffic_matches_latest(payload, latest_revision):
+    if not _traffic_on_revision(payload, target_revision):
         raise RuntimeError(
-            f"Cloud Run service {service} is not routed 100% to latest ready revision {latest_revision}"
-        )
-
-    latest_sha = _revision_commit_sha(project=project, region=region, revision=latest_revision)
-    if latest_sha != target_sha:
-        raise RuntimeError(
-            f"Cloud Run latest ready revision {latest_revision} on {service} has commit {latest_sha or '<none>'}, "
-            f"expected {target_sha}"
+            f"Cloud Run service {service} is not routed 100% to commit revision {target_revision}"
         )
 
     _assert_execution_concurrency_invariants(payload)
 
-    print(f"Cloud Run service {service} is routed to latest ready revision {latest_revision}.")
+    print(f"Cloud Run service {service} is routed to commit revision {target_revision}.")
 
 
 def _legacy_scheduler_jobs(service: str) -> list[str]:
