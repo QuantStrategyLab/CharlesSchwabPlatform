@@ -156,6 +156,16 @@ def build_account_new_risk_snapshot(
     return projection
 
 
+
+def _resolve_production_drift_status(portfolio: Mapping[str, Any], projection: Mapping[str, Any]) -> str | None:
+    raw = projection.get("production_drift_status")
+    if raw is None or raw == "":
+        raw = portfolio.get("production_drift_status")
+    if raw is None or raw == "":
+        return None
+    return str(raw).strip()
+
+
 def build_snapshot_from_portfolio(
     portfolio: Mapping[str, Any],
     *,
@@ -180,6 +190,7 @@ def build_snapshot_from_portfolio(
         realized_vol=_coerce_optional_float(projection.get("realized_vol"))
         if "realized_vol" in projection
         else _coerce_optional_float(portfolio.get("realized_vol")),
+        production_drift_status=_resolve_production_drift_status(portfolio, projection),
     )
 
 
