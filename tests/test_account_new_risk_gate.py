@@ -47,10 +47,22 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
         self.assertTrue(new_risk_buy_prohibited(result))
         self.assertIn("DRAWDOWN_BRAKE_TRIPPED", result.reason_codes)
 
-    def test_healthy_broker_liquidation_equity_allows_new_risk(self) -> None:
+    def test_broker_liquidation_equity_without_snapshot_prohibits_new_risk(self) -> None:
         portfolio = {
             "total_equity": 50_000.0,
             "metadata": {"total_equity_source": "broker_liquidation_value"},
+        }
+        result = evaluate_portfolio_new_risk_admission(portfolio)
+        self.assertEqual(result.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+
+    def test_explicit_healthy_snapshot_allows_new_risk(self) -> None:
+        portfolio = {
+            "total_equity": 50_000.0,
+            "account_new_risk_snapshot": {
+                "observation_status": "COMPLETE",
+                "reconciliation_status": "VERIFIED",
+                "circuit_breaker_state": "CLOSED",
+            },
         }
         result = evaluate_portfolio_new_risk_admission(portfolio)
         self.assertEqual(result.disposition, NewRiskDisposition.ALLOW_NEW_RISK)
@@ -131,7 +143,15 @@ class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
         self.assertTrue(any("Account new-risk gate" in log for log in result.trade_logs))
 
     def test_execution_cycle_allows_buys_when_healthy(self) -> None:
-        result, submitted_orders = self._run_buy_cycle()
+        result, submitted_orders = self._run_buy_cycle(
+            portfolio_overrides={
+                "account_new_risk_snapshot": {
+                    "observation_status": "COMPLETE",
+                    "reconciliation_status": "VERIFIED",
+                    "circuit_breaker_state": "CLOSED",
+                },
+            }
+        )
         self.assertEqual(len(submitted_orders), 1)
         self.assertEqual(str(getattr(submitted_orders[0], "side", "")).lower(), "buy")
         self.assertFalse(any("Account new-risk gate" in log for log in result.trade_logs))
