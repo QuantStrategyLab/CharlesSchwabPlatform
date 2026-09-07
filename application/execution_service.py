@@ -717,7 +717,7 @@ def execute_rebalance_cycle(
         cycle_snapshot = build_snapshot_from_portfolio(portfolio, execution=execution)
         set_cycle_snapshot(cycle_snapshot)
         reasons = ", ".join(account_new_risk_reason_codes) or "-"
-        trade_logs.append(
+        gate_diagnostic_message = (
             "[Account new-risk gate] "
             f"disposition={admission.disposition.value} "
             f"observation={cycle_snapshot.observation_status} "
@@ -725,6 +725,9 @@ def execute_rebalance_cycle(
             f"breaker={cycle_snapshot.circuit_breaker_state} "
             f"reasons={reasons}"
         )
+        # Cloud Logging / dry-run verification need stdout; trade_logs alone are not persisted.
+        print(gate_diagnostic_message, flush=True)
+        trade_logs.append(gate_diagnostic_message)
     else:
         set_cycle_snapshot(None)
 

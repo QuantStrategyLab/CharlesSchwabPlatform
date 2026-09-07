@@ -202,6 +202,28 @@ class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
         self.assertTrue(any("disposition=ALLOW_NEW_RISK" in log for log in result.trade_logs))
         self.assertFalse(any("NEW_RISK_PROHIBITED" in log for log in result.trade_logs))
 
+    def test_execution_cycle_prints_gate_axes_to_stdout(self) -> None:
+        from io import StringIO
+        from contextlib import redirect_stdout
+
+        buf = StringIO()
+        with redirect_stdout(buf):
+            result, _submitted = self._run_buy_cycle(
+                portfolio_overrides={
+                    "account_new_risk_snapshot": {
+                        "observation_status": "COMPLETE",
+                        "reconciliation_status": "VERIFIED",
+                        "circuit_breaker_state": "CLOSED",
+                    },
+                }
+            )
+        printed = buf.getvalue()
+        self.assertIn("[Account new-risk gate]", printed)
+        self.assertIn("observation=COMPLETE", printed)
+        self.assertIn("reconciliation=VERIFIED", printed)
+        self.assertIn("breaker=CLOSED", printed)
+        self.assertTrue(any("disposition=ALLOW_NEW_RISK" in log for log in result.trade_logs))
+
     def test_execution_cycle_halves_buy_quantity_for_half_scale(self) -> None:
         _result, submitted_orders = self._run_buy_cycle(
             portfolio_overrides={
