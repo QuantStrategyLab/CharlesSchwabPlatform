@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from application.account_new_risk_gate_support import (
     apply_combined_scale,
+    build_account_new_risk_snapshot,
     build_snapshot_from_portfolio,
     evaluate_cycle_new_risk_admission,
     evaluate_portfolio_new_risk_admission,
@@ -692,6 +693,11 @@ def execute_rebalance_cycle(
     account_new_risk_buy_blocked = False
     account_new_risk_reason_codes: tuple[str, ...] = ()
     if is_account_new_risk_gate_enabled():
+        portfolio = dict(portfolio)
+        portfolio["account_new_risk_snapshot"] = build_account_new_risk_snapshot(
+            portfolio,
+            execution=execution,
+        )
         admission = evaluate_portfolio_new_risk_admission(portfolio, execution=execution)
         account_new_risk_buy_blocked = new_risk_buy_prohibited(admission)
         account_new_risk_reason_codes = tuple(admission.reason_codes)

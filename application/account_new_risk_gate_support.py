@@ -62,13 +62,28 @@ def _resolve_equity_usd(portfolio: Mapping[str, Any], execution: Mapping[str, An
     return None
 
 
+def build_account_new_risk_snapshot(
+    portfolio: Mapping[str, Any],
+    *,
+    execution: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build an explicit fail-closed projection from evidence available this cycle."""
+    projection = dict(portfolio.get("account_new_risk_snapshot") or {})
+    projection.setdefault("observation_status", "UNAVAILABLE")
+    projection.setdefault("reconciliation_status", "UNVERIFIED")
+    projection.setdefault("circuit_breaker_state", "OPEN")
+    if "equity_usd" not in projection:
+        projection["equity_usd"] = _resolve_equity_usd(portfolio, execution)
+    return projection
+
+
 def build_snapshot_from_portfolio(
     portfolio: Mapping[str, Any],
     *,
     execution: Mapping[str, Any] | None = None,
 ) -> InjectedReconciliationSnapshot:
     """Project an injected reconciliation snapshot from an existing portfolio read."""
-    projection = dict(portfolio.get("account_new_risk_snapshot") or {})
+    projection = build_account_new_risk_snapshot(portfolio, execution=execution)
     equity_usd = _coerce_optional_float(projection.get("equity_usd"))
     if equity_usd is None:
         equity_usd = _resolve_equity_usd(portfolio, execution)

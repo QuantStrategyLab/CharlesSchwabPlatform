@@ -14,6 +14,7 @@ if (QPK_SRC / "quant_platform_kit").exists() and str(QPK_SRC) not in sys.path:
 from application.account_new_risk_gate_support import (
     ACCOUNT_NEW_RISK_GATE_ENV,
     apply_combined_scale,
+    build_account_new_risk_snapshot,
     build_snapshot_from_portfolio,
     evaluate_portfolio_new_risk_admission,
     new_risk_buy_prohibited,
@@ -33,6 +34,15 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
 
     def test_missing_equity_prohibits_fail_closed(self) -> None:
         portfolio = {"market_values": {"SOXL": 0.0}, "liquid_cash": 100.0}
+        self.assertEqual(
+            build_account_new_risk_snapshot(portfolio),
+            {
+                "observation_status": "UNAVAILABLE",
+                "reconciliation_status": "UNVERIFIED",
+                "circuit_breaker_state": "OPEN",
+                "equity_usd": None,
+            },
+        )
         result = evaluate_portfolio_new_risk_admission(portfolio)
         self.assertTrue(new_risk_buy_prohibited(result))
         self.assertIn("EQUITY_UNKNOWN_FAIL_CLOSED", result.reason_codes)
@@ -147,6 +157,10 @@ class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
             }
         )
         self.assertEqual(submitted_orders, [])
+        self.assertEqual(
+            result.portfolio["account_new_risk_snapshot"]["observation_status"],
+            "UNAVAILABLE",
+        )
         self.assertTrue(any("Account new-risk gate" in log for log in result.trade_logs))
 
     def test_execution_cycle_allows_buys_when_healthy(self) -> None:
