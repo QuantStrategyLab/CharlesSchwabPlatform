@@ -39,6 +39,11 @@ def _buy_plan(*, account_hash: str = "demo") -> dict:
             "targets": {"SOXX": 500.0},
         },
         "portfolio": {
+            "account_new_risk_snapshot": {
+                "observation_status": "COMPLETE",
+                "reconciliation_status": "VERIFIED",
+                "circuit_breaker_state": "CLOSED",
+            },
             "strategy_symbols": ("SOXX",),
             "portfolio_rows": (("SOXX",),),
             "market_values": {"SOXX": 0.0},

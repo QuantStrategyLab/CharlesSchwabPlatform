@@ -19,6 +19,12 @@ from notifications.telegram import build_translator
 from quant_platform_kit.common.models import ExecutionReport, PortfolioSnapshot, Position, QuoteSnapshot
 from quant_platform_kit.common.port_adapters import CallableExecutionPort, CallableMarketDataPort, CallableNotificationPort, CallablePortfolioPort
 
+HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT = {
+    "observation_status": "COMPLETE",
+    "reconciliation_status": "VERIFIED",
+    "circuit_breaker_state": "CLOSED",
+}
+
 
 class RebalanceServiceTests(unittest.TestCase):
     def test_missing_cash_sweep_quote_defers_cycle_without_submitting_an_order(self):
@@ -845,6 +851,7 @@ class RebalanceServiceTests(unittest.TestCase):
                 "targets": {"TQQQ": 20000.0, "BOXX": 15000.0, "SPYI": 5000.0, "QQQI": 10000.0},
             },
             "portfolio": {
+                "account_new_risk_snapshot": HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT,
                 "strategy_symbols": ("TQQQ", "BOXX", "SPYI", "QQQI"),
                 "portfolio_rows": (("TQQQ", "BOXX"), ("QQQI", "SPYI")),
                 "market_values": {"TQQQ": 0.0, "BOXX": 5000.0, "SPYI": 0.0, "QQQI": 0.0},
@@ -1301,6 +1308,7 @@ class RebalanceServiceTests(unittest.TestCase):
                 "targets": {"TQQQ": 900.0, "BOXX": 100.0},
             },
             "portfolio": {
+                "account_new_risk_snapshot": HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT,
                 "strategy_symbols": ("TQQQ", "BOXX"),
                 "portfolio_rows": (("TQQQ", "BOXX"),),
                 "market_values": {"TQQQ": 0.0, "BOXX": 1000.0},
@@ -1314,6 +1322,7 @@ class RebalanceServiceTests(unittest.TestCase):
         refreshed_plan = {
             **initial_plan,
             "portfolio": {
+                "account_new_risk_snapshot": HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT,
                 "strategy_symbols": ("TQQQ", "BOXX"),
                 "portfolio_rows": (("TQQQ", "BOXX"),),
                 "market_values": {"TQQQ": 0.0, "BOXX": 200.0},
@@ -1497,6 +1506,7 @@ class RebalanceServiceTests(unittest.TestCase):
                 "targets": {"TQQQ": 540.0, "QQQM": 527.0, "BOXX": 100.0},
             },
             "portfolio": {
+                "account_new_risk_snapshot": HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT,
                 "strategy_symbols": ("TQQQ", "QQQM", "BOXX"),
                 "portfolio_rows": (("TQQQ", "QQQM", "BOXX"),),
                 "market_values": {"TQQQ": 500.0, "QQQM": 0.0, "BOXX": 500.0},
@@ -1587,6 +1597,7 @@ class RebalanceServiceTests(unittest.TestCase):
                 "targets": {"QQQM": 550.0, "BOXX": 0.0},
             },
             "portfolio": {
+                "account_new_risk_snapshot": HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT,
                 "strategy_symbols": ("QQQM", "BOXX"),
                 "portfolio_rows": (("QQQM", "BOXX"),),
                 "market_values": {"QQQM": 0.0, "BOXX": 1000.0},
@@ -1709,6 +1720,7 @@ class RebalanceServiceTests(unittest.TestCase):
                 "targets": {"TQQQ": 900.0, "BOXX": 100.0},
             },
             "portfolio": {
+                "account_new_risk_snapshot": HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT,
                 "strategy_symbols": ("TQQQ", "BOXX"),
                 "portfolio_rows": (("TQQQ", "BOXX"),),
                 "market_values": {"TQQQ": 0.0, "BOXX": 1000.0},
@@ -1722,6 +1734,7 @@ class RebalanceServiceTests(unittest.TestCase):
         stale_plan = {
             **initial_plan,
             "portfolio": {
+                "account_new_risk_snapshot": HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT,
                 "strategy_symbols": ("TQQQ", "BOXX"),
                 "portfolio_rows": (("TQQQ", "BOXX"),),
                 "market_values": {"TQQQ": 0.0, "BOXX": 200.0},
@@ -1734,6 +1747,7 @@ class RebalanceServiceTests(unittest.TestCase):
         settled_plan = {
             **initial_plan,
             "portfolio": {
+                "account_new_risk_snapshot": HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT,
                 "strategy_symbols": ("TQQQ", "BOXX"),
                 "portfolio_rows": (("TQQQ", "BOXX"),),
                 "market_values": {"TQQQ": 0.0, "BOXX": 200.0},
@@ -1863,6 +1877,7 @@ class RebalanceServiceTests(unittest.TestCase):
                 "targets": {"TQQQ": 900.0, "BOXX": 100.0},
             },
             "portfolio": {
+                "account_new_risk_snapshot": HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT,
                 "strategy_symbols": ("TQQQ", "BOXX"),
                 "portfolio_rows": (("TQQQ", "BOXX"),),
                 "market_values": {"TQQQ": 0.0, "BOXX": 1000.0},
@@ -1876,6 +1891,7 @@ class RebalanceServiceTests(unittest.TestCase):
         stale_plan = {
             **initial_plan,
             "portfolio": {
+                "account_new_risk_snapshot": HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT,
                 "strategy_symbols": ("TQQQ", "BOXX"),
                 "portfolio_rows": (("TQQQ", "BOXX"),),
                 "market_values": {"TQQQ": 0.0, "BOXX": 200.0},
@@ -1980,6 +1996,7 @@ class RebalanceServiceTests(unittest.TestCase):
                 "targets": {"TQQQ": 20000.0, "BOXX": 15000.0},
             },
             "portfolio": {
+                "account_new_risk_snapshot": HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT,
                 "strategy_symbols": ("TQQQ", "BOXX"),
                 "portfolio_rows": (("TQQQ", "BOXX"),),
                 "market_values": {"TQQQ": 0.0, "BOXX": 5000.0},
