@@ -38,10 +38,8 @@ grep -Fq 'scripts/verify_cloud_run_no_traffic_deploy.py verify' "$workflow"
 grep -Fq -- '--expected-image-digest="${EXPECTED_IMAGE_DIGEST}"' "$workflow"
 grep -Fq 'image_summary.digest' "$workflow"
 
-grep -Fq 'traffic changed during no-traffic deployment' "$readback"
-grep -Fq 'scheduler changed during no-traffic deployment' "$readback"
-grep -Fq 'iam changed during no-traffic deployment' "$readback"
-grep -Fq 'configuration changed during no-traffic deployment' "$readback"
+grep -Fq 'for key in ("traffic", "scheduler", "iam", "configuration"):' "$readback"
+grep -Fq 'raise RuntimeError(f"{key} changed during no-traffic deployment")' "$readback"
 grep -Fq 'Compare only effective traffic' "$readback"
 grep -Fq 'if percent > 0:' "$readback"
 if grep -Fq 'secrets versions access' "$readback" || grep -Fq 'containers.env.value,' "$readback"; then

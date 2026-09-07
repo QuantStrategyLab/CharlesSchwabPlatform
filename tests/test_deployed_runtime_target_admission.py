@@ -48,7 +48,7 @@ def test_target_drift_fails_closed(configured, profile, message):
         admission.verify_service(service="paper-service", service_json=payload(configured, profile))
 
 
-@pytest.mark.parametrize("mismatch", [None, "image", "source"])
+@pytest.mark.parametrize("mismatch", [None, "image", "source", "traffic", "scheduler", "iam", "configuration"])
 def test_no_traffic_readback_projects_container_array_and_checks_identity(tmp_path, monkeypatch, mismatch):
     from types import SimpleNamespace
     from scripts import verify_cloud_run_no_traffic_deploy as readback
@@ -58,7 +58,8 @@ def test_no_traffic_readback_projects_container_array_and_checks_identity(tmp_pa
     before.write_text(json.dumps(baseline))
     args = SimpleNamespace(before=before, project="synthetic", region="synthetic",
                            service="synthetic", expected_sha=sha, expected_image_digest=digest)
-    monkeypatch.setattr(readback, "_snapshot", lambda _args: baseline)
+    observed = baseline | ({mismatch: "changed"} if mismatch in baseline else {})
+    monkeypatch.setattr(readback, "_snapshot", lambda _args: observed)
     monkeypatch.setattr(readback.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=0, stdout="synthetic-revision", stderr=""))
     def projected(command):
         result = {"metadata": {"labels": {"commit-sha": "c" * 40 if mismatch == "source" else sha}}}
@@ -69,7 +70,8 @@ def test_no_traffic_readback_projects_container_array_and_checks_identity(tmp_pa
         return result
     monkeypatch.setattr(readback, "_run_json", projected)
     if mismatch:
-        with pytest.raises(RuntimeError, match="commit SHA" if mismatch == "source" else "image digest"):
+        message = f"{mismatch} changed" if mismatch in baseline else "commit SHA" if mismatch == "source" else "image digest"
+        with pytest.raises(RuntimeError, match=message):
             readback._verify(args)
     else:
         readback._verify(args)
