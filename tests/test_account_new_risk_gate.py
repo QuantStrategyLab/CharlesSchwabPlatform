@@ -13,6 +13,7 @@ if (QPK_SRC / "quant_platform_kit").exists() and str(QPK_SRC) not in sys.path:
 
 from application.account_new_risk_gate_support import (
     ACCOUNT_NEW_RISK_GATE_ENV,
+    apply_combined_scale,
     build_snapshot_from_portfolio,
     evaluate_portfolio_new_risk_admission,
     new_risk_buy_prohibited,
@@ -71,6 +72,12 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
     def test_snapshot_maps_total_equity_from_portfolio(self) -> None:
         snapshot = build_snapshot_from_portfolio({"total_equity": 12_345.0})
         self.assertEqual(snapshot.equity_usd, 12_345.0)
+
+    def test_combined_scale_halves_value(self) -> None:
+        self.assertEqual(apply_combined_scale(4.0, 0.5), 2.0)
+
+    def test_missing_combined_scale_is_no_op(self) -> None:
+        self.assertEqual(apply_combined_scale(4.0, None), 4.0)
 
 
 class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
@@ -155,6 +162,21 @@ class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
         self.assertEqual(len(submitted_orders), 1)
         self.assertEqual(str(getattr(submitted_orders[0], "side", "")).lower(), "buy")
         self.assertFalse(any("Account new-risk gate" in log for log in result.trade_logs))
+
+    def test_execution_cycle_halves_buy_quantity_for_half_scale(self) -> None:
+        _result, submitted_orders = self._run_buy_cycle(
+            portfolio_overrides={
+                "total_equity": 40_000.0,
+                "account_new_risk_snapshot": {
+                    "observation_status": "COMPLETE",
+                    "reconciliation_status": "VERIFIED",
+                    "circuit_breaker_state": "CLOSED",
+                    "drawdown_from_peak": 0.075,
+                },
+            }
+        )
+        self.assertEqual(len(submitted_orders), 1)
+        self.assertEqual(submitted_orders[0].quantity, 2)
 
     def test_execution_cycle_allows_sell_when_buy_prohibited(self) -> None:
         submitted_orders = []

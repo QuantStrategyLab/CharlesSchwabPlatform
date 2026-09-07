@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from application.account_new_risk_gate_support import (
+    apply_combined_scale,
     build_snapshot_from_portfolio,
     evaluate_cycle_new_risk_admission,
     evaluate_portfolio_new_risk_admission,
@@ -753,17 +754,18 @@ def execute_rebalance_cycle(
         submitted_orders.append(payload)
 
     def execute_fire_forget(symbol, action_type, quantity, price=None):
+        if is_account_new_risk_gate_enabled() and action_type != "SELL":
+            admission = evaluate_cycle_new_risk_admission()
+            if new_risk_buy_prohibited(admission):
+                record_submitted_order(symbol, action_type, quantity, price, status="rejected")
+                return False
+            quantity = apply_combined_scale(quantity, admission.combined_scale)
+            if action_type != "BUY_NOTIONAL":
+                quantity = int(quantity)
         if action_type == "BUY_NOTIONAL":
             if float(quantity or 0.0) < MIN_NOTIONAL_BUY_USD:
                 return False
         elif quantity <= 0:
-            return False
-        if (
-            is_account_new_risk_gate_enabled()
-            and action_type != "SELL"
-            and new_risk_buy_prohibited(evaluate_cycle_new_risk_admission())
-        ):
-            record_submitted_order(symbol, action_type, quantity, price, status="rejected")
             return False
         try:
             price_text = "{:.2f}".format(price) if price else None
