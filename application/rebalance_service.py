@@ -371,15 +371,16 @@ def _record_execution_outcome(
                 "orders_pending_count": int(
                     dict(getattr(result, "execution", {}) or {}).get("orders_pending_count") or 0
                 ),
+                "submitted_orders": list(getattr(result, "submitted_orders", ()) or ()),
                 "signal_date": str(dict(getattr(result, "execution", {}) or {}).get("signal_date") or ""),
                 "effective_date": str(dict(getattr(result, "execution", {}) or {}).get("effective_date") or ""),
             },
         )
-    except Exception as exc:
-        notify_issue(
-            "Execution outcome write failed",
-            f"Marker: {marker_key}\n{type(exc).__name__}: {exc}",
-        )
+    except Exception:
+        try:
+            notify_issue("Execution outcome write failed", "execution_outcome_persistence_failed")
+        except Exception:
+            print("execution_outcome_notification_failed", flush=True)
 
 
 def _legacy_quote_snapshot(symbol, quote_snapshots) -> QuoteSnapshot:
@@ -695,17 +696,20 @@ def run_strategy_core(
     trade_logs = list(execution_result.trade_logs)
 
     if _has_submitted_orders(execution_result):
-        notification_publisher.publish(
-            notification_renderers.render_trade_notification(
-                translator=config.translator,
-                strategy_display_name=config.strategy_display_name,
-                dry_run_only=config.dry_run_only,
-                extra_notification_lines=config.extra_notification_lines,
-                execution=execution,
-                trade_logs=trade_logs,
-                account_label=plan.get("account_hash", ""),
+        try:
+            notification_publisher.publish(
+                notification_renderers.render_trade_notification(
+                    translator=config.translator,
+                    strategy_display_name=config.strategy_display_name,
+                    dry_run_only=config.dry_run_only,
+                    extra_notification_lines=config.extra_notification_lines,
+                    execution=execution,
+                    trade_logs=trade_logs,
+                    account_label=plan.get("account_hash", ""),
+                )
             )
-        )
+        except Exception:
+            print("pending_order_notification_failed", flush=True)
     elif getattr(config, "notify_no_trade_cycles", True):
         notification_publisher.publish(
             notification_renderers.render_heartbeat_notification(
