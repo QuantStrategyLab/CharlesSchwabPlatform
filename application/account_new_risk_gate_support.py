@@ -166,6 +166,45 @@ def _resolve_production_drift_status(portfolio: Mapping[str, Any], projection: M
     return str(raw).strip()
 
 
+def maybe_inject_production_drift_status(
+    portfolio: Mapping[str, Any],
+    *,
+    strategy_profile: str | None,
+    domain: str | None,
+    store=None,
+) -> dict[str, Any]:
+    """Return a shallow-copied portfolio with production_drift_status filled from store when absent.
+
+    Explicit account_new_risk_snapshot.production_drift_status or portfolio.production_drift_status wins.
+    Missing profile/domain, parked store, or any exception → leave unchanged (omit; never invent CRITICAL).
+    Never optimizes or grants live.
+    """
+    out = dict(portfolio)
+    projection = dict(out.get("account_new_risk_snapshot") or {})
+    if _resolve_production_drift_status(out, projection) is not None:
+        return out
+    profile = str(strategy_profile or "").strip() or None
+    domain_key = str(domain or "").strip() or None
+    if not profile or not domain_key:
+        return out
+    try:
+        from quant_platform_kit.risk.production_drift_new_risk import (
+            resolve_production_drift_status_from_store,
+        )
+
+        status = resolve_production_drift_status_from_store(
+            strategy_profile=profile,
+            domain=domain_key,
+            store=store,
+        )
+    except Exception:
+        return out
+    if status:
+        projection["production_drift_status"] = status
+        out["account_new_risk_snapshot"] = projection
+    return out
+
+
 def build_snapshot_from_portfolio(
     portfolio: Mapping[str, Any],
     *,

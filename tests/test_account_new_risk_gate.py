@@ -7,14 +7,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+# Prefer installed QPK pin (uv sync). Local checkout is append-only fallback.
 REPO_ROOT = ROOT.parent.parent if ROOT.parent.name == ".worktrees" else ROOT
-QPK_DRIFT_WORKTREE_SRC = (
-    REPO_ROOT.parent / "QuantPlatformKit" / ".worktrees" / "drift-to-new-risk-a" / "src"
-)
 QPK_SRC = REPO_ROOT.parent / "QuantPlatformKit" / "src"
-for qpk_src in (QPK_SRC, QPK_DRIFT_WORKTREE_SRC):
-    if (qpk_src / "quant_platform_kit").exists() and str(qpk_src) not in sys.path:
-        sys.path.insert(0, str(qpk_src))
+if (QPK_SRC / "quant_platform_kit").exists() and str(QPK_SRC) not in sys.path:
+    sys.path.append(str(QPK_SRC))
 
 from application.account_new_risk_gate_support import (
     ACCOUNT_NEW_RISK_GATE_ENV,
@@ -22,6 +19,7 @@ from application.account_new_risk_gate_support import (
     build_account_new_risk_snapshot,
     build_snapshot_from_portfolio,
     evaluate_portfolio_new_risk_admission,
+    maybe_inject_production_drift_status,
     new_risk_buy_prohibited,
     set_cycle_snapshot,
 )
@@ -149,6 +147,107 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
         }
         result = evaluate_portfolio_new_risk_admission(portfolio)
         self.assertEqual(result.disposition, NewRiskDisposition.ALLOW_NEW_RISK)
+
+    def test_maybe_inject_fills_from_store_and_prohibits(self) -> None:
+        def _fake_resolve(*, strategy_profile, domain, store=None, **_kwargs):
+            self.assertEqual(strategy_profile, "demo_profile")
+            self.assertEqual(domain, "us_equity")
+            return "review"
+
+        import quant_platform_kit.risk.production_drift_new_risk as drift_mod
+
+        original = getattr(
+            drift_mod, "resolve_production_drift_status_from_store", None
+        )
+        drift_mod.resolve_production_drift_status_from_store = _fake_resolve  # type: ignore[assignment]
+        try:
+            portfolio = {
+                "total_equity": 50_000.0,
+                "metadata": {"total_equity_source": "broker_liquidation_value"},
+            }
+            injected = maybe_inject_production_drift_status(
+                portfolio,
+                strategy_profile="demo_profile",
+                domain="us_equity",
+            )
+            self.assertEqual(
+                injected["account_new_risk_snapshot"]["production_drift_status"],
+                "review",
+            )
+            result = evaluate_portfolio_new_risk_admission(injected)
+            self.assertEqual(result.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+            self.assertIn("PRODUCTION_DRIFT_REVIEW", result.reason_codes)
+        finally:
+            if original is None:
+                delattr(drift_mod, "resolve_production_drift_status_from_store")
+            else:
+                drift_mod.resolve_production_drift_status_from_store = original
+
+    def test_maybe_inject_does_not_overwrite_explicit_status(self) -> None:
+        def _fake_resolve(**_kwargs):
+            raise AssertionError("store resolve must not run when status already set")
+
+        import quant_platform_kit.risk.production_drift_new_risk as drift_mod
+
+        original = drift_mod.resolve_production_drift_status_from_store
+        drift_mod.resolve_production_drift_status_from_store = _fake_resolve  # type: ignore[assignment]
+        try:
+            for explicit in ("review", "critical"):
+                portfolio = {
+                    "total_equity": 50_000.0,
+                    "account_new_risk_snapshot": {"production_drift_status": explicit},
+                }
+                injected = maybe_inject_production_drift_status(
+                    portfolio,
+                    strategy_profile="demo_profile",
+                    domain="us_equity",
+                )
+                self.assertEqual(
+                    injected["account_new_risk_snapshot"]["production_drift_status"],
+                    explicit,
+                )
+        finally:
+            drift_mod.resolve_production_drift_status_from_store = original
+
+    def test_maybe_inject_leaves_absent_when_resolve_returns_none(self) -> None:
+        def _fake_resolve(**_kwargs):
+            return None
+
+        import quant_platform_kit.risk.production_drift_new_risk as drift_mod
+
+        original = drift_mod.resolve_production_drift_status_from_store
+        drift_mod.resolve_production_drift_status_from_store = _fake_resolve  # type: ignore[assignment]
+        try:
+            portfolio = {"total_equity": 50_000.0}
+            injected = maybe_inject_production_drift_status(
+                portfolio,
+                strategy_profile="demo_profile",
+                domain="us_equity",
+            )
+            self.assertNotIn("account_new_risk_snapshot", injected)
+            self.assertNotIn("production_drift_status", injected)
+        finally:
+            drift_mod.resolve_production_drift_status_from_store = original
+
+    def test_maybe_inject_leaves_absent_when_resolve_raises(self) -> None:
+        def _fake_resolve(**_kwargs):
+            raise RuntimeError("store unavailable")
+
+        import quant_platform_kit.risk.production_drift_new_risk as drift_mod
+
+        original = drift_mod.resolve_production_drift_status_from_store
+        drift_mod.resolve_production_drift_status_from_store = _fake_resolve  # type: ignore[assignment]
+        try:
+            portfolio = {"total_equity": 50_000.0}
+            injected = maybe_inject_production_drift_status(
+                portfolio,
+                strategy_profile="demo_profile",
+                domain="us_equity",
+            )
+            self.assertNotIn("account_new_risk_snapshot", injected)
+            self.assertNotIn("production_drift_status", injected)
+        finally:
+            drift_mod.resolve_production_drift_status_from_store = original
 
     def test_combined_scale_halves_value(self) -> None:
         self.assertEqual(apply_combined_scale(4.0, 0.5), 2.0)
