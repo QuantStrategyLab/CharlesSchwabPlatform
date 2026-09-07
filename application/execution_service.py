@@ -714,7 +714,17 @@ def execute_rebalance_cycle(
         admission = evaluate_portfolio_new_risk_admission(portfolio, execution=execution)
         account_new_risk_buy_blocked = new_risk_buy_prohibited(admission)
         account_new_risk_reason_codes = tuple(admission.reason_codes)
-        set_cycle_snapshot(build_snapshot_from_portfolio(portfolio, execution=execution))
+        cycle_snapshot = build_snapshot_from_portfolio(portfolio, execution=execution)
+        set_cycle_snapshot(cycle_snapshot)
+        reasons = ", ".join(account_new_risk_reason_codes) or "-"
+        trade_logs.append(
+            "[Account new-risk gate] "
+            f"disposition={admission.disposition.value} "
+            f"observation={cycle_snapshot.observation_status} "
+            f"reconciliation={cycle_snapshot.reconciliation_status} "
+            f"breaker={cycle_snapshot.circuit_breaker_state} "
+            f"reasons={reasons}"
+        )
     else:
         set_cycle_snapshot(None)
 
