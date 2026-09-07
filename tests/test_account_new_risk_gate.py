@@ -34,16 +34,33 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
 
     def test_missing_equity_prohibits_fail_closed(self) -> None:
         portfolio = {"market_values": {"SOXL": 0.0}, "liquid_cash": 100.0}
-        self.assertEqual(
-            build_account_new_risk_snapshot(portfolio),
-            {
-                "observation_status": "UNAVAILABLE",
-                "reconciliation_status": "UNVERIFIED",
-                "circuit_breaker_state": "OPEN",
-                "equity_usd": None,
-            },
-        )
+        snapshot = build_account_new_risk_snapshot(portfolio)
+        # Missing equity keeps observation_ok=False under cycle-health, which
+        # still fails closed via EQUITY_UNKNOWN_FAIL_CLOSED below -- the
+        # circuit-breaker axis is not durably OPEN here since there is no
+        # explicit unknown-pending / durable-breaker evidence this cycle.
+        self.assertEqual(snapshot["observation_status"], "UNAVAILABLE")
+        self.assertIsNone(snapshot["equity_usd"])
         result = evaluate_portfolio_new_risk_admission(portfolio)
+        self.assertTrue(new_risk_buy_prohibited(result))
+        self.assertIn("EQUITY_UNKNOWN_FAIL_CLOSED", result.reason_codes)
+
+    def test_unknown_pending_orders_prohibits_and_opens_breaker(self) -> None:
+        portfolio = {
+            "total_equity": 50_000.0,
+            "unknown_pending_orders": True,
+        }
+        snapshot = build_account_new_risk_snapshot(portfolio)
+        self.assertEqual(snapshot["circuit_breaker_state"], "OPEN")
+        self.assertEqual(snapshot["reconciliation_status"], "UNVERIFIED")
+        result = evaluate_portfolio_new_risk_admission(portfolio)
+        self.assertTrue(new_risk_buy_prohibited(result))
+        self.assertIn("CIRCUIT_BREAKER_OPEN", result.reason_codes)
+        self.assertIn("RECONCILIATION_NOT_VERIFIED", result.reason_codes)
+
+    def test_default_projection_without_equity_still_prohibits(self) -> None:
+        """A bare portfolio with no equity and no explicit snapshot still fails closed."""
+        result = evaluate_portfolio_new_risk_admission({})
         self.assertTrue(new_risk_buy_prohibited(result))
         self.assertIn("EQUITY_UNKNOWN_FAIL_CLOSED", result.reason_codes)
 
@@ -58,13 +75,20 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
         self.assertTrue(new_risk_buy_prohibited(result))
         self.assertIn("DRAWDOWN_BRAKE_TRIPPED", result.reason_codes)
 
-    def test_broker_liquidation_equity_without_snapshot_prohibits_new_risk(self) -> None:
+    def test_healthy_equity_only_portfolio_allows_new_risk(self) -> None:
+        """A plain healthy-equity portfolio (no explicit snapshot) now derives
+        COMPLETE/VERIFIED/CLOSED via cycle-health instead of failing closed on
+        soft UNAVAILABLE/UNVERIFIED/OPEN defaults."""
         portfolio = {
             "total_equity": 50_000.0,
             "metadata": {"total_equity_source": "broker_liquidation_value"},
         }
+        snapshot = build_account_new_risk_snapshot(portfolio)
+        self.assertEqual(snapshot["observation_status"], "COMPLETE")
+        self.assertEqual(snapshot["reconciliation_status"], "VERIFIED")
+        self.assertEqual(snapshot["circuit_breaker_state"], "CLOSED")
         result = evaluate_portfolio_new_risk_admission(portfolio)
-        self.assertEqual(result.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+        self.assertEqual(result.disposition, NewRiskDisposition.ALLOW_NEW_RISK)
 
     def test_explicit_healthy_snapshot_allows_new_risk(self) -> None:
         portfolio = {

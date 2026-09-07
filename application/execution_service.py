@@ -48,12 +48,24 @@ except ImportError:  # pragma: no cover - compatibility with older pinned shared
         return False
 try:
     from quant_platform_kit.common.small_account_compatibility import (
+        DEFAULT_EXISTING_WHOLE_SHARE_RETENTION_SYMBOLS,
+        DEFAULT_WHOLE_SHARE_BOOTSTRAP_MIN_TARGET_SHARE_RATIO_BY_SYMBOL,
+        DEFAULT_WHOLE_SHARE_RETENTION_MIN_TARGET_SHARE_RATIO_BY_SYMBOL,
+        SMALL_ACCOUNT_SAFE_HAVEN_CASH_SUBSTITUTE_LIMIT_USD as QPK_SMALL_ACCOUNT_SAFE_HAVEN_CASH_SUBSTITUTE_LIMIT_USD,
         apply_small_account_cash_compatibility,
         build_small_account_allocation_drift_notes,
         format_small_account_allocation_drift_notes,
         format_small_account_cash_substitution_notes,
     )
 except ImportError:  # pragma: no cover - compatibility with older pinned shared wheels
+    DEFAULT_EXISTING_WHOLE_SHARE_RETENTION_SYMBOLS = frozenset({"TQQQ", "SOXL", "QQQM"})
+    DEFAULT_WHOLE_SHARE_RETENTION_MIN_TARGET_SHARE_RATIO_BY_SYMBOL = {"QQQM": 0.85}
+    DEFAULT_WHOLE_SHARE_BOOTSTRAP_MIN_TARGET_SHARE_RATIO_BY_SYMBOL = {
+        "TQQQ": 0.90,
+        "SOXL": 0.90,
+        "QQQM": 0.85,
+    }
+    QPK_SMALL_ACCOUNT_SAFE_HAVEN_CASH_SUBSTITUTE_LIMIT_USD = 2000.0
     @dataclass(frozen=True)
     class _SmallAccountCashCompatibilityResult:
         targets: dict
@@ -231,15 +243,16 @@ class ExecutionCycleResult:
 
 DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD = 1000.0
 MIN_NOTIONAL_BUY_USD = 1.0
-SMALL_ACCOUNT_SAFE_HAVEN_CASH_SUBSTITUTE_LIMIT_USD = 2000.0
-SMALL_ACCOUNT_EXISTING_WHOLE_SHARE_RETENTION_SYMBOLS = frozenset({"TQQQ", "SOXL"})
+SMALL_ACCOUNT_SAFE_HAVEN_CASH_SUBSTITUTE_LIMIT_USD = QPK_SMALL_ACCOUNT_SAFE_HAVEN_CASH_SUBSTITUTE_LIMIT_USD
+SMALL_ACCOUNT_EXISTING_WHOLE_SHARE_RETENTION_SYMBOLS = DEFAULT_EXISTING_WHOLE_SHARE_RETENTION_SYMBOLS
 _SMALL_ACCOUNT_RETENTION_MIN_TARGET_SHARE_RATIO_DEFAULT = 0.85
+# Merge platform-specific SOXX ratios on top of the QPK shared defaults (QQQM etc.).
 SMALL_ACCOUNT_EXISTING_WHOLE_SHARE_RETENTION_MIN_TARGET_SHARE_RATIO_BY_SYMBOL = {
+    **DEFAULT_WHOLE_SHARE_RETENTION_MIN_TARGET_SHARE_RATIO_BY_SYMBOL,
     "SOXX": 0.90,
 }
 SMALL_ACCOUNT_WHOLE_SHARE_BOOTSTRAP_MIN_TARGET_SHARE_RATIO_BY_SYMBOL = {
-    "TQQQ": 0.90,
-    "SOXL": 0.90,
+    **DEFAULT_WHOLE_SHARE_BOOTSTRAP_MIN_TARGET_SHARE_RATIO_BY_SYMBOL,
     "SOXX": 0.90,
 }
 
