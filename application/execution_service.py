@@ -785,7 +785,13 @@ def execute_rebalance_cycle(
             payload["broker_order_id"] = broker_order_id
         submitted_orders.append(payload)
 
+    submission_halted = False
+    submission_outcome_unknown = False
+
     def execute_fire_forget(symbol, action_type, quantity, price=None):
+        nonlocal submission_halted, submission_outcome_unknown
+        if submission_halted:
+            return False
         if is_account_new_risk_gate_enabled() and action_type != "SELL":
             admission = evaluate_cycle_new_risk_admission()
             if new_risk_buy_prohibited(admission):
@@ -799,6 +805,9 @@ def execute_rebalance_cycle(
                 return False
         elif quantity <= 0:
             return False
+        submission_attempted = False
+        outcome_confirmed = False
+        report = None
         try:
             price_text = "{:.2f}".format(price) if price else None
             if action_type == "SELL":
@@ -864,13 +873,31 @@ def execute_rebalance_cycle(
                 return True
 
             if execution_port is not None:
+                submission_attempted = True
                 report = execution_port.submit_order(order_intent)
             elif submit_equity_order is not None:
+                submission_attempted = True
                 report = submit_equity_order(client, plan["account_hash"], order_intent)
             else:
                 raise ValueError("Schwab execution requires execution_port or submit_equity_order")
+            # The pinned adapter labels HTTP errors rejected, including responses
+            # that do not establish whether the broker accepted the request.
+            status_code = report.raw_payload.get("status_code")
+            if report.status not in {"accepted", "rejected"} or (
+                report.status == "rejected"
+                and status_code is not None
+                and (int(status_code) >= 500 or int(status_code) == 408)
+            ):
+                raise RuntimeError("submission outcome unconfirmed")
+            outcome_confirmed = True
             success = report.status == "accepted"
-            info = report.broker_order_id if success else report.raw_payload.get("detail", report.status)
+            if success:
+                # Preserve the ACK before formatting or notification can fail.
+                record_submitted_order(
+                    symbol, action_type, quantity, price,
+                    status=report.status, broker_order_id=report.broker_order_id,
+                )
+            info = report.broker_order_id if success else report.status
             order_id_suffix = str(translator("order_id_suffix", order_id=info)).strip()
             if not order_id_suffix or order_id_suffix == "order_id_suffix":
                 if str(translator("shares")).strip() == "股":
@@ -878,14 +905,6 @@ def execute_rebalance_cycle(
                 else:
                     order_id_suffix = f"(ID: {info})"
             if success:
-                record_submitted_order(
-                    symbol,
-                    action_type,
-                    quantity,
-                    price,
-                    status=report.status,
-                    broker_order_id=report.broker_order_id,
-                )
                 if action_type == "SELL":
                     trade_logs.append(
                         f"✅ 📉 {translator('market_sell_cmd')} {symbol}: {quantity}{translator('shares')} {order_id_suffix}"
@@ -913,10 +932,24 @@ def execute_rebalance_cycle(
             trade_logs.append(message)
             publish_order_issue(message)
             return False
-        except Exception as exc:
-            message = f"🚨 {symbol} {translator('buy_label')} {quantity}{translator('shares')} {translator('exception')}: {exc}"
+        except Exception:
+            if submission_attempted:
+                submission_halted = True
+                if not outcome_confirmed:
+                    submission_outcome_unknown = True
+                    record_submitted_order(
+                        symbol, action_type, quantity, price, status="unknown",
+                        broker_order_id=getattr(report, "broker_order_id", None),
+                    )
+                message = "Order cycle stopped; reconciliation required."
+            else:
+                message = "Order validation failed before submission."
             trade_logs.append(message)
-            publish_order_issue(message)
+            try:
+                publish_order_issue(message)
+            except Exception:
+                # Notification failure must not discard an uncertain outcome.
+                pass
             return False
 
     market_values = dict(portfolio["market_values"])
@@ -1054,7 +1087,7 @@ def execute_rebalance_cycle(
                         )
                     )
 
-    if sell_executed:
+    if sell_executed and not submission_halted:
         if dry_run_only:
             virtual_market_values = dict(portfolio["market_values"])
             virtual_quantities = dict(portfolio["quantities"])
@@ -1318,7 +1351,7 @@ def execute_rebalance_cycle(
             result_execution.update(
                 {
                     "execution_status": "pending_reconciliation",
-                    "broker_submission_done": True,
+                    "broker_submission_done": not submission_outcome_unknown,
                     "orders_pending_count": len(submitted_orders),
                 }
             )
