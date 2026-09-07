@@ -180,7 +180,7 @@ jobs:
 
       - name: Publish lifecycle to the unified control plane
         if: ${{ steps.lifecycle_ingress.outputs.enabled == 'true' }}
-        uses: QuantStrategyLab/QuantRuntimeSettings/actions/publish-runtime-target-lifecycle@c2e46314fd749fd40f4d5fbdbaedadc8b7b27dff
+        uses: QuantStrategyLab/QuantRuntimeSettings/actions/publish-runtime-target-lifecycle@f3c0fb94e5d3e29a593b683adf2c28fdce26907f
         with:
           source-id: schwab.primary
           target-id: schwab.primary
