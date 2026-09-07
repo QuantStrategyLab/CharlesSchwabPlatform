@@ -63,6 +63,16 @@ def test_lifecycle_classifies_import_failures_as_unavailable() -> None:
     assert workflow.count("traceback|importerror|modulenotfounderror") == 2
 
 
+def test_lifecycle_observes_production_drift_without_optimization() -> None:
+    workflow = (ROOT / ".github/workflows/runtime-target-lifecycle.yml").read_text()
+
+    assert "scripts/production_drift_health_observe.py" in workflow
+    assert "id: production_drift" in workflow
+    assert "LIFECYCLE_PERFORMANCE_BUCKET" in workflow
+    assert "| Production drift |" in workflow
+    assert "run_research_promotion_cycle" not in workflow
+
+
 def test_lifecycle_uses_fail_closed_reconcile_only_state_resolver() -> None:
     workflow = (ROOT / ".github/workflows/runtime-target-lifecycle.yml").read_text()
 
