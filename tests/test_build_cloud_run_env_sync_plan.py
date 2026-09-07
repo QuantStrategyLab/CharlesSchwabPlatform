@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 QPK_SRC = ROOT.parent / "QuantPlatformKit" / "src"
@@ -16,6 +18,57 @@ if str(UES_SRC) not in sys.path:
     sys.path.insert(0, str(UES_SRC))
 
 SYNC_PLAN_SCRIPT_PATH = ROOT / "scripts" / "build_cloud_run_env_sync_plan.py"
+
+def test_workflow_exports_lifecycle_store_settings():
+    workflow = (ROOT / ".github/workflows/sync-cloud-run-env.yml").read_text()
+    assert "      LIFECYCLE_PERFORMANCE_BUCKET: ${{ vars.LIFECYCLE_PERFORMANCE_BUCKET }}" in workflow
+
+
+@pytest.mark.parametrize("source", ["missing", "shared", "defaults", "target"])
+def test_lifecycle_store_per_service_precedence(source):
+    defaults = {"GLOBAL_TELEGRAM_CHAT_ID": "test-chat", "NOTIFY_LANG": "en"}
+    target = {
+        "service": "unit-service",
+        "runtime_target": json.loads(runtime_target_json(
+            "tqqq_growth_income",
+            deployment_selector="unit",
+            account_scope="unit",
+            service_name="unit-service",
+        )),
+    }
+    env = {
+        name: value for name, value in os.environ.items()
+        if name in {"PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"}
+    }
+    env["PLATFORM_CONFIG_JSON"] = "{}"
+    values = {"LIFECYCLE_PERFORMANCE_BUCKET": "gs://unit-test-lifecycle"}
+    expected = {}
+    for layer in ("shared", "defaults", "target"):
+        if source == "missing":
+            break
+        destination = env if layer == "shared" else defaults if layer == "defaults" else target
+        expected = {name: value + "-" + layer for name, value in values.items()}
+        destination.update(expected)
+        if source == layer:
+            break
+    env["CLOUD_RUN_SERVICE_TARGETS_JSON"] = json.dumps(
+        {"defaults": defaults, "targets": [target]}
+    )
+    result = subprocess.run(
+        [sys.executable, str(SYNC_PLAN_SCRIPT_PATH), "--json"],
+        check=True, capture_output=True, text=True, env=env, timeout=30,
+    )
+    plan = json.loads(result.stdout)
+    assert plan["mode"] == "per_service"
+    actual = plan["targets"][0]
+    for name in values:
+        if source == "missing":
+            assert name not in actual["env"]
+            assert name in actual["remove_env_vars"]
+        else:
+            assert actual["env"][name] == expected[name]
+            assert name not in actual["remove_env_vars"]
+
 
 
 def runtime_target_json(
@@ -56,6 +109,7 @@ def test_build_cloud_run_env_sync_plan_legacy_mode_tqqq_growth_income():
             service_name="charles-schwab-service",
         ),
         "EXECUTION_REPORT_GCS_URI": "gs://runtime/execution-reports",
+        "LIFECYCLE_PERFORMANCE_BUCKET": "gs://qsl-runtime-logs-shared/strategy-lifecycle/v1",
         "CLOUD_SCHEDULER_MAIN_TIME": "10 16",
         "CLOUD_SCHEDULER_PROBE_TIME": "40 9,15",
     }
@@ -78,6 +132,9 @@ def test_build_cloud_run_env_sync_plan_legacy_mode_tqqq_growth_income():
     assert target["env"]["NOTIFY_LANG"] == "zh"
     assert target["env"]["STRATEGY_PROFILE"] == "tqqq_growth_income"
     assert target["env"]["EXECUTION_REPORT_GCS_URI"] == "gs://runtime/execution-reports"
+    assert target["env"]["LIFECYCLE_PERFORMANCE_BUCKET"] == (
+        "gs://qsl-runtime-logs-shared/strategy-lifecycle/v1"
+    )
     assert target["scheduler"] == {
         "timezone": "America/New_York",
         "main_time": "10 16",
