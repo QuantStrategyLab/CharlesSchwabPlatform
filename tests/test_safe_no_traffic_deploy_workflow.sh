@@ -46,3 +46,45 @@ if grep -Fq 'secrets versions access' "$readback" || grep -Fq 'containers.env.va
   echo "readback must not access Secret Manager values or plaintext environment values" >&2
   exit 1
 fi
+
+# Execute the real build command against a synthetic checkout. Authentication
+# files created after checkout must never enter the container build context.
+python3 - "$workflow" <<'PY'
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+
+build_command = next(line.strip() for line in Path(sys.argv[1]).read_text().splitlines() if "docker build --pull" in line)
+with tempfile.TemporaryDirectory() as directory:
+    root = Path(directory)
+    checkout = root / "checkout"
+    checkout.mkdir()
+    env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+    def git(*args):
+        subprocess.run(["git", *args], cwd=checkout, env=env, check=True, capture_output=True)
+    git("init", "-q")
+    (checkout / "Dockerfile").write_text("FROM scratch\nCOPY . /app/\n")
+    (checkout / "tracked.txt").write_text("synthetic source\n")
+    git("add", "Dockerfile", "tracked.txt")
+    git("-c", "user.name=synthetic", "-c", "user.email=synthetic@example.invalid", "-c", "commit.gpgSign=false", "commit", "-qm", "synthetic")
+    (checkout / "gha-creds-synthetic.json").write_text('{"synthetic":true}\n')
+    bin_dir = root / "bin"
+    bin_dir.mkdir()
+    docker = bin_dir / "docker"
+    docker.write_text(f"#!{sys.executable}\n" + '''import sys, tarfile
+if sys.argv[-1] != "-":
+    raise SystemExit("workspace build context can include generated credentials")
+with tarfile.open(fileobj=sys.stdin.buffer, mode="r|*") as archive:
+    names = {member.name for member in archive}
+if names != {"Dockerfile", "tracked.txt"}:
+    raise SystemExit("build context must contain only the approved tracked source")
+''')
+    docker.chmod(0o700)
+    env.update(PATH=f"{bin_dir}:{os.environ['PATH']}", image="synthetic:test")
+    result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + build_command], cwd=checkout, env=env, capture_output=True)
+    if result.returncode:
+        raise SystemExit("FAIL: generated authentication file is not excluded by the build boundary")
+print("PASS: tracked-source container build excludes generated authentication files")
+PY

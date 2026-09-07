@@ -393,7 +393,7 @@ jobs:
           image="${image_repo}:${GITHUB_SHA}"
 
           gcloud auth configure-docker "${artifact_registry_hostname}" --quiet
-          docker build --pull -t "${image}" .
+          git archive HEAD | docker build --pull -t "${image}" -
           docker push "${image}"
           image_digest="$(gcloud artifacts docker images describe "${image}" --project="${GCP_PROJECT_ID}" --format='value(image_summary.digest)')"
           if [[ ! "${image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
