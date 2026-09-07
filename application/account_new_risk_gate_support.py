@@ -15,6 +15,10 @@ from quant_platform_kit.risk.account_new_risk_gate import (
     NewRiskDisposition,
     evaluate_new_risk_admission,
 )
+from quant_platform_kit.risk.cycle_new_risk_health import (
+    CycleNewRiskHealthEvidence,
+    apply_cycle_new_risk_health_axes,
+)
 
 ACCOUNT_NEW_RISK_GATE_ENV = "ACCOUNT_NEW_RISK_GATE"
 
@@ -62,18 +66,93 @@ def _resolve_equity_usd(portfolio: Mapping[str, Any], execution: Mapping[str, An
     return None
 
 
+def _is_explicit_open(value: object) -> bool:
+    return str(value or "").strip().upper() == "OPEN"
+
+
+def _mapping_or_empty(value: object) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _build_cycle_new_risk_health_evidence(
+    portfolio: Mapping[str, Any],
+    *,
+    execution: Mapping[str, Any] | None,
+    projection: Mapping[str, Any],
+    equity_usd: float | None,
+) -> CycleNewRiskHealthEvidence:
+    """Derive cycle-health evidence from portfolio/execution facts available this cycle.
+
+    Only explicit durable/metadata flags count as durable breaker evidence; the
+    fail-closed default (missing equity) must never be mistaken for a durable
+    circuit-breaker trip.
+    """
+    metadata = _mapping_or_empty(portfolio.get("metadata"))
+    execution_metadata = _mapping_or_empty(_mapping_or_empty(execution).get("metadata"))
+
+    unknown_pending = bool(
+        portfolio.get("unknown_pending_orders")
+        or metadata.get("unknown_pending_orders")
+        or portfolio.get("pending_reconciliation")
+        or metadata.get("pending_reconciliation")
+        or _mapping_or_empty(execution).get("pending_reconciliation")
+        or execution_metadata.get("pending_reconciliation")
+    )
+
+    durable_breaker_open = (
+        _is_explicit_open(portfolio.get("durable_circuit_breaker_state"))
+        or _is_explicit_open(metadata.get("durable_circuit_breaker_state"))
+        or _is_explicit_open(projection.get("circuit_breaker_state"))
+    )
+
+    digests_configured = bool(projection.get("digests_configured") or metadata.get("digests_configured"))
+    digests_verified = bool(
+        projection.get("digests_verified")
+        or metadata.get("digests_verified")
+        or projection.get("permits_active_lkg")
+        or metadata.get("permits_active_lkg")
+    )
+
+    cycle_trip_open = bool(projection.get("cycle_trip_open") or metadata.get("cycle_trip_open"))
+
+    return CycleNewRiskHealthEvidence(
+        observation_ok=equity_usd is not None and equity_usd > 0.0,
+        unknown_pending=unknown_pending,
+        digests_configured=digests_configured,
+        digests_verified=digests_verified,
+        durable_breaker_open=durable_breaker_open,
+        cycle_trip_open=cycle_trip_open,
+    )
+
+
 def build_account_new_risk_snapshot(
     portfolio: Mapping[str, Any],
     *,
     execution: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build an explicit fail-closed projection from evidence available this cycle."""
+    """Build an explicit fail-closed projection from evidence available this cycle.
+
+    Resolves equity first, then projects cycle-health axes (observation /
+    reconciliation / circuit-breaker) from evidence available this cycle.
+    Explicit keys already present on the incoming ``account_new_risk_snapshot``
+    always win over the projected axes (tests / HITL overrides). Missing or
+    non-positive equity keeps ``observation_ok=False``, which fails closed via
+    ``EQUITY_UNKNOWN_FAIL_CLOSED`` in the gate regardless of the projected axes.
+    """
     projection = dict(portfolio.get("account_new_risk_snapshot") or {})
-    projection.setdefault("observation_status", "UNAVAILABLE")
-    projection.setdefault("reconciliation_status", "UNVERIFIED")
-    projection.setdefault("circuit_breaker_state", "OPEN")
-    if "equity_usd" not in projection:
-        projection["equity_usd"] = _resolve_equity_usd(portfolio, execution)
+    if "equity_usd" in projection:
+        equity_usd = _coerce_optional_float(projection.get("equity_usd"))
+    else:
+        equity_usd = _resolve_equity_usd(portfolio, execution)
+
+    evidence = _build_cycle_new_risk_health_evidence(
+        portfolio,
+        execution=execution,
+        projection=projection,
+        equity_usd=equity_usd,
+    )
+    projection = apply_cycle_new_risk_health_axes(projection, evidence)
+    projection["equity_usd"] = equity_usd
     return projection
 
 
