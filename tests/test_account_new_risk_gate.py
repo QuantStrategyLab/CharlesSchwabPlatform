@@ -199,7 +199,8 @@ class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
         )
         self.assertEqual(len(submitted_orders), 1)
         self.assertEqual(str(getattr(submitted_orders[0], "side", "")).lower(), "buy")
-        self.assertFalse(any("Account new-risk gate" in log for log in result.trade_logs))
+        self.assertTrue(any("disposition=ALLOW_NEW_RISK" in log for log in result.trade_logs))
+        self.assertFalse(any("NEW_RISK_PROHIBITED" in log for log in result.trade_logs))
 
     def test_execution_cycle_halves_buy_quantity_for_half_scale(self) -> None:
         _result, submitted_orders = self._run_buy_cycle(

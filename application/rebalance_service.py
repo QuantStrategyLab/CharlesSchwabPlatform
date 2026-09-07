@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import json
 from datetime import datetime, timezone
@@ -28,6 +29,22 @@ from quant_platform_kit.common.strategy_plugins import attach_strategy_plugin_me
 from quant_platform_kit.strategy_lifecycle.performance_monitor import try_record_platform_execution
 
 _DETAIL_FIELD_SPLIT_RE = re.compile(r"\s+(?=[^\s=:：]+[=:：])")
+DRY_RUN_BYPASS_EXECUTION_MARKER_ENV = "DRY_RUN_BYPASS_EXECUTION_MARKER"
+
+
+def _env_flag_enabled(name: str) -> bool:
+    return str(os.environ.get(name, "") or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _dry_run_bypasses_execution_marker(config: SchwabRebalanceConfig) -> bool:
+    """Allow dry-run verification to skip same-day marker/report dedup.
+
+    Live ``/run`` is never affected. When enabled, dry-run also skips claiming or
+    writing execution markers so verification does not pollute dedup state.
+    """
+    return bool(getattr(config, "dry_run_only", False)) and _env_flag_enabled(
+        DRY_RUN_BYPASS_EXECUTION_MARKER_ENV
+    )
 
 
 def _record_platform_execution_telemetry(
@@ -499,7 +516,14 @@ def run_strategy_core(
     execution_state_store = getattr(config, "execution_state_store", None)
     execution_already_recorded = False
     execution_claim_acquired = False
-    if getattr(config, "execution_dedup_enabled", False):
+    dry_run_bypass_marker = _dry_run_bypasses_execution_marker(config)
+    if dry_run_bypass_marker:
+        print(
+            "Dry-run bypassing execution marker "
+            f"({DRY_RUN_BYPASS_EXECUTION_MARKER_ENV}=true); no marker claim/write",
+            flush=True,
+        )
+    elif getattr(config, "execution_dedup_enabled", False):
         if not execution_marker_key:
             raise RuntimeError("Execution deduplication requires a stable execution marker key")
         if not execution_state_store:
