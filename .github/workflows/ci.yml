@@ -122,6 +122,9 @@ jobs:
             tests/test_execution_uncertainty.py \
             tests/test_deployed_runtime_target_admission.py
 
+      - name: Verify no-traffic deployment workflow
+        run: bash tests/test_safe_no_traffic_deploy_workflow.sh
+
       - name: Run ruff
         run: |
           set -euo pipefail
