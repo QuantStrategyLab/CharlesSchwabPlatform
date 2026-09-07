@@ -56,6 +56,7 @@ def test_build_cloud_run_env_sync_plan_legacy_mode_tqqq_growth_income():
             service_name="charles-schwab-service",
         ),
         "EXECUTION_REPORT_GCS_URI": "gs://runtime/execution-reports",
+        "LIFECYCLE_PERFORMANCE_BUCKET": "gs://qsl-runtime-logs-shared/strategy-lifecycle/v1",
         "CLOUD_SCHEDULER_MAIN_TIME": "10 16",
         "CLOUD_SCHEDULER_PROBE_TIME": "40 9,15",
     }
@@ -78,6 +79,9 @@ def test_build_cloud_run_env_sync_plan_legacy_mode_tqqq_growth_income():
     assert target["env"]["NOTIFY_LANG"] == "zh"
     assert target["env"]["STRATEGY_PROFILE"] == "tqqq_growth_income"
     assert target["env"]["EXECUTION_REPORT_GCS_URI"] == "gs://runtime/execution-reports"
+    assert target["env"]["LIFECYCLE_PERFORMANCE_BUCKET"] == (
+        "gs://qsl-runtime-logs-shared/strategy-lifecycle/v1"
+    )
     assert target["scheduler"] == {
         "timezone": "America/New_York",
         "main_time": "10 16",
