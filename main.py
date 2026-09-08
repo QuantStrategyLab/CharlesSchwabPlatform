@@ -458,36 +458,20 @@ def _runtime_error_notification_targets() -> tuple[tuple[str, str], ...]:
 
 
 def _runtime_error_notification_message(exc: Exception, *, route_label: str) -> str:
-    error_text = f"{type(exc).__name__}: {exc}"
-    if len(error_text) > 1200:
-        error_text = error_text[:1197] + "..."
-    if str(NOTIFY_LANG or "").strip().lower().startswith("zh"):
-        return "\n".join(
-            (
-                "Schwab 策略运行失败",
-                f"服务: {SERVICE_NAME}",
-                f"版本: {os.getenv('K_REVISION') or '<unknown>'}",
-                f"路由: {route_label}",
-                f"策略: {STRATEGY_PROFILE}",
-                f"错误: {error_text}",
-            )
-        )
-    return "\n".join(
-        (
-            "Schwab strategy run failed",
-            f"service: {SERVICE_NAME}",
-            f"revision: {os.getenv('K_REVISION') or '<unknown>'}",
-            f"route: {route_label}",
-            f"strategy: {STRATEGY_PROFILE}",
-            f"error: {error_text}",
-        )
-    )
+    title = "runtime_failure_title"
+    return "\n".join((
+        t(title),
+        t("strategy_label", name=strategy_display_name or STRATEGY_PROFILE),
+        t("runtime_failure_context", context=SERVICE_NAME),
+        t("runtime_failure_result"),
+        t("runtime_failure_action"),
+    ))
 
 
 def _notify_runtime_error(exc: Exception, *, route_label: str) -> bool:
     targets = _runtime_error_notification_targets()
     if not targets:
-        print("Schwab runtime error notification skipped: no Telegram target configured.", flush=True)
+        print(t("runtime_notification_missing_target"), flush=True)
         return False
     message = _runtime_error_notification_message(exc, route_label=route_label)
     outcomes = []
@@ -505,9 +489,9 @@ def _notify_runtime_error(exc: Exception, *, route_label: str) -> bool:
             if isinstance(payload, dict) and payload.get("ok") is False:
                 acknowledged = False
             outcomes.append(acknowledged)
-        except Exception as send_exc:
+        except Exception:
             print(
-                f"Schwab runtime error Telegram send failed: {type(send_exc).__name__}",
+                t("runtime_notification_delivery_failed"),
                 flush=True,
             )
             outcomes.append(False)
@@ -519,14 +503,13 @@ def _publish_runtime_failure_notification(*, detailed_text: str, compact_text: s
         if publish_notification(detailed_text=detailed_text, compact_text=compact_text):
             return True
         return _notify_runtime_error(exc, route_label="strategy_cycle")
-    except Exception as notification_exc:
-        print(f"Schwab runtime error notification fallback: {notification_exc}", flush=True)
+    except Exception:
+        print(t("runtime_notification_delivery_failed"), flush=True)
         return _notify_runtime_error(exc, route_label="strategy_cycle")
 
 
 def _handle_route_runtime_error(exc: Exception, *, route_label: str):
-    print(f"Schwab route failed before strategy-cycle handling: {type(exc).__name__}: {exc}", flush=True)
-    traceback.print_exc()
+    print(t("runtime_failure_log"), flush=True)
     _notify_runtime_error(exc, route_label=route_label)
     return "Error", 500
 
