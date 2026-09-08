@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from quant_platform_kit.common.operational_notification_localization import resolve_operational_notification_locale
+
 import re
 
 try:
@@ -36,6 +38,13 @@ SIGNAL_ICONS = {
 
 I18N = {
     "zh": {
+        "runtime_failure_title": "⚠️ Schwab 策略运行失败",
+        "runtime_failure_context": "运行目标：{context}",
+        "runtime_failure_result": "本次运行未正常结束，请查看最新执行报告。",
+        "runtime_failure_action": "下一步：检查账户授权及最新执行报告。",
+        "runtime_notification_missing_target": "异常通知未发送：未配置 Telegram 接收目标（notification_target_missing）",
+        "runtime_notification_delivery_failed": "异常通知发送失败（notification_delivery_failed）",
+        "runtime_failure_log": "策略运行失败（runtime_setup_failed）",
         "trade_header": "🔔 【调仓指令】",
         "rebalance_title": "🔔 【调仓指令】",
         "heartbeat_header": "💓 【心跳检测】",
@@ -200,6 +209,13 @@ I18N = {
         "strategy_name_us_equity_combo_leveraged": "美股Alpha组合",
     },
     "en": {
+        "runtime_failure_title": "⚠️ Schwab strategy run failed",
+        "runtime_failure_context": "Target: {context}",
+        "runtime_failure_result": "The run did not finish successfully; check the latest execution report.",
+        "runtime_failure_action": "Next: Check account authorization and the latest execution report.",
+        "runtime_notification_missing_target": "Runtime alert not sent: Telegram target is not configured (notification_target_missing)",
+        "runtime_notification_delivery_failed": "Runtime alert delivery failed (notification_delivery_failed)",
+        "runtime_failure_log": "Strategy run failed (runtime_setup_failed)",
         "trade_header": "🔔 【Trade Execution Report】",
         "rebalance_title": "🔔 【Trade Execution Report】",
         "heartbeat_header": "💓 【Heartbeat】",
@@ -376,8 +392,8 @@ if _merge_strategy_plugin_i18n is not None:
 
 
 def build_translator(lang):
+    active_lang = resolve_operational_notification_locale(lang)
     def translate(key, **kwargs):
-        active_lang = lang if lang in I18N else "en"
         template = I18N[active_lang].get(key, key)
         return template.format(**kwargs) if kwargs else template
 

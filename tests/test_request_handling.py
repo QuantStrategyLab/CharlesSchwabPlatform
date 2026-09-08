@@ -8,6 +8,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from notifications.telegram import build_translator as build_notification_translator
+
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -746,6 +748,7 @@ class RequestHandlingTests(unittest.TestCase):
 
     def test_handle_schwab_runtime_error_fallback_sends_telegram(self):
         module = load_module()
+        module.t = build_notification_translator("en")
         observed = {"payloads": []}
 
         class FakeResponse:
@@ -768,10 +771,11 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(len(observed["payloads"]), 1)
         self.assertEqual(observed["payloads"][0][0]["chat_id"], "chat-1")
         self.assertIn("Schwab strategy run failed", observed["payloads"][0][0]["text"])
-        self.assertIn("RuntimeError: boom", observed["payloads"][0][0]["text"])
+        self.assertNotIn("boom", observed["payloads"][0][0]["text"])
 
     def test_handle_schwab_runtime_error_fallback_uses_chinese_copy(self):
         module = load_module(notify_lang="zh")
+        module.t = build_notification_translator("zh")
         observed = {"payloads": []}
 
         class FakeResponse:
@@ -793,8 +797,8 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(body, "Error")
         text = observed["payloads"][0][0]["text"]
         self.assertIn("Schwab 策略运行失败", text)
-        self.assertIn("服务:", text)
-        self.assertIn("错误: RuntimeError: boom", text)
+        self.assertIn("运行目标：", text)
+        self.assertIn("未正常结束", text)
 
     def test_handle_schwab_sends_escalated_strategy_plugin_alert(self):
         module = load_module()
