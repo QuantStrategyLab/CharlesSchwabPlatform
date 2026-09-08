@@ -6,7 +6,7 @@ allow_legacy = false
 
 [qsl.requires]
 quant_platform_kit = "d51bb79dea8dc5773384d21b06e726620276558c"
-us_equity_strategies = "59a6e4341bf12cf1e27953b9c2d3705bc0335d96"
+us_equity_strategies = "c31f28484b8489a1ecda8e595a6d2afd3bce8185"
 
 [qsl.compat]
 bundle = "2026.09.1"
