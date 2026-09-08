@@ -3,7 +3,6 @@ import importlib
 import os
 import tempfile
 import time
-import traceback
 from zoneinfo import ZoneInfo
 
 from flask import Flask
@@ -879,19 +878,19 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
         append_runtime_report_error(
             report,
             stage="strategy_cycle",
-            message=str(exc),
+            message="strategy_cycle_failed",
             error_type=type(exc).__name__,
         )
         finalize_runtime_report(report, status="error")
         log_runtime_event(
             log_context,
             "strategy_cycle_failed",
-            message="Strategy execution failed",
+            message=t("runtime_failure_log"),
             severity="ERROR",
             error_type=type(exc).__name__,
-            error_message=str(exc),
+            error_message="strategy_cycle_failed",
         )
-        error_message = f"{t('error_header')}\n{traceback.format_exc()}"
+        error_message = _runtime_error_notification_message(exc, route_label="strategy_cycle")
         _publish_runtime_failure_notification(
             detailed_text=error_message,
             compact_text=error_message,
@@ -1079,7 +1078,7 @@ def _handle_schwab_probe(*, response_body: str = "Probe OK"):
             append_runtime_report_error(
                 report,
                 stage="health_probe",
-                message=str(exc),
+                message="health_probe_failed",
                 error_type=type(exc).__name__,
             )
             finalize_runtime_report(report, status="error")
@@ -1087,13 +1086,13 @@ def _handle_schwab_probe(*, response_body: str = "Probe OK"):
             log_runtime_event(
                 log_context,
                 "health_probe_failed",
-                message="Health probe failed",
+                message=t("health_probe_title"),
                 severity="ERROR",
                 execution_window="probe",
                 error_type=type(exc).__name__,
-                error_message=str(exc),
+                error_message="health_probe_failed",
             )
-        error_message = f"{t('health_probe_title')}\n{t('health_probe_error_prefix')}{traceback.format_exc()}"
+        error_message = "\n".join((t("health_probe_title"), t("runtime_failure_result"), t("runtime_failure_action")))
         if composer is not None:
             composer.build_notification_adapters().publish_cycle_notification(
                 detailed_text=error_message,
