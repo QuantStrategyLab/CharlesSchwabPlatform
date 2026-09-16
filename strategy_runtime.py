@@ -377,7 +377,16 @@ def load_strategy_runtime(
         overrides["reserved_cash_floor_usd"] = float(reserved_cash_floor_usd)
     if reserved_cash_ratio is not None and float(reserved_cash_ratio or 0.0) > 0.0:
         overrides["reserved_cash_ratio"] = float(reserved_cash_ratio)
+        # Keep the manifest key used by runtime-risk binding in lockstep with the
+        # platform reserved-cash setting (both must stay at the approved 0.03).
+        overrides["cash_reserve_ratio"] = float(reserved_cash_ratio)
     overrides.update(runtime_overrides or {})
+    if getattr(runtime_settings, "cash_only_execution", False) is True:
+        # Approved SOXL recovery is cash-only / options-off. UES profile defaults
+        # still enable option overlays; force them closed after other overrides.
+        overrides["option_overlay_enabled"] = False
+        overrides["option_growth_overlay_enabled"] = False
+        overrides["option_income_overlay_enabled"] = False
     runtime = LoadedStrategyRuntime(
         entrypoint=entrypoint,
         runtime_adapter=runtime_adapter,
