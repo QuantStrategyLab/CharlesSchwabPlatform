@@ -110,6 +110,7 @@ def _build_runtime_settings(
     feature_snapshot_path: str | None = None,
     reserved_cash_floor_usd: float = 0.0,
     reserved_cash_ratio: float = 0.0,
+    cash_only_execution: bool = False,
 ) -> PlatformRuntimeSettings:
     return PlatformRuntimeSettings(
         strategy_profile=profile,
@@ -121,6 +122,7 @@ def _build_runtime_settings(
         dry_run_only=False,
         reserved_cash_floor_usd=reserved_cash_floor_usd,
         reserved_cash_ratio=reserved_cash_ratio,
+        cash_only_execution=cash_only_execution,
         feature_snapshot_path=feature_snapshot_path,
         feature_snapshot_manifest_path=None,
         strategy_config_path=None,
@@ -590,8 +592,52 @@ class StrategyRuntimeTests(unittest.TestCase):
 
         self.assertEqual(runtime.runtime_overrides["reserved_cash_floor_usd"], 150.0)
         self.assertEqual(runtime.runtime_overrides["reserved_cash_ratio"], 0.03)
+        self.assertEqual(runtime.runtime_overrides["cash_reserve_ratio"], 0.03)
         self.assertEqual(runtime.merged_runtime_config["reserved_cash_floor_usd"], 150.0)
         self.assertEqual(runtime.merged_runtime_config["reserved_cash_ratio"], 0.03)
+        self.assertEqual(runtime.merged_runtime_config["cash_reserve_ratio"], 0.03)
+
+    def test_load_strategy_runtime_forces_option_overlays_off_when_cash_only(self):
+        class _SoxlWithOverlayDefaults(_SoxlEntrypoint):
+            manifest = StrategyManifest(
+                profile="soxl_soxx_trend_income",
+                domain="us_equity",
+                display_name="SOXL/SOXX Trend Income",
+                description="test entrypoint",
+                required_inputs=frozenset({"benchmark_history", "portfolio_snapshot"}),
+                default_config={
+                    **dict(_SoxlEntrypoint.manifest.default_config),
+                    "option_overlay_enabled": True,
+                    "option_growth_overlay_enabled": False,
+                    "option_income_overlay_enabled": True,
+                },
+            )
+
+        entrypoint = _SoxlWithOverlayDefaults()
+
+        with patch.object(strategy_runtime_module, "load_strategy_entrypoint_for_profile", return_value=entrypoint):
+            with patch.object(
+                strategy_runtime_module,
+                "load_strategy_runtime_adapter_for_profile",
+                return_value=StrategyRuntimeAdapter(portfolio_input_name="portfolio_snapshot"),
+            ):
+                runtime = strategy_runtime_module.load_strategy_runtime(
+                    "soxl_soxx_trend_income",
+                    runtime_settings=_build_runtime_settings(
+                        "soxl_soxx_trend_income",
+                        reserved_cash_ratio=0.03,
+                        cash_only_execution=True,
+                    ),
+                    runtime_overrides={
+                        "option_overlay_enabled": True,
+                        "option_income_overlay_enabled": True,
+                    },
+                )
+
+        self.assertFalse(runtime.merged_runtime_config["option_overlay_enabled"])
+        self.assertFalse(runtime.merged_runtime_config["option_growth_overlay_enabled"])
+        self.assertFalse(runtime.merged_runtime_config["option_income_overlay_enabled"])
+        self.assertEqual(runtime.merged_runtime_config["cash_reserve_ratio"], 0.03)
 
     def test_feature_snapshot_runtime_loads_snapshot_into_context(self):
         entrypoint = _TechEntrypoint()
