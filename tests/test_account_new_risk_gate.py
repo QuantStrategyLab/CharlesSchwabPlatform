@@ -2,6 +2,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,14 +20,20 @@ from application.account_new_risk_gate_support import (
     build_account_new_risk_snapshot,
     build_snapshot_from_portfolio,
     evaluate_portfolio_new_risk_admission,
-    maybe_inject_production_drift_status,
     new_risk_buy_prohibited,
     set_cycle_snapshot,
 )
 from application.execution_service import execute_rebalance_cycle
+from application.rebalance_service import run_strategy_core
+from application.runtime_dependencies import SchwabRebalanceConfig, SchwabRebalanceRuntime
 from notifications.telegram import build_translator
-from quant_platform_kit.common.models import QuoteSnapshot
-from quant_platform_kit.common.port_adapters import CallableExecutionPort, CallableMarketDataPort
+from quant_platform_kit.common.models import PortfolioSnapshot, QuoteSnapshot
+from quant_platform_kit.common.port_adapters import (
+    CallableExecutionPort,
+    CallableMarketDataPort,
+    CallableNotificationPort,
+    CallablePortfolioPort,
+)
 from quant_platform_kit.risk.account_new_risk_gate import NewRiskDisposition
 
 
@@ -140,6 +147,37 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
         self.assertEqual(result.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
         self.assertIn("PRODUCTION_DRIFT_CRITICAL", result.reason_codes)
 
+    def test_production_drift_invalid_status_prohibits_new_risk(self) -> None:
+        portfolio = {
+            "total_equity": 50_000.0,
+            "metadata": {"total_equity_source": "broker_liquidation_value"},
+            "account_new_risk_snapshot": {"production_drift_status": "invalid"},
+        }
+        result = evaluate_portfolio_new_risk_admission(portfolio)
+        self.assertEqual(result.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+        self.assertIn("PRODUCTION_DRIFT_STATUS_INVALID_FAIL_CLOSED", result.reason_codes)
+
+    def test_production_drift_status_prefers_account_snapshot_over_portfolio(self) -> None:
+        portfolio = {
+            "total_equity": 50_000.0,
+            "metadata": {"total_equity_source": "broker_liquidation_value"},
+            "production_drift_status": "healthy",
+            "account_new_risk_snapshot": {"production_drift_status": "critical"},
+        }
+        result = evaluate_portfolio_new_risk_admission(portfolio)
+        self.assertEqual(result.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+        self.assertIn("PRODUCTION_DRIFT_CRITICAL", result.reason_codes)
+
+    def test_production_drift_status_falls_back_to_portfolio(self) -> None:
+        portfolio = {
+            "total_equity": 50_000.0,
+            "metadata": {"total_equity_source": "broker_liquidation_value"},
+            "production_drift_status": "review",
+        }
+        result = evaluate_portfolio_new_risk_admission(portfolio)
+        self.assertEqual(result.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+        self.assertIn("PRODUCTION_DRIFT_REVIEW", result.reason_codes)
+
     def test_absent_production_drift_status_still_allows_when_healthy(self) -> None:
         portfolio = {
             "total_equity": 50_000.0,
@@ -148,106 +186,79 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
         result = evaluate_portfolio_new_risk_admission(portfolio)
         self.assertEqual(result.disposition, NewRiskDisposition.ALLOW_NEW_RISK)
 
-    def test_maybe_inject_fills_from_store_and_prohibits(self) -> None:
-        def _fake_resolve(*, strategy_profile, domain, store=None, **_kwargs):
-            self.assertEqual(strategy_profile, "demo_profile")
-            self.assertEqual(domain, "us_equity")
-            return "review"
-
+    def test_rebalance_does_not_use_unbound_research_store_for_production_drift(self) -> None:
         import quant_platform_kit.risk.production_drift_new_risk as drift_mod
 
-        original = getattr(
-            drift_mod, "resolve_production_drift_status_from_store", None
-        )
-        drift_mod.resolve_production_drift_status_from_store = _fake_resolve  # type: ignore[assignment]
-        try:
-            portfolio = {
+        plan = {
+            "account_hash": "demo",
+            "allocation": {
+                "target_mode": "value",
+                "strategy_symbols": (),
+                "risk_symbols": (),
+                "income_symbols": (),
+                "safe_haven_symbols": (),
+                "targets": {},
+            },
+            "portfolio": {
+                "metadata": {
+                    "strategy_domain": "us_equity",
+                    "total_equity_source": "broker_liquidation_value",
+                },
+                "market_values": {},
+                "quantities": {},
+                "portfolio_rows": (),
                 "total_equity": 50_000.0,
-                "metadata": {"total_equity_source": "broker_liquidation_value"},
-            }
-            injected = maybe_inject_production_drift_status(
-                portfolio,
-                strategy_profile="demo_profile",
-                domain="us_equity",
-            )
-            self.assertEqual(
-                injected["account_new_risk_snapshot"]["production_drift_status"],
-                "review",
-            )
-            result = evaluate_portfolio_new_risk_admission(injected)
-            self.assertEqual(result.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
-            self.assertIn("PRODUCTION_DRIFT_REVIEW", result.reason_codes)
-        finally:
-            if original is None:
-                delattr(drift_mod, "resolve_production_drift_status_from_store")
-            else:
-                drift_mod.resolve_production_drift_status_from_store = original
-
-    def test_maybe_inject_does_not_overwrite_explicit_status(self) -> None:
-        def _fake_resolve(**_kwargs):
-            raise AssertionError("store resolve must not run when status already set")
-
-        import quant_platform_kit.risk.production_drift_new_risk as drift_mod
-
-        original = drift_mod.resolve_production_drift_status_from_store
-        drift_mod.resolve_production_drift_status_from_store = _fake_resolve  # type: ignore[assignment]
-        try:
-            for explicit in ("review", "critical"):
-                portfolio = {
-                    "total_equity": 50_000.0,
-                    "account_new_risk_snapshot": {"production_drift_status": explicit},
-                }
-                injected = maybe_inject_production_drift_status(
-                    portfolio,
+                "liquid_cash": 50_000.0,
+                "cash_sweep_symbol": None,
+            },
+            "execution": {
+                "trade_threshold_value": 10.0,
+                "reserved_cash": 0.0,
+                "signal_display": "No trade",
+                "dashboard_text": "dashboard",
+                "separator": "---",
+                "signal_date": "2026-09-17",
+                "effective_date": "2026-09-18",
+            },
+        }
+        snapshot = PortfolioSnapshot(
+            as_of="2026-09-17",
+            total_equity=50_000.0,
+            buying_power=50_000.0,
+            positions=(),
+            metadata={},
+        )
+        resolver = patch.object(
+            drift_mod,
+            "resolve_production_drift_status_from_store",
+            return_value="review",
+        )
+        with resolver as store_resolver:
+            result = run_strategy_core(
+                runtime=SchwabRebalanceRuntime(
+                    fetch_reference_history=lambda: [],
+                    portfolio_port=CallablePortfolioPort(lambda: snapshot),
+                    market_data_port=CallableMarketDataPort(quote_loader=lambda _symbol: None),
+                    resolve_rebalance_plan=lambda **_kwargs: plan,
+                    notifications=CallableNotificationPort(lambda _message: None),
+                    execution_port_factory=lambda _account_hash: CallableExecutionPort(
+                        lambda _order_intent: None
+                    ),
+                ),
+                config=SchwabRebalanceConfig(
+                    translator=build_translator("en"),
+                    strategy_display_name="Demo",
+                    limit_buy_premium=1.0,
+                    sell_settle_delay_sec=0.0,
                     strategy_profile="demo_profile",
-                    domain="us_equity",
-                )
-                self.assertEqual(
-                    injected["account_new_risk_snapshot"]["production_drift_status"],
-                    explicit,
-                )
-        finally:
-            drift_mod.resolve_production_drift_status_from_store = original
-
-    def test_maybe_inject_leaves_absent_when_resolve_returns_none(self) -> None:
-        def _fake_resolve(**_kwargs):
-            return None
-
-        import quant_platform_kit.risk.production_drift_new_risk as drift_mod
-
-        original = drift_mod.resolve_production_drift_status_from_store
-        drift_mod.resolve_production_drift_status_from_store = _fake_resolve  # type: ignore[assignment]
-        try:
-            portfolio = {"total_equity": 50_000.0}
-            injected = maybe_inject_production_drift_status(
-                portfolio,
-                strategy_profile="demo_profile",
-                domain="us_equity",
+                ),
             )
-            self.assertNotIn("account_new_risk_snapshot", injected)
-            self.assertNotIn("production_drift_status", injected)
-        finally:
-            drift_mod.resolve_production_drift_status_from_store = original
 
-    def test_maybe_inject_leaves_absent_when_resolve_raises(self) -> None:
-        def _fake_resolve(**_kwargs):
-            raise RuntimeError("store unavailable")
-
-        import quant_platform_kit.risk.production_drift_new_risk as drift_mod
-
-        original = drift_mod.resolve_production_drift_status_from_store
-        drift_mod.resolve_production_drift_status_from_store = _fake_resolve  # type: ignore[assignment]
-        try:
-            portfolio = {"total_equity": 50_000.0}
-            injected = maybe_inject_production_drift_status(
-                portfolio,
-                strategy_profile="demo_profile",
-                domain="us_equity",
-            )
-            self.assertNotIn("account_new_risk_snapshot", injected)
-            self.assertNotIn("production_drift_status", injected)
-        finally:
-            drift_mod.resolve_production_drift_status_from_store = original
+        store_resolver.assert_not_called()
+        self.assertNotIn(
+            "production_drift_status",
+            result.portfolio["account_new_risk_snapshot"],
+        )
 
     def test_combined_scale_halves_value(self) -> None:
         self.assertEqual(apply_combined_scale(4.0, 0.5), 2.0)
