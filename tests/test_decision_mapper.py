@@ -1,15 +1,305 @@
 import unittest
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
+from quant_platform_kit.common.models import PortfolioSnapshot
 from quant_platform_kit.common.strategy_contracts import (
     PositionTarget,
     StrategyDecision,
+    StrategyContext,
 )
+from quant_platform_kit.risk.contracts import RuntimeRiskLimits
+from quant_platform_kit.risk.gate import apply_risk_gate
 
 from decision_mapper import map_strategy_decision_to_plan
 
 
 class DecisionMapperTests(unittest.TestCase):
+    @staticmethod
+    def _runtime_limits() -> RuntimeRiskLimits:
+        symbols = ("SOXL", "SOXX", "BOXX")
+        return RuntimeRiskLimits(
+            allowed_symbols=symbols,
+            product_leverage_factors={"SOXL": 3, "SOXX": 1, "BOXX": 1},
+            nominal_caps={"SOXL": 0.679, "SOXX": 0.873, "BOXX": 0.97},
+            total_nominal_exposure_cap=0.97,
+            total_effective_exposure_cap=2.328,
+            max_positions=8,
+        )
+
+    @staticmethod
+    def _runtime_snapshot() -> PortfolioSnapshot:
+        return PortfolioSnapshot(
+            as_of=datetime(2026, 9, 17, tzinfo=timezone.utc),
+            total_equity=100_000.0,
+            buying_power=100_000.0,
+            cash_balance=100_000.0,
+            positions=(),
+            metadata={"account_hash": "demo"},
+        )
+
+    def test_runtime_limits_keep_rounded_value_plan_within_caps(self):
+        snapshot = self._runtime_snapshot()
+        decision = StrategyDecision(
+            positions=(
+                PositionTarget(symbol="SOXL", target_weight=0.679),
+                PositionTarget(symbol="SOXX", target_weight=0.194),
+                PositionTarget(symbol="BOXX", target_weight=0.097),
+            )
+        )
+        approved = apply_risk_gate(
+            decision,
+            portfolio_snapshot=snapshot,
+            max_single_weight=1.0,
+            max_total_exposure=1.0,
+            runtime_risk_limits=self._runtime_limits(),
+        )
+        plan = map_strategy_decision_to_plan(
+            approved,
+            snapshot=snapshot,
+            strategy_profile="soxl_soxx_trend_income",
+        )
+
+        targets = plan["allocation"]["targets"]
+        self.assertLessEqual(sum(targets.values()), 97_000.0 + 1e-6)
+        self.assertLessEqual(targets["SOXL"], 67_900.0 + 1e-6)
+        self.assertLessEqual(targets["SOXX"], 19_400.0 + 1e-6)
+        self.assertLessEqual(targets["BOXX"], 9_700.0 + 1e-6)
+
+    def test_runtime_limit_rejection_maps_to_zero_order_plan(self):
+        snapshot = self._runtime_snapshot()
+        rejected = apply_risk_gate(
+            StrategyDecision(
+                positions=(PositionTarget(symbol="SOXL", target_weight=0.70),)
+            ),
+            portfolio_snapshot=snapshot,
+            max_single_weight=1.0,
+            max_total_exposure=1.0,
+            runtime_risk_limits=self._runtime_limits(),
+        )
+        plan = map_strategy_decision_to_plan(
+            rejected,
+            snapshot=snapshot,
+            strategy_profile="soxl_soxx_trend_income",
+        )
+
+        self.assertEqual(plan["allocation"]["targets"], {})
+        self.assertEqual(plan["execution"]["execution_status"], "blocked")
+        self.assertEqual(plan["execution"]["no_op_reason"], "strategy_risk_rejected")
+
+    def test_synthetic_bound_limits_gate_mapper_cycle(self):
+        """Binding-success limits → QPK gate → mapper plan (E denominator, reserve, budgets)."""
+        from quant_platform_kit.common.strategy_contracts import BudgetIntent
+        import strategy_runtime as strategy_runtime_module
+        from dataclasses import replace
+        from unittest.mock import patch
+        from quant_platform_kit.common.runtime_target import build_runtime_target
+        from runtime_config_support import PlatformRuntimeSettings
+        from quant_platform_kit.common.strategy_contracts import (
+            StrategyManifest,
+            StrategyRuntimeAdapter,
+        )
+
+        symbols = ("SOXL", "SOXX", "BOXX", "SCHD", "DGRO", "SGOV", "SPYI", "QQQI")
+        policy = {
+            "binding": {
+                "account_scope": "live-account-scope",
+                "runtime_scope": "schwab-live-service",
+                "account_hash": "account-hash",
+                "strategy_profile": "soxl_soxx_trend_income",
+                "ues_revision": "ues-revision",
+                "execution_mode": "live",
+                "cash_only_execution": True,
+                "reserved_cash_ratio": 0.03,
+                "options_enabled": False,
+            },
+            "allowed_symbols": list(symbols),
+            "product_leverage_factors": {"SOXL": 3, **{symbol: 1 for symbol in symbols[1:]}},
+            "nominal_caps": {
+                "SOXL": 0.679,
+                "SOXX": 0.873,
+                **{symbol: 0.97 for symbol in symbols[2:]},
+            },
+            "total_nominal_exposure_cap": 0.97,
+            "total_effective_exposure_cap": 2.328,
+            "max_positions": 8,
+            "exit_parameters": {"trend_exit_buffer": 0.02},
+        }
+
+        class _SoxlEntrypoint:
+            manifest = StrategyManifest(
+                profile="soxl_soxx_trend_income",
+                domain="us_equity",
+                display_name="SOXL/SOXX Trend Income",
+                description="synthetic",
+                required_inputs=frozenset({"benchmark_history", "portfolio_snapshot"}),
+                default_config={
+                    "benchmark_symbol": "SOXX",
+                    "managed_symbols": symbols,
+                    "trend_exit_buffer": 0.02,
+                    "cash_reserve_ratio": 0.03,
+                    "option_overlay_enabled": False,
+                    "option_growth_overlay_enabled": False,
+                    "option_income_overlay_enabled": False,
+                },
+            )
+
+            def evaluate(self, ctx):
+                self.ctx = ctx
+                return StrategyDecision()
+
+        entrypoint = _SoxlEntrypoint()
+        target = build_runtime_target(
+            platform_id="schwab",
+            strategy_profile="soxl_soxx_trend_income",
+            dry_run_only=False,
+            account_scope="live-account-scope",
+            service_name="schwab-live-service",
+            strategy_release={
+                "release_id": "soxl-release",
+                "manifest_sha256": "a" * 64,
+                "strategy_revision": "ues-revision",
+                "config_sha256": "b" * 64,
+                "risk_policy_sha256": "c" * 64,
+                "evidence_sha256": "d" * 64,
+                "plugin_bundle_sha256": "e" * 64,
+                "effective_session": "2026-09-17",
+            },
+        )
+        settings = replace(
+            PlatformRuntimeSettings(
+                strategy_profile="soxl_soxx_trend_income",
+                strategy_display_name="SOXL/SOXX Trend Income",
+                strategy_domain="us_equity",
+                notify_lang="en",
+                dry_run_only=False,
+                reserved_cash_ratio=0.03,
+                cash_only_execution=True,
+            ),
+            runtime_target=target,
+            trusted_runtime_risk_policy=policy,
+        )
+        runtime = strategy_runtime_module.LoadedStrategyRuntime(
+            entrypoint=entrypoint,
+            runtime_adapter=StrategyRuntimeAdapter(portfolio_input_name="portfolio_snapshot"),
+            runtime_settings=settings,
+            merged_runtime_config=dict(entrypoint.manifest.default_config),
+        )
+        # E=100_000 NAV; S=buying_power deliberately larger so weight math must use E.
+        equity_e = 100_000.0
+        buying_power_s = 500_000.0
+        snapshot = PortfolioSnapshot(
+            as_of=datetime(2026, 9, 17, tzinfo=timezone.utc),
+            total_equity=equity_e,
+            buying_power=buying_power_s,
+            cash_balance=equity_e,
+            positions=(),
+            metadata={
+                "account_hash": "account-hash",
+                "total_equity_source": "broker_liquidation_value",
+                "source_digest_sha256": "a" * 64,
+            },
+        )
+        with patch.object(strategy_runtime_module, "_installed_ues_revision", return_value="ues-revision"):
+            bound = runtime.evaluate(
+                benchmark_history=[{"close": 1.0}],
+                portfolio_snapshot=snapshot,
+                signal_text_fn=str,
+                translator=lambda key, **_kwargs: key,
+            )
+        limits = entrypoint.ctx.capabilities["runtime_risk_limits"]
+        self.assertEqual(bound.metadata["runtime_risk_status"], "verified:runtime_risk_limits")
+        self.assertIsInstance(limits, RuntimeRiskLimits)
+
+        approved_decision = StrategyDecision(
+            positions=(
+                PositionTarget(symbol="SOXL", target_weight=0.679),
+                PositionTarget(symbol="SOXX", target_weight=0.194),
+                PositionTarget(symbol="BOXX", target_weight=0.097),
+            )
+        )
+        approved = apply_risk_gate(
+            approved_decision,
+            portfolio_snapshot=snapshot,
+            max_single_weight=1.0,
+            max_total_exposure=1.0,
+            runtime_risk_limits=limits,
+        )
+        self.assertIn("risk_gate:passed", approved.risk_flags)
+        plan = map_strategy_decision_to_plan(
+            approved,
+            snapshot=snapshot,
+            strategy_profile="soxl_soxx_trend_income",
+            runtime_metadata={
+                "schwab_execution_policy": {
+                    "reserved_cash_ratio": 0.03,
+                    "cash_only_execution": True,
+                },
+                "execution_annotations": {"reserved_cash": equity_e * 0.03},
+            },
+        )
+        targets = plan["allocation"]["targets"]
+        # Cash reserve 0.03 must remain: total deployable ≤ 0.97 * E (not S).
+        self.assertLessEqual(sum(targets.values()), equity_e * 0.97 + 1e-6)
+        self.assertAlmostEqual(targets["SOXL"], equity_e * 0.679, places=4)
+        self.assertNotAlmostEqual(targets["SOXL"], buying_power_s * 0.679, places=0)
+        self.assertEqual(plan["execution"]["reserved_cash"], equity_e * 0.03)
+
+        # Non-empty budgets are unsupported under explicit runtime limits → zero submit.
+        budget_rejected = apply_risk_gate(
+            StrategyDecision(
+                positions=(PositionTarget(symbol="SOXL", target_weight=0.20),),
+                budgets=(BudgetIntent(name="reserve", symbol="SOXL", amount=100.0),),
+            ),
+            portfolio_snapshot=snapshot,
+            max_single_weight=1.0,
+            max_total_exposure=1.0,
+            runtime_risk_limits=limits,
+        )
+        budget_plan = map_strategy_decision_to_plan(
+            budget_rejected,
+            snapshot=snapshot,
+            strategy_profile="soxl_soxx_trend_income",
+        )
+        self.assertEqual(budget_rejected.positions, ())
+        self.assertEqual(budget_rejected.risk_flags, ("rejected:runtime_risk_limits",))
+        self.assertEqual(budget_plan["allocation"]["targets"], {})
+        self.assertEqual(budget_plan["execution"]["execution_status"], "blocked")
+
+        # Over-limit reject must clear positions (no silent scale-down).
+        overrun = apply_risk_gate(
+            StrategyDecision(positions=(PositionTarget(symbol="SOXL", target_weight=0.70),)),
+            portfolio_snapshot=snapshot,
+            max_single_weight=1.0,
+            max_total_exposure=1.0,
+            runtime_risk_limits=limits,
+        )
+        self.assertEqual(overrun.positions, ())
+        self.assertEqual(overrun.diagnostics.get("risk_gate"), "REJECT")
+        self.assertNotIn("risk_gate:passed", overrun.risk_flags)
+
+        # Income-role sleeve over the SOXL nominal cap also rejects without scaling.
+        income_overrun = apply_risk_gate(
+            StrategyDecision(
+                positions=(
+                    PositionTarget(symbol="SOXL", target_weight=0.70, role="income"),
+                )
+            ),
+            portfolio_snapshot=snapshot,
+            max_single_weight=1.0,
+            max_total_exposure=1.0,
+            runtime_risk_limits=limits,
+        )
+        self.assertEqual(income_overrun.positions, ())
+        self.assertEqual(income_overrun.risk_flags, ("rejected:runtime_risk_limits",))
+        income_plan = map_strategy_decision_to_plan(
+            income_overrun,
+            snapshot=snapshot,
+            strategy_profile="soxl_soxx_trend_income",
+        )
+        self.assertEqual(income_plan["allocation"]["targets"], {})
+        self.assertEqual(income_plan["execution"]["execution_status"], "blocked")
+
     def test_preserves_strategy_risk_rejection_for_zero_order_report(self):
         snapshot = SimpleNamespace(
             total_equity=120000.0,

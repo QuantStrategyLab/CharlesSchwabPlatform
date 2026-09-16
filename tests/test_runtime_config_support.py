@@ -170,6 +170,21 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         self.assertEqual(settings.runtime_target.execution_mode, "paper")
         self.assertEqual(settings.runtime_target.service_name, "charles-schwab-quant-service")
 
+    def test_runtime_target_json_preserves_trusted_runtime_risk_policy(self):
+        target = json.loads(runtime_target_json("soxl_soxx_trend_income"))
+        target["runtime_risk_limits"] = {"binding": {"account_scope": "schwab"}}
+        with patch.dict(
+            os.environ,
+            {"RUNTIME_TARGET_JSON": json.dumps(target)},
+            clear=True,
+        ):
+            settings = load_platform_runtime_settings()
+
+        self.assertEqual(
+            settings.trusted_runtime_risk_policy,
+            {"binding": {"account_scope": "schwab"}},
+        )
+
     def test_requires_strategy_profile(self):
         with patch.dict(os.environ, {}, clear=True):
             with self.assertRaisesRegex(EnvironmentError, "RUNTIME_TARGET_JSON"):

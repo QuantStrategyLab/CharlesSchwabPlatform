@@ -13,6 +13,7 @@ from quant_platform_kit.common.strategy_contracts import (
     StrategyRuntimeAdapter,
     StrategyRuntimePolicy,
 )
+from quant_platform_kit.risk.contracts import RuntimeRiskLimits
 from runtime_config_support import PlatformRuntimeSettings
 
 
@@ -33,6 +34,29 @@ class _FakeEntrypoint:
     def evaluate(self, ctx):
         self.ctx = ctx
         return StrategyDecision(diagnostics={"signal_display": "hold"})
+
+
+class _SoxlEntrypoint:
+    manifest = StrategyManifest(
+        profile="soxl_soxx_trend_income",
+        domain="us_equity",
+        display_name="SOXL/SOXX Trend Income",
+        description="test entrypoint",
+        required_inputs=frozenset({"benchmark_history", "portfolio_snapshot"}),
+        default_config={
+            "benchmark_symbol": "SOXX",
+            "managed_symbols": ("SOXL", "SOXX", "BOXX", "SCHD", "DGRO", "SGOV", "SPYI", "QQQI"),
+            "trend_exit_buffer": 0.02,
+            "cash_reserve_ratio": 0.03,
+            "option_overlay_enabled": False,
+            "option_growth_overlay_enabled": False,
+            "option_income_overlay_enabled": False,
+        },
+    )
+
+    def evaluate(self, ctx):
+        self.ctx = ctx
+        return StrategyDecision()
 
 
 class _TechEntrypoint:
@@ -104,7 +128,256 @@ def _build_runtime_settings(
     )
 
 
+def _soxl_runtime_policy(*, account_hash: str = "account-hash") -> dict[str, object]:
+    symbols = ("SOXL", "SOXX", "BOXX", "SCHD", "DGRO", "SGOV", "SPYI", "QQQI")
+    return {
+        "binding": {
+            "account_scope": "live-account-scope",
+            "runtime_scope": "schwab-live-service",
+            "account_hash": account_hash,
+            "strategy_profile": "soxl_soxx_trend_income",
+            "ues_revision": "ues-revision",
+            "execution_mode": "live",
+            "cash_only_execution": True,
+            "reserved_cash_ratio": 0.03,
+            "options_enabled": False,
+        },
+        "allowed_symbols": list(symbols),
+        "product_leverage_factors": {"SOXL": 3, **{symbol: 1 for symbol in symbols[1:]}},
+        "nominal_caps": {"SOXL": 0.679, "SOXX": 0.873, **{symbol: 0.97 for symbol in symbols[2:]}},
+        "total_nominal_exposure_cap": 0.97,
+        "total_effective_exposure_cap": 2.328,
+        "max_positions": 8,
+        "exit_parameters": {"trend_exit_buffer": 0.02},
+    }
+
+
 class StrategyRuntimeTests(unittest.TestCase):
+    def _soxl_runtime(self, *, policy: dict[str, object] | None = None):
+        entrypoint = _SoxlEntrypoint()
+        target = build_runtime_target(
+            platform_id="schwab",
+            strategy_profile="soxl_soxx_trend_income",
+            dry_run_only=False,
+            account_scope="live-account-scope",
+            service_name="schwab-live-service",
+            strategy_release={
+                "release_id": "soxl-release",
+                "manifest_sha256": "a" * 64,
+                "strategy_revision": "ues-revision",
+                "config_sha256": "b" * 64,
+                "risk_policy_sha256": "c" * 64,
+                "evidence_sha256": "d" * 64,
+                "plugin_bundle_sha256": "e" * 64,
+                "effective_session": "2026-09-17",
+            },
+        )
+        settings = replace(
+            _build_runtime_settings("soxl_soxx_trend_income", reserved_cash_ratio=0.03),
+            runtime_target=target,
+            trusted_runtime_risk_policy=policy,
+            cash_only_execution=True,
+        )
+        return entrypoint, strategy_runtime_module.LoadedStrategyRuntime(
+            entrypoint=entrypoint,
+            runtime_adapter=StrategyRuntimeAdapter(portfolio_input_name="portfolio_snapshot"),
+            runtime_settings=settings,
+            merged_runtime_config=dict(entrypoint.manifest.default_config),
+        )
+
+    @staticmethod
+    def _soxl_snapshot(account_hash: str = "account-hash") -> PortfolioSnapshot:
+        return PortfolioSnapshot(
+            as_of=datetime(2026, 8, 27, tzinfo=timezone.utc),
+            total_equity=1_000.0,
+            buying_power=100.0,
+            cash_balance=100.0,
+            metadata={
+                "account_hash": account_hash,
+                "total_equity_source": "broker_liquidation_value",
+                "source_digest_sha256": "a" * 64,
+            },
+        )
+
+    def test_soxl_runtime_binds_explicit_limits_to_broker_and_installed_ues(self):
+        entrypoint, runtime = self._soxl_runtime(policy=_soxl_runtime_policy())
+        with patch.object(strategy_runtime_module, "_installed_ues_revision", return_value="ues-revision"):
+            result = runtime.evaluate(
+                benchmark_history=[{"close": 1.0}],
+                portfolio_snapshot=self._soxl_snapshot(),
+                signal_text_fn=str,
+                translator=lambda key, **_kwargs: key,
+            )
+
+        self.assertEqual(result.metadata["runtime_risk_status"], "verified:runtime_risk_limits")
+        self.assertEqual(entrypoint.ctx.capabilities["runtime_risk_limits"].max_positions, 8)
+
+    def test_soxl_runtime_rejects_policy_bound_to_wrong_account(self):
+        entrypoint, runtime = self._soxl_runtime(policy=_soxl_runtime_policy(account_hash="other-account"))
+        with patch.object(strategy_runtime_module, "_installed_ues_revision", return_value="ues-revision"):
+            result = runtime.evaluate(
+                benchmark_history=[{"close": 1.0}],
+                portfolio_snapshot=self._soxl_snapshot(),
+                signal_text_fn=str,
+                translator=lambda key, **_kwargs: key,
+            )
+
+        self.assertEqual(result.metadata["runtime_risk_status"], "unavailable:runtime_binding_mismatch")
+        self.assertNotIsInstance(entrypoint.ctx.capabilities["runtime_risk_limits"], RuntimeRiskLimits)
+
+    def _assert_binding_mismatch_zero_submit(
+        self,
+        *,
+        entrypoint,
+        runtime,
+        snapshot=None,
+        installed_ues_revision: str = "ues-revision",
+    ):
+        from quant_platform_kit.common.strategy_contracts import PositionTarget
+        from quant_platform_kit.risk.gate import apply_risk_gate
+        from decision_mapper import map_strategy_decision_to_plan
+
+        snapshot = snapshot or self._soxl_snapshot()
+        with patch.object(
+            strategy_runtime_module,
+            "_installed_ues_revision",
+            return_value=installed_ues_revision,
+        ):
+            result = runtime.evaluate(
+                benchmark_history=[{"close": 1.0}],
+                portfolio_snapshot=snapshot,
+                signal_text_fn=str,
+                translator=lambda key, **_kwargs: key,
+            )
+
+        limits = entrypoint.ctx.capabilities["runtime_risk_limits"]
+        self.assertEqual(result.metadata["runtime_risk_status"], "unavailable:runtime_binding_mismatch")
+        self.assertNotIsInstance(limits, RuntimeRiskLimits)
+
+        rejected = apply_risk_gate(
+            StrategyDecision(positions=(PositionTarget(symbol="SOXL", target_weight=0.20),)),
+            portfolio_snapshot=snapshot,
+            max_single_weight=1.0,
+            max_total_exposure=1.0,
+            runtime_risk_limits=limits,
+        )
+        plan = map_strategy_decision_to_plan(
+            rejected,
+            snapshot=snapshot,
+            strategy_profile="soxl_soxx_trend_income",
+        )
+        self.assertEqual(rejected.positions, ())
+        self.assertEqual(rejected.diagnostics.get("risk_gate"), "REJECT")
+        self.assertEqual(plan["allocation"]["targets"], {})
+        self.assertEqual(plan["execution"]["execution_status"], "blocked")
+
+    def test_soxl_runtime_binding_mismatch_zero_submit_matrix(self):
+        cases = []
+
+        policy = _soxl_runtime_policy(account_hash="other-account")
+        cases.append(("account_hash", self._soxl_runtime(policy=policy), "ues-revision", None, None))
+
+        policy = _soxl_runtime_policy()
+        policy["binding"] = {**policy["binding"], "runtime_scope": "other-service"}
+        cases.append(("service", self._soxl_runtime(policy=policy), "ues-revision", None, None))
+
+        policy = _soxl_runtime_policy()
+        policy["binding"] = {**policy["binding"], "strategy_profile": "tqqq_growth_income"}
+        cases.append(("profile", self._soxl_runtime(policy=policy), "ues-revision", None, None))
+
+        policy = _soxl_runtime_policy()
+        policy["binding"] = {**policy["binding"], "ues_revision": "other-revision"}
+        cases.append(("ues_revision", self._soxl_runtime(policy=policy), "ues-revision", None, None))
+
+        policy = _soxl_runtime_policy()
+        policy["binding"] = {**policy["binding"], "execution_mode": "paper"}
+        cases.append(("execution_mode", self._soxl_runtime(policy=policy), "ues-revision", None, None))
+
+        policy = _soxl_runtime_policy()
+        policy["binding"] = {**policy["binding"], "cash_only_execution": False}
+        cases.append(("cash_only_policy", self._soxl_runtime(policy=policy), "ues-revision", None, None))
+
+        entrypoint, runtime = self._soxl_runtime(policy=_soxl_runtime_policy())
+        runtime = strategy_runtime_module.LoadedStrategyRuntime(
+            entrypoint=entrypoint,
+            runtime_adapter=runtime.runtime_adapter,
+            runtime_settings=replace(runtime.runtime_settings, cash_only_execution=False),
+            merged_runtime_config=dict(runtime.merged_runtime_config),
+        )
+        cases.append(("cash_only_settings", (entrypoint, runtime), "ues-revision", None, None))
+
+        policy = _soxl_runtime_policy()
+        policy["binding"] = {**policy["binding"], "reserved_cash_ratio": 0.05}
+        entrypoint, runtime = self._soxl_runtime(policy=policy)
+        runtime = strategy_runtime_module.LoadedStrategyRuntime(
+            entrypoint=entrypoint,
+            runtime_adapter=runtime.runtime_adapter,
+            runtime_settings=replace(runtime.runtime_settings, reserved_cash_ratio=0.05),
+            merged_runtime_config={**runtime.merged_runtime_config, "cash_reserve_ratio": 0.05},
+        )
+        cases.append(("reserve_equal_wrong", (entrypoint, runtime), "ues-revision", None, None))
+
+        policy = _soxl_runtime_policy()
+        policy["binding"] = {**policy["binding"], "options_enabled": True}
+        cases.append(("options_policy", self._soxl_runtime(policy=policy), "ues-revision", None, None))
+
+        entrypoint, runtime = self._soxl_runtime(policy=_soxl_runtime_policy())
+        runtime = strategy_runtime_module.LoadedStrategyRuntime(
+            entrypoint=entrypoint,
+            runtime_adapter=runtime.runtime_adapter,
+            runtime_settings=runtime.runtime_settings,
+            merged_runtime_config={
+                **runtime.merged_runtime_config,
+                "option_overlay_enabled": True,
+            },
+        )
+        cases.append(("options_config", (entrypoint, runtime), "ues-revision", None, None))
+
+        policy = _soxl_runtime_policy()
+        policy["exit_parameters"] = {"exit_buffer": 0.02}
+        cases.append(("exit_key", self._soxl_runtime(policy=policy), "ues-revision", None, None))
+
+        policy = _soxl_runtime_policy()
+        policy["exit_parameters"] = {"trend_exit_buffer": 0.05}
+        cases.append(("exit_value", self._soxl_runtime(policy=policy), "ues-revision", None, None))
+
+        policy = _soxl_runtime_policy()
+        policy["exit_parameters"] = {"trend_exit_buffer": 0.05}
+        entrypoint, runtime = self._soxl_runtime(policy=policy)
+        runtime = strategy_runtime_module.LoadedStrategyRuntime(
+            entrypoint=entrypoint,
+            runtime_adapter=runtime.runtime_adapter,
+            runtime_settings=runtime.runtime_settings,
+            merged_runtime_config={**runtime.merged_runtime_config, "trend_exit_buffer": 0.05},
+        )
+        cases.append(("exit_equal_wrong", (entrypoint, runtime), "ues-revision", None, None))
+
+        policy = _soxl_runtime_policy()
+        policy["binding"] = {**policy["binding"], "ues_revision": "wrong-revision"}
+        cases.append(
+            ("ues_revision_equal_wrong", self._soxl_runtime(policy=policy), "wrong-revision", None, None)
+        )
+
+        for label, (entrypoint, runtime), installed_rev, _snapshot, _extra in cases:
+            with self.subTest(label=label):
+                self._assert_binding_mismatch_zero_submit(
+                    entrypoint=entrypoint,
+                    runtime=runtime,
+                    installed_ues_revision=installed_rev,
+                )
+
+    def test_soxl_runtime_missing_policy_is_fail_closed(self):
+        entrypoint, runtime = self._soxl_runtime(policy=None)
+        result = runtime.evaluate(
+            benchmark_history=[{"close": 1.0}],
+            portfolio_snapshot=self._soxl_snapshot(),
+            signal_text_fn=str,
+            translator=lambda key, **_kwargs: key,
+        )
+
+        self.assertEqual(result.metadata["runtime_risk_status"], "unavailable:runtime_risk_policy")
+        self.assertIsNotNone(entrypoint.ctx.capabilities["runtime_risk_limits"])
+
     def test_runtime_attaches_v2_capital_evidence_only_for_broker_liquidation_value(self):
         entrypoint = _FakeEntrypoint()
         runtime = strategy_runtime_module.LoadedStrategyRuntime(

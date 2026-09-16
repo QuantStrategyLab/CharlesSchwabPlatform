@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import json
+from importlib import metadata as importlib_metadata
 from typing import Any, Callable, Mapping
 
 from quant_platform_kit.common.feature_snapshot import load_feature_snapshot_guarded
@@ -23,6 +25,7 @@ from quant_platform_kit.common.strategy_contracts import (
     build_execution_timing_metadata,
     build_strategy_context_from_available_inputs,
 )
+from quant_platform_kit.risk.contracts import RuntimeRiskLimits
 from runtime_config_support import PlatformRuntimeSettings
 from us_equity_strategies.signals import resolve_external_market_signal_inputs
 
@@ -32,6 +35,23 @@ from strategy_loader import (
 )
 
 _FEATURE_SNAPSHOT_INPUT = "feature_snapshot"
+_SOXL_PROFILE = "soxl_soxx_trend_income"
+
+
+def _installed_ues_revision() -> str | None:
+    """Read the VCS revision of the installed UES distribution."""
+    try:
+        distribution = importlib_metadata.distribution("us-equity-strategies")
+        raw_direct_url = distribution.read_text("direct_url.json")
+        if not raw_direct_url:
+            return None
+        payload = json.loads(raw_direct_url)
+        revision = payload.get("vcs_info", {}).get("commit_id")
+    except (ImportError, OSError, TypeError, ValueError, AttributeError):
+        return None
+    if not isinstance(revision, str) or not revision.strip():
+        return None
+    return revision.strip()
 
 
 @dataclass(frozen=True)
@@ -141,6 +161,103 @@ class LoadedStrategyRuntime:
             "capital_base_binding": binding,
         }, "verified:broker_account_net_liquidation"
 
+    def _build_runtime_risk_capabilities(
+        self,
+        available_inputs: Mapping[str, Any],
+        capabilities: Mapping[str, Any],
+    ) -> tuple[dict[str, Any], str]:
+        """Bind explicit limits to the deployed account and installed UES."""
+        if self.profile != _SOXL_PROFILE:
+            return dict(capabilities), "unavailable:profile_not_supported"
+        policy = self.runtime_settings.trusted_runtime_risk_policy
+        runtime_target = self.runtime_settings.runtime_target
+        snapshot = available_inputs.get("portfolio_snapshot")
+        binding = capabilities.get("capital_base_binding")
+        if not isinstance(policy, Mapping):
+            return {**capabilities, "runtime_risk_limits": object()}, "unavailable:runtime_risk_policy"
+        if runtime_target is None or snapshot is None or binding is None:
+            return {**capabilities, "runtime_risk_limits": object()}, "unavailable:runtime_binding"
+        expected_policy_keys = {
+            "binding",
+            "allowed_symbols",
+            "product_leverage_factors",
+            "nominal_caps",
+            "total_nominal_exposure_cap",
+            "total_effective_exposure_cap",
+            "max_positions",
+            "exit_parameters",
+        }
+        if set(policy) != expected_policy_keys or not isinstance(policy.get("binding"), Mapping):
+            return {**capabilities, "runtime_risk_limits": object()}, "unavailable:invalid_runtime_risk_policy"
+
+        target_release = runtime_target.strategy_release
+        policy_binding = policy["binding"]
+        expected_binding_keys = {
+            "account_scope",
+            "runtime_scope",
+            "account_hash",
+            "strategy_profile",
+            "ues_revision",
+            "execution_mode",
+            "cash_only_execution",
+            "reserved_cash_ratio",
+            "options_enabled",
+        }
+        if set(policy_binding) != expected_binding_keys:
+            return {**capabilities, "runtime_risk_limits": object()}, "unavailable:invalid_runtime_binding"
+        metadata = getattr(snapshot, "metadata", {})
+        account_scope = str(runtime_target.account_scope or "").strip()
+        runtime_scope = str(runtime_target.service_name or runtime_target.deployment_selector or "").strip()
+        actual_account_hash = str(metadata.get("account_hash") or "").strip() if isinstance(metadata, Mapping) else ""
+        actual_ues_revision = _installed_ues_revision()
+        actual_exit_buffer = self.merged_runtime_config.get("trend_exit_buffer")
+        if (
+            not account_scope
+            or not runtime_scope
+            or not actual_account_hash
+            or target_release is None
+            or str(policy_binding["account_scope"]).strip() != account_scope
+            or str(policy_binding["runtime_scope"]).strip() != runtime_scope
+            or str(policy_binding["account_hash"]).strip() != actual_account_hash
+            or str(policy_binding["strategy_profile"]).strip() != self.profile
+            or str(policy_binding["ues_revision"]).strip() != str(target_release.strategy_revision).strip()
+            or actual_ues_revision is None
+            or actual_ues_revision != str(policy_binding["ues_revision"]).strip()
+            or str(policy_binding["execution_mode"]).strip().lower() != runtime_target.execution_mode
+            or policy_binding["cash_only_execution"] is not True
+            or self.runtime_settings.cash_only_execution is not True
+            or policy_binding["reserved_cash_ratio"] != self.merged_runtime_config.get("cash_reserve_ratio")
+            or policy_binding["reserved_cash_ratio"] != self.runtime_settings.reserved_cash_ratio
+            or policy_binding["reserved_cash_ratio"] != 0.03
+            or policy_binding["options_enabled"] is not False
+            or any(
+                self.merged_runtime_config.get(key) is not False
+                for key in (
+                    "option_overlay_enabled",
+                    "option_growth_overlay_enabled",
+                    "option_income_overlay_enabled",
+                )
+            )
+            or not isinstance(policy.get("exit_parameters"), Mapping)
+            or actual_exit_buffer is None
+            or actual_exit_buffer != 0.02
+            or dict(policy["exit_parameters"]) != {"trend_exit_buffer": 0.02}
+            or dict(policy["exit_parameters"]) != {"trend_exit_buffer": actual_exit_buffer}
+        ):
+            return {**capabilities, "runtime_risk_limits": object()}, "unavailable:runtime_binding_mismatch"
+        try:
+            limits = RuntimeRiskLimits(
+                allowed_symbols=tuple(policy["allowed_symbols"]),
+                product_leverage_factors=policy["product_leverage_factors"],
+                nominal_caps=policy["nominal_caps"],
+                total_nominal_exposure_cap=policy["total_nominal_exposure_cap"],
+                total_effective_exposure_cap=policy["total_effective_exposure_cap"],
+                max_positions=policy["max_positions"],
+            )
+        except (TypeError, ValueError):
+            return {**capabilities, "runtime_risk_limits": object()}, "unavailable:invalid_runtime_risk_limits"
+        return {**capabilities, "runtime_risk_limits": limits}, "verified:runtime_risk_limits"
+
     def evaluate(
         self,
         *,
@@ -171,6 +288,10 @@ class LoadedStrategyRuntime:
         capabilities, capital_base_status = self._build_capital_base_capabilities(
             resolved_available_inputs
         )
+        capabilities, runtime_risk_status = self._build_runtime_risk_capabilities(
+            resolved_available_inputs,
+            capabilities,
+        )
         ctx = build_strategy_context_from_available_inputs(
             entrypoint=self.entrypoint,
             runtime_adapter=self.runtime_adapter,
@@ -185,6 +306,7 @@ class LoadedStrategyRuntime:
             metadata={
                 "strategy_profile": self.profile,
                 "capital_base_status": capital_base_status,
+                "runtime_risk_status": runtime_risk_status,
                 **build_execution_timing_metadata(
                     signal_date=as_of,
                     signal_effective_after_trading_days=(
