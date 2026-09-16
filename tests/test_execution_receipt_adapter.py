@@ -65,3 +65,20 @@ class ExecutionReceiptAdapterTest(unittest.TestCase):
         )
 
         self.assertEqual(report["execution_receipt"]["outcome"], "no_action")
+
+    def test_strategy_risk_rejection_is_persisted_as_risk_blocked(self) -> None:
+        report = _report()
+
+        attach_cycle_execution_receipt(
+            report,
+            SimpleNamespace(
+                execution={
+                    "execution_status": "blocked",
+                    "no_op_reason": "rejected:too_many_positions",
+                },
+                submitted_orders=(),
+            ),
+        )
+
+        self.assertEqual(report["execution_receipt"]["outcome"], "risk_blocked")
+        self.assertEqual(report["execution_receipt"]["broker_confirmation"], "not_applicable")

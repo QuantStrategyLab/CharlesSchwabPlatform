@@ -75,6 +75,14 @@ def _format_benchmark_lines(execution, *, translator) -> list[str]:
     ]
 
 
+def _format_cycle_completion_line(execution, *, translator) -> str:
+    if str(execution.get("execution_status") or "").strip().lower() != "blocked":
+        return translator("no_trades")
+    if str(execution.get("no_op_reason") or "").strip() == "rejected:too_many_positions":
+        return translator("risk_rejected_too_many_positions")
+    return translator("risk_rejected")
+
+
 def _is_holding_segment(segment: str) -> bool:
     label, sep, value = str(segment or "").partition(":")
     symbol = label.strip().replace(".", "").replace("-", "")
@@ -235,6 +243,7 @@ def _build_compact_heartbeat_message(
     timing_lines,
     signal_snapshot_line,
     risk_control_lines,
+    completion_line,
 ) -> str:
     lines = [
         translator("heartbeat_title"),
@@ -257,7 +266,7 @@ def _build_compact_heartbeat_message(
         lines.append(separator)
         lines.extend(dashboard_lines)
     lines.append(separator)
-    lines.append(translator("no_trades"))
+    lines.append(completion_line)
     return "\n".join(lines)
 
 
@@ -356,6 +365,7 @@ def render_heartbeat_notification(
         translator=translator,
     )
     risk_control_lines = _build_tqqq_risk_control_lines(execution, translator=translator)
+    completion_line = _format_cycle_completion_line(execution, translator=translator)
     separator = str(execution["separator"])
     total_equity = float(portfolio["total_equity"])
     portfolio_rows = tuple(portfolio["portfolio_rows"])
@@ -396,7 +406,7 @@ def render_heartbeat_notification(
         f"{heartbeat_signal_block}\n"
         f"{benchmark_block}"
         f"{separator}\n"
-        f"{translator('no_trades')}"
+        f"{completion_line}"
     )
     compact_text = _build_compact_heartbeat_message(
         translator=translator,
@@ -412,5 +422,6 @@ def render_heartbeat_notification(
         timing_lines=timing_lines,
         signal_snapshot_line=signal_snapshot_line,
         risk_control_lines=risk_control_lines,
+        completion_line=completion_line,
     )
     return RenderedNotification(detailed_text=detailed_text, compact_text=compact_text)
