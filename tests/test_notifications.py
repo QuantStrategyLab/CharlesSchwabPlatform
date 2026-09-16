@@ -237,6 +237,32 @@ class NotificationTests(unittest.TestCase):
         self.assertNotIn("📊 市场状态", rendered.compact_text)
         self.assertNotIn("schwab_daily_history_with_live_quote_overlay", rendered.compact_text)
 
+    def test_heartbeat_reports_strategy_risk_rejection_instead_of_normal_hold(self):
+        rendered = render_heartbeat_notification(
+            translator=build_translator("en"),
+            strategy_display_name="TQQQ Growth Income",
+            dry_run_only=False,
+            extra_notification_lines=(),
+            execution={
+                "dashboard_text": "",
+                "separator": "━━━━━━━━━━━━━━━━━━",
+                "signal_display": "Trend Hold",
+                "execution_status": "blocked",
+                "no_op_reason": "rejected:too_many_positions",
+            },
+            portfolio={
+                "total_equity": 10000.0,
+                "portfolio_rows": (("TQQQ",),),
+                "market_values": {"TQQQ": 0.0},
+            },
+            account_label="demo",
+        )
+
+        assert "Strategy risk rejected: target count exceeds applicable risk limit; no orders submitted" in rendered.detailed_text
+        assert "Strategy risk rejected: target count exceeds applicable risk limit; no orders submitted" in rendered.compact_text
+        assert "No rebalance needed" not in rendered.detailed_text
+        assert "No rebalance needed" not in rendered.compact_text
+
     def test_heartbeat_renders_tqqq_volatility_delever_risk_control(self):
         rendered = render_heartbeat_notification(
             translator=build_translator("en"),

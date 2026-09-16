@@ -26,6 +26,10 @@ def attach_cycle_execution_receipt(
     execution = _as_mapping(getattr(cycle_result, "execution", {}))
     submitted_orders = tuple(getattr(cycle_result, "submitted_orders", ()) or ())
     status = str(execution.get("execution_status") or "").strip().lower()
+    risk_blocked = status == "blocked" and str(execution.get("no_op_reason") or "").strip() in {
+        "rejected:too_many_positions",
+        "strategy_risk_rejected",
+    }
     reconciliation_required = status == "pending_reconciliation" or bool(
         execution.get("orders_pending_count")
     )
@@ -33,6 +37,7 @@ def attach_cycle_execution_receipt(
         dry_run=bool(report.get("dry_run")),
         submission_attempted=bool(execution.get("broker_submission_done")) or bool(submitted_orders),
         reconciliation_required=reconciliation_required,
+        risk_blocked=risk_blocked,
     )
     return attach_runtime_execution_receipt(
         report,

@@ -79,6 +79,24 @@ def test_summarize_execution_cycle_result_handles_empty_result() -> None:
     assert summary["no_op_reason"] == "market_closed"
 
 
+def test_summarize_execution_cycle_result_preserves_strategy_risk_rejection() -> None:
+    result = SimpleNamespace(
+        execution={
+            "execution_status": "blocked",
+            "no_op_reason": "rejected:too_many_positions",
+        },
+        submitted_orders=(),
+        trade_logs=(),
+    )
+
+    summary = summarize_execution_cycle_result(result, dry_run=False)
+
+    assert summary["result"] == "blocked"
+    assert summary["execution_status"] == "blocked"
+    assert summary["no_op_reason"] == "rejected:too_many_positions"
+    assert summary["orders_submitted_count"] == 0
+
+
 def test_summarize_execution_cycle_result_preserves_notification_delivery_summary() -> None:
     delivery_summary = {
         "event_count": 1,

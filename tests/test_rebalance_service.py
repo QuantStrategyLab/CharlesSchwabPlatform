@@ -27,6 +27,53 @@ HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT = {
 
 
 class RebalanceServiceTests(unittest.TestCase):
+    def test_strategy_risk_rejection_keeps_reason_with_zero_submissions(self):
+        submitted_orders = []
+        plan = {
+            "account_hash": "demo",
+            "allocation": {
+                "target_mode": "value",
+                "strategy_symbols": (),
+                "risk_symbols": (),
+                "income_symbols": (),
+                "safe_haven_symbols": (),
+                "targets": {},
+            },
+            "portfolio": {
+                "market_values": {},
+                "quantities": {},
+                "liquid_cash": 1000.0,
+                "cash_sweep_symbol": "",
+            },
+            "execution": {
+                "trade_threshold_value": 10.0,
+                "reserved_cash": 0.0,
+                "execution_status": "blocked",
+                "no_op_reason": "rejected:too_many_positions",
+            },
+        }
+
+        result = execute_rebalance_cycle(
+            client=object(),
+            plan=plan,
+            portfolio=plan["portfolio"],
+            execution=plan["execution"],
+            allocation=plan["allocation"],
+            fetch_managed_snapshot=lambda _client: None,
+            market_data_port=CallableMarketDataPort(quote_loader=lambda _symbol: None),
+            load_plan=lambda _snapshot: (plan, plan["portfolio"], plan["execution"], plan["allocation"]),
+            execution_port=CallableExecutionPort(lambda order_intent: submitted_orders.append(order_intent)),
+            translator=build_translator("en"),
+            limit_buy_premium=1.0,
+            sell_settle_delay_sec=0,
+            publish_order_issue=lambda _message: None,
+        )
+
+        self.assertEqual(submitted_orders, [])
+        self.assertEqual(result.submitted_orders, ())
+        self.assertEqual(result.execution["execution_status"], "blocked")
+        self.assertEqual(result.execution["no_op_reason"], "rejected:too_many_positions")
+
     def test_missing_cash_sweep_quote_defers_cycle_without_submitting_an_order(self):
         submitted_orders = []
         issues = []

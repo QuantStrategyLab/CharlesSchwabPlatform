@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from us_equity_strategies.catalog import resolve_canonical_profile
@@ -17,6 +18,30 @@ from quant_platform_kit.common.execution_translation import (
     resolve_decision_target_mode,
     translate_decision_to_target_mode,
 )
+
+
+_STRATEGY_RISK_REJECTION_STATUS = "blocked"
+_SAFE_STRATEGY_RISK_REASON_CODES = frozenset({"rejected:too_many_positions"})
+
+
+def _strategy_risk_rejection_fields(decision: StrategyDecision) -> dict[str, str]:
+    diagnostics = decision.diagnostics if isinstance(decision.diagnostics, Mapping) else {}
+    risk_gate = str(diagnostics.get("risk_gate") or "").strip().upper()
+    if risk_gate != "REJECT":
+        return {}
+
+    reason_code = next(
+        (
+            str(flag).strip()
+            for flag in tuple(decision.risk_flags or ())
+            if str(flag).strip() in _SAFE_STRATEGY_RISK_REASON_CODES
+        ),
+        "strategy_risk_rejected",
+    )
+    return {
+        "execution_status": _STRATEGY_RISK_REJECTION_STATUS,
+        "no_op_reason": reason_code,
+    }
 
 
 def _resolve_reserved_cash(
@@ -248,6 +273,7 @@ def map_strategy_decision_to_plan(
     )
     plan["account_hash"] = snapshot.metadata["account_hash"]
     execution = plan.setdefault("execution", {})
+    execution.update(_strategy_risk_rejection_fields(decision))
     for field_name in (
         "allocation_mode",
         "trend_entry_buffer",

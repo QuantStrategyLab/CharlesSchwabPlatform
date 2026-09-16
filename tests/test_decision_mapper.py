@@ -10,6 +10,81 @@ from decision_mapper import map_strategy_decision_to_plan
 
 
 class DecisionMapperTests(unittest.TestCase):
+    def test_preserves_strategy_risk_rejection_for_zero_order_report(self):
+        snapshot = SimpleNamespace(
+            total_equity=120000.0,
+            buying_power=20000.0,
+            positions=(SimpleNamespace(symbol="TQQQ", quantity=10, market_value=8000.0),),
+            metadata={"account_hash": "demo"},
+        )
+        decision = StrategyDecision(
+            positions=(),
+            risk_flags=("rejected:too_many_positions",),
+            diagnostics={
+                "risk_gate": "REJECT",
+                "reason": "raw upstream diagnostic must not be published",
+            },
+        )
+
+        plan = map_strategy_decision_to_plan(
+            decision,
+            snapshot=snapshot,
+            strategy_profile="tqqq_growth_income",
+        )
+
+        execution = plan["execution"]
+        self.assertEqual(execution["execution_status"], "blocked")
+        self.assertEqual(execution["no_op_reason"], "rejected:too_many_positions")
+        self.assertNotIn("raw upstream diagnostic", str(execution))
+
+    def test_does_not_infer_risk_rejection_from_flag_without_gate(self):
+        snapshot = SimpleNamespace(
+            total_equity=120000.0,
+            buying_power=20000.0,
+            positions=(),
+            metadata={"account_hash": "demo"},
+        )
+        decision = StrategyDecision(
+            positions=(),
+            risk_flags=("rejected:too_many_positions",),
+            diagnostics={},
+        )
+
+        plan = map_strategy_decision_to_plan(
+            decision,
+            snapshot=snapshot,
+            strategy_profile="tqqq_growth_income",
+        )
+
+        self.assertNotIn("execution_status", plan["execution"])
+        self.assertNotIn("no_op_reason", plan["execution"])
+
+    def test_unknown_risk_rejection_uses_fixed_fallback_reason(self):
+        snapshot = SimpleNamespace(
+            total_equity=120000.0,
+            buying_power=20000.0,
+            positions=(),
+            metadata={"account_hash": "demo"},
+        )
+        decision = StrategyDecision(
+            positions=(),
+            risk_flags=("rejected:future_reason",),
+            diagnostics={
+                "risk_gate": "REJECT",
+                "reason": "raw upstream diagnostic must not be published",
+            },
+        )
+
+        plan = map_strategy_decision_to_plan(
+            decision,
+            snapshot=snapshot,
+            strategy_profile="tqqq_growth_income",
+        )
+
+        self.assertEqual(plan["execution"]["execution_status"], "blocked")
+        self.assertEqual(plan["execution"]["no_op_reason"], "strategy_risk_rejected")
+        self.assertNotIn("future_reason", str(plan["execution"]))
+
     def test_maps_hybrid_growth_decision_to_execution_plan(self):
         snapshot = SimpleNamespace(
             total_equity=120000.0,
