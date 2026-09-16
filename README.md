@@ -27,6 +27,7 @@ It is an execution layer, not a strategy research repository. Strategy logic com
 - Handles broker/API connectivity, dry-run checks, notifications, and deployment settings.
 - Must keep credentials in GitHub Secrets, cloud secret stores, or the broker-specific secret system, never in Git.
 - Should start with dry-run or paper mode before any live order path is enabled.
+- Account production-drift status is consumed only from the account risk snapshot (or the portfolio snapshot fallback); unbound research performance stores are not used by the Schwab execution gate.
 
 ## Direct vs snapshot-backed profiles
 
