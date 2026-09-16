@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import math
 import os
+import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from quant_platform_kit.common.runtime_config import (
     resolve_bool_value,
@@ -106,6 +107,7 @@ class PlatformRuntimeSettings:
     serverchan_webhook_url: str | None = None
     runtime_target: RuntimeTarget | None = None
     strategy_metadata: Any = None
+    trusted_runtime_risk_policy: Mapping[str, Any] | None = None
 
 
 def _resolve_non_negative_float_env(name: str, *, default: float) -> float:
@@ -183,8 +185,28 @@ def resolve_strategy_profile(raw_value: str | None = None) -> str:
     ).profile
 
 
+def _load_trusted_runtime_risk_policy() -> Mapping[str, Any] | None:
+    """Read risk limits only from the deployment runtime target JSON."""
+    raw_target = os.getenv("RUNTIME_TARGET_JSON")
+    if raw_target is None or not raw_target.strip():
+        return None
+    try:
+        payload = json.loads(raw_target)
+    except (TypeError, ValueError) as exc:
+        raise EnvironmentError("RUNTIME_TARGET_JSON must be valid JSON") from exc
+    if not isinstance(payload, dict):
+        raise EnvironmentError("RUNTIME_TARGET_JSON must decode to an object")
+    policy = payload.get("runtime_risk_limits")
+    if policy is None:
+        return None
+    if not isinstance(policy, dict):
+        raise EnvironmentError("RUNTIME_TARGET_JSON.runtime_risk_limits must be an object")
+    return dict(policy)
+
+
 def load_platform_runtime_settings() -> PlatformRuntimeSettings:
     runtime_target = resolve_runtime_target_from_env(env=os.environ, expected_platform_id=SCHWAB_PLATFORM)
+    trusted_runtime_risk_policy = _load_trusted_runtime_risk_policy()
     dry_run_only = resolve_dry_run_env(os.environ, "SCHWAB_DRY_RUN_ONLY")
     paper_execution_admission_enabled = resolve_optional_bool_env(
         "SCHWAB_PAPER_EXECUTION_ADMISSION_ENABLED",
@@ -375,4 +397,5 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
         feishu_webhook_url=os.getenv("NOTIFICATION_FEISHU_WEBHOOK_URL"),
         serverchan_webhook_url=os.getenv("NOTIFICATION_SERVERCHAN_WEBHOOK_URL"),
         runtime_target=runtime_target,
+        trusted_runtime_risk_policy=trusted_runtime_risk_policy,
     )
