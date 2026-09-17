@@ -21,7 +21,12 @@ from quant_platform_kit.common.execution_translation import (
 
 
 _STRATEGY_RISK_REJECTION_STATUS = "blocked"
-_SAFE_STRATEGY_RISK_REASON_CODES = frozenset({"rejected:too_many_positions"})
+_SAFE_STRATEGY_RISK_REASON_CODES = frozenset(
+    {
+        "rejected:too_many_positions",
+        "rejected:runtime_risk_limits",
+    }
+)
 
 
 def _strategy_risk_rejection_fields(decision: StrategyDecision) -> dict[str, str]:

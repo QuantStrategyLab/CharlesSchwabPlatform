@@ -388,6 +388,33 @@ class LoadedStrategyRuntime:
             capabilities=capabilities,
         )
         decision = self.entrypoint.evaluate(ctx)
+        if any(str(flag).startswith("rejected:runtime_risk") for flag in decision.risk_flags):
+            diagnostics = decision.diagnostics if isinstance(decision.diagnostics, Mapping) else {}
+            portfolio_snapshot = resolved_available_inputs.get("portfolio_snapshot")
+            snapshot_metadata = getattr(portfolio_snapshot, "metadata", None)
+            if isinstance(snapshot_metadata, Mapping):
+                broker_nlv = snapshot_metadata.get("broker_liquidation_value")
+                if broker_nlv is None:
+                    broker_nlv = snapshot_metadata.get("broker_net_liquidation")
+            else:
+                broker_nlv = None
+            target_value_sum = sum(
+                float(position.target_value)
+                for position in decision.positions
+                if position.target_value is not None
+            )
+            self.logger(
+                "strategy_runtime_risk_reject | "
+                f"profile={self.profile} "
+                f"capital_base_status={capital_base_status} "
+                f"runtime_risk_status={runtime_risk_status} "
+                f"risk_flags={','.join(str(flag) for flag in decision.risk_flags)} "
+                f"reason={diagnostics.get('reason')} "
+                f"hold={diagnostics.get('runtime_risk_small_account_hold')} "
+                f"broker_nlv={broker_nlv} "
+                f"portfolio_total_equity={getattr(portfolio_snapshot, 'total_equity', None)} "
+                f"target_value_sum={target_value_sum}"
+            )
         return StrategyEvaluationResult(
             decision=decision,
             metadata={

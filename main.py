@@ -345,6 +345,7 @@ def build_broker_adapters():
         fetch_daily_price_history_fn=fetch_default_daily_price_history_candles,
         submit_equity_order_fn=submit_equity_order,
         fetch_order_status_fn=fetch_order_status,
+        cash_only_execution=CASH_ONLY_EXECUTION,
     )
 
 

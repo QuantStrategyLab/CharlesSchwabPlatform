@@ -18,6 +18,8 @@ from quant_platform_kit.common.port_adapters import (
     CallablePortfolioPort,
 )
 
+from application.portfolio_nlv_align import align_cash_only_sleeve_to_broker_liquidation
+
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -64,14 +66,19 @@ class SchwabRuntimeBrokerAdapters:
     fetch_daily_price_history_fn: Any
     submit_equity_order_fn: Any
     fetch_order_status_fn: Any | None = None
+    cash_only_execution: bool = True
     clock: Any = _utcnow
 
     def fetch_managed_snapshot(self, client):
         for attempt in range(_ACCOUNT_TRANSIENT_MAX_ATTEMPTS):
             try:
-                return self.fetch_account_snapshot_fn(
+                snapshot = self.fetch_account_snapshot_fn(
                     client,
                     strategy_symbols=list(self.managed_symbols),
+                )
+                return align_cash_only_sleeve_to_broker_liquidation(
+                    snapshot,
+                    cash_only_execution=bool(self.cash_only_execution),
                 )
             except Exception as exc:
                 if (
@@ -257,6 +264,7 @@ def build_runtime_broker_adapters(
     fetch_daily_price_history_fn,
     submit_equity_order_fn,
     fetch_order_status_fn=None,
+    cash_only_execution: bool = True,
     clock=_utcnow,
 ) -> SchwabRuntimeBrokerAdapters:
     return SchwabRuntimeBrokerAdapters(
@@ -266,5 +274,6 @@ def build_runtime_broker_adapters(
         fetch_daily_price_history_fn=fetch_daily_price_history_fn,
         submit_equity_order_fn=submit_equity_order_fn,
         fetch_order_status_fn=fetch_order_status_fn,
+        cash_only_execution=bool(cash_only_execution),
         clock=clock,
     )
