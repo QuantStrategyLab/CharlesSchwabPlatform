@@ -25,7 +25,7 @@ from quant_platform_kit.common.strategy_contracts import (
     build_execution_timing_metadata,
     build_strategy_context_from_available_inputs,
 )
-from quant_platform_kit.risk.contracts import RuntimeRiskLimits
+from quant_platform_kit.risk.contracts import RuntimeRiskLimits, SmallAccountRiskHoldPolicy
 from runtime_config_support import PlatformRuntimeSettings
 from us_equity_strategies.signals import resolve_external_market_signal_inputs
 
@@ -36,6 +36,22 @@ from strategy_loader import (
 
 _FEATURE_SNAPSHOT_INPUT = "feature_snapshot"
 _SOXL_PROFILE = "soxl_soxx_trend_income"
+
+
+def _parse_small_account_hold_policy(raw: Any) -> SmallAccountRiskHoldPolicy | None:
+    """Parse optional deployment hold policy; invalid shapes return None."""
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        return None
+    try:
+        return SmallAccountRiskHoldPolicy(
+            enabled=raw["enabled"],
+            hold_below_nav=raw["hold_below_nav"],
+            require_cash_only=raw.get("require_cash_only", True),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def _installed_ues_revision() -> str | None:
@@ -187,7 +203,13 @@ class LoadedStrategyRuntime:
             "max_positions",
             "exit_parameters",
         }
-        if set(policy) != expected_policy_keys or not isinstance(policy.get("binding"), Mapping):
+        optional_policy_keys = {"small_account_hold"}
+        policy_keys = set(policy)
+        if (
+            not expected_policy_keys.issubset(policy_keys)
+            or (policy_keys - expected_policy_keys - optional_policy_keys)
+            or not isinstance(policy.get("binding"), Mapping)
+        ):
             return {**capabilities, "runtime_risk_limits": object()}, "unavailable:invalid_runtime_risk_policy"
 
         target_release = runtime_target.strategy_release
@@ -256,7 +278,25 @@ class LoadedStrategyRuntime:
             )
         except (TypeError, ValueError):
             return {**capabilities, "runtime_risk_limits": object()}, "unavailable:invalid_runtime_risk_limits"
-        return {**capabilities, "runtime_risk_limits": limits}, "verified:runtime_risk_limits"
+        capability_payload: dict[str, Any] = {
+            **capabilities,
+            "runtime_risk_limits": limits,
+            "cash_only_execution": bool(self.runtime_settings.cash_only_execution),
+        }
+        hold_policy = _parse_small_account_hold_policy(policy.get("small_account_hold"))
+        if isinstance(policy.get("small_account_hold"), Mapping) and hold_policy is None:
+            return {
+                **capabilities,
+                "runtime_risk_limits": object(),
+            }, "unavailable:invalid_small_account_hold"
+        if hold_policy is not None:
+            if hold_policy.require_cash_only and self.runtime_settings.cash_only_execution is not True:
+                return {
+                    **capabilities,
+                    "runtime_risk_limits": object(),
+                }, "unavailable:small_account_hold_cash_only"
+            capability_payload["small_account_hold_policy"] = hold_policy
+        return capability_payload, "verified:runtime_risk_limits"
 
     def evaluate(
         self,

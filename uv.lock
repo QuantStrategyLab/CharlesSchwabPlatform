@@ -17,7 +17,7 @@ resolution-markers = [
 ]
 
 [manifest]
-overrides = [{ name = "quant-platform-kit", git = "https://github.com/QuantStrategyLab/QuantPlatformKit.git?rev=68c51590da8a5097b7de6d75b4ccb6a175318b48" }]
+overrides = [{ name = "quant-platform-kit", git = "https://github.com/QuantStrategyLab/QuantPlatformKit.git?rev=a90937621a7a05c9f72d0ca8a29be3fcb18a327c" }]
 
 [[package]]
 name = "anyio"
@@ -186,11 +186,11 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'test'" },
     { name = "pytest-cov", marker = "extra == 'test'" },
     { name = "pytz" },
-    { name = "quant-platform-kit", git = "https://github.com/QuantStrategyLab/QuantPlatformKit.git?rev=68c51590da8a5097b7de6d75b4ccb6a175318b48" },
+    { name = "quant-platform-kit", git = "https://github.com/QuantStrategyLab/QuantPlatformKit.git?rev=a90937621a7a05c9f72d0ca8a29be3fcb18a327c" },
     { name = "requests" },
     { name = "ruff", marker = "extra == 'test'" },
     { name = "schwab-py" },
-    { name = "us-equity-strategies", git = "https://github.com/QuantStrategyLab/UsEquityStrategies.git?rev=e2258223310913f6db9f40b810756db0ee2cfd68" },
+    { name = "us-equity-strategies", git = "https://github.com/QuantStrategyLab/UsEquityStrategies.git?rev=4a3943883cd6b5bbfe32a559e56a91b40a81b7ce" },
 ]
 provides-extras = ["test"]
 
@@ -1320,7 +1320,7 @@ wheels = [
 [[package]]
 name = "quant-platform-kit"
 version = "1.0.0"
-source = { git = "https://github.com/QuantStrategyLab/QuantPlatformKit.git?rev=68c51590da8a5097b7de6d75b4ccb6a175318b48#68c51590da8a5097b7de6d75b4ccb6a175318b48" }
+source = { git = "https://github.com/QuantStrategyLab/QuantPlatformKit.git?rev=a90937621a7a05c9f72d0ca8a29be3fcb18a327c#a90937621a7a05c9f72d0ca8a29be3fcb18a327c" }
 
 [[package]]
 name = "requests"
@@ -1485,7 +1485,7 @@ wheels = [
 [[package]]
 name = "us-equity-strategies"
 version = "0.7.60"
-source = { git = "https://github.com/QuantStrategyLab/UsEquityStrategies.git?rev=e2258223310913f6db9f40b810756db0ee2cfd68#e2258223310913f6db9f40b810756db0ee2cfd68" }
+source = { git = "https://github.com/QuantStrategyLab/UsEquityStrategies.git?rev=4a3943883cd6b5bbfe32a559e56a91b40a81b7ce#4a3943883cd6b5bbfe32a559e56a91b40a81b7ce" }
 dependencies = [
     { name = "pandas" },
     { name = "pytz" },
