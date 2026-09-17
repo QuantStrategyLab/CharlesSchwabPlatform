@@ -214,6 +214,45 @@ class StrategyRuntimeTests(unittest.TestCase):
         self.assertEqual(result.metadata["runtime_risk_status"], "verified:runtime_risk_limits")
         self.assertEqual(entrypoint.ctx.capabilities["runtime_risk_limits"].max_positions, 8)
 
+    def test_soxl_runtime_attaches_small_account_hold_policy(self):
+        from quant_platform_kit.risk.contracts import SmallAccountRiskHoldPolicy
+
+        policy = _soxl_runtime_policy()
+        policy["small_account_hold"] = {
+            "enabled": True,
+            "hold_below_nav": 1000.0,
+            "require_cash_only": True,
+        }
+        entrypoint, runtime = self._soxl_runtime(policy=policy)
+        with patch.object(strategy_runtime_module, "_installed_ues_revision", return_value="ues-revision"):
+            result = runtime.evaluate(
+                benchmark_history=[{"close": 1.0}],
+                portfolio_snapshot=self._soxl_snapshot(),
+                signal_text_fn=str,
+                translator=lambda key, **_kwargs: key,
+            )
+
+        self.assertEqual(result.metadata["runtime_risk_status"], "verified:runtime_risk_limits")
+        hold = entrypoint.ctx.capabilities["small_account_hold_policy"]
+        self.assertIsInstance(hold, SmallAccountRiskHoldPolicy)
+        self.assertEqual(hold.hold_below_nav, 1000.0)
+        self.assertTrue(entrypoint.ctx.capabilities["cash_only_execution"])
+
+    def test_soxl_runtime_rejects_invalid_small_account_hold(self):
+        policy = _soxl_runtime_policy()
+        policy["small_account_hold"] = {"enabled": True, "hold_below_nav": -1}
+        entrypoint, runtime = self._soxl_runtime(policy=policy)
+        with patch.object(strategy_runtime_module, "_installed_ues_revision", return_value="ues-revision"):
+            result = runtime.evaluate(
+                benchmark_history=[{"close": 1.0}],
+                portfolio_snapshot=self._soxl_snapshot(),
+                signal_text_fn=str,
+                translator=lambda key, **_kwargs: key,
+            )
+
+        self.assertEqual(result.metadata["runtime_risk_status"], "unavailable:invalid_small_account_hold")
+        self.assertNotIn("small_account_hold_policy", entrypoint.ctx.capabilities)
+
     def test_soxl_runtime_rejects_policy_bound_to_wrong_account(self):
         entrypoint, runtime = self._soxl_runtime(policy=_soxl_runtime_policy(account_hash="other-account"))
         with patch.object(strategy_runtime_module, "_installed_ues_revision", return_value="ues-revision"):
