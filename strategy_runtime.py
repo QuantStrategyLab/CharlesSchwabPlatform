@@ -290,7 +290,9 @@ class LoadedStrategyRuntime:
             mismatch_reasons.append("account_hash")
         if str(policy_binding["strategy_profile"]).strip() != self.profile:
             mismatch_reasons.append("strategy_profile")
-        if str(policy_binding["ues_revision"]).strip() != str(target_release.strategy_revision).strip() if target_release is not None else True:
+        if target_release is not None and str(policy_binding["ues_revision"]).strip() != str(
+            target_release.strategy_revision
+        ).strip():
             mismatch_reasons.append("ues_revision_target")
         if actual_ues_revision is None:
             mismatch_reasons.append("ues_revision_installed_missing")
