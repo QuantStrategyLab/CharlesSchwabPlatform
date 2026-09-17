@@ -41,6 +41,9 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
     def tearDown(self) -> None:
         set_cycle_snapshot(None)
         os.environ.pop(ACCOUNT_NEW_RISK_GATE_ENV, None)
+        os.environ.pop("SCHWAB_MAX_DAILY_LOSS_USD", None)
+        os.environ.pop("MAX_DAILY_LOSS_USD", None)
+        os.environ.pop("RUNTIME_TARGET_JSON", None)
 
     def test_missing_equity_prohibits_fail_closed(self) -> None:
         portfolio = {"market_values": {"SOXL": 0.0}, "liquid_cash": 100.0}
@@ -121,6 +124,56 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
         snapshot = build_snapshot_from_portfolio({"total_equity": 12_345.0})
         self.assertEqual(snapshot.equity_usd, 12_345.0)
 
+    def test_explicit_daily_loss_at_limit_prohibits_buy(self) -> None:
+        portfolio = {
+            "total_equity": 50_000.0,
+            "metadata": {"total_equity_source": "broker_liquidation_value"},
+            "account_new_risk_snapshot": {
+                "daily_loss_usd": 100.0,
+                "max_daily_loss_usd": 100.0,
+            },
+        }
+        with patch(
+            "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+            return_value=None,
+        ):
+            snapshot = build_snapshot_from_portfolio(portfolio)
+            result = evaluate_portfolio_new_risk_admission(portfolio)
+        self.assertEqual(snapshot.daily_loss_usd, 100.0)
+        self.assertEqual(result.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+        self.assertIn("DAILY_LOSS_LIMIT_EXCEEDED", result.reason_codes)
+        self.assertTrue(new_risk_buy_prohibited(result))
+
+    def test_unconfigured_daily_loss_limit_omits_axis(self) -> None:
+        portfolio = {
+            "total_equity": 50_000.0,
+            "metadata": {"total_equity_source": "broker_liquidation_value"},
+            # daily_loss fact absent / invalid must not invent a prohibit when
+            # no max_daily_loss_usd is configured.
+            "account_new_risk_snapshot": {"daily_loss_usd": float("nan")},
+        }
+        with patch(
+            "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+            return_value=None,
+        ):
+            result = evaluate_portfolio_new_risk_admission(portfolio)
+        self.assertEqual(result.disposition, NewRiskDisposition.ALLOW_NEW_RISK)
+        self.assertNotIn("DAILY_LOSS_UNKNOWN_FAIL_CLOSED", result.reason_codes)
+        self.assertNotIn("DAILY_LOSS_LIMIT_EXCEEDED", result.reason_codes)
+
+    def test_configured_limit_without_daily_loss_fact_fails_closed(self) -> None:
+        portfolio = {
+            "total_equity": 50_000.0,
+            "metadata": {"total_equity_source": "broker_liquidation_value"},
+            "account_new_risk_snapshot": {"max_daily_loss_usd": 100.0},
+        }
+        with patch(
+            "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+            return_value=None,
+        ):
+            result = evaluate_portfolio_new_risk_admission(portfolio)
+        self.assertEqual(result.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+        self.assertIn("DAILY_LOSS_UNKNOWN_FAIL_CLOSED", result.reason_codes)
 
     def test_snapshot_maps_production_drift_status_from_account_new_risk_snapshot(self) -> None:
         snapshot = build_snapshot_from_portfolio(

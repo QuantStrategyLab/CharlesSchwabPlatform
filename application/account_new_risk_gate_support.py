@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import os
 from collections.abc import Mapping
@@ -15,6 +16,7 @@ from quant_platform_kit.risk.account_new_risk_gate import (
     NewRiskDisposition,
     evaluate_new_risk_admission,
 )
+from quant_platform_kit.risk.contracts import RuntimeRiskLimits
 from quant_platform_kit.risk.cycle_new_risk_health import (
     CycleNewRiskHealthEvidence,
     apply_cycle_new_risk_health_axes,
@@ -24,9 +26,13 @@ from quant_platform_kit.risk.production_drift_new_risk import (
 )
 
 ACCOUNT_NEW_RISK_GATE_ENV = "ACCOUNT_NEW_RISK_GATE"
+_MAX_DAILY_LOSS_ENV_KEYS = ("SCHWAB_MAX_DAILY_LOSS_USD", "MAX_DAILY_LOSS_USD")
 
 _DEFAULT_STRATEGY_PROFILE = "soxl_soxx_trend_income"
 _DEFAULT_DOMAIN = "us_equity"
+
+# Minimal carrier for gate-only daily-loss axis; not a production RRL binding.
+_DAILY_LOSS_LIMIT_CARRIER_SYMBOL = "SPY"
 
 _cycle_snapshot: InjectedReconciliationSnapshot | None = None
 
@@ -44,6 +50,14 @@ def _coerce_optional_float(value: object) -> float | None:
     except (TypeError, ValueError, OverflowError):
         return None
     if not math.isfinite(number):
+        return None
+    return number
+
+
+def _positive_limit_or_none(value: object) -> float | None:
+    """Accept only finite positive limits; never invent a production default."""
+    number = _coerce_optional_float(value)
+    if number is None or number <= 0.0:
         return None
     return number
 
@@ -200,6 +214,83 @@ def _resolve_drawdown_from_peak(
     return max(0.0, 1.0 - (equity_usd / peak_equity_usd))
 
 
+def _resolve_explicit_daily_loss_usd(
+    projection: Mapping[str, Any],
+    portfolio: Mapping[str, Any],
+    execution: Mapping[str, Any] | None,
+) -> float | None:
+    """Pass through an explicit daily_loss_usd fact only; never invent one."""
+    for source in (projection, portfolio, _mapping_or_empty(execution)):
+        if "daily_loss_usd" in source:
+            return _coerce_optional_float(source.get("daily_loss_usd"))
+    return None
+
+
+def _max_daily_loss_from_runtime_target_json() -> float | None:
+    """Read max_daily_loss_usd from RUNTIME_TARGET_JSON when present; soft-omit on errors."""
+    raw_target = os.environ.get("RUNTIME_TARGET_JSON")
+    if raw_target is None or not str(raw_target).strip():
+        return None
+    try:
+        payload = json.loads(raw_target)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    policy = payload.get("runtime_risk_limits")
+    if not isinstance(policy, dict) or "max_daily_loss_usd" not in policy:
+        return None
+    return _positive_limit_or_none(policy.get("max_daily_loss_usd"))
+
+
+def resolve_max_daily_loss_usd(
+    portfolio: Mapping[str, Any] | None = None,
+) -> float | None:
+    """Resolve an explicit max_daily_loss_usd; omit the axis when unset.
+
+    Priority: account_new_risk_snapshot / portfolio key → RUNTIME_TARGET_JSON →
+    SCHWAB_MAX_DAILY_LOSS_USD / MAX_DAILY_LOSS_USD. No approved production default.
+    """
+    if portfolio is not None:
+        projection = _mapping_or_empty(portfolio.get("account_new_risk_snapshot"))
+        for source in (projection, portfolio):
+            if "max_daily_loss_usd" in source:
+                return _positive_limit_or_none(source.get("max_daily_loss_usd"))
+    policy_limit = _max_daily_loss_from_runtime_target_json()
+    if policy_limit is not None:
+        return policy_limit
+    for key in _MAX_DAILY_LOSS_ENV_KEYS:
+        raw = os.environ.get(key)
+        if raw is None or not str(raw).strip():
+            continue
+        limit = _positive_limit_or_none(raw)
+        if limit is not None:
+            return limit
+    return None
+
+
+def runtime_risk_limits_for_daily_loss_axis(
+    max_daily_loss_usd: float | None,
+) -> RuntimeRiskLimits | None:
+    """Build admission-only limits carrying ``max_daily_loss_usd``, or omit.
+
+    SPY/1.0 caps are a minimal legal RuntimeRiskLimits carrier for the gate only —
+    not a production RRL binding and not an exposure raise.
+    """
+    if max_daily_loss_usd is None:
+        return None
+    symbol = _DAILY_LOSS_LIMIT_CARRIER_SYMBOL
+    return RuntimeRiskLimits(
+        allowed_symbols=(symbol,),
+        product_leverage_factors={symbol: 1},
+        nominal_caps={symbol: 1.0},
+        total_nominal_exposure_cap=1.0,
+        total_effective_exposure_cap=1.0,
+        max_positions=1,
+        max_daily_loss_usd=max_daily_loss_usd,
+    )
+
+
 def build_snapshot_from_portfolio(
     portfolio: Mapping[str, Any],
     *,
@@ -235,6 +326,7 @@ def build_snapshot_from_portfolio(
         if "realized_vol" in projection
         else _coerce_optional_float(portfolio.get("realized_vol")),
         production_drift_status=_resolve_production_drift_status(portfolio, projection),
+        daily_loss_usd=_resolve_explicit_daily_loss_usd(projection, portfolio, execution),
     )
 
 
@@ -245,7 +337,8 @@ def evaluate_portfolio_new_risk_admission(
 ) -> NewRiskAdmissionResult:
     try:
         snapshot = build_snapshot_from_portfolio(portfolio, execution=execution)
-        return evaluate_new_risk_admission(snapshot)
+        limits = runtime_risk_limits_for_daily_loss_axis(resolve_max_daily_loss_usd(portfolio))
+        return evaluate_new_risk_admission(snapshot, limits)
     except AccountNewRiskGateError:
         return NewRiskAdmissionResult(
             disposition=NewRiskDisposition.NEW_RISK_PROHIBITED,
@@ -291,7 +384,8 @@ def evaluate_cycle_new_risk_admission() -> NewRiskAdmissionResult:
             reason_codes=("EQUITY_UNKNOWN_FAIL_CLOSED",),
         )
     try:
-        return evaluate_new_risk_admission(_cycle_snapshot)
+        limits = runtime_risk_limits_for_daily_loss_axis(resolve_max_daily_loss_usd())
+        return evaluate_new_risk_admission(_cycle_snapshot, limits)
     except AccountNewRiskGateError:
         return NewRiskAdmissionResult(
             disposition=NewRiskDisposition.NEW_RISK_PROHIBITED,
