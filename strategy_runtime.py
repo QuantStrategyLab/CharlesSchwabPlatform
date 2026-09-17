@@ -54,6 +54,46 @@ def _parse_small_account_hold_policy(raw: Any) -> SmallAccountRiskHoldPolicy | N
         return None
 
 
+def _verified_nav_from_capabilities(capabilities: Mapping[str, Any]) -> float | None:
+    capital_base = capabilities.get("capital_base")
+    if capital_base is None:
+        return None
+    try:
+        nav = float(getattr(capital_base, "target_equity"))
+    except (TypeError, ValueError, AttributeError):
+        return None
+    if nav <= 0.0:
+        return None
+    return nav
+
+
+def _portfolio_weight_map_from_snapshot(
+    portfolio_snapshot: Any,
+    *,
+    verified_nav: float | None,
+) -> dict[str, float] | None:
+    """Book weights vs verified NLV for small-account hold non-worsening checks."""
+    if portfolio_snapshot is None or verified_nav is None or verified_nav <= 0.0:
+        return None
+    positions = getattr(portfolio_snapshot, "positions", None)
+    if positions is None:
+        return None
+    weights: dict[str, float] = {}
+    try:
+        for position in positions:
+            symbol = str(getattr(position, "symbol", "") or "").strip().upper()
+            try:
+                market_value = float(getattr(position, "market_value"))
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if not symbol or market_value <= 0.0:
+                continue
+            weights[symbol] = weights.get(symbol, 0.0) + market_value / verified_nav
+    except TypeError:
+        return None
+    return weights or None
+
+
 def _installed_ues_revision() -> str | None:
     """Read the VCS revision of the installed UES distribution."""
     try:
@@ -296,6 +336,13 @@ class LoadedStrategyRuntime:
                     "runtime_risk_limits": object(),
                 }, "unavailable:small_account_hold_cash_only"
             capability_payload["small_account_hold_policy"] = hold_policy
+        # Always expose book weights for default/opt-in hold non-worsening checks.
+        current_weights = _portfolio_weight_map_from_snapshot(
+            available_inputs.get("portfolio_snapshot"),
+            verified_nav=_verified_nav_from_capabilities(capabilities),
+        )
+        if current_weights is not None:
+            capability_payload["current_portfolio_weights"] = current_weights
         return capability_payload, "verified:runtime_risk_limits"
 
     def evaluate(
