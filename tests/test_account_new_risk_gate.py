@@ -93,11 +93,15 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
             "total_equity": 50_000.0,
             "metadata": {"total_equity_source": "broker_liquidation_value"},
         }
-        snapshot = build_account_new_risk_snapshot(portfolio)
-        self.assertEqual(snapshot["observation_status"], "COMPLETE")
-        self.assertEqual(snapshot["reconciliation_status"], "VERIFIED")
-        self.assertEqual(snapshot["circuit_breaker_state"], "CLOSED")
-        result = evaluate_portfolio_new_risk_admission(portfolio)
+        with patch(
+            "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+            return_value=None,
+        ):
+            snapshot = build_account_new_risk_snapshot(portfolio)
+            self.assertEqual(snapshot["observation_status"], "COMPLETE")
+            self.assertEqual(snapshot["reconciliation_status"], "VERIFIED")
+            self.assertEqual(snapshot["circuit_breaker_state"], "CLOSED")
+            result = evaluate_portfolio_new_risk_admission(portfolio)
         self.assertEqual(result.disposition, NewRiskDisposition.ALLOW_NEW_RISK)
 
     def test_explicit_healthy_snapshot_allows_new_risk(self) -> None:
@@ -183,12 +187,44 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
             "total_equity": 50_000.0,
             "metadata": {"total_equity_source": "broker_liquidation_value"},
         }
-        result = evaluate_portfolio_new_risk_admission(portfolio)
+        with patch(
+            "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+            return_value=None,
+        ):
+            result = evaluate_portfolio_new_risk_admission(portfolio)
         self.assertEqual(result.disposition, NewRiskDisposition.ALLOW_NEW_RISK)
 
-    def test_rebalance_does_not_use_unbound_research_store_for_production_drift(self) -> None:
-        import quant_platform_kit.risk.production_drift_new_risk as drift_mod
+    def test_store_critical_production_drift_prohibits_when_status_absent(self) -> None:
+        portfolio = {
+            "total_equity": 50_000.0,
+            "metadata": {"total_equity_source": "broker_liquidation_value"},
+        }
+        with patch(
+            "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+            return_value="critical",
+        ) as store_resolver:
+            result = evaluate_portfolio_new_risk_admission(portfolio)
+        store_resolver.assert_called_once()
+        self.assertEqual(result.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+        self.assertIn("PRODUCTION_DRIFT_CRITICAL", result.reason_codes)
 
+    def test_explicit_production_drift_status_skips_store_lookup(self) -> None:
+        portfolio = {
+            "total_equity": 50_000.0,
+            "metadata": {"total_equity_source": "broker_liquidation_value"},
+            "account_new_risk_snapshot": {"production_drift_status": "critical"},
+        }
+        with patch(
+            "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+            return_value="review",
+        ) as store_resolver:
+            result = evaluate_portfolio_new_risk_admission(portfolio)
+        store_resolver.assert_not_called()
+        self.assertEqual(result.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+        self.assertIn("PRODUCTION_DRIFT_CRITICAL", result.reason_codes)
+
+    def test_rebalance_policy_a_store_read_is_fail_soft_when_unbound(self) -> None:
+        """Gate may read PerformanceStore; unbound/empty probe must not invent bans."""
         plan = {
             "account_hash": "demo",
             "allocation": {
@@ -228,10 +264,9 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
             positions=(),
             metadata={},
         )
-        resolver = patch.object(
-            drift_mod,
-            "resolve_production_drift_status_from_store",
-            return_value="review",
+        resolver = patch(
+            "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+            return_value=None,
         )
         with resolver as store_resolver:
             result = run_strategy_core(
@@ -254,7 +289,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
                 ),
             )
 
-        store_resolver.assert_not_called()
+        store_resolver.assert_called()
         self.assertNotIn(
             "production_drift_status",
             result.portfolio["account_new_risk_snapshot"],
