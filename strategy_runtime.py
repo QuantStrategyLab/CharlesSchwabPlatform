@@ -286,7 +286,8 @@ class LoadedStrategyRuntime:
             mismatch_reasons.append("account_scope")
         if str(policy_binding["runtime_scope"]).strip() != runtime_scope:
             mismatch_reasons.append("runtime_scope")
-        if str(policy_binding["account_hash"]).strip() != actual_account_hash:
+        # Schwab account hashes are hex digests; broker metadata may upper-case them.
+        if str(policy_binding["account_hash"]).strip().casefold() != actual_account_hash.casefold():
             mismatch_reasons.append("account_hash")
         if str(policy_binding["strategy_profile"]).strip() != self.profile:
             mismatch_reasons.append("strategy_profile")

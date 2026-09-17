@@ -214,6 +214,23 @@ class StrategyRuntimeTests(unittest.TestCase):
         self.assertEqual(result.metadata["runtime_risk_status"], "verified:runtime_risk_limits")
         self.assertEqual(entrypoint.ctx.capabilities["runtime_risk_limits"].max_positions, 8)
 
+    def test_soxl_runtime_accepts_account_hash_casefold_match(self):
+        """Broker metadata may upper-case the same hex account hash stored in RRL binding."""
+        binding_hash = "bf2e669106f029a41e6f36dc18f704906ad6078d1f16a171ec0001e992d39b7d"
+        entrypoint, runtime = self._soxl_runtime(
+            policy=_soxl_runtime_policy(account_hash=binding_hash)
+        )
+        with patch.object(strategy_runtime_module, "_installed_ues_revision", return_value="ues-revision"):
+            result = runtime.evaluate(
+                benchmark_history=[{"close": 1.0}],
+                portfolio_snapshot=self._soxl_snapshot(account_hash=binding_hash.upper()),
+                signal_text_fn=str,
+                translator=lambda key, **_kwargs: key,
+            )
+
+        self.assertEqual(result.metadata["runtime_risk_status"], "verified:runtime_risk_limits")
+        self.assertIsInstance(entrypoint.ctx.capabilities["runtime_risk_limits"], RuntimeRiskLimits)
+
     def test_soxl_runtime_attaches_small_account_hold_policy(self):
         from quant_platform_kit.risk.contracts import SmallAccountRiskHoldPolicy
 
