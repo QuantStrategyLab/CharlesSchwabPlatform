@@ -251,6 +251,16 @@ grep -Fq 'probe_job_name="${CLOUD_RUN_SERVICE}-probe-scheduler"' "$workflow_file
 grep -Fq 'probe_uri="${service_url}/probe"' "$workflow_file"
 grep -Fq 'precheck_job_name="${CLOUD_RUN_SERVICE}-precheck-scheduler"' "$workflow_file"
 grep -Fq 'precheck_uri="${service_url}/dry-run"' "$workflow_file"
+# probe/precheck may collide on maxScale=1; retry transient 429 capacity aborts.
+# Keep shared monitor-dispatch and /run without these retries.
+probe_update_block="$(sed -n '/gcloud scheduler jobs update http "${probe_job_name}"/,/--quiet/p' "$workflow_file")"
+precheck_update_block="$(sed -n '/gcloud scheduler jobs update http "${precheck_job_name}"/,/--quiet/p' "$workflow_file")"
+for block in "$probe_update_block" "$precheck_update_block"; do
+  grep -Fq -- '--max-retry-attempts=3' <<<"$block"
+  grep -Fq -- '--min-backoff=120s' <<<"$block"
+  grep -Fq -- '--max-backoff=300s' <<<"$block"
+  grep -Fq -- '--max-retry-duration=900s' <<<"$block"
+done
 grep -Fq 'managed_scheduler_jobs=("${job_name}")' "$workflow_file"
 grep -Fq 'if [ "${DIRECT_MONITOR_MIGRATION_COMPLETE:-}" = "true" ]; then' "$workflow_file"
 grep -Fq 'managed_scheduler_jobs+=("${probe_job_name}" "${precheck_job_name}")' "$workflow_file"
