@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import strategy_runtime as strategy_runtime_module
-from quant_platform_kit.common.models import PortfolioSnapshot
+from quant_platform_kit.common.models import PortfolioSnapshot, Position
 from quant_platform_kit.common.runtime_target import build_runtime_target
 from quant_platform_kit.common.strategy_contracts import (
     StrategyDecision,
@@ -236,6 +236,37 @@ class StrategyRuntimeTests(unittest.TestCase):
         hold = entrypoint.ctx.capabilities["small_account_hold_policy"]
         self.assertIsInstance(hold, SmallAccountRiskHoldPolicy)
         self.assertEqual(hold.hold_below_nav, 1000.0)
+        self.assertTrue(entrypoint.ctx.capabilities["cash_only_execution"])
+
+    def test_soxl_runtime_exposes_current_portfolio_weights_for_hold(self):
+        entrypoint, runtime = self._soxl_runtime(policy=_soxl_runtime_policy())
+        snapshot = PortfolioSnapshot(
+            as_of=datetime(2026, 8, 27, tzinfo=timezone.utc),
+            total_equity=587.0,
+            buying_power=50.0,
+            cash_balance=50.0,
+            positions=(
+                Position(symbol="SOXL", quantity=3.0, market_value=350.0, average_cost=100.0),
+                Position(symbol="SOXX", quantity=1.0, market_value=187.0, average_cost=180.0),
+            ),
+            metadata={
+                "account_hash": "account-hash",
+                "total_equity_source": "broker_liquidation_value",
+                "source_digest_sha256": "a" * 64,
+            },
+        )
+        with patch.object(strategy_runtime_module, "_installed_ues_revision", return_value="ues-revision"):
+            result = runtime.evaluate(
+                benchmark_history=[{"close": 1.0}],
+                portfolio_snapshot=snapshot,
+                signal_text_fn=str,
+                translator=lambda key, **_kwargs: key,
+            )
+
+        self.assertEqual(result.metadata["runtime_risk_status"], "verified:runtime_risk_limits")
+        weights = entrypoint.ctx.capabilities["current_portfolio_weights"]
+        self.assertAlmostEqual(weights["SOXL"], 350.0 / 587.0)
+        self.assertAlmostEqual(weights["SOXX"], 187.0 / 587.0)
         self.assertTrue(entrypoint.ctx.capabilities["cash_only_execution"])
 
     def test_soxl_runtime_rejects_invalid_small_account_hold(self):
