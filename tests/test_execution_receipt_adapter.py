@@ -82,3 +82,58 @@ class ExecutionReceiptAdapterTest(unittest.TestCase):
 
         self.assertEqual(report["execution_receipt"]["outcome"], "risk_blocked")
         self.assertEqual(report["execution_receipt"]["broker_confirmation"], "not_applicable")
+
+    def test_explicit_no_signal_reason_is_no_signal(self) -> None:
+        report = _report()
+
+        attach_cycle_execution_receipt(
+            report,
+            SimpleNamespace(execution={"no_op_reason": "no_signal"}, submitted_orders=()),
+        )
+
+        self.assertEqual(report["execution_receipt"]["outcome"], "no_signal")
+        self.assertEqual(report["execution_receipt"]["broker_confirmation"], "not_applicable")
+
+    def test_explicit_no_rebalance_reason_is_no_rebalance(self) -> None:
+        report = _report()
+
+        attach_cycle_execution_receipt(
+            report,
+            SimpleNamespace(
+                execution={
+                    "execution_status": "no_op",
+                    "no_op_reason": "target_diff_below_threshold",
+                },
+                submitted_orders=(),
+            ),
+        )
+
+        self.assertEqual(report["execution_receipt"]["outcome"], "no_rebalance")
+        self.assertEqual(report["execution_receipt"]["broker_confirmation"], "not_applicable")
+
+    def test_ambiguous_no_op_reason_stays_no_action(self) -> None:
+        report = _report()
+
+        attach_cycle_execution_receipt(
+            report,
+            SimpleNamespace(
+                execution={"execution_status": "no_op", "no_op_reason": "market_closed"},
+                submitted_orders=(),
+            ),
+        )
+
+        self.assertEqual(report["execution_receipt"]["outcome"], "no_action")
+
+    def test_dry_run_keeps_no_action_even_with_explicit_reason(self) -> None:
+        report = _report()
+        report["dry_run"] = True
+
+        attach_cycle_execution_receipt(
+            report,
+            SimpleNamespace(
+                execution={"no_op_reason": "no_signal"},
+                submitted_orders=(),
+            ),
+        )
+
+        self.assertEqual(report["execution_receipt"]["outcome"], "no_action")
