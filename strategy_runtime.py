@@ -273,39 +273,70 @@ class LoadedStrategyRuntime:
         actual_account_hash = str(metadata.get("account_hash") or "").strip() if isinstance(metadata, Mapping) else ""
         actual_ues_revision = _installed_ues_revision()
         actual_exit_buffer = self.merged_runtime_config.get("trend_exit_buffer")
-        if (
-            not account_scope
-            or not runtime_scope
-            or not actual_account_hash
-            or target_release is None
-            or str(policy_binding["account_scope"]).strip() != account_scope
-            or str(policy_binding["runtime_scope"]).strip() != runtime_scope
-            or str(policy_binding["account_hash"]).strip() != actual_account_hash
-            or str(policy_binding["strategy_profile"]).strip() != self.profile
-            or str(policy_binding["ues_revision"]).strip() != str(target_release.strategy_revision).strip()
-            or actual_ues_revision is None
-            or actual_ues_revision != str(policy_binding["ues_revision"]).strip()
-            or str(policy_binding["execution_mode"]).strip().lower() != runtime_target.execution_mode
-            or policy_binding["cash_only_execution"] is not True
-            or self.runtime_settings.cash_only_execution is not True
-            or policy_binding["reserved_cash_ratio"] != self.merged_runtime_config.get("cash_reserve_ratio")
-            or policy_binding["reserved_cash_ratio"] != self.runtime_settings.reserved_cash_ratio
-            or policy_binding["reserved_cash_ratio"] != 0.03
-            or policy_binding["options_enabled"] is not False
-            or any(
-                self.merged_runtime_config.get(key) is not False
-                for key in (
-                    "option_overlay_enabled",
-                    "option_growth_overlay_enabled",
-                    "option_income_overlay_enabled",
-                )
-            )
-            or not isinstance(policy.get("exit_parameters"), Mapping)
-            or actual_exit_buffer is None
-            or actual_exit_buffer != 0.02
-            or dict(policy["exit_parameters"]) != {"trend_exit_buffer": 0.02}
-            or dict(policy["exit_parameters"]) != {"trend_exit_buffer": actual_exit_buffer}
+        mismatch_reasons: list[str] = []
+        if not account_scope:
+            mismatch_reasons.append("missing_account_scope")
+        if not runtime_scope:
+            mismatch_reasons.append("missing_runtime_scope")
+        if not actual_account_hash:
+            mismatch_reasons.append("missing_account_hash")
+        if target_release is None:
+            mismatch_reasons.append("missing_strategy_release")
+        if str(policy_binding["account_scope"]).strip() != account_scope:
+            mismatch_reasons.append("account_scope")
+        if str(policy_binding["runtime_scope"]).strip() != runtime_scope:
+            mismatch_reasons.append("runtime_scope")
+        if str(policy_binding["account_hash"]).strip() != actual_account_hash:
+            mismatch_reasons.append("account_hash")
+        if str(policy_binding["strategy_profile"]).strip() != self.profile:
+            mismatch_reasons.append("strategy_profile")
+        if target_release is not None and str(policy_binding["ues_revision"]).strip() != str(
+            target_release.strategy_revision
+        ).strip():
+            mismatch_reasons.append("ues_revision_target")
+        if actual_ues_revision is None:
+            mismatch_reasons.append("ues_revision_installed_missing")
+        elif actual_ues_revision != str(policy_binding["ues_revision"]).strip():
+            mismatch_reasons.append(f"ues_revision_installed:{actual_ues_revision}")
+        if str(policy_binding["execution_mode"]).strip().lower() != runtime_target.execution_mode:
+            mismatch_reasons.append("execution_mode")
+        if policy_binding["cash_only_execution"] is not True:
+            mismatch_reasons.append("binding_cash_only")
+        if self.runtime_settings.cash_only_execution is not True:
+            mismatch_reasons.append("settings_cash_only")
+        if policy_binding["reserved_cash_ratio"] != self.merged_runtime_config.get("cash_reserve_ratio"):
+            mismatch_reasons.append("cash_reserve_ratio_merged")
+        if policy_binding["reserved_cash_ratio"] != self.runtime_settings.reserved_cash_ratio:
+            mismatch_reasons.append("cash_reserve_ratio_settings")
+        if policy_binding["reserved_cash_ratio"] != 0.03:
+            mismatch_reasons.append("cash_reserve_ratio_value")
+        if policy_binding["options_enabled"] is not False:
+            mismatch_reasons.append("options_enabled")
+        for key in (
+            "option_overlay_enabled",
+            "option_growth_overlay_enabled",
+            "option_income_overlay_enabled",
         ):
+            if self.merged_runtime_config.get(key) is not False:
+                mismatch_reasons.append(key)
+        if not isinstance(policy.get("exit_parameters"), Mapping):
+            mismatch_reasons.append("exit_parameters_type")
+        if actual_exit_buffer is None:
+            mismatch_reasons.append("trend_exit_buffer_missing")
+        elif actual_exit_buffer != 0.02:
+            mismatch_reasons.append(f"trend_exit_buffer:{actual_exit_buffer}")
+        if dict(policy.get("exit_parameters") or {}) != {"trend_exit_buffer": 0.02}:
+            mismatch_reasons.append("exit_parameters_value")
+        if mismatch_reasons:
+            self.logger(
+                "strategy_runtime_binding_mismatch | "
+                f"profile={self.profile} reasons={','.join(mismatch_reasons)} "
+                f"actual_account_hash={actual_account_hash[:16]} "
+                f"binding_account_hash={str(policy_binding.get('account_hash') or '')[:16]} "
+                f"installed_ues={actual_ues_revision} "
+                f"target_ues={(target_release.strategy_revision if target_release is not None else None)} "
+                f"exit_buffer={actual_exit_buffer}"
+            )
             return {**capabilities, "runtime_risk_limits": object()}, "unavailable:runtime_binding_mismatch"
         try:
             limits = RuntimeRiskLimits(
