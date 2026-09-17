@@ -85,7 +85,7 @@ class DecisionMapperTests(unittest.TestCase):
 
         self.assertEqual(plan["allocation"]["targets"], {})
         self.assertEqual(plan["execution"]["execution_status"], "blocked")
-        self.assertEqual(plan["execution"]["no_op_reason"], "strategy_risk_rejected")
+        self.assertEqual(plan["execution"]["no_op_reason"], "rejected:runtime_risk_limits")
 
     def test_synthetic_bound_limits_gate_mapper_cycle(self):
         """Binding-success limits → QPK gate → mapper plan (E denominator, reserve, budgets)."""
