@@ -243,7 +243,7 @@ class LoadedStrategyRuntime:
             "max_positions",
             "exit_parameters",
         }
-        optional_policy_keys = {"small_account_hold"}
+        optional_policy_keys = {"small_account_hold", "max_daily_loss_usd"}
         policy_keys = set(policy)
         if (
             not expected_policy_keys.issubset(policy_keys)
@@ -340,6 +340,9 @@ class LoadedStrategyRuntime:
             )
             return {**capabilities, "runtime_risk_limits": object()}, "unavailable:runtime_binding_mismatch"
         try:
+            daily_loss_kwargs: dict[str, Any] = {}
+            if "max_daily_loss_usd" in policy:
+                daily_loss_kwargs["max_daily_loss_usd"] = policy.get("max_daily_loss_usd")
             limits = RuntimeRiskLimits(
                 allowed_symbols=tuple(policy["allowed_symbols"]),
                 product_leverage_factors=policy["product_leverage_factors"],
@@ -347,6 +350,7 @@ class LoadedStrategyRuntime:
                 total_nominal_exposure_cap=policy["total_nominal_exposure_cap"],
                 total_effective_exposure_cap=policy["total_effective_exposure_cap"],
                 max_positions=policy["max_positions"],
+                **daily_loss_kwargs,
             )
         except (TypeError, ValueError):
             return {**capabilities, "runtime_risk_limits": object()}, "unavailable:invalid_runtime_risk_limits"
