@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from application.account_new_risk_gate_support import (
-    apply_combined_scale,
+    apply_combined_scale_to_allocation_targets,
     build_account_new_risk_snapshot,
     build_snapshot_from_portfolio,
     evaluate_cycle_new_risk_admission,
@@ -743,6 +743,17 @@ def execute_rebalance_cycle(
         )
         print(attention_message, flush=True)
         trade_logs.append(attention_message)
+        allocation = apply_combined_scale_to_allocation_targets(
+            allocation,
+            admission.combined_scale,
+        )
+        if admission.combined_scale is not None:
+            scale_message = (
+                f"[Envelope scale] combined_scale={admission.combined_scale} "
+                "applied_to_allocation_targets"
+            )
+            print(scale_message, flush=True)
+            trade_logs.append(scale_message)
     else:
         set_cycle_snapshot(None)
 
@@ -812,9 +823,6 @@ def execute_rebalance_cycle(
             if new_risk_buy_prohibited(admission):
                 record_submitted_order(symbol, action_type, quantity, price, status="rejected")
                 return False
-            quantity = apply_combined_scale(quantity, admission.combined_scale)
-            if action_type != "BUY_NOTIONAL":
-                quantity = int(quantity)
         if action_type == "BUY_NOTIONAL":
             if float(quantity or 0.0) < MIN_NOTIONAL_BUY_USD:
                 return False

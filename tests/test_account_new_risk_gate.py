@@ -16,7 +16,7 @@ if (QPK_SRC / "quant_platform_kit").exists() and str(QPK_SRC) not in sys.path:
 
 from application.account_new_risk_gate_support import (
     ACCOUNT_NEW_RISK_GATE_ENV,
-    apply_combined_scale,
+    apply_combined_scale_to_allocation_targets,
     build_account_new_risk_snapshot,
     build_snapshot_from_portfolio,
     evaluate_portfolio_new_risk_admission,
@@ -351,15 +351,23 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
             result.portfolio["account_new_risk_snapshot"],
         )
 
-    def test_combined_scale_halves_value(self) -> None:
-        self.assertEqual(apply_combined_scale(4.0, 0.5), 2.0)
+    def test_combined_scale_halves_allocation_targets(self) -> None:
+        scaled = apply_combined_scale_to_allocation_targets(
+            {"targets": {"SOXL": 0.6, "SOXX": 0.4}},
+            0.5,
+        )
+        self.assertEqual(scaled["targets"], {"SOXL": 0.3, "SOXX": 0.2})
 
-    def test_missing_combined_scale_is_no_op(self) -> None:
-        self.assertEqual(apply_combined_scale(4.0, None), 4.0)
+    def test_missing_combined_scale_leaves_targets(self) -> None:
+        allocation = {"targets": {"SOXL": 0.6}}
+        self.assertEqual(
+            apply_combined_scale_to_allocation_targets(allocation, None)["targets"],
+            {"SOXL": 0.6},
+        )
 
     def test_attention_notify_on_new_risk_prohibit_dedupes(self) -> None:
         QPK_ATTENTION = Path(
-            "/Users/lisiyi/Projects/.worktrees/qpk-attention-wire-20260918/src"
+            "/Users/lisiyi/Projects/.worktrees/qpk-envelope-scale-20260918/src"
         )
         if QPK_ATTENTION.exists() and str(QPK_ATTENTION) not in sys.path:
             sys.path.insert(0, str(QPK_ATTENTION))
@@ -531,8 +539,8 @@ class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
         self.assertIn("breaker=CLOSED", printed)
         self.assertTrue(any("disposition=ALLOW_NEW_RISK" in log for log in result.trade_logs))
 
-    def test_execution_cycle_halves_buy_quantity_for_half_scale(self) -> None:
-        _result, submitted_orders = self._run_buy_cycle(
+    def test_execution_cycle_scales_targets_for_half_combined_scale(self) -> None:
+        result, submitted_orders = self._run_buy_cycle(
             portfolio_overrides={
                 "total_equity": 40_000.0,
                 "account_new_risk_snapshot": {
@@ -543,7 +551,11 @@ class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
                 },
             }
         )
+        self.assertTrue(
+            any("applied_to_allocation_targets" in log for log in result.trade_logs)
+        )
         self.assertEqual(len(submitted_orders), 1)
+        # Target value path: half envelope scale → half buy size from full target.
         self.assertEqual(submitted_orders[0].quantity, 2)
 
     def test_execution_cycle_allows_sell_when_buy_prohibited(self) -> None:
