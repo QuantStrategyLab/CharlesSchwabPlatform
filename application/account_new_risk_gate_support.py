@@ -312,6 +312,41 @@ def resolve_max_daily_loss_usd_from_equity_schedule(
     return equity * chosen_pct
 
 
+def resolve_max_daily_loss_usd_from_equity_formula(
+    equity_usd: float | None,
+    formula: object,
+) -> float | None:
+    """Smooth capital-dependent daily-loss budget.
+
+    ``p(E) = pct_min + (pct_max - pct_min) * equity_scale / (equity_scale + E)``
+    ``limit = p(E) * E``
+
+    As equity shrinks, allowed daily-loss fraction approaches ``pct_max``; as equity
+    grows it approaches ``pct_min``. ``equity_scale_usd`` is the transition scale
+    (near E≈scale, fraction is about midway). No production defaults in code.
+    """
+    equity = _coerce_optional_float(equity_usd)
+    if equity is None or equity <= 0.0:
+        return None
+    if not isinstance(formula, Mapping):
+        return None
+    pct_max = _coerce_optional_float(formula.get("pct_max"))
+    pct_min = _coerce_optional_float(formula.get("pct_min"))
+    scale = _coerce_optional_float(
+        formula.get("equity_scale_usd")
+        if "equity_scale_usd" in formula
+        else formula.get("E0_usd")
+    )
+    if pct_max is None or pct_min is None or scale is None:
+        return None
+    if not (0.0 < pct_min <= pct_max <= 1.0):
+        return None
+    if scale <= 0.0:
+        return None
+    pct = pct_min + (pct_max - pct_min) * (scale / (scale + equity))
+    return equity * pct
+
+
 def _equity_for_daily_loss_schedule(
     portfolio: Mapping[str, Any] | None,
 ) -> float | None:
@@ -334,8 +369,9 @@ def resolve_max_daily_loss_usd(
     Priority:
     1. explicit absolute ``max_daily_loss_usd`` on snapshot/portfolio
     2. RUNTIME_TARGET absolute ``runtime_risk_limits.max_daily_loss_usd``
-    3. RUNTIME_TARGET ``runtime_risk_limits.max_daily_loss_equity_schedule`` × equity
-    4. SCHWAB_MAX_DAILY_LOSS_USD / MAX_DAILY_LOSS_USD env absolutes
+    3. RUNTIME_TARGET ``runtime_risk_limits.max_daily_loss_equity_formula`` (smooth)
+    4. RUNTIME_TARGET ``runtime_risk_limits.max_daily_loss_equity_schedule`` (tiers)
+    5. SCHWAB_MAX_DAILY_LOSS_USD / MAX_DAILY_LOSS_USD env absolutes
 
     No approved production default in code.
     """
@@ -348,9 +384,17 @@ def resolve_max_daily_loss_usd(
     if policy_limit is not None:
         return policy_limit
     policy = _runtime_risk_limits_policy()
+    equity = _equity_for_daily_loss_schedule(portfolio)
+    if policy is not None and "max_daily_loss_equity_formula" in policy:
+        from_formula = resolve_max_daily_loss_usd_from_equity_formula(
+            equity,
+            policy.get("max_daily_loss_equity_formula"),
+        )
+        if from_formula is not None:
+            return from_formula
     if policy is not None and "max_daily_loss_equity_schedule" in policy:
         scheduled = resolve_max_daily_loss_usd_from_equity_schedule(
-            _equity_for_daily_loss_schedule(portfolio),
+            equity,
             policy.get("max_daily_loss_equity_schedule"),
         )
         if scheduled is not None:
