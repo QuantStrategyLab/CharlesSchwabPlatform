@@ -243,7 +243,14 @@ class LoadedStrategyRuntime:
             "max_positions",
             "exit_parameters",
         }
-        optional_policy_keys = {"small_account_hold", "max_daily_loss_usd"}
+        optional_policy_keys = {
+            "small_account_hold",
+            "max_daily_loss_usd",
+            # Resolved by account_new_risk_gate_support into absolute max_daily_loss_usd;
+            # must be allowlisted here so RUNTIME_TARGET can carry the config.
+            "max_daily_loss_equity_formula",
+            "max_daily_loss_equity_schedule",
+        }
         policy_keys = set(policy)
         if (
             not expected_policy_keys.issubset(policy_keys)
