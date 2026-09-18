@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import unittest
@@ -177,6 +178,101 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
             result = evaluate_portfolio_new_risk_admission(portfolio)
         self.assertEqual(result.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
         self.assertIn("DAILY_LOSS_UNKNOWN_FAIL_CLOSED", result.reason_codes)
+
+    def test_equity_formula_smooths_from_aggressive_to_conservative(self) -> None:
+        from application.account_new_risk_gate_support import (
+            resolve_max_daily_loss_usd,
+            resolve_max_daily_loss_usd_from_equity_formula,
+        )
+
+        formula = {"pct_max": 0.05, "pct_min": 0.01, "equity_scale_usd": 2000.0}
+        # E=400 → p = 0.01 + 0.04 * 2000/2400 = 0.04333... → limit ≈ 17.333
+        small = resolve_max_daily_loss_usd_from_equity_formula(400.0, formula)
+        mid = resolve_max_daily_loss_usd_from_equity_formula(2000.0, formula)
+        large = resolve_max_daily_loss_usd_from_equity_formula(20_000.0, formula)
+        self.assertIsNotNone(small)
+        self.assertIsNotNone(mid)
+        self.assertIsNotNone(large)
+        assert small is not None and mid is not None and large is not None
+        self.assertAlmostEqual(small, 400.0 * (0.01 + 0.04 * 2000.0 / 2400.0))
+        self.assertAlmostEqual(mid, 2000.0 * 0.03)
+        self.assertAlmostEqual(large, 20_000.0 * (0.01 + 0.04 * 2000.0 / 22_000.0))
+        # Fraction falls as equity rises.
+        self.assertGreater(small / 400.0, mid / 2000.0)
+        self.assertGreater(mid / 2000.0, large / 20_000.0)
+
+        portfolio = {
+            "total_equity": 400.0,
+            "metadata": {"total_equity_source": "broker_liquidation_value"},
+            "account_new_risk_snapshot": {
+                "daily_loss_usd": 18.0,
+                "daily_loss_baseline_equity_usd": 400.0,
+            },
+        }
+        target = json.dumps(
+            {"runtime_risk_limits": {"max_daily_loss_equity_formula": formula}}
+        )
+        with patch.dict(os.environ, {"RUNTIME_TARGET_JSON": target}, clear=False):
+            with patch(
+                "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+                return_value=None,
+            ):
+                self.assertAlmostEqual(
+                    resolve_max_daily_loss_usd(portfolio) or 0.0,
+                    400.0 * (0.01 + 0.04 * 2000.0 / 2400.0),
+                )
+                result = evaluate_portfolio_new_risk_admission(portfolio)
+        self.assertEqual(result.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+        self.assertIn("DAILY_LOSS_LIMIT_EXCEEDED", result.reason_codes)
+
+    def test_equity_schedule_uses_larger_pct_for_small_account(self) -> None:
+        from application.account_new_risk_gate_support import (
+            resolve_max_daily_loss_usd,
+            resolve_max_daily_loss_usd_from_equity_schedule,
+        )
+
+        schedule = [
+            {"equity_lte_usd": 500, "max_daily_loss_pct": 0.05},
+            {"equity_lte_usd": 5000, "max_daily_loss_pct": 0.02},
+            {"max_daily_loss_pct": 0.01},
+        ]
+        self.assertAlmostEqual(
+            resolve_max_daily_loss_usd_from_equity_schedule(400.0, schedule) or 0.0,
+            20.0,
+        )
+        self.assertAlmostEqual(
+            resolve_max_daily_loss_usd_from_equity_schedule(2000.0, schedule) or 0.0,
+            40.0,
+        )
+        self.assertAlmostEqual(
+            resolve_max_daily_loss_usd_from_equity_schedule(20_000.0, schedule) or 0.0,
+            200.0,
+        )
+
+        portfolio = {
+            "total_equity": 400.0,
+            "metadata": {"total_equity_source": "broker_liquidation_value"},
+            "account_new_risk_snapshot": {
+                "daily_loss_usd": 25.0,
+                "daily_loss_baseline_equity_usd": 400.0,
+            },
+        }
+        target = json.dumps(
+            {
+                "runtime_risk_limits": {
+                    "max_daily_loss_equity_schedule": schedule,
+                }
+            }
+        )
+        with patch.dict(os.environ, {"RUNTIME_TARGET_JSON": target}, clear=False):
+            with patch(
+                "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+                return_value=None,
+            ):
+                self.assertAlmostEqual(resolve_max_daily_loss_usd(portfolio) or 0.0, 20.0)
+                result = evaluate_portfolio_new_risk_admission(portfolio)
+        self.assertEqual(result.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+        self.assertIn("DAILY_LOSS_LIMIT_EXCEEDED", result.reason_codes)
 
     def test_snapshot_maps_production_drift_status_from_account_new_risk_snapshot(self) -> None:
         snapshot = build_snapshot_from_portfolio(
