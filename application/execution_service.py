@@ -16,6 +16,7 @@ from application.account_new_risk_gate_support import (
     new_risk_buy_prohibited,
     set_cycle_snapshot,
 )
+from application.daily_loss_fact_producer import attach_daily_loss_fact_to_portfolio
 from quant_platform_kit.common.order_status import compute_confirmed_sell_release_value
 
 try:
@@ -708,6 +709,8 @@ def execute_rebalance_cycle(
     account_new_risk_reason_codes: tuple[str, ...] = ()
     if is_account_new_risk_gate_enabled():
         portfolio = dict(portfolio)
+        # Verified daily-loss fact when baseline+cashflow available; omit on failure.
+        portfolio = attach_daily_loss_fact_to_portfolio(portfolio, client=client)
         portfolio["account_new_risk_snapshot"] = build_account_new_risk_snapshot(
             portfolio,
             execution=execution,
