@@ -230,6 +230,15 @@ def resolve_nasdaq_session_bounds(
     return prior_close, session_open
 
 
+@dataclass(frozen=True)
+class DailyLossFactAttempt:
+    """Outcome of one produce attempt; fact is set only when status=verified."""
+
+    status: str
+    reason: str
+    fact: DailyLossFact | None = None
+
+
 def produce_daily_loss_fact(
     *,
     current_equity_usd: float | None,
@@ -240,47 +249,73 @@ def produce_daily_loss_fact(
     transactions_loader: Callable[..., Sequence[Mapping[str, Any]]] | None = None,
 ) -> DailyLossFact | None:
     """Compose baseline + flow + current equity into a verified daily_loss fact."""
+    attempt = produce_daily_loss_fact_attempt(
+        current_equity_usd=current_equity_usd,
+        reference_now=reference_now,
+        session_open=session_open,
+        prior_session_close=prior_session_close,
+        reports_loader=reports_loader,
+        transactions_loader=transactions_loader,
+    )
+    return attempt.fact
+
+
+def produce_daily_loss_fact_attempt(
+    *,
+    current_equity_usd: float | None,
+    reference_now: datetime,
+    session_open: datetime | None = None,
+    prior_session_close: datetime | None = None,
+    reports_loader: Callable[[], Sequence[Mapping[str, Any]]] | None = None,
+    transactions_loader: Callable[..., Sequence[Mapping[str, Any]]] | None = None,
+) -> DailyLossFactAttempt:
+    """Same as produce_daily_loss_fact, but always returns a status/reason for logs."""
+    if _coerce_finite_float(current_equity_usd) is None:
+        return DailyLossFactAttempt(status="omitted", reason="missing_current_equity")
+
     if session_open is None or prior_session_close is None:
         bounds = resolve_nasdaq_session_bounds(reference_now)
         if bounds is None:
-            return None
+            return DailyLossFactAttempt(status="omitted", reason="session_bounds_unavailable")
         prior_session_close, session_open = bounds
 
     if reports_loader is None or transactions_loader is None:
-        return None
+        return DailyLossFactAttempt(status="omitted", reason="loaders_unavailable")
 
     try:
         reports = reports_loader()
     except Exception:
-        return None
+        return DailyLossFactAttempt(status="omitted", reason="reports_load_failed")
+
     baseline = select_session_baseline(
         reports,
         session_open=session_open,
         prior_session_close=prior_session_close,
     )
     if baseline is None:
-        return None
+        return DailyLossFactAttempt(status="omitted", reason="baseline_unavailable")
 
     try:
         transactions = transactions_loader(start=baseline.as_of, end=reference_now)
     except Exception:
-        return None
+        return DailyLossFactAttempt(status="omitted", reason="transactions_load_failed")
 
     flow = summarize_verified_external_cash_flow(
         transactions,
         window_start=baseline.as_of,
         window_end=reference_now,
     )
+    if flow.status == "unverified":
+        return DailyLossFactAttempt(status="omitted", reason="flow_unverified")
     if flow.status != "verified" or flow.net_flow is None:
-        return None
+        return DailyLossFactAttempt(status="omitted", reason="flow_unavailable")
 
     loss = derive_daily_loss_usd(baseline.equity_usd, flow.net_flow, current_equity_usd)
-    if loss is None:
-        return None
     current = _coerce_finite_float(current_equity_usd)
-    if current is None:
-        return None
-    return DailyLossFact(
+    if loss is None or current is None:
+        return DailyLossFactAttempt(status="omitted", reason="derive_failed")
+
+    fact = DailyLossFact(
         daily_loss_usd=loss,
         status="verified",
         baseline_equity_usd=baseline.equity_usd,
@@ -288,6 +323,7 @@ def produce_daily_loss_fact(
         verified_net_external_flow=flow.net_flow,
         current_equity_usd=current,
     )
+    return DailyLossFactAttempt(status="verified", reason="verified", fact=fact)
 
 
 def _strategy_profile_from_portfolio(portfolio: Mapping[str, Any]) -> str:
@@ -386,8 +422,10 @@ def attach_daily_loss_fact_to_portfolio(
     out = dict(portfolio or {})
     projection = dict(out.get("account_new_risk_snapshot") or {})
     if "daily_loss_usd" in projection or "daily_loss_usd" in out:
+        print("[Daily loss fact] status=skipped reason=explicit_present", flush=True)
         return out
     if not is_daily_loss_fact_enabled():
+        print("[Daily loss fact] status=omitted reason=disabled", flush=True)
         return out
 
     now = reference_now or datetime.now(tz=_NY)
@@ -406,22 +444,42 @@ def attach_daily_loss_fact_to_portfolio(
         return fetch_schwab_transactions(client, start=start, end=end)
 
     try:
-        fact = produce_daily_loss_fact(
+        attempt = produce_daily_loss_fact_attempt(
             current_equity_usd=current,
             reference_now=now,
             reports_loader=reports_loader or _default_reports_loader,
             transactions_loader=transactions_loader or _default_transactions_loader,
         )
-    except Exception:
-        return out
-    if fact is None:
+    except Exception as exc:
+        print(
+            f"[Daily loss fact] status=omitted reason=unexpected_error "
+            f"error_type={type(exc).__name__}",
+            flush=True,
+        )
         return out
 
+    if attempt.fact is None:
+        print(f"[Daily loss fact] status=omitted reason={attempt.reason}", flush=True)
+        projection["daily_loss_fact_status"] = "omitted"
+        projection["daily_loss_fact_reason"] = attempt.reason
+        out["account_new_risk_snapshot"] = projection
+        return out
+
+    fact = attempt.fact
     projection["daily_loss_usd"] = fact.daily_loss_usd
     projection["daily_loss_fact_status"] = fact.status
+    projection["daily_loss_fact_reason"] = attempt.reason
     projection["daily_loss_baseline_equity_usd"] = fact.baseline_equity_usd
     projection["daily_loss_baseline_as_of"] = fact.baseline_as_of.isoformat()
     projection["daily_loss_verified_net_external_flow"] = fact.verified_net_external_flow
     out["account_new_risk_snapshot"] = projection
     out["daily_loss_usd"] = fact.daily_loss_usd
+    print(
+        "[Daily loss fact] "
+        f"status=verified loss={fact.daily_loss_usd} "
+        f"baseline={fact.baseline_equity_usd} "
+        f"flow={fact.verified_net_external_flow} "
+        f"current={fact.current_equity_usd}",
+        flush=True,
+    )
     return out

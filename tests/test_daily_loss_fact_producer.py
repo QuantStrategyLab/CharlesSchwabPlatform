@@ -185,3 +185,21 @@ def test_produce_fact_returns_none_when_transaction_loader_fails():
         transactions_loader=transactions_loader,
     )
     assert fact is None
+
+
+def test_produce_attempt_exposes_transactions_load_failed_reason():
+    from application.daily_loss_fact_producer import produce_daily_loss_fact_attempt
+
+    session_open = datetime(2026, 9, 18, 9, 30, tzinfo=NY)
+    prior_close = datetime(2026, 9, 17, 16, 0, tzinfo=NY)
+    attempt = produce_daily_loss_fact_attempt(
+        current_equity_usd=500.0,
+        reference_now=datetime(2026, 9, 18, 13, 45, tzinfo=NY),
+        session_open=session_open,
+        prior_session_close=prior_close,
+        reports_loader=lambda: [_report(finished_at="2026-09-17T19:35:15+00:00", equity=590.34)],
+        transactions_loader=lambda **_: (_ for _ in ()).throw(RuntimeError("broker unavailable")),
+    )
+    assert attempt.status == "omitted"
+    assert attempt.reason == "transactions_load_failed"
+    assert attempt.fact is None
