@@ -350,11 +350,122 @@ def new_risk_buy_prohibited(result: NewRiskAdmissionResult) -> bool:
     return result.disposition == NewRiskDisposition.NEW_RISK_PROHIBITED
 
 
-def apply_combined_scale(value: float, scale: float | None) -> float:
-    """Apply a valid reducing scale; missing or out-of-range values are a no-op."""
-    if scale is None or not math.isfinite(scale) or not 0.0 < scale <= 1.0:
-        return value
-    return value * scale
+def apply_combined_scale_to_allocation_targets(
+    allocation: Mapping[str, Any] | None,
+    combined_scale: float | None,
+) -> dict[str, Any]:
+    """Shrink allocation targets by admission combined_scale; omit when scale missing."""
+    from quant_platform_kit.risk.capital_risk_envelope import apply_combined_scale_to_targets
+
+    allocation_out = dict(allocation or {})
+    allocation_out["targets"] = apply_combined_scale_to_targets(
+        allocation_out.get("targets"),
+        combined_scale,
+    )
+    return allocation_out
+
+
+
+_ATTENTION_PLATFORM = "schwab"
+_OPERATIONAL_UNCERTAIN_REASONS = frozenset(
+    {
+        "EQUITY_UNKNOWN_FAIL_CLOSED",
+        "SNAPSHOT_VALIDATION_FAIL_CLOSED",
+        "RECONCILIATION_NOT_VERIFIED",
+        "CIRCUIT_BREAKER_OPEN",
+        "UNKNOWN_PENDING_ORDERS",
+    }
+)
+_attention_sent_keys: set[str] = set()
+
+
+def _resolve_attention_strategy_profile(portfolio: Mapping[str, Any]) -> str:
+    projection = _mapping_or_empty(portfolio.get("account_new_risk_snapshot"))
+    for source in (projection, portfolio, _mapping_or_empty(portfolio.get("metadata"))):
+        value = source.get("strategy_profile")
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return str(os.environ.get("STRATEGY_PROFILE") or "").strip() or _DEFAULT_STRATEGY_PROFILE
+
+
+def _resolve_attention_account_alias(
+    portfolio: Mapping[str, Any],
+    execution: Mapping[str, Any] | None,
+) -> str:
+    for source in (
+        portfolio,
+        _mapping_or_empty(portfolio.get("metadata")),
+        _mapping_or_empty(execution),
+    ):
+        for key in ("account_alias", "account_hash", "account_id", "account"):
+            value = source.get(key)
+            if value is not None and str(value).strip():
+                text = str(value).strip()
+                return text[-8:] if len(text) > 8 else text
+    for env_key in ("SCHWAB_ACCOUNT_HASH", "ACCOUNT_ALIAS"):
+        env_alias = str(os.environ.get(env_key) or "").strip()
+        if env_alias:
+            return env_alias[-8:] if len(env_alias) > 8 else env_alias
+    return "unknown"
+
+
+def maybe_publish_attention_for_admission(
+    admission: NewRiskAdmissionResult,
+    *,
+    portfolio: Mapping[str, Any],
+    execution: Mapping[str, Any] | None = None,
+    snapshot: InjectedReconciliationSnapshot | None = None,
+    telegram_sender: Any | None = None,
+    log_message: Any = print,
+) -> Mapping[str, int]:
+    """Publish ACTION/HALT attention when NEW_RISK / ops axes require a page.
+
+    Dedupes on transition keys within the process. Never grants live, raises RRL,
+    or invents daily-loss facts.
+    """
+
+    try:
+        from quant_platform_kit.risk.attention import (
+            AttentionAxes,
+            evaluate_attention,
+            resolve_mandate_dd_budget,
+        )
+        from quant_platform_kit.risk.attention_notify import publish_attention_telegram_transition
+    except ImportError:
+        try:
+            log_message("attention_telegram_skipped reason=attention_api_unavailable")
+        except TypeError:
+            log_message("attention_telegram_skipped reason=attention_api_unavailable", flush=True)
+        return {"sent": 0, "skipped": 1, "failed": 0}
+
+    reasons = tuple(admission.reason_codes or ())
+    prohibited = new_risk_buy_prohibited(admission)
+    operational_uncertain = any(code in _OPERATIONAL_UNCERTAIN_REASONS for code in reasons)
+    profile = _resolve_attention_strategy_profile(portfolio)
+    drawdown = None if snapshot is None else snapshot.drawdown_from_peak
+    decision = evaluate_attention(
+        AttentionAxes(
+            new_risk_prohibited=True if prohibited else None,
+            operational_uncertain=True if operational_uncertain else None,
+            drawdown_from_peak=drawdown,
+            mandate_dd_budget=resolve_mandate_dd_budget(profile),
+        )
+    )
+    return publish_attention_telegram_transition(
+        decision=decision,
+        platform=_ATTENTION_PLATFORM,
+        account_alias=_resolve_attention_account_alias(portfolio, execution),
+        strategy_profile=profile,
+        previous_level=None,
+        already_sent_keys=list(_attention_sent_keys),
+        record_sent_key=_attention_sent_keys.add,
+        telegram_sender=telegram_sender,
+        log_message=log_message,
+    )
+
+
+def reset_attention_sent_keys_for_tests() -> None:
+    _attention_sent_keys.clear()
 
 
 def get_cycle_snapshot() -> InjectedReconciliationSnapshot | None:

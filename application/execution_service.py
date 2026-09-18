@@ -6,12 +6,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from application.account_new_risk_gate_support import (
-    apply_combined_scale,
+    apply_combined_scale_to_allocation_targets,
     build_account_new_risk_snapshot,
     build_snapshot_from_portfolio,
     evaluate_cycle_new_risk_admission,
     evaluate_portfolio_new_risk_admission,
     is_account_new_risk_gate_enabled,
+    maybe_publish_attention_for_admission,
     new_risk_buy_prohibited,
     set_cycle_snapshot,
 )
@@ -728,6 +729,31 @@ def execute_rebalance_cycle(
         # Cloud Logging / dry-run verification need stdout; trade_logs alone are not persisted.
         print(gate_diagnostic_message, flush=True)
         trade_logs.append(gate_diagnostic_message)
+        attention_counts = maybe_publish_attention_for_admission(
+            admission,
+            portfolio=portfolio,
+            execution=execution,
+            snapshot=cycle_snapshot,
+        )
+        attention_message = (
+            "[Attention notify] "
+            f"sent={attention_counts.get('sent', 0)} "
+            f"skipped={attention_counts.get('skipped', 0)} "
+            f"failed={attention_counts.get('failed', 0)}"
+        )
+        print(attention_message, flush=True)
+        trade_logs.append(attention_message)
+        allocation = apply_combined_scale_to_allocation_targets(
+            allocation,
+            admission.combined_scale,
+        )
+        if admission.combined_scale is not None:
+            scale_message = (
+                f"[Envelope scale] combined_scale={admission.combined_scale} "
+                "applied_to_allocation_targets"
+            )
+            print(scale_message, flush=True)
+            trade_logs.append(scale_message)
     else:
         set_cycle_snapshot(None)
 
@@ -797,9 +823,6 @@ def execute_rebalance_cycle(
             if new_risk_buy_prohibited(admission):
                 record_submitted_order(symbol, action_type, quantity, price, status="rejected")
                 return False
-            quantity = apply_combined_scale(quantity, admission.combined_scale)
-            if action_type != "BUY_NOTIONAL":
-                quantity = int(quantity)
         if action_type == "BUY_NOTIONAL":
             if float(quantity or 0.0) < MIN_NOTIONAL_BUY_USD:
                 return False

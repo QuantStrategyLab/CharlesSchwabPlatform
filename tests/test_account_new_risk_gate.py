@@ -16,11 +16,13 @@ if (QPK_SRC / "quant_platform_kit").exists() and str(QPK_SRC) not in sys.path:
 
 from application.account_new_risk_gate_support import (
     ACCOUNT_NEW_RISK_GATE_ENV,
-    apply_combined_scale,
+    apply_combined_scale_to_allocation_targets,
     build_account_new_risk_snapshot,
     build_snapshot_from_portfolio,
     evaluate_portfolio_new_risk_admission,
+    maybe_publish_attention_for_admission,
     new_risk_buy_prohibited,
+    reset_attention_sent_keys_for_tests,
     set_cycle_snapshot,
 )
 from application.execution_service import execute_rebalance_cycle
@@ -40,6 +42,7 @@ from quant_platform_kit.risk.account_new_risk_gate import NewRiskDisposition
 class AccountNewRiskGateSupportTests(unittest.TestCase):
     def tearDown(self) -> None:
         set_cycle_snapshot(None)
+        reset_attention_sent_keys_for_tests()
         os.environ.pop(ACCOUNT_NEW_RISK_GATE_ENV, None)
         os.environ.pop("SCHWAB_MAX_DAILY_LOSS_USD", None)
         os.environ.pop("MAX_DAILY_LOSS_USD", None)
@@ -348,16 +351,71 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
             result.portfolio["account_new_risk_snapshot"],
         )
 
-    def test_combined_scale_halves_value(self) -> None:
-        self.assertEqual(apply_combined_scale(4.0, 0.5), 2.0)
+    def test_combined_scale_halves_allocation_targets(self) -> None:
+        scaled = apply_combined_scale_to_allocation_targets(
+            {"targets": {"SOXL": 0.6, "SOXX": 0.4}},
+            0.5,
+        )
+        self.assertEqual(scaled["targets"], {"SOXL": 0.3, "SOXX": 0.2})
 
-    def test_missing_combined_scale_is_no_op(self) -> None:
-        self.assertEqual(apply_combined_scale(4.0, None), 4.0)
+    def test_missing_combined_scale_leaves_targets(self) -> None:
+        allocation = {"targets": {"SOXL": 0.6}}
+        self.assertEqual(
+            apply_combined_scale_to_allocation_targets(allocation, None)["targets"],
+            {"SOXL": 0.6},
+        )
+
+    def test_attention_notify_on_new_risk_prohibit_dedupes(self) -> None:
+        QPK_ATTENTION = Path(
+            "/Users/lisiyi/Projects/.worktrees/qpk-envelope-scale-20260918/src"
+        )
+        if QPK_ATTENTION.exists() and str(QPK_ATTENTION) not in sys.path:
+            sys.path.insert(0, str(QPK_ATTENTION))
+
+        reset_attention_sent_keys_for_tests()
+        portfolio = {
+            "total_equity": 50_000.0,
+            "strategy_profile": "soxl_soxx_trend_income",
+            "account_hash": "00682abc",
+            "account_new_risk_snapshot": {
+                "production_drift_status": "critical",
+            },
+        }
+        admission = evaluate_portfolio_new_risk_admission(portfolio)
+        self.assertTrue(new_risk_buy_prohibited(admission))
+        snapshot = build_snapshot_from_portfolio(portfolio)
+        payloads: list[str] = []
+
+        def _sender(*, text: str, alert_key: str | None = None, **_kwargs) -> bool:
+            payloads.append(text)
+            return True
+
+        counts = maybe_publish_attention_for_admission(
+            admission,
+            portfolio=portfolio,
+            snapshot=snapshot,
+            telegram_sender=_sender,
+            log_message=lambda *_a, **_k: None,
+        )
+        self.assertEqual(counts.get("sent"), 1)
+        self.assertEqual(len(payloads), 1)
+        counts2 = maybe_publish_attention_for_admission(
+            admission,
+            portfolio=portfolio,
+            snapshot=snapshot,
+            telegram_sender=_sender,
+            log_message=lambda *_a, **_k: None,
+        )
+        self.assertEqual(counts2.get("sent"), 0)
+        self.assertEqual(counts2.get("skipped"), 1)
+        self.assertEqual(len(payloads), 1)
+
 
 
 class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
     def tearDown(self) -> None:
         set_cycle_snapshot(None)
+        reset_attention_sent_keys_for_tests()
         os.environ.pop(ACCOUNT_NEW_RISK_GATE_ENV, None)
 
     def _run_buy_cycle(self, *, portfolio_overrides=None):
@@ -481,8 +539,8 @@ class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
         self.assertIn("breaker=CLOSED", printed)
         self.assertTrue(any("disposition=ALLOW_NEW_RISK" in log for log in result.trade_logs))
 
-    def test_execution_cycle_halves_buy_quantity_for_half_scale(self) -> None:
-        _result, submitted_orders = self._run_buy_cycle(
+    def test_execution_cycle_scales_targets_for_half_combined_scale(self) -> None:
+        result, submitted_orders = self._run_buy_cycle(
             portfolio_overrides={
                 "total_equity": 40_000.0,
                 "account_new_risk_snapshot": {
@@ -493,7 +551,11 @@ class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
                 },
             }
         )
+        self.assertTrue(
+            any("applied_to_allocation_targets" in log for log in result.trade_logs)
+        )
         self.assertEqual(len(submitted_orders), 1)
+        # Target value path: half envelope scale → half buy size from full target.
         self.assertEqual(submitted_orders[0].quantity, 2)
 
     def test_execution_cycle_allows_sell_when_buy_prohibited(self) -> None:
