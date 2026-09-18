@@ -255,6 +255,30 @@ class StrategyRuntimeTests(unittest.TestCase):
         self.assertEqual(hold.hold_below_nav, 1000.0)
         self.assertTrue(entrypoint.ctx.capabilities["cash_only_execution"])
 
+    def test_soxl_runtime_allows_equity_formula_and_schedule_policy_keys(self):
+        """Daily-loss formula/schedule live on RUNTIME_TARGET; RRL binding must not reject them."""
+        policy = _soxl_runtime_policy()
+        policy["max_daily_loss_equity_formula"] = {
+            "pct_max": 0.05,
+            "pct_min": 0.01,
+            "equity_scale_usd": 2000,
+        }
+        policy["max_daily_loss_equity_schedule"] = [
+            {"equity_lte_usd": 500, "max_daily_loss_pct": 0.05},
+            {"max_daily_loss_pct": 0.01},
+        ]
+        entrypoint, runtime = self._soxl_runtime(policy=policy)
+        with patch.object(strategy_runtime_module, "_installed_ues_revision", return_value="ues-revision"):
+            result = runtime.evaluate(
+                benchmark_history=[{"close": 1.0}],
+                portfolio_snapshot=self._soxl_snapshot(),
+                signal_text_fn=str,
+                translator=lambda key, **_kwargs: key,
+            )
+
+        self.assertEqual(result.metadata["runtime_risk_status"], "verified:runtime_risk_limits")
+        self.assertIsInstance(entrypoint.ctx.capabilities["runtime_risk_limits"], RuntimeRiskLimits)
+
     def test_soxl_runtime_exposes_current_portfolio_weights_for_hold(self):
         entrypoint, runtime = self._soxl_runtime(policy=_soxl_runtime_policy())
         snapshot = PortfolioSnapshot(
