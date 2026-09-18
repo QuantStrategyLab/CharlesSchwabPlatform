@@ -243,13 +243,101 @@ def _max_daily_loss_from_runtime_target_json() -> float | None:
     return _positive_limit_or_none(policy.get("max_daily_loss_usd"))
 
 
+def _runtime_risk_limits_policy() -> dict[str, Any] | None:
+    raw_target = os.environ.get("RUNTIME_TARGET_JSON")
+    if raw_target is None or not str(raw_target).strip():
+        return None
+    try:
+        payload = json.loads(raw_target)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    policy = payload.get("runtime_risk_limits")
+    return policy if isinstance(policy, dict) else None
+
+
+def resolve_max_daily_loss_usd_from_equity_schedule(
+    equity_usd: float | None,
+    schedule: object,
+) -> float | None:
+    """Map account equity to an absolute daily-loss limit via a pct schedule.
+
+    Schedule entries are ordered by ascending ``equity_lte_usd`` (optional on the
+    final catch-all). Small-equity tiers may use a larger pct; large-equity tiers
+    a smaller pct. No approved production default lives in code — omit when the
+    schedule is absent/invalid or equity is missing/non-positive.
+    """
+    equity = _coerce_optional_float(equity_usd)
+    if equity is None or equity <= 0.0:
+        return None
+    if not isinstance(schedule, list) or not schedule:
+        return None
+
+    tiers: list[tuple[float, float]] = []
+    catch_all_pct: float | None = None
+    for raw in schedule:
+        if not isinstance(raw, Mapping):
+            return None
+        pct = _coerce_optional_float(raw.get("max_daily_loss_pct"))
+        if pct is None or pct <= 0.0 or pct > 1.0:
+            return None
+        if "equity_lte_usd" not in raw or raw.get("equity_lte_usd") is None:
+            if catch_all_pct is not None:
+                return None
+            catch_all_pct = pct
+            continue
+        ceiling = _coerce_optional_float(raw.get("equity_lte_usd"))
+        if ceiling is None or ceiling <= 0.0:
+            return None
+        tiers.append((ceiling, pct))
+
+    tiers.sort(key=lambda item: item[0])
+    # Reject overlapping / non-increasing ceilings after sort duplicates.
+    last_ceiling = 0.0
+    for ceiling, _pct in tiers:
+        if ceiling <= last_ceiling:
+            return None
+        last_ceiling = ceiling
+
+    chosen_pct: float | None = None
+    for ceiling, pct in tiers:
+        if equity <= ceiling:
+            chosen_pct = pct
+            break
+    if chosen_pct is None:
+        chosen_pct = catch_all_pct
+    if chosen_pct is None:
+        return None
+    return equity * chosen_pct
+
+
+def _equity_for_daily_loss_schedule(
+    portfolio: Mapping[str, Any] | None,
+) -> float | None:
+    """Prefer session baseline equity when the fact producer attached it."""
+    if portfolio is None:
+        return None
+    projection = _mapping_or_empty(portfolio.get("account_new_risk_snapshot"))
+    for key in ("daily_loss_baseline_equity_usd", "equity_usd"):
+        equity = _coerce_optional_float(projection.get(key))
+        if equity is not None and equity > 0.0:
+            return equity
+    return _resolve_equity_usd(portfolio, None)
+
+
 def resolve_max_daily_loss_usd(
     portfolio: Mapping[str, Any] | None = None,
 ) -> float | None:
-    """Resolve an explicit max_daily_loss_usd; omit the axis when unset.
+    """Resolve max_daily_loss_usd; omit the axis when unset.
 
-    Priority: account_new_risk_snapshot / portfolio key → RUNTIME_TARGET_JSON →
-    SCHWAB_MAX_DAILY_LOSS_USD / MAX_DAILY_LOSS_USD. No approved production default.
+    Priority:
+    1. explicit absolute ``max_daily_loss_usd`` on snapshot/portfolio
+    2. RUNTIME_TARGET absolute ``runtime_risk_limits.max_daily_loss_usd``
+    3. RUNTIME_TARGET ``runtime_risk_limits.max_daily_loss_equity_schedule`` × equity
+    4. SCHWAB_MAX_DAILY_LOSS_USD / MAX_DAILY_LOSS_USD env absolutes
+
+    No approved production default in code.
     """
     if portfolio is not None:
         projection = _mapping_or_empty(portfolio.get("account_new_risk_snapshot"))
@@ -259,6 +347,14 @@ def resolve_max_daily_loss_usd(
     policy_limit = _max_daily_loss_from_runtime_target_json()
     if policy_limit is not None:
         return policy_limit
+    policy = _runtime_risk_limits_policy()
+    if policy is not None and "max_daily_loss_equity_schedule" in policy:
+        scheduled = resolve_max_daily_loss_usd_from_equity_schedule(
+            _equity_for_daily_loss_schedule(portfolio),
+            policy.get("max_daily_loss_equity_schedule"),
+        )
+        if scheduled is not None:
+            return scheduled
     for key in _MAX_DAILY_LOSS_ENV_KEYS:
         raw = os.environ.get(key)
         if raw is None or not str(raw).strip():

@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import unittest
@@ -177,6 +178,55 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
             result = evaluate_portfolio_new_risk_admission(portfolio)
         self.assertEqual(result.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
         self.assertIn("DAILY_LOSS_UNKNOWN_FAIL_CLOSED", result.reason_codes)
+
+    def test_equity_schedule_uses_larger_pct_for_small_account(self) -> None:
+        from application.account_new_risk_gate_support import (
+            resolve_max_daily_loss_usd,
+            resolve_max_daily_loss_usd_from_equity_schedule,
+        )
+
+        schedule = [
+            {"equity_lte_usd": 500, "max_daily_loss_pct": 0.05},
+            {"equity_lte_usd": 5000, "max_daily_loss_pct": 0.02},
+            {"max_daily_loss_pct": 0.01},
+        ]
+        self.assertAlmostEqual(
+            resolve_max_daily_loss_usd_from_equity_schedule(400.0, schedule) or 0.0,
+            20.0,
+        )
+        self.assertAlmostEqual(
+            resolve_max_daily_loss_usd_from_equity_schedule(2000.0, schedule) or 0.0,
+            40.0,
+        )
+        self.assertAlmostEqual(
+            resolve_max_daily_loss_usd_from_equity_schedule(20_000.0, schedule) or 0.0,
+            200.0,
+        )
+
+        portfolio = {
+            "total_equity": 400.0,
+            "metadata": {"total_equity_source": "broker_liquidation_value"},
+            "account_new_risk_snapshot": {
+                "daily_loss_usd": 25.0,
+                "daily_loss_baseline_equity_usd": 400.0,
+            },
+        }
+        target = json.dumps(
+            {
+                "runtime_risk_limits": {
+                    "max_daily_loss_equity_schedule": schedule,
+                }
+            }
+        )
+        with patch.dict(os.environ, {"RUNTIME_TARGET_JSON": target}, clear=False):
+            with patch(
+                "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+                return_value=None,
+            ):
+                self.assertAlmostEqual(resolve_max_daily_loss_usd(portfolio) or 0.0, 20.0)
+                result = evaluate_portfolio_new_risk_admission(portfolio)
+        self.assertEqual(result.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+        self.assertIn("DAILY_LOSS_LIMIT_EXCEEDED", result.reason_codes)
 
     def test_snapshot_maps_production_drift_status_from_account_new_risk_snapshot(self) -> None:
         snapshot = build_snapshot_from_portfolio(
