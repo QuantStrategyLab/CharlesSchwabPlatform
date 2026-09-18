@@ -12,6 +12,7 @@ from application.account_new_risk_gate_support import (
     evaluate_cycle_new_risk_admission,
     evaluate_portfolio_new_risk_admission,
     is_account_new_risk_gate_enabled,
+    maybe_publish_attention_for_admission,
     new_risk_buy_prohibited,
     set_cycle_snapshot,
 )
@@ -728,6 +729,20 @@ def execute_rebalance_cycle(
         # Cloud Logging / dry-run verification need stdout; trade_logs alone are not persisted.
         print(gate_diagnostic_message, flush=True)
         trade_logs.append(gate_diagnostic_message)
+        attention_counts = maybe_publish_attention_for_admission(
+            admission,
+            portfolio=portfolio,
+            execution=execution,
+            snapshot=cycle_snapshot,
+        )
+        attention_message = (
+            "[Attention notify] "
+            f"sent={attention_counts.get('sent', 0)} "
+            f"skipped={attention_counts.get('skipped', 0)} "
+            f"failed={attention_counts.get('failed', 0)}"
+        )
+        print(attention_message, flush=True)
+        trade_logs.append(attention_message)
     else:
         set_cycle_snapshot(None)
 

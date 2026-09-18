@@ -20,7 +20,9 @@ from application.account_new_risk_gate_support import (
     build_account_new_risk_snapshot,
     build_snapshot_from_portfolio,
     evaluate_portfolio_new_risk_admission,
+    maybe_publish_attention_for_admission,
     new_risk_buy_prohibited,
+    reset_attention_sent_keys_for_tests,
     set_cycle_snapshot,
 )
 from application.execution_service import execute_rebalance_cycle
@@ -40,6 +42,7 @@ from quant_platform_kit.risk.account_new_risk_gate import NewRiskDisposition
 class AccountNewRiskGateSupportTests(unittest.TestCase):
     def tearDown(self) -> None:
         set_cycle_snapshot(None)
+        reset_attention_sent_keys_for_tests()
         os.environ.pop(ACCOUNT_NEW_RISK_GATE_ENV, None)
         os.environ.pop("SCHWAB_MAX_DAILY_LOSS_USD", None)
         os.environ.pop("MAX_DAILY_LOSS_USD", None)
@@ -354,10 +357,57 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
     def test_missing_combined_scale_is_no_op(self) -> None:
         self.assertEqual(apply_combined_scale(4.0, None), 4.0)
 
+    def test_attention_notify_on_new_risk_prohibit_dedupes(self) -> None:
+        QPK_ATTENTION = Path(
+            "/Users/lisiyi/Projects/.worktrees/qpk-attention-wire-20260918/src"
+        )
+        if QPK_ATTENTION.exists() and str(QPK_ATTENTION) not in sys.path:
+            sys.path.insert(0, str(QPK_ATTENTION))
+
+        reset_attention_sent_keys_for_tests()
+        portfolio = {
+            "total_equity": 50_000.0,
+            "strategy_profile": "soxl_soxx_trend_income",
+            "account_hash": "00682abc",
+            "account_new_risk_snapshot": {
+                "production_drift_status": "critical",
+            },
+        }
+        admission = evaluate_portfolio_new_risk_admission(portfolio)
+        self.assertTrue(new_risk_buy_prohibited(admission))
+        snapshot = build_snapshot_from_portfolio(portfolio)
+        payloads: list[str] = []
+
+        def _sender(*, text: str, alert_key: str | None = None, **_kwargs) -> bool:
+            payloads.append(text)
+            return True
+
+        counts = maybe_publish_attention_for_admission(
+            admission,
+            portfolio=portfolio,
+            snapshot=snapshot,
+            telegram_sender=_sender,
+            log_message=lambda *_a, **_k: None,
+        )
+        self.assertEqual(counts.get("sent"), 1)
+        self.assertEqual(len(payloads), 1)
+        counts2 = maybe_publish_attention_for_admission(
+            admission,
+            portfolio=portfolio,
+            snapshot=snapshot,
+            telegram_sender=_sender,
+            log_message=lambda *_a, **_k: None,
+        )
+        self.assertEqual(counts2.get("sent"), 0)
+        self.assertEqual(counts2.get("skipped"), 1)
+        self.assertEqual(len(payloads), 1)
+
+
 
 class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
     def tearDown(self) -> None:
         set_cycle_snapshot(None)
+        reset_attention_sent_keys_for_tests()
         os.environ.pop(ACCOUNT_NEW_RISK_GATE_ENV, None)
 
     def _run_buy_cycle(self, *, portfolio_overrides=None):
