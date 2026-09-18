@@ -531,11 +531,13 @@ def _resolve_attention_strategy_profile(portfolio: Mapping[str, Any]) -> str:
 def _resolve_attention_account_alias(
     portfolio: Mapping[str, Any],
     execution: Mapping[str, Any] | None,
+    plan: Mapping[str, Any] | None = None,
 ) -> str:
     for source in (
         portfolio,
         _mapping_or_empty(portfolio.get("metadata")),
         _mapping_or_empty(execution),
+        _mapping_or_empty(plan),
     ):
         for key in ("account_alias", "account_hash", "account_id", "account"):
             value = source.get(key)
@@ -549,11 +551,25 @@ def _resolve_attention_account_alias(
     return "unknown"
 
 
+def _resolve_attention_production_drift_status(
+    *,
+    portfolio: Mapping[str, Any],
+    snapshot: InjectedReconciliationSnapshot | None,
+) -> str | None:
+    if snapshot is not None:
+        status = getattr(snapshot, "production_drift_status", None)
+        if status is not None and str(status).strip():
+            return str(status).strip()
+    projection = _mapping_or_empty(portfolio.get("account_new_risk_snapshot"))
+    return _resolve_production_drift_status(portfolio, projection)
+
+
 def maybe_publish_attention_for_admission(
     admission: NewRiskAdmissionResult,
     *,
     portfolio: Mapping[str, Any],
     execution: Mapping[str, Any] | None = None,
+    plan: Mapping[str, Any] | None = None,
     snapshot: InjectedReconciliationSnapshot | None = None,
     telegram_sender: Any | None = None,
     log_message: Any = print,
@@ -586,6 +602,10 @@ def maybe_publish_attention_for_admission(
     decision = evaluate_attention(
         AttentionAxes(
             new_risk_prohibited=True if prohibited else None,
+            production_drift_status=_resolve_attention_production_drift_status(
+                portfolio=portfolio,
+                snapshot=snapshot,
+            ),
             operational_uncertain=True if operational_uncertain else None,
             drawdown_from_peak=drawdown,
             mandate_dd_budget=resolve_mandate_dd_budget(profile),
@@ -594,7 +614,7 @@ def maybe_publish_attention_for_admission(
     return publish_attention_telegram_transition(
         decision=decision,
         platform=_ATTENTION_PLATFORM,
-        account_alias=_resolve_attention_account_alias(portfolio, execution),
+        account_alias=_resolve_attention_account_alias(portfolio, execution, plan),
         strategy_profile=profile,
         previous_level=None,
         already_sent_keys=list(_attention_sent_keys),

@@ -736,6 +736,7 @@ def execute_rebalance_cycle(
             admission,
             portfolio=portfolio,
             execution=execution,
+            plan=plan,
             snapshot=cycle_snapshot,
         )
         attention_message = (

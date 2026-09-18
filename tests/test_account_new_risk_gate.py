@@ -462,42 +462,56 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
         )
 
     def test_attention_notify_on_new_risk_prohibit_dedupes(self) -> None:
-        QPK_ATTENTION = Path(
-            "/Users/lisiyi/Projects/.worktrees/qpk-envelope-scale-20260918/src"
-        )
-        if QPK_ATTENTION.exists() and str(QPK_ATTENTION) not in sys.path:
-            sys.path.insert(0, str(QPK_ATTENTION))
+        # Prefer local QPK worktrees with attention i18n; else installed pin.
+        for candidate in (
+            Path("/Users/lisiyi/Projects/.worktrees/qpk-attention-i18n-20260918/src"),
+            Path("/Users/lisiyi/Projects/QuantPlatformKit/src"),
+        ):
+            if candidate.exists() and str(candidate) not in sys.path:
+                sys.path.insert(0, str(candidate))
+                break
 
         reset_attention_sent_keys_for_tests()
         portfolio = {
             "total_equity": 50_000.0,
             "strategy_profile": "soxl_soxx_trend_income",
-            "account_hash": "00682abc",
             "account_new_risk_snapshot": {
                 "production_drift_status": "critical",
             },
         }
+        plan = {"account_hash": "00682abc"}
         admission = evaluate_portfolio_new_risk_admission(portfolio)
         self.assertTrue(new_risk_buy_prohibited(admission))
+        self.assertIn("PRODUCTION_DRIFT_CRITICAL", admission.reason_codes)
         snapshot = build_snapshot_from_portfolio(portfolio)
+        self.assertEqual(snapshot.production_drift_status, "critical")
         payloads: list[str] = []
 
         def _sender(*, text: str, alert_key: str | None = None, **_kwargs) -> bool:
             payloads.append(text)
             return True
 
-        counts = maybe_publish_attention_for_admission(
-            admission,
-            portfolio=portfolio,
-            snapshot=snapshot,
-            telegram_sender=_sender,
-            log_message=lambda *_a, **_k: None,
-        )
+        with unittest.mock.patch.dict(os.environ, {"NOTIFY_LANG": "zh"}, clear=False):
+            counts = maybe_publish_attention_for_admission(
+                admission,
+                portfolio=portfolio,
+                plan=plan,
+                snapshot=snapshot,
+                telegram_sender=_sender,
+                log_message=lambda *_a, **_k: None,
+            )
         self.assertEqual(counts.get("sent"), 1)
         self.assertEqual(len(payloads), 1)
+        text = payloads[0]
+        self.assertIn("00682abc", text)
+        self.assertIn("生产偏离严重", text)
+        self.assertNotIn("原因：new_risk_prohibited", text)
+        self.assertIn("打开管理站处理恢复", text)
+        self.assertNotIn("accept ≠ live", text)
         counts2 = maybe_publish_attention_for_admission(
             admission,
             portfolio=portfolio,
+            plan=plan,
             snapshot=snapshot,
             telegram_sender=_sender,
             log_message=lambda *_a, **_k: None,
