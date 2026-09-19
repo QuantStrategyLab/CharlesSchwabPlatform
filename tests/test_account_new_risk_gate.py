@@ -11,7 +11,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 # Prefer installed QPK (site-packages / uv env). Sibling checkout is append-only
 # fallback only — not pin proof. Authoritative pin checks use pytest -o pythonpath
-# to an unmodified 3f06ce31 export (see CURSOR_RESULT.md); do not hardcode worktrees.
+# to an unmodified c7646a7168b3 export matching pyproject/uv.lock/qsl.toml; do not
+# hardcode worktrees.
 REPO_ROOT = ROOT.parent.parent if ROOT.parent.name == ".worktrees" else ROOT
 for _qpk_src in (
     REPO_ROOT / "QuantPlatformKit" / "src",
@@ -737,6 +738,41 @@ class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
                     )
         self.assertEqual(submitted_orders, [])
         self.assertTrue(any("NEW_RISK_PROHIBITED" in log for log in _result.trade_logs))
+
+    def test_execution_cycle_zero_buy_submit_when_daily_loss_fact_omitted(self) -> None:
+        """F2: configured limit + omitted/unverified daily-loss fact → zero buy submit."""
+
+        def _omit_unverified_fact(portfolio, **_kwargs):
+            out = dict(portfolio)
+            snap = dict(out.get("account_new_risk_snapshot") or {})
+            snap["max_daily_loss_usd"] = 100.0
+            snap.pop("daily_loss_usd", None)
+            out["account_new_risk_snapshot"] = snap
+            return out
+
+        with patch(
+            "application.execution_service.attach_daily_loss_fact_to_portfolio",
+            side_effect=_omit_unverified_fact,
+        ):
+            with patch(
+                "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+                return_value=None,
+            ):
+                result, submitted_orders = self._run_buy_cycle(
+                    portfolio_overrides={
+                        "total_equity": 50_000.0,
+                        "account_new_risk_snapshot": {
+                            "observation_status": "COMPLETE",
+                            "reconciliation_status": "VERIFIED",
+                            "circuit_breaker_state": "CLOSED",
+                        },
+                    }
+                )
+        self.assertEqual(submitted_orders, [])
+        self.assertTrue(any("NEW_RISK_PROHIBITED" in log for log in result.trade_logs))
+        self.assertTrue(
+            any("DAILY_LOSS_UNKNOWN_FAIL_CLOSED" in log for log in result.trade_logs)
+        )
 
     def test_execution_cycle_passes_plan_account_hash_to_daily_loss_attach(self) -> None:
         """C1: attach must receive plan account_hash (same identity as order submit)."""
