@@ -9,11 +9,17 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-# Prefer installed QPK pin (uv sync). Local checkout is append-only fallback.
+# Prefer installed QPK (site-packages / uv env). Sibling checkout is append-only
+# fallback only — not pin proof. Authoritative pin checks use pytest -o pythonpath
+# to an unmodified f8aed3fe export (see CURSOR_RESULT.md); do not hardcode worktrees.
 REPO_ROOT = ROOT.parent.parent if ROOT.parent.name == ".worktrees" else ROOT
-QPK_SRC = REPO_ROOT.parent / "QuantPlatformKit" / "src"
-if (QPK_SRC / "quant_platform_kit").exists() and str(QPK_SRC) not in sys.path:
-    sys.path.append(str(QPK_SRC))
+for _qpk_src in (
+    REPO_ROOT / "QuantPlatformKit" / "src",
+    REPO_ROOT.parent / "QuantPlatformKit" / "src",
+):
+    if (_qpk_src / "quant_platform_kit").is_dir() and str(_qpk_src) not in sys.path:
+        sys.path.append(str(_qpk_src))
+        break
 
 from application.account_new_risk_gate_support import (
     ACCOUNT_NEW_RISK_GATE_ENV,
@@ -200,6 +206,8 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
         # Fraction falls as equity rises.
         self.assertGreater(small / 400.0, mid / 2000.0)
         self.assertGreater(mid / 2000.0, large / 20_000.0)
+        # Approved mid-equity point: E=2000 → limit exactly 60.
+        self.assertAlmostEqual(mid, 60.0)
 
         portfolio = {
             "total_equity": 400.0,
@@ -224,6 +232,100 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
                 result = evaluate_portfolio_new_risk_admission(portfolio)
         self.assertEqual(result.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
         self.assertIn("DAILY_LOSS_LIMIT_EXCEEDED", result.reason_codes)
+
+    def test_equity_formula_invalid_or_missing_equity_fails_closed_not_absent(self) -> None:
+        from application.account_new_risk_gate_support import (
+            resolve_max_daily_loss_resolution,
+            resolve_max_daily_loss_usd_from_equity_formula,
+        )
+
+        healthy = {
+            "total_equity": 2000.0,
+            "metadata": {"total_equity_source": "broker_liquidation_value"},
+            "account_new_risk_snapshot": {
+                "observation_status": "COMPLETE",
+                "reconciliation_status": "VERIFIED",
+                "circuit_breaker_state": "CLOSED",
+                "daily_loss_usd": 0.0,
+                "daily_loss_baseline_equity_usd": 2000.0,
+            },
+        }
+        cases = [
+            {"pct_max": 0.05, "pct_min": 0.01, "equity_scale_usd": 0},
+            {"pct_max": 0.05, "pct_min": 0.01, "equity_scale_usd": float("nan")},
+            {"pct_max": 0.05, "pct_min": 0.01, "equity_scale_usd": True},
+            {"pct_max": 0.01, "pct_min": 0.05, "equity_scale_usd": 2000.0},
+            {"pct_max": 0.05, "pct_min": 0.01},  # missing scale
+        ]
+        for formula in cases:
+            with self.subTest(formula=formula):
+                self.assertIsNone(
+                    resolve_max_daily_loss_usd_from_equity_formula(2000.0, formula)
+                )
+                target = json.dumps(
+                    {
+                        "runtime_risk_limits": {
+                            "max_daily_loss_equity_formula": formula,
+                            # Must not fall through to schedule when formula is explicit+illegal.
+                            "max_daily_loss_equity_schedule": [
+                                {"max_daily_loss_pct": 0.01},
+                            ],
+                        }
+                    }
+                )
+                with patch.dict(os.environ, {"RUNTIME_TARGET_JSON": target}, clear=False):
+                    with patch(
+                        "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+                        return_value=None,
+                    ):
+                        resolution = resolve_max_daily_loss_resolution(healthy)
+                        result = evaluate_portfolio_new_risk_admission(healthy)
+                self.assertEqual(resolution.status, "invalid")
+                self.assertEqual(result.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+                self.assertTrue(new_risk_buy_prohibited(result))
+                self.assertTrue(
+                    set(result.reason_codes)
+                    & {
+                        "DAILY_LOSS_UNKNOWN_FAIL_CLOSED",
+                        "SNAPSHOT_VALIDATION_FAIL_CLOSED",
+                    }
+                )
+
+        # Legitimate formula present but equity missing → invalid, not omitted axis.
+        missing_equity = {
+            "account_new_risk_snapshot": {
+                "observation_status": "COMPLETE",
+                "reconciliation_status": "VERIFIED",
+                "circuit_breaker_state": "CLOSED",
+                "daily_loss_usd": 0.0,
+            },
+        }
+        legal = {"pct_max": 0.05, "pct_min": 0.01, "equity_scale_usd": 2000.0}
+        target = json.dumps(
+            {"runtime_risk_limits": {"max_daily_loss_equity_formula": legal}}
+        )
+        with patch.dict(os.environ, {"RUNTIME_TARGET_JSON": target}, clear=False):
+            with patch(
+                "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+                return_value=None,
+            ):
+                resolution = resolve_max_daily_loss_resolution(missing_equity)
+                result = evaluate_portfolio_new_risk_admission(missing_equity)
+        self.assertEqual(resolution.status, "invalid")
+        self.assertEqual(result.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+        self.assertTrue(new_risk_buy_prohibited(result))
+
+        # Truly absent daily-loss config remains optional (no invented axis).
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("RUNTIME_TARGET_JSON", None)
+            with patch(
+                "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+                return_value=None,
+            ):
+                resolution = resolve_max_daily_loss_resolution(healthy)
+                result = evaluate_portfolio_new_risk_admission(healthy)
+        self.assertEqual(resolution.status, "absent")
+        self.assertEqual(result.disposition, NewRiskDisposition.ALLOW_NEW_RISK)
 
     def test_equity_schedule_uses_larger_pct_for_small_account(self) -> None:
         from application.account_new_risk_gate_support import (
@@ -462,15 +564,6 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
         )
 
     def test_attention_notify_on_new_risk_prohibit_dedupes(self) -> None:
-        # Prefer local QPK worktrees with attention i18n; else installed pin.
-        for candidate in (
-            Path("/Users/lisiyi/Projects/.worktrees/qpk-attention-i18n-20260918/src"),
-            Path("/Users/lisiyi/Projects/QuantPlatformKit/src"),
-        ):
-            if candidate.exists() and str(candidate) not in sys.path:
-                sys.path.insert(0, str(candidate))
-                break
-
         reset_attention_sent_keys_for_tests()
         portfolio = {
             "total_equity": 50_000.0,
@@ -527,6 +620,9 @@ class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
         set_cycle_snapshot(None)
         reset_attention_sent_keys_for_tests()
         os.environ.pop(ACCOUNT_NEW_RISK_GATE_ENV, None)
+        os.environ.pop("RUNTIME_TARGET_JSON", None)
+        os.environ.pop("SCHWAB_MAX_DAILY_LOSS_USD", None)
+        os.environ.pop("MAX_DAILY_LOSS_USD", None)
 
     def _run_buy_cycle(self, *, portfolio_overrides=None):
         submitted_orders = []
@@ -611,6 +707,63 @@ class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
         self.assertEqual(submitted_orders, [])
         self.assertTrue(any("Account new-risk gate" in log for log in result.trade_logs))
         self.assertTrue(any("NEW_RISK_PROHIBITED" in log for log in result.trade_logs))
+
+    def test_execution_cycle_zero_buy_submit_when_equity_formula_invalid(self) -> None:
+        """Explicit illegal formula must not omit the daily-loss axis and allow buys."""
+        formula = {"pct_max": 0.05, "pct_min": 0.01, "equity_scale_usd": 0}
+        target = json.dumps(
+            {"runtime_risk_limits": {"max_daily_loss_equity_formula": formula}}
+        )
+        with patch.dict(os.environ, {"RUNTIME_TARGET_JSON": target}, clear=False):
+            with patch(
+                "application.execution_service.attach_daily_loss_fact_to_portfolio",
+                side_effect=lambda portfolio, **_kwargs: dict(portfolio),
+            ):
+                with patch(
+                    "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+                    return_value=None,
+                ):
+                    _result, submitted_orders = self._run_buy_cycle(
+                        portfolio_overrides={
+                            "total_equity": 2000.0,
+                            "account_new_risk_snapshot": {
+                                "observation_status": "COMPLETE",
+                                "reconciliation_status": "VERIFIED",
+                                "circuit_breaker_state": "CLOSED",
+                                "daily_loss_usd": 0.0,
+                                "daily_loss_baseline_equity_usd": 2000.0,
+                            },
+                        }
+                    )
+        self.assertEqual(submitted_orders, [])
+        self.assertTrue(any("NEW_RISK_PROHIBITED" in log for log in _result.trade_logs))
+
+    def test_execution_cycle_passes_plan_account_hash_to_daily_loss_attach(self) -> None:
+        """C1: attach must receive plan account_hash (same identity as order submit)."""
+        captured: dict[str, object] = {}
+
+        def _capture_attach(portfolio, **kwargs):
+            captured["expected_account_hash"] = kwargs.get("expected_account_hash")
+            return dict(portfolio)
+
+        with patch(
+            "application.execution_service.attach_daily_loss_fact_to_portfolio",
+            side_effect=_capture_attach,
+        ):
+            with patch(
+                "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+                return_value=None,
+            ):
+                _result, _submitted = self._run_buy_cycle(
+                    portfolio_overrides={
+                        "account_new_risk_snapshot": {
+                            "observation_status": "COMPLETE",
+                            "reconciliation_status": "VERIFIED",
+                            "circuit_breaker_state": "CLOSED",
+                        },
+                    }
+                )
+        self.assertEqual(captured.get("expected_account_hash"), "demo")
 
     def test_execution_cycle_allows_buys_when_healthy(self) -> None:
         result, submitted_orders = self._run_buy_cycle(

@@ -7,6 +7,7 @@ import math
 import os
 from collections.abc import Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Any
 
 from quant_platform_kit.risk.account_new_risk_gate import (
@@ -35,6 +36,15 @@ _DEFAULT_DOMAIN = "us_equity"
 _DAILY_LOSS_LIMIT_CARRIER_SYMBOL = "SPY"
 
 _cycle_snapshot: InjectedReconciliationSnapshot | None = None
+
+
+@dataclass(frozen=True)
+class MaxDailyLossResolution:
+    """Distinguish unconfigured vs resolvable vs illegal daily-loss limit inputs."""
+
+    status: str  # absent | valid | invalid
+    limit_usd: float | None = None
+    reason: str | None = None
 
 
 def is_account_new_risk_gate_enabled() -> bool:
@@ -226,23 +236,6 @@ def _resolve_explicit_daily_loss_usd(
     return None
 
 
-def _max_daily_loss_from_runtime_target_json() -> float | None:
-    """Read max_daily_loss_usd from RUNTIME_TARGET_JSON when present; soft-omit on errors."""
-    raw_target = os.environ.get("RUNTIME_TARGET_JSON")
-    if raw_target is None or not str(raw_target).strip():
-        return None
-    try:
-        payload = json.loads(raw_target)
-    except (TypeError, ValueError):
-        return None
-    if not isinstance(payload, dict):
-        return None
-    policy = payload.get("runtime_risk_limits")
-    if not isinstance(policy, dict) or "max_daily_loss_usd" not in policy:
-        return None
-    return _positive_limit_or_none(policy.get("max_daily_loss_usd"))
-
-
 def _runtime_risk_limits_policy() -> dict[str, Any] | None:
     raw_target = os.environ.get("RUNTIME_TARGET_JSON")
     if raw_target is None or not str(raw_target).strip():
@@ -312,6 +305,33 @@ def resolve_max_daily_loss_usd_from_equity_schedule(
     return equity * chosen_pct
 
 
+def _classify_equity_formula(
+    equity_usd: float | None,
+    formula: object,
+) -> MaxDailyLossResolution:
+    """Classify an explicit equity formula: valid limit, or invalid (never absent)."""
+    if not isinstance(formula, Mapping):
+        return MaxDailyLossResolution(status="invalid", reason="formula_not_mapping")
+    equity = _coerce_optional_float(equity_usd)
+    if equity is None or equity <= 0.0:
+        return MaxDailyLossResolution(status="invalid", reason="formula_equity_unavailable")
+    pct_max = _coerce_optional_float(formula.get("pct_max"))
+    pct_min = _coerce_optional_float(formula.get("pct_min"))
+    if "equity_scale_usd" not in formula and "E0_usd" not in formula:
+        return MaxDailyLossResolution(status="invalid", reason="formula_scale_missing")
+    scale = _coerce_optional_float(
+        formula.get("equity_scale_usd") if "equity_scale_usd" in formula else formula.get("E0_usd")
+    )
+    if pct_max is None or pct_min is None or scale is None:
+        return MaxDailyLossResolution(status="invalid", reason="formula_params_invalid")
+    if not (0.0 < pct_min <= pct_max <= 1.0):
+        return MaxDailyLossResolution(status="invalid", reason="formula_bounds_invalid")
+    if scale <= 0.0:
+        return MaxDailyLossResolution(status="invalid", reason="formula_scale_non_positive")
+    pct = pct_min + (pct_max - pct_min) * (scale / (scale + equity))
+    return MaxDailyLossResolution(status="valid", limit_usd=equity * pct, reason="formula")
+
+
 def resolve_max_daily_loss_usd_from_equity_formula(
     equity_usd: float | None,
     formula: object,
@@ -324,27 +344,27 @@ def resolve_max_daily_loss_usd_from_equity_formula(
     As equity shrinks, allowed daily-loss fraction approaches ``pct_max``; as equity
     grows it approaches ``pct_min``. ``equity_scale_usd`` is the transition scale
     (near E≈scale, fraction is about midway). No production defaults in code.
+    Returns the limit only when valid; use ``_classify_equity_formula`` to distinguish
+    illegal explicit config from a true absent axis.
     """
+    classified = _classify_equity_formula(equity_usd, formula)
+    if classified.status == "valid":
+        return classified.limit_usd
+    return None
+
+
+def _classify_equity_schedule(
+    equity_usd: float | None,
+    schedule: object,
+) -> MaxDailyLossResolution:
+    """Classify an explicit equity schedule: valid limit, or invalid (never absent)."""
     equity = _coerce_optional_float(equity_usd)
     if equity is None or equity <= 0.0:
-        return None
-    if not isinstance(formula, Mapping):
-        return None
-    pct_max = _coerce_optional_float(formula.get("pct_max"))
-    pct_min = _coerce_optional_float(formula.get("pct_min"))
-    scale = _coerce_optional_float(
-        formula.get("equity_scale_usd")
-        if "equity_scale_usd" in formula
-        else formula.get("E0_usd")
-    )
-    if pct_max is None or pct_min is None or scale is None:
-        return None
-    if not (0.0 < pct_min <= pct_max <= 1.0):
-        return None
-    if scale <= 0.0:
-        return None
-    pct = pct_min + (pct_max - pct_min) * (scale / (scale + equity))
-    return equity * pct
+        return MaxDailyLossResolution(status="invalid", reason="schedule_equity_unavailable")
+    scheduled = resolve_max_daily_loss_usd_from_equity_schedule(equity, schedule)
+    if scheduled is None:
+        return MaxDailyLossResolution(status="invalid", reason="schedule_invalid")
+    return MaxDailyLossResolution(status="valid", limit_usd=scheduled, reason="schedule")
 
 
 def _equity_for_daily_loss_schedule(
@@ -361,10 +381,17 @@ def _equity_for_daily_loss_schedule(
     return _resolve_equity_usd(portfolio, None)
 
 
-def resolve_max_daily_loss_usd(
+def _resolution_from_explicit_absolute(value: object) -> MaxDailyLossResolution:
+    limit = _positive_limit_or_none(value)
+    if limit is None:
+        return MaxDailyLossResolution(status="invalid", reason="absolute_limit_invalid")
+    return MaxDailyLossResolution(status="valid", limit_usd=limit, reason="absolute")
+
+
+def resolve_max_daily_loss_resolution(
     portfolio: Mapping[str, Any] | None = None,
-) -> float | None:
-    """Resolve max_daily_loss_usd; omit the axis when unset.
+) -> MaxDailyLossResolution:
+    """Resolve max daily-loss limit with absent/valid/invalid semantics.
 
     Priority:
     1. explicit absolute ``max_daily_loss_usd`` on snapshot/portfolio
@@ -373,40 +400,61 @@ def resolve_max_daily_loss_usd(
     4. RUNTIME_TARGET ``runtime_risk_limits.max_daily_loss_equity_schedule`` (tiers)
     5. SCHWAB_MAX_DAILY_LOSS_USD / MAX_DAILY_LOSS_USD env absolutes
 
-    No approved production default in code.
+    Explicit keys that cannot resolve are ``invalid`` (fail closed) — never silent
+    fallthrough to a looser source. No approved production default in code.
     """
     if portfolio is not None:
         projection = _mapping_or_empty(portfolio.get("account_new_risk_snapshot"))
         for source in (projection, portfolio):
             if "max_daily_loss_usd" in source:
-                return _positive_limit_or_none(source.get("max_daily_loss_usd"))
-    policy_limit = _max_daily_loss_from_runtime_target_json()
-    if policy_limit is not None:
-        return policy_limit
+                return _resolution_from_explicit_absolute(source.get("max_daily_loss_usd"))
+
     policy = _runtime_risk_limits_policy()
+    if policy is not None and "max_daily_loss_usd" in policy:
+        return _resolution_from_explicit_absolute(policy.get("max_daily_loss_usd"))
+
     equity = _equity_for_daily_loss_schedule(portfolio)
     if policy is not None and "max_daily_loss_equity_formula" in policy:
-        from_formula = resolve_max_daily_loss_usd_from_equity_formula(
-            equity,
-            policy.get("max_daily_loss_equity_formula"),
-        )
-        if from_formula is not None:
-            return from_formula
+        return _classify_equity_formula(equity, policy.get("max_daily_loss_equity_formula"))
     if policy is not None and "max_daily_loss_equity_schedule" in policy:
-        scheduled = resolve_max_daily_loss_usd_from_equity_schedule(
-            equity,
-            policy.get("max_daily_loss_equity_schedule"),
-        )
-        if scheduled is not None:
-            return scheduled
+        return _classify_equity_schedule(equity, policy.get("max_daily_loss_equity_schedule"))
+
     for key in _MAX_DAILY_LOSS_ENV_KEYS:
         raw = os.environ.get(key)
         if raw is None or not str(raw).strip():
             continue
-        limit = _positive_limit_or_none(raw)
-        if limit is not None:
-            return limit
+        return _resolution_from_explicit_absolute(raw)
+    return MaxDailyLossResolution(status="absent")
+
+
+def resolve_max_daily_loss_usd(
+    portfolio: Mapping[str, Any] | None = None,
+) -> float | None:
+    """Resolve max_daily_loss_usd; omit the axis when unset or illegal.
+
+    Prefer ``resolve_max_daily_loss_resolution`` when absent/invalid must differ.
+    """
+    resolution = resolve_max_daily_loss_resolution(portfolio)
+    if resolution.status == "valid":
+        return resolution.limit_usd
     return None
+
+
+def _admission_for_daily_loss_resolution(
+    portfolio: Mapping[str, Any],
+    *,
+    execution: Mapping[str, Any] | None = None,
+) -> NewRiskAdmissionResult:
+    """Build snapshot + limits; illegal explicit daily-loss config fails closed."""
+    snapshot = build_snapshot_from_portfolio(portfolio, execution=execution)
+    resolution = resolve_max_daily_loss_resolution(portfolio)
+    if resolution.status == "invalid":
+        return NewRiskAdmissionResult(
+            disposition=NewRiskDisposition.NEW_RISK_PROHIBITED,
+            reason_codes=("DAILY_LOSS_UNKNOWN_FAIL_CLOSED",),
+        )
+    limits = runtime_risk_limits_for_daily_loss_axis(resolution.limit_usd)
+    return evaluate_new_risk_admission(snapshot, limits)
 
 
 def runtime_risk_limits_for_daily_loss_axis(
@@ -476,9 +524,7 @@ def evaluate_portfolio_new_risk_admission(
     execution: Mapping[str, Any] | None = None,
 ) -> NewRiskAdmissionResult:
     try:
-        snapshot = build_snapshot_from_portfolio(portfolio, execution=execution)
-        limits = runtime_risk_limits_for_daily_loss_axis(resolve_max_daily_loss_usd(portfolio))
-        return evaluate_new_risk_admission(snapshot, limits)
+        return _admission_for_daily_loss_resolution(portfolio, execution=execution)
     except AccountNewRiskGateError:
         return NewRiskAdmissionResult(
             disposition=NewRiskDisposition.NEW_RISK_PROHIBITED,
@@ -655,7 +701,20 @@ def evaluate_cycle_new_risk_admission() -> NewRiskAdmissionResult:
             reason_codes=("EQUITY_UNKNOWN_FAIL_CLOSED",),
         )
     try:
-        limits = runtime_risk_limits_for_daily_loss_axis(resolve_max_daily_loss_usd())
+        # Reuse cycle equity so explicit formula/schedule stay valid; missing equity
+        # with an explicit config remains invalid → fail closed.
+        portfolio_for_limit = {
+            "account_new_risk_snapshot": {
+                "equity_usd": _cycle_snapshot.equity_usd,
+            }
+        }
+        resolution = resolve_max_daily_loss_resolution(portfolio_for_limit)
+        if resolution.status == "invalid":
+            return NewRiskAdmissionResult(
+                disposition=NewRiskDisposition.NEW_RISK_PROHIBITED,
+                reason_codes=("DAILY_LOSS_UNKNOWN_FAIL_CLOSED",),
+            )
+        limits = runtime_risk_limits_for_daily_loss_axis(resolution.limit_usd)
         return evaluate_new_risk_admission(_cycle_snapshot, limits)
     except AccountNewRiskGateError:
         return NewRiskAdmissionResult(
