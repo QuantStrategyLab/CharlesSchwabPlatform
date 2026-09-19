@@ -37,7 +37,7 @@ from strategy_registry import (
 
 
 SAMPLE_STRATEGY_PROFILE = "tqqq_growth_income"
-BASE_SCHWAB_PROFILES = frozenset(
+ENABLED_SCHWAB_PROFILES = frozenset(
     {
         SAMPLE_STRATEGY_PROFILE,
         "global_etf_rotation",
@@ -45,16 +45,25 @@ BASE_SCHWAB_PROFILES = frozenset(
         "nasdaq_sp500_smart_dca",
         "russell_top50_leader_rotation",
         "soxl_soxx_trend_income",
+    }
+)
+ELIGIBLE_ONLY_SCHWAB_PROFILES = frozenset(
+    {
         "us_equity_combo",
         "us_equity_combo_leveraged",
+        "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve",
     }
 )
 OPTIONAL_SCHWAB_PROFILES = frozenset({"global_etf_confidence_vol_gate"})
 
 
-def expected_schwab_profiles(actual_profiles) -> frozenset[str]:
+def expected_enabled_schwab_profiles(actual_profiles) -> frozenset[str]:
     actual = frozenset(actual_profiles)
-    return BASE_SCHWAB_PROFILES | (OPTIONAL_SCHWAB_PROFILES & actual)
+    return ENABLED_SCHWAB_PROFILES | (OPTIONAL_SCHWAB_PROFILES & actual)
+
+
+def expected_eligible_schwab_profiles(actual_profiles) -> frozenset[str]:
+    return expected_enabled_schwab_profiles(actual_profiles) | ELIGIBLE_ONLY_SCHWAB_PROFILES
 
 
 def runtime_target_json(
@@ -211,11 +220,11 @@ class RuntimeConfigSupportTests(unittest.TestCase):
 
     def test_platform_supported_profiles_are_filtered_by_registry(self):
         profiles = get_supported_profiles_for_platform(SCHWAB_PLATFORM)
-        self.assertEqual(profiles, expected_schwab_profiles(profiles))
+        self.assertEqual(profiles, expected_enabled_schwab_profiles(profiles))
 
     def test_platform_eligible_profiles_are_exposed_by_capability_matrix(self):
         profiles = get_eligible_profiles_for_platform(SCHWAB_PLATFORM)
-        self.assertEqual(profiles, expected_schwab_profiles(profiles))
+        self.assertEqual(profiles, expected_eligible_schwab_profiles(profiles))
 
     def test_rejects_human_readable_alias(self):
         with patch.dict(
@@ -589,7 +598,14 @@ class RuntimeConfigSupportTests(unittest.TestCase):
         rows = get_platform_profile_status_matrix()
         by_profile = {row["canonical_profile"]: row for row in rows}
 
-        self.assertEqual(set(by_profile), expected_schwab_profiles(by_profile))
+        self.assertEqual(set(by_profile), expected_eligible_schwab_profiles(by_profile))
+        self.assertEqual(
+            {profile for profile, row in by_profile.items() if row["enabled"]},
+            expected_enabled_schwab_profiles(by_profile),
+        )
+        for profile in ELIGIBLE_ONLY_SCHWAB_PROFILES:
+            self.assertTrue(by_profile[profile]["eligible"])
+            self.assertFalse(by_profile[profile]["enabled"])
         self.assertEqual(
             by_profile["tqqq_growth_income"],
             {
