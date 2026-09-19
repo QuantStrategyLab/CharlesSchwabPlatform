@@ -8,7 +8,9 @@ from zoneinfo import ZoneInfo
 from application.daily_loss_fact_producer import (
     EXTERNAL_CASH_FLOW_TYPES,
     derive_daily_loss_usd,
+    fetch_schwab_transactions,
     produce_daily_loss_fact,
+    produce_daily_loss_fact_attempt,
     select_session_baseline,
     summarize_verified_external_cash_flow,
 )
@@ -85,6 +87,85 @@ def test_non_valid_whitelisted_event_marks_window_unverified():
     )
     assert result.status == "unverified"
     assert result.net_flow is None
+
+
+def test_identified_external_flow_with_bad_or_missing_time_is_unverified_not_zero():
+    """F2: baseline 500, deposit +100, equity 550 → loss 50 when time valid; never verified/0."""
+    window_start = datetime(2026, 9, 18, 9, 0, tzinfo=ZoneInfo("UTC"))
+    window_end = datetime(2026, 9, 18, 13, 0, tzinfo=ZoneInfo("UTC"))
+    valid = [
+        _tx(type="CASH_RECEIPT", status="VALID", time="2026-09-18T10:00:00+0000", net_amount=100.0),
+    ]
+    ok = summarize_verified_external_cash_flow(
+        valid, window_start=window_start, window_end=window_end
+    )
+    assert ok.status == "verified"
+    assert ok.net_flow == 100.0
+    assert derive_daily_loss_usd(500.0, ok.net_flow, 550.0) == 50.0
+
+    for bad in (
+        _tx(type="CASH_RECEIPT", status="VALID", time="invalid", net_amount=100.0),
+        {
+            "type": "CASH_RECEIPT",
+            "status": "VALID",
+            "netAmount": 100.0,
+            "transferItems": [{"instrument": {"assetType": "CURRENCY"}}],
+        },
+        _tx(type="CASH_RECEIPT", status="VALID", time="", net_amount=100.0),
+    ):
+        result = summarize_verified_external_cash_flow(
+            [bad], window_start=window_start, window_end=window_end
+        )
+        assert result.status == "unverified"
+        assert result.net_flow is None
+        assert derive_daily_loss_usd(500.0, result.net_flow, 550.0) is None
+
+
+def test_cash_flow_window_timezone_endpoints_withdrawal_and_internal_trade():
+    window_start = datetime(2026, 9, 18, 9, 0, tzinfo=NY)
+    window_end = datetime(2026, 9, 18, 16, 0, tzinfo=NY)
+    transactions = [
+        # Same instant as start (exclusive) → safely outside.
+        _tx(type="WIRE_IN", status="VALID", time="2026-09-18T09:00:00-0400", net_amount=25.0),
+        # Inside via offset without colon.
+        _tx(type="ACH_DISBURSEMENT", status="VALID", time="2026-09-18T12:00:00-0400", net_amount=-40.0),
+        # Explicitly after end → outside.
+        _tx(type="WIRE_OUT", status="VALID", time="2026-09-18T16:00:01-0400", net_amount=-10.0),
+        # Internal trade is not external capital.
+        _tx(
+            type="TRADE",
+            status="VALID",
+            time="2026-09-18T11:00:00-0400",
+            net_amount=-200.0,
+            asset_types=["EQUITY", "CURRENCY"],
+        ),
+        # End boundary inclusive.
+        _tx(type="CASH_RECEIPT", status="VALID", time="2026-09-18T16:00:00-0400", net_amount=15.0),
+    ]
+    result = summarize_verified_external_cash_flow(
+        transactions, window_start=window_start, window_end=window_end
+    )
+    assert result.status == "verified"
+    assert result.net_flow == -25.0
+    assert result.event_count == 2
+
+
+def test_produce_omits_when_external_flow_time_unverified():
+    session_open = datetime(2026, 9, 18, 9, 30, tzinfo=NY)
+    prior_close = datetime(2026, 9, 17, 16, 0, tzinfo=NY)
+    attempt = produce_daily_loss_fact_attempt(
+        current_equity_usd=550.0,
+        reference_now=datetime(2026, 9, 18, 13, 45, tzinfo=NY),
+        session_open=session_open,
+        prior_session_close=prior_close,
+        reports_loader=lambda: [_report(finished_at="2026-09-17T19:35:15+00:00", equity=500.0)],
+        transactions_loader=lambda **_: [
+            _tx(type="CASH_RECEIPT", status="VALID", time="invalid", net_amount=100.0),
+        ],
+    )
+    assert attempt.status == "omitted"
+    assert attempt.fact is None
+    assert "unverified" in attempt.reason
 
 
 def test_derive_daily_loss_ignores_pure_deposit_and_withdrawal():
@@ -188,8 +269,6 @@ def test_produce_fact_returns_none_when_transaction_loader_fails():
 
 
 def test_produce_attempt_exposes_transactions_load_failed_reason():
-    from application.daily_loss_fact_producer import produce_daily_loss_fact_attempt
-
     session_open = datetime(2026, 9, 18, 9, 30, tzinfo=NY)
     prior_close = datetime(2026, 9, 17, 16, 0, tzinfo=NY)
     attempt = produce_daily_loss_fact_attempt(
@@ -203,3 +282,43 @@ def test_produce_attempt_exposes_transactions_load_failed_reason():
     assert attempt.status == "omitted"
     assert attempt.reason == "transactions_load_failed"
     assert attempt.fact is None
+
+
+def test_c1_dual_account_first_hash_differs_from_expected_is_reachable():
+    """C1: synthetic dual-account chain — [0] must not silently replace expected_account_hash."""
+    fetched: list[str] = []
+
+    class _Resp:
+        def __init__(self, payload, status_code=200):
+            self._payload = payload
+            self.status_code = status_code
+
+        def json(self):
+            return self._payload
+
+    class _Client:
+        def get_account_numbers(self):
+            return _Resp(
+                [
+                    {"hashValue": "acct-first"},
+                    {"hashValue": "acct-expected"},
+                ]
+            )
+
+        def get_transactions(self, account_hash, **_kwargs):
+            fetched.append(account_hash)
+            return _Resp([])
+
+    start = datetime(2026, 9, 17, 16, 0, tzinfo=NY)
+    end = datetime(2026, 9, 18, 14, 0, tzinfo=NY)
+    # Reachability: without binding, loader historically preferred numbers[0].
+    fetch_schwab_transactions(_Client(), start=start, end=end, expected_account_hash="acct-expected")
+    assert fetched == ["acct-expected"]
+    fetched.clear()
+    # Multi-account with no expected identity must fail closed (reuse portfolio identity rules).
+    try:
+        fetch_schwab_transactions(_Client(), start=start, end=end)
+        raised = False
+    except RuntimeError:
+        raised = True
+    assert raised is True

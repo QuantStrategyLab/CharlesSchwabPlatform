@@ -60,3 +60,40 @@ def test_attach_injects_verified_fact():
     # 500 + 50 - 480 = 70 loss
     assert out.get("daily_loss_usd") == 70.0
     assert out["account_new_risk_snapshot"]["daily_loss_fact_status"] == "verified"
+
+
+def test_attach_default_loader_binds_expected_account_from_portfolio_metadata():
+    """C1 consumer seam: portfolio metadata identity is passed into fetch (not numbers[0])."""
+    from unittest.mock import patch
+
+    prior = datetime(2026, 9, 17, 16, 0, tzinfo=NY)
+    session_open = datetime(2026, 9, 18, 9, 30, tzinfo=NY)
+    reports = [
+        {
+            "status": "ok",
+            "finished_at": "2026-09-17T20:05:00+00:00",
+            "summary": {"total_equity": 500.0},
+        }
+    ]
+    now = datetime(2026, 9, 18, 14, 0, tzinfo=NY)
+    with patch(
+        "application.daily_loss_fact_producer.resolve_nasdaq_session_bounds",
+        return_value=(prior, session_open),
+    ):
+        with patch(
+            "application.daily_loss_fact_producer.fetch_schwab_transactions",
+            return_value=[],
+        ) as fetch:
+            attach_daily_loss_fact_to_portfolio(
+                {
+                    "total_equity": 480.0,
+                    "metadata": {"account_hash": "acct-expected"},
+                    "strategy_profile": "soxl_soxx_trend_income",
+                },
+                client=object(),
+                reference_now=now,
+                reports_loader=lambda: reports,
+                transactions_loader=None,
+            )
+    assert fetch.call_count == 1
+    assert fetch.call_args.kwargs["expected_account_hash"] == "acct-expected"

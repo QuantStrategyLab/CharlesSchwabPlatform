@@ -710,7 +710,14 @@ def execute_rebalance_cycle(
     if is_account_new_risk_gate_enabled():
         portfolio = dict(portfolio)
         # Verified daily-loss fact when baseline+cashflow available; omit on failure.
-        portfolio = attach_daily_loss_fact_to_portfolio(portfolio, client=client)
+        # Bind transactions to the same plan account identity used for submit
+        # (decision_mapper: plan["account_hash"] = snapshot.metadata["account_hash"]).
+        expected_account_hash = str((plan or {}).get("account_hash") or "").strip() or None
+        portfolio = attach_daily_loss_fact_to_portfolio(
+            portfolio,
+            client=client,
+            expected_account_hash=expected_account_hash,
+        )
         portfolio["account_new_risk_snapshot"] = build_account_new_risk_snapshot(
             portfolio,
             execution=execution,

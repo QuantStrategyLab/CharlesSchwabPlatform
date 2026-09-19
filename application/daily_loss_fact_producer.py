@@ -44,6 +44,7 @@ class CashFlowSummary:
     status: str  # verified | unverified | unavailable
     net_flow: float | None
     event_count: int = 0
+    reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -133,16 +134,35 @@ def summarize_verified_external_cash_flow(
         if tx_type not in EXTERNAL_CASH_FLOW_TYPES:
             continue
         when = parse_broker_datetime(raw.get("time") or raw.get("transactionDate"))
-        if when is None or when <= window_start or when > window_end:
+        if when is None:
+            # Identified external capital movement whose session membership cannot be
+            # proven — never skip into verified net_flow=0.
+            return CashFlowSummary(
+                status="unverified",
+                net_flow=None,
+                event_count=count,
+                reason="missing_or_invalid_time",
+            )
+        if when <= window_start or when > window_end:
             continue
         status = str(raw.get("status") or "").strip().upper()
         if status != "VALID":
-            return CashFlowSummary(status="unverified", net_flow=None, event_count=count)
+            return CashFlowSummary(
+                status="unverified",
+                net_flow=None,
+                event_count=count,
+                reason="non_valid_status",
+            )
         if not _is_pure_currency(raw):
             continue
         amount = _coerce_finite_float(raw.get("netAmount"))
         if amount is None:
-            return CashFlowSummary(status="unverified", net_flow=None, event_count=count)
+            return CashFlowSummary(
+                status="unverified",
+                net_flow=None,
+                event_count=count,
+                reason="missing_or_invalid_amount",
+            )
         net += amount
         count += 1
     return CashFlowSummary(status="verified", net_flow=net, event_count=count)
@@ -306,7 +326,10 @@ def produce_daily_loss_fact_attempt(
         window_end=reference_now,
     )
     if flow.status == "unverified":
-        return DailyLossFactAttempt(status="omitted", reason="flow_unverified")
+        reason = flow.reason or "flow_unverified"
+        if reason != "flow_unverified" and not reason.startswith("flow_"):
+            reason = f"flow_unverified:{reason}"
+        return DailyLossFactAttempt(status="omitted", reason=reason)
     if flow.status != "verified" or flow.net_flow is None:
         return DailyLossFactAttempt(status="omitted", reason="flow_unavailable")
 
@@ -386,7 +409,13 @@ def fetch_schwab_transactions(
     *,
     start: datetime,
     end: datetime,
+    expected_account_hash: str | None = None,
 ) -> list[Mapping[str, Any]]:
+    """Load transactions for the bound account identity (never invent another).
+
+    Reuses the same expected-hash selection rule as QPK schwab portfolio reads:
+    single account may omit expected; multiple accounts require an explicit hash.
+    """
     get_account_numbers = getattr(client, "get_account_numbers", None)
     get_transactions = getattr(client, "get_transactions", None)
     if not callable(get_account_numbers) or not callable(get_transactions):
@@ -394,12 +423,28 @@ def fetch_schwab_transactions(
     numbers = get_account_numbers().json()
     if not isinstance(numbers, list) or not numbers:
         raise RuntimeError("no schwab account numbers")
-    row = numbers[0]
-    if not isinstance(row, Mapping):
-        raise RuntimeError("invalid schwab account number row")
-    account_hash = row.get("hashValue") or row.get("accountHash")
-    if not account_hash:
+    account_hashes: list[str] = []
+    for row in numbers:
+        if not isinstance(row, Mapping):
+            continue
+        value = row.get("hashValue") or row.get("accountHash")
+        if value is not None and str(value).strip():
+            account_hashes.append(str(value).strip())
+    if not account_hashes:
         raise RuntimeError("missing schwab account hash")
+
+    expected = str(expected_account_hash or "").strip() or None
+    if expected is None:
+        if len(account_hashes) != 1:
+            raise RuntimeError("schwab transactions require explicit account hash for multiple accounts")
+        account_hash = account_hashes[0]
+    else:
+        # Casefold match mirrors strategy_runtime account_hash binding.
+        matched = [item for item in account_hashes if item.casefold() == expected.casefold()]
+        if not matched:
+            raise RuntimeError("expected schwab account hash unavailable for transactions")
+        account_hash = matched[0]
+
     response = get_transactions(account_hash, start_date=start, end_date=end)
     status = getattr(response, "status_code", None)
     payload = response.json()
@@ -410,6 +455,22 @@ def fetch_schwab_transactions(
     return [item for item in payload if isinstance(item, Mapping)]
 
 
+def _expected_account_hash_from_portfolio(portfolio: Mapping[str, Any]) -> str | None:
+    for source in (
+        portfolio,
+        portfolio.get("account_new_risk_snapshot"),
+        portfolio.get("metadata"),
+    ):
+        if not isinstance(source, Mapping):
+            continue
+        for key in ("account_hash", "accountHash", "hashValue"):
+            value = source.get(key)
+            if value is not None and str(value).strip():
+                return str(value).strip()
+    env_hash = str(os.environ.get("SCHWAB_ACCOUNT_HASH") or "").strip()
+    return env_hash or None
+
+
 def attach_daily_loss_fact_to_portfolio(
     portfolio: Mapping[str, Any],
     *,
@@ -417,6 +478,7 @@ def attach_daily_loss_fact_to_portfolio(
     reference_now: datetime | None = None,
     reports_loader: Callable[[], Sequence[Mapping[str, Any]]] | None = None,
     transactions_loader: Callable[..., Sequence[Mapping[str, Any]]] | None = None,
+    expected_account_hash: str | None = None,
 ) -> dict[str, Any]:
     """Inject verified daily_loss_usd when producible; never invent; never raise."""
     out = dict(portfolio or {})
@@ -434,6 +496,7 @@ def attach_daily_loss_fact_to_portfolio(
         current = _coerce_finite_float(out.get("total_equity"))
 
     profile = _strategy_profile_from_portfolio(out)
+    account_hash = str(expected_account_hash or "").strip() or _expected_account_hash_from_portfolio(out)
 
     def _default_reports_loader() -> Sequence[Mapping[str, Any]]:
         return load_recent_runtime_reports_from_gcs(strategy_profile=profile)
@@ -441,7 +504,12 @@ def attach_daily_loss_fact_to_portfolio(
     def _default_transactions_loader(*, start: datetime, end: datetime) -> Sequence[Mapping[str, Any]]:
         if client is None:
             raise RuntimeError("no schwab client")
-        return fetch_schwab_transactions(client, start=start, end=end)
+        return fetch_schwab_transactions(
+            client,
+            start=start,
+            end=end,
+            expected_account_hash=account_hash,
+        )
 
     try:
         attempt = produce_daily_loss_fact_attempt(
