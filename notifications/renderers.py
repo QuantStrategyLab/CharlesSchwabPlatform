@@ -6,6 +6,8 @@ from collections.abc import Mapping
 
 from notifications.events import RenderedNotification
 from quant_platform_kit.common.notification_localization import (
+    format_notification_account_label as _format_notification_account_label,
+    humanize_notification_lines as _humanize_notification_lines,
     localize_notification_text as _base_localize_notification_text,
 )
 from quant_platform_kit.notifications.renderer_base import (
@@ -161,17 +163,15 @@ def _first_detail_line(text: str) -> str:
     return parts[0] if parts else ""
 
 
-def _render_extra_notification_block(extra_notification_lines) -> str:
-    block = "\n".join(
-        str(line).strip() for line in extra_notification_lines if str(line).strip()
-    )
+def _render_extra_notification_block(extra_notification_lines, *, translator) -> str:
+    block = "\n".join(_humanize_notification_lines(extra_notification_lines, translator=translator))
     if not block:
         return ""
     return f"{block}\n"
 
 
 def _format_account_line(account_label, *, translator) -> str:
-    value = str(account_label or "").strip()
+    value = _format_notification_account_label(account_label, translator=translator)
     if not value:
         return ""
     label = "账户" if _translator_uses_zh(translator) else "Account"
@@ -282,7 +282,11 @@ def render_trade_notification(
 ) -> RenderedNotification:
     signal_display = _localize_notification_text(execution["signal_display"], translator=translator)
     status_display = _localize_notification_text(execution.get("status_display"), translator=translator)
-    extra_notification_block = _render_extra_notification_block(extra_notification_lines)
+    extra_notification_block = _render_extra_notification_block(
+        extra_notification_lines,
+        translator=translator,
+    )
+    trade_logs = _humanize_notification_lines(trade_logs, translator=translator)
     cash_only_execution = bool(execution.get("cash_only_execution", True))
     dashboard_text = _format_dashboard_text(
         str(execution["dashboard_text"]),
@@ -352,7 +356,10 @@ def render_heartbeat_notification(
 ) -> RenderedNotification:
     signal_display = _localize_notification_text(execution["signal_display"], translator=translator)
     status_display = _localize_notification_text(execution.get("status_display"), translator=translator)
-    extra_notification_block = _render_extra_notification_block(extra_notification_lines)
+    extra_notification_block = _render_extra_notification_block(
+        extra_notification_lines,
+        translator=translator,
+    )
     cash_only_execution = bool(execution.get("cash_only_execution", True))
     dashboard_text = _format_dashboard_text(
         str(execution["dashboard_text"]),
