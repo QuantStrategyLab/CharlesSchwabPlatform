@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 # Prefer installed QPK (site-packages / uv env). Sibling checkout is append-only
 # fallback only — not pin proof. Authoritative pin checks use pytest -o pythonpath
-# to an unmodified f8aed3fe export (see CURSOR_RESULT.md); do not hardcode worktrees.
+# to an unmodified 3f06ce31 export (see CURSOR_RESULT.md); do not hardcode worktrees.
 REPO_ROOT = ROOT.parent.parent if ROOT.parent.name == ".worktrees" else ROOT
 for _qpk_src in (
     REPO_ROOT / "QuantPlatformKit" / "src",
