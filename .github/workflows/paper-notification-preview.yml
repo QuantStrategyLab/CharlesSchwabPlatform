@@ -1,0 +1,41 @@
+name: PAPER Notification Preview
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: paper-notification-preview-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  preview:
+    name: Send PAPER Telegram notification preview pack
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      # Production runtime target stays fail-closed for this manual preview path.
+      RUNTIME_TARGET_ENABLED: "false"
+      NOTIFY_LANG: ${{ vars.NOTIFY_LANG || 'zh' }}
+      GLOBAL_TELEGRAM_CHAT_ID: ${{ secrets.GLOBAL_TELEGRAM_CHAT_ID }}
+      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+
+      - name: Install locked runtime dependencies
+        run: |
+          set -euo pipefail
+          uv sync --frozen --no-dev
+
+      - name: Send PAPER notification preview pack
+        run: uv run --no-sync python scripts/send_paper_notification_preview.py
