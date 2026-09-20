@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -52,7 +53,21 @@ def _split_chat_ids(raw: str | None) -> list[str]:
 
 
 def resolve_telegram_token() -> str:
-    return (os.environ.get("TELEGRAM_TOKEN") or os.environ.get("TG_TOKEN") or "").strip()
+    direct_token = (os.environ.get("TELEGRAM_TOKEN") or os.environ.get("TG_TOKEN") or "").strip()
+    if direct_token:
+        return direct_token
+    secret_name = (os.environ.get("TELEGRAM_TOKEN_SECRET_NAME") or "").strip()
+    if not secret_name:
+        return ""
+    result = subprocess.run(
+        ["gcloud", "secrets", "versions", "access", "latest", "--secret", secret_name],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
 
 
 def resolve_telegram_chat_id() -> str:

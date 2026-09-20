@@ -17,12 +17,17 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+      id-token: write
     env:
+      GCP_PROJECT_ID: charlesschwabquant
+      GCP_WORKLOAD_IDENTITY_PROVIDER: projects/401309731911/locations/global/workloadIdentityPools/github-actions/providers/github-main
+      GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: schwab-platform-deploy@charlesschwabquant.iam.gserviceaccount.com
       # Production runtime target stays fail-closed for this manual preview path.
       RUNTIME_TARGET_ENABLED: "false"
       NOTIFY_LANG: ${{ vars.NOTIFY_LANG || 'zh' }}
       GLOBAL_TELEGRAM_CHAT_ID: ${{ secrets.GLOBAL_TELEGRAM_CHAT_ID }}
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+      TELEGRAM_TOKEN_SECRET_NAME: ${{ vars.TELEGRAM_TOKEN_SECRET_NAME }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -31,6 +36,19 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+
+      - name: Authenticate to Google Cloud for existing Telegram secret access
+        if: ${{ env.TELEGRAM_TOKEN == '' && env.TELEGRAM_TOKEN_SECRET_NAME != '' }}
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud for existing Telegram secret access
+        if: ${{ env.TELEGRAM_TOKEN == '' && env.TELEGRAM_TOKEN_SECRET_NAME != '' }}
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
 
       - name: Install locked runtime dependencies
         run: |
