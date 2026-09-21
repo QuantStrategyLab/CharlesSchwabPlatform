@@ -198,6 +198,25 @@ def test_select_session_baseline_prefers_latest_in_prior_close_to_open_window():
     assert baseline.equity_usd == 591.0
 
 
+def test_select_session_baseline_uses_previous_session_day_after_weekend():
+    session_open = datetime(2026, 9, 21, 9, 30, tzinfo=NY)
+    prior_close = datetime(2026, 9, 18, 16, 0, tzinfo=NY)
+    reports = [
+        _report(finished_at="2026-09-18T19:35:15+00:00", equity=260.94),
+        _report(finished_at="2026-09-17T19:35:15+00:00", equity=250.00),
+    ]
+
+    baseline = select_session_baseline(
+        reports,
+        session_open=session_open,
+        prior_session_close=prior_close,
+    )
+
+    assert baseline is not None
+    assert baseline.equity_usd == 260.94
+    assert baseline.source == "runtime_report_prior_session"
+
+
 def test_produce_fact_end_to_end_with_injected_loaders():
     session_open = datetime(2026, 9, 18, 9, 30, tzinfo=NY)
     prior_close = datetime(2026, 9, 17, 16, 0, tzinfo=NY)
