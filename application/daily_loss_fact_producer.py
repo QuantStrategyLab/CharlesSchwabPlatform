@@ -194,6 +194,12 @@ def select_session_baseline(
     primary: list[SessionBaseline] = []
     fallback: list[SessionBaseline] = []
     fallback_floor = session_open - timedelta(hours=36)
+    prior_session_day_start = prior_session_close.astimezone(_NY).replace(
+        hour=0,
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
     for report in reports:
         if not isinstance(report, Mapping):
             continue
@@ -211,6 +217,17 @@ def select_session_baseline(
             continue
         if prior_session_close <= finished < session_open:
             primary.append(SessionBaseline(equity_usd=equity, as_of=finished))
+        elif prior_session_day_start <= finished < session_open:
+            # A weekend or exchange holiday can make the previous session's
+            # final report older than the short fallback window. Keep the
+            # fallback bounded to the immediately preceding session day.
+            fallback.append(
+                SessionBaseline(
+                    equity_usd=equity,
+                    as_of=finished,
+                    source="runtime_report_prior_session",
+                )
+            )
         elif fallback_floor <= finished < session_open:
             fallback.append(SessionBaseline(equity_usd=equity, as_of=finished, source="runtime_report_fallback"))
     pool = primary or fallback
