@@ -46,6 +46,11 @@ _SAFE_CANDIDATE_KEYS = frozenset(
     }
 )
 _TERMINAL_ORDER_STATUSES = frozenset({"CANCELED", "REJECTED", "EXPIRED", "FILLED", "REPLACED"})
+# Official Trader API OAS3: GET orders max range 1 year, maxResults default 3000.
+# Official GTC duration is at most 180 calendar days, so a 365-day entered-time
+# window covers every currently open GTC when the response is under the limit.
+_OPEN_ORDERS_LOOKBACK = timedelta(days=365)
+_OPEN_ORDERS_MAX_RESULTS = 3000
 
 
 class SchwabReconciliationReadError(RuntimeError):
@@ -250,9 +255,8 @@ def collect_read_only_reconciliation_observations(
     *,
     fetch_account_snapshot: Callable[..., Any],
     now: datetime | None = None,
-    lookback: timedelta = timedelta(days=7),
 ) -> SchwabReconciliationObservations:
-    """Read account and bounded order observations, not a complete order/fill ledger."""
+    """Read account and bounded order observations; open-orders completeness is proven only under the official result limit."""
 
     get_account_numbers = getattr(client, "get_account_numbers", None)
     get_orders_for_account = getattr(client, "get_orders_for_account", None)
@@ -270,13 +274,20 @@ def collect_read_only_reconciliation_observations(
     reference_now = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     try:
         orders_payload = _response_json(
-            get_orders_for_account(account_hash, from_entered_datetime=reference_now - lookback, to_entered_datetime=reference_now),
+            get_orders_for_account(
+                account_hash,
+                from_entered_datetime=reference_now - _OPEN_ORDERS_LOOKBACK,
+                to_entered_datetime=reference_now,
+                max_results=_OPEN_ORDERS_MAX_RESULTS,
+            ),
             surface="recent orders",
         )
     except TypeError as exc:
         raise SchwabReconciliationReadError("Schwab reconciliation requires bounded read-only order-history support.") from exc
     if not isinstance(orders_payload, list) or any(not isinstance(item, Mapping) for item in orders_payload):
         raise SchwabReconciliationReadError("Schwab reconciliation received invalid recent orders.")
+    returned_count = len(orders_payload)
+    open_orders_complete = returned_count < _OPEN_ORDERS_MAX_RESULTS
     normalized_orders = [_normalize_order(order) for order in orders_payload]
     open_orders = [order for order in normalized_orders if order["status"] not in _TERMINAL_ORDER_STATUSES]
     cash = {
@@ -284,17 +295,25 @@ def collect_read_only_reconciliation_observations(
         "buying_power": _number(getattr(snapshot, "buying_power", None), field_name="buying power"),
         "total_equity": _number(getattr(snapshot, "total_equity", None), field_name="total equity"),
     }
+    reason_codes: list[str] = []
+    if not open_orders_complete:
+        reason_codes.append("open_orders_max_results_limit_reached")
+    reason_codes.extend(
+        (
+            "order_fill_quantity_is_not_a_timestamped_execution_stream",
+            "official_fill_coverage_rules_unverified",
+        )
+    )
     coverage = {
-        "order_lookback_days": int(lookback.total_seconds() // 86400),
-        "open_orders_complete": False,
+        "order_lookback_days": int(_OPEN_ORDERS_LOOKBACK.total_seconds() // 86400),
+        "orders_result_count": returned_count,
+        "orders_max_results": _OPEN_ORDERS_MAX_RESULTS,
+        "orders_result_cap_reached": not open_orders_complete,
+        "open_orders_complete": open_orders_complete,
         "recent_executions_complete": False,
         "open_orders_query": "entered_time_window",
         "recent_executions_query": "omitted_incomplete_coverage",
-        "reason_codes": (
-            "entered_time_window_may_miss_older_gtc_open_orders",
-            "order_fill_quantity_is_not_a_timestamped_execution_stream",
-            "official_open_order_and_fill_coverage_rules_unverified",
-        ),
+        "reason_codes": tuple(reason_codes),
     }
     return SchwabReconciliationObservations(
         account_scope={"account_hash": account_hash},
@@ -302,10 +321,9 @@ def collect_read_only_reconciliation_observations(
         positions=_canonical_records([_normalize_position(position) for position in (getattr(snapshot, "positions", ()) or ())]),
         cash=cash,
         open_orders=_canonical_records(open_orders),
-        # Entry-time filtering misses older GTC orders and old orders filled now.
         # Cumulative filled quantity is not a timestamped execution record.
         recent_executions=(),
-        open_orders_complete=False,
+        open_orders_complete=open_orders_complete,
         recent_executions_complete=False,
         coverage=coverage,
     )

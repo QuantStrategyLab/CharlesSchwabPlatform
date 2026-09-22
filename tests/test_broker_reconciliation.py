@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from dataclasses import replace
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -30,6 +32,42 @@ class _Response:
         return self._payload
 
 
+_SAMPLE_ORDERS = [
+    {
+        "orderId": 1,
+        "status": "WORKING",
+        "orderType": "LIMIT",
+        "orderStrategyType": "SINGLE",
+        "enteredTime": "2026-08-31T00:00:00Z",
+        "filledQuantity": 0,
+        "remainingQuantity": 2,
+        "orderLegCollection": [
+            {
+                "instruction": "BUY",
+                "quantity": 2,
+                "instrument": {"symbol": "SOXL", "assetType": "EQUITY"},
+            }
+        ],
+    },
+    {
+        "orderId": 2,
+        "status": "FILLED",
+        "orderType": "MARKET",
+        "orderStrategyType": "SINGLE",
+        "enteredTime": "2026-08-30T00:00:00Z",
+        "filledQuantity": 3,
+        "remainingQuantity": 0,
+        "orderLegCollection": [
+            {
+                "instruction": "SELL",
+                "quantity": 3,
+                "instrument": {"symbol": "SOXL", "assetType": "EQUITY"},
+            }
+        ],
+    },
+]
+
+
 class _Client:
     def get_account_numbers(self):
         return _Response([{"hashValue": "acct-hash"}])
@@ -37,42 +75,8 @@ class _Client:
     def get_orders_for_account(self, account_hash, **kwargs):
         assert account_hash == "acct-hash"
         assert kwargs["from_entered_datetime"] < kwargs["to_entered_datetime"]
-        return _Response(
-            [
-                {
-                    "orderId": 1,
-                    "status": "WORKING",
-                    "orderType": "LIMIT",
-                    "orderStrategyType": "SINGLE",
-                    "enteredTime": "2026-08-31T00:00:00Z",
-                    "filledQuantity": 0,
-                    "remainingQuantity": 2,
-                    "orderLegCollection": [
-                        {
-                            "instruction": "BUY",
-                            "quantity": 2,
-                            "instrument": {"symbol": "SOXL", "assetType": "EQUITY"},
-                        }
-                    ],
-                },
-                {
-                    "orderId": 2,
-                    "status": "FILLED",
-                    "orderType": "MARKET",
-                    "orderStrategyType": "SINGLE",
-                    "enteredTime": "2026-08-30T00:00:00Z",
-                    "filledQuantity": 3,
-                    "remainingQuantity": 0,
-                    "orderLegCollection": [
-                        {
-                            "instruction": "SELL",
-                            "quantity": 3,
-                            "instrument": {"symbol": "SOXL", "assetType": "EQUITY"},
-                        }
-                    ],
-                },
-            ]
-        )
+        assert kwargs["max_results"] == 3000
+        return _Response(deepcopy(_SAMPLE_ORDERS))
 
 
 def _snapshot(_client, *, strategy_symbols=()):
@@ -109,7 +113,68 @@ def _target():
     )
 
 
-def test_collects_partial_read_only_surfaces_without_claiming_completeness():
+def test_open_orders_complete_when_year_window_returns_under_max_results():
+    captured: dict[str, object] = {}
+
+    class CapturingClient(_Client):
+        def get_orders_for_account(self, account_hash, **kwargs):
+            captured.update(kwargs)
+            return super().get_orders_for_account(account_hash, **kwargs)
+
+    now = datetime(2026, 9, 22, tzinfo=timezone.utc)
+    observations = collect_read_only_reconciliation_observations(
+        CapturingClient(), fetch_account_snapshot=_snapshot, now=now
+    )
+
+    assert captured["max_results"] == 3000
+    assert (captured["to_entered_datetime"] - captured["from_entered_datetime"]).days == 365
+    assert observations.coverage["order_lookback_days"] == 365
+    assert observations.coverage["orders_result_count"] == 2
+    assert observations.coverage["orders_max_results"] == 3000
+    assert observations.coverage["orders_result_cap_reached"] is False
+    assert observations.open_orders_complete is True
+    assert observations.coverage["open_orders_complete"] is True
+    assert observations.recent_executions_complete is False
+    assert observations.coverage["recent_executions_complete"] is False
+    assert len(observations.open_orders) == 1
+    assert observations.open_orders[0]["order_id"] == "1"
+    assert "open_orders_max_results_limit_reached" not in observations.coverage["reason_codes"]
+    assert "order_fill_quantity_is_not_a_timestamped_execution_stream" in observations.coverage["reason_codes"]
+
+
+@pytest.mark.parametrize("returned_count", [3000, 3001])
+def test_open_orders_incomplete_when_result_limit_reached_or_exceeded(returned_count):
+    class TruncatedClient(_Client):
+        def get_orders_for_account(self, account_hash, **kwargs):
+            assert kwargs["max_results"] == 3000
+            template = deepcopy(_SAMPLE_ORDERS[0])
+            payload = []
+            for index in range(returned_count):
+                order = deepcopy(template)
+                order["orderId"] = index + 1
+                order["status"] = "WORKING" if index % 2 == 0 else "FILLED"
+                payload.append(order)
+            return _Response(payload)
+
+    observations = collect_read_only_reconciliation_observations(
+        TruncatedClient(), fetch_account_snapshot=_snapshot
+    )
+
+    assert observations.open_orders_complete is False
+    assert observations.coverage["open_orders_complete"] is False
+    assert observations.coverage["order_lookback_days"] == 365
+    assert observations.coverage["orders_result_count"] == returned_count
+    assert observations.coverage["orders_max_results"] == 3000
+    assert observations.coverage["orders_result_cap_reached"] is True
+    assert "open_orders_max_results_limit_reached" in observations.coverage["reason_codes"]
+    assert observations.recent_executions_complete is False
+    assert all(
+        order["status"] not in {"CANCELED", "REJECTED", "EXPIRED", "FILLED", "REPLACED"}
+        for order in observations.open_orders
+    )
+
+
+def test_collects_read_only_surfaces_with_provable_open_orders_only():
     observations = collect_read_only_reconciliation_observations(
         _Client(), fetch_account_snapshot=_snapshot
     )
@@ -119,12 +184,13 @@ def test_collects_partial_read_only_surfaces_without_claiming_completeness():
     assert len(observations.positions) == 1
     assert len(observations.open_orders) == 1
     assert observations.recent_executions == ()
-    assert observations.open_orders_complete is False
+    assert observations.open_orders_complete is True
     assert observations.recent_executions_complete is False
-    assert observations.coverage["open_orders_complete"] is False
+    assert observations.coverage["open_orders_complete"] is True
     assert observations.coverage["recent_executions_complete"] is False
-    assert observations.coverage["order_lookback_days"] == 7
-    assert "entered_time_window_may_miss_older_gtc_open_orders" in observations.coverage["reason_codes"]
+    assert observations.coverage["order_lookback_days"] == 365
+    assert "open_orders_max_results_limit_reached" not in observations.coverage["reason_codes"]
+    assert "order_fill_quantity_is_not_a_timestamped_execution_stream" in observations.coverage["reason_codes"]
 
 
 def test_missing_order_history_support_fails_closed():
@@ -511,31 +577,43 @@ def test_reconciliation_candidate_requires_canonical_receipt_schema():
         validate_reconciliation_candidate(candidate)
 
 
-@pytest.mark.parametrize("outside_window_status", ["WORKING", "FILLED"])
-def test_entered_window_cannot_authorize_recovery_even_when_all_digests_match(tmp_path, outside_window_status):
-    from datetime import datetime, timezone
-    from copy import deepcopy
+@pytest.mark.parametrize("legacy_status", ["WORKING", "FILLED"])
+def test_year_window_includes_older_gtc_but_executions_still_block_recovery(tmp_path, legacy_status):
     now = datetime(2026, 9, 5, tzinfo=timezone.utc)
 
     class WindowedClient(_Client):
         def get_orders_for_account(self, account_hash, **kwargs):
             visible = super().get_orders_for_account(account_hash, **kwargs).json()
-            hidden = deepcopy(visible[0])
-            hidden.update(orderId=99, status=outside_window_status,
-                          enteredTime="2026-07-01T00:00:00Z",
-                          closeTime="2026-09-04T12:00:00Z" if outside_window_status == "FILLED" else "",
-                          filledQuantity=2 if outside_window_status == "FILLED" else 0)
-            # The broker really has an old GTC, or an old order filled yesterday.
-            # Filtering by entry date excludes it in both cases.
-            return _Response([order for order in [*visible, hidden]
-                              if kwargs["from_entered_datetime"] <= datetime.fromisoformat(order["enteredTime"].replace("Z", "+00:00")) <= kwargs["to_entered_datetime"]])
+            legacy = deepcopy(visible[0])
+            legacy.update(
+                orderId=99,
+                status=legacy_status,
+                enteredTime="2026-07-01T00:00:00Z",
+                closeTime="2026-09-04T12:00:00Z" if legacy_status == "FILLED" else "",
+                filledQuantity=2 if legacy_status == "FILLED" else 0,
+            )
+            return _Response(
+                [
+                    order
+                    for order in [*visible, legacy]
+                    if kwargs["from_entered_datetime"]
+                    <= datetime.fromisoformat(order["enteredTime"].replace("Z", "+00:00"))
+                    <= kwargs["to_entered_datetime"]
+                ]
+            )
 
     observations = collect_read_only_reconciliation_observations(
         WindowedClient(), fetch_account_snapshot=_snapshot, now=now,
     )
-    assert all(order["order_id"] != "99" for order in observations.open_orders)
+    if legacy_status == "WORKING":
+        assert any(order["order_id"] == "99" for order in observations.open_orders)
+    else:
+        assert all(order["order_id"] != "99" for order in observations.open_orders)
+    assert observations.open_orders_complete is True
+
     def empty_env(name, default=None):
         return str(tmp_path) if name == "SCHWAB_EXECUTION_STATE_DIR" else default
+
     seed = build_reconciliation_candidate(
         observations=observations, runtime_target=_target(), project_id=None,
         env_reader=empty_env, observed_at=now,
@@ -544,10 +622,57 @@ def test_entered_window_cannot_authorize_recovery_even_when_all_digests_match(tm
         "account_scope_sha256", "positions_sha256", "cash_sha256", "open_orders_sha256",
         "recent_executions_sha256", "local_execution_ledger_sha256",
     )}
+
     def configured_env(name, default=None):
         if name == "SCHWAB_RECONCILIATION_EXPECTED_DIGESTS_JSON":
             return json.dumps(expected)
         return empty_env(name, default)
+
+    candidate = build_reconciliation_candidate(
+        observations=observations, runtime_target=_target(), project_id=None,
+        env_reader=configured_env, observed_at=now,
+    )
+    assert candidate.permits_active_lkg is False
+    assert BrokerReconciliationFinding.OPEN_ORDERS_MISMATCH not in candidate.recovery_blockers
+    assert BrokerReconciliationFinding.RECENT_EXECUTIONS_MISMATCH in candidate.recovery_blockers
+
+
+def test_max_results_truncation_keeps_open_orders_incomplete_for_recovery(tmp_path):
+    now = datetime(2026, 9, 5, tzinfo=timezone.utc)
+
+    class TruncatedClient(_Client):
+        def get_orders_for_account(self, account_hash, **kwargs):
+            template = deepcopy(_SAMPLE_ORDERS[0])
+            return _Response(
+                [
+                    {**deepcopy(template), "orderId": index + 1, "status": "WORKING"}
+                    for index in range(3000)
+                ]
+            )
+
+    observations = collect_read_only_reconciliation_observations(
+        TruncatedClient(), fetch_account_snapshot=_snapshot, now=now,
+    )
+    assert observations.open_orders_complete is False
+    assert "open_orders_max_results_limit_reached" in observations.coverage["reason_codes"]
+
+    def empty_env(name, default=None):
+        return str(tmp_path) if name == "SCHWAB_EXECUTION_STATE_DIR" else default
+
+    seed = build_reconciliation_candidate(
+        observations=observations, runtime_target=_target(), project_id=None,
+        env_reader=empty_env, observed_at=now,
+    )
+    expected = {key: seed.evidence.to_dict()[key] for key in (
+        "account_scope_sha256", "positions_sha256", "cash_sha256", "open_orders_sha256",
+        "recent_executions_sha256", "local_execution_ledger_sha256",
+    )}
+
+    def configured_env(name, default=None):
+        if name == "SCHWAB_RECONCILIATION_EXPECTED_DIGESTS_JSON":
+            return json.dumps(expected)
+        return empty_env(name, default)
+
     candidate = build_reconciliation_candidate(
         observations=observations, runtime_target=_target(), project_id=None,
         env_reader=configured_env, observed_at=now,
