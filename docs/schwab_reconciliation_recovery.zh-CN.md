@@ -38,3 +38,20 @@
 
 生产恢复完整对账仍要求挂单与成交两侧均可证明；本改动只让 C4 所需的挂单观测在
 未截断时可证明完整，不授予订单提交权限，也不把成交完整性升格为 true。
+
+## C4 zero-submit 装配旁路（研究/影子）
+
+在只读采集已经得到 `SchwabReconciliationObservations` 与
+`BrokerReconciliationEvidence` 之后，可用纯函数
+`assemble_c4_shadow_zero_submit_from_reconcile_observations` 把账户/挂单两份物化
+快照与调用方另行提供的最终 RiskEngine assessment 交给
+`materialize_c4_shadow_zero_submit_cycle`。该旁路：
+
+- 不创建券商客户端，不调用下单/撤单，不改 `POST /reconcile` 行为；
+- 不发明 RiskEngine `APPROVE`，也不把 `recent_executions_complete` 伪装成 true；
+- 挂单覆盖不完整、身份/digest/策略/时点不一致、或风险结果非零提交语义时，输出
+  `PARKED`，并固定 `proposed_orders=[]`、`submission_attempted=false`、
+  `execution_permitted=false`、`no_order=true`。
+
+自然禁止提交周期仍需外部只读授权与部署后的真实读回；本旁路只提供可审计的本地
+装配入口。
