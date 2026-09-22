@@ -335,6 +335,33 @@ def install_stub_modules(
 
     broker_reconciliation_module.validate_reconciliation_preconditions = validate_reconciliation_preconditions
 
+    c4_shadow_reconcile_runtime_module = types.ModuleType("application.c4_shadow_reconcile_runtime")
+
+    def _build_reconcile_c4_report_attachment(**_kwargs):
+        return {
+            "summary": {
+                "c4_shadow_status": "PARKED",
+                "c4_shadow_no_order": True,
+                "c4_shadow_submission_attempted": False,
+                "c4_shadow_execution_permitted": False,
+            },
+            "diagnostics": {
+                "c4_shadow_zero_submit": {
+                    "status": "PARKED",
+                    "reason_codes": ["assessment missing"],
+                    "no_order": True,
+                    "proposed_orders_count": 0,
+                    "submission_attempted": False,
+                    "execution_permitted": False,
+                    "execution_authorized": False,
+                }
+            },
+        }
+
+    c4_shadow_reconcile_runtime_module.build_reconcile_c4_report_attachment = (
+        _build_reconcile_c4_report_attachment
+    )
+
     paper_execution_command_consumer_module = types.ModuleType("application.paper_execution_command_consumer")
     paper_execution_command_consumer_module.consume_due_paper_execution_commands = lambda *args, **kwargs: None
 
@@ -493,6 +520,7 @@ def install_stub_modules(
         "application.runtime_strategy_adapters": runtime_strategy_adapters_module,
         "application.rebalance_service": rebalance_service_module,
         "application.broker_reconciliation": broker_reconciliation_module,
+        "application.c4_shadow_reconcile_runtime": c4_shadow_reconcile_runtime_module,
         "application.paper_execution_command_consumer": paper_execution_command_consumer_module,
         "application.runtime_report_summary": runtime_report_summary_module,
         "application.signal_snapshot": signal_snapshot_module,

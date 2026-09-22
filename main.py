@@ -20,6 +20,7 @@ from application.broker_reconciliation import (
     validate_reconciliation_candidate,
     validate_reconciliation_preconditions,
 )
+from application.c4_shadow_reconcile_runtime import build_reconcile_c4_report_attachment
 from application.runtime_broker_adapters import build_runtime_broker_adapters
 from application.runtime_report_summary import summarize_execution_cycle_result
 from application.runtime_composer import build_runtime_composer
@@ -73,6 +74,9 @@ app = Flask(__name__)
 READ_ONLY_BROKER_RECONCILIATION_COLLECTOR = (
     collect_read_only_reconciliation_observations
 )
+# Optional injectable final RiskEngine assessment provider for C4 shadow.
+# Default None → explicit PARKED with "assessment missing"; never forge APPROVE.
+FINAL_RISK_ASSESSMENT_PROVIDER = None
 
 
 def get_project_id():
@@ -1147,6 +1151,12 @@ def _handle_reconciliation():
             project_id=PROJECT_ID,
         )
         payload = validate_reconciliation_candidate(candidate)
+        c4_attachment = build_reconcile_c4_report_attachment(
+            observations=observations,
+            reconciliation_evidence=candidate.evidence,
+            runtime_target=runtime_target,
+            final_risk_assessment_provider=FINAL_RISK_ASSESSMENT_PROVIDER,
+        )
         finalize_runtime_report(
             report,
             status="ok",
@@ -1154,8 +1164,12 @@ def _handle_reconciliation():
                 "broker_reconciliation_permits_active_lkg": candidate.permits_active_lkg,
                 "broker_reconciliation_blockers_count": len(candidate.recovery_blockers),
                 "broker_reconciliation_ledger_records_count": candidate.execution_ledger_records_count,
+                **c4_attachment["summary"],
             },
-            diagnostics={"broker_reconciliation": payload},
+            diagnostics={
+                "broker_reconciliation": payload,
+                **c4_attachment["diagnostics"],
+            },
         )
         reporting_adapters.log_event(
             log_context,
@@ -1164,7 +1178,10 @@ def _handle_reconciliation():
             execution_window="reconciliation",
             permits_active_lkg=candidate.permits_active_lkg,
             blockers=[finding.value for finding in candidate.recovery_blockers],
+            c4_shadow_status=c4_attachment["summary"].get("c4_shadow_status"),
+            c4_shadow_no_order=c4_attachment["summary"].get("c4_shadow_no_order"),
         )
+        # Public response contract unchanged: candidate receipt only.
         return json.dumps(payload, ensure_ascii=False), 200, {"Content-Type": "application/json"}
     except Exception as exc:
         append_runtime_report_error(
