@@ -42,16 +42,26 @@
 ## C4 zero-submit 装配旁路（研究/影子）
 
 在只读采集已经得到 `SchwabReconciliationObservations` 与
-`BrokerReconciliationEvidence` 之后，可用纯函数
+`BrokerReconciliationEvidence` 之后，纯函数
 `assemble_c4_shadow_zero_submit_from_reconcile_observations` 把账户/挂单两份物化
 快照与调用方另行提供的最终 RiskEngine assessment 交给
-`materialize_c4_shadow_zero_submit_cycle`。该旁路：
+`materialize_c4_shadow_zero_submit_cycle`。
 
-- 不创建券商客户端，不调用下单/撤单，不改 `POST /reconcile` 行为；
+`POST /reconcile` 成功路径会通过 `build_reconcile_c4_report_attachment` 调用同一旁路，
+把脱敏后的 C4 状态写入**内部**运行报告 `summary` / `diagnostics`；公开 HTTP 响应仍只
+返回 `schwab_reconciliation_candidate.v1`，不包含账户明细或 C4 原始材料。
+
+该旁路：
+
+- 不创建券商客户端，不调用下单/撤单，不改变公开响应契约；
 - 不发明 RiskEngine `APPROVE`，也不把 `recent_executions_complete` 伪装成 true；
-- 挂单覆盖不完整、身份/digest/策略/时点不一致、或风险结果非零提交语义时，输出
-  `PARKED`，并固定 `proposed_orders=[]`、`submission_attempted=false`、
-  `execution_permitted=false`、`no_order=true`。
+- 默认没有真实最终 RiskEngine assessment provider（`FINAL_RISK_ASSESSMENT_PROVIDER`）时，
+  显式输出 `PARKED`，`reason_codes` 含 `assessment missing`，并固定
+  `proposed_orders=[]`、`submission_attempted=false`、`execution_permitted=false`、
+  `no_order=true`；
+- 只有同一账户/策略/UTC `as_of` 的真实 provider 能给出最终 assessment，且挂单覆盖、
+  身份/digest/时点满足时，才可能得到 `READY_SHADOW_ZERO_SUBMIT`；任一不满足仍为
+  `PARKED`。
 
 自然禁止提交周期仍需外部只读授权与部署后的真实读回；本旁路只提供可审计的本地
-装配入口。
+装配与报告入口。
