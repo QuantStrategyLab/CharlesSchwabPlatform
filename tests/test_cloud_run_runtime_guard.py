@@ -342,3 +342,60 @@ def test_strategy_request_capacity_warning_still_fails(monkeypatch):
     }
 
     assert guard._is_failure(entry) is True
+
+
+def _reconcile_503_entry(*, path: str = "/reconcile", status: int = 503) -> dict:
+    return {
+        "severity": "WARNING",
+        "httpRequest": {
+            "status": status,
+            "requestUrl": f"https://example.run.app{path}",
+        },
+    }
+
+
+def test_reconcile_503_is_failure_by_default(monkeypatch):
+    monkeypatch.delenv("RUNTIME_GUARD_IGNORE_ACTIVE_LKG_RECONCILE_GATE_REJECTS", raising=False)
+    monkeypatch.setenv("RUNTIME_TARGET_ENABLED", "true")
+    monkeypatch.setenv(
+        "RUNTIME_TARGET_JSON",
+        json.dumps({"live_continuity": {"state": "ACTIVE_LKG"}}),
+    )
+
+    assert guard._is_failure(_reconcile_503_entry()) is True
+
+
+def test_active_lkg_reconcile_gate_reject_can_be_ignored(monkeypatch):
+    monkeypatch.setenv("RUNTIME_GUARD_IGNORE_ACTIVE_LKG_RECONCILE_GATE_REJECTS", "true")
+    monkeypatch.setenv("RUNTIME_TARGET_ENABLED", "true")
+    monkeypatch.setenv(
+        "RUNTIME_TARGET_JSON",
+        json.dumps({"live_continuity": {"state": "ACTIVE_LKG"}}),
+    )
+
+    assert guard._is_failure(_reconcile_503_entry()) is False
+
+
+def test_active_lkg_reconcile_ignore_stays_narrow(monkeypatch):
+    monkeypatch.setenv("RUNTIME_GUARD_IGNORE_ACTIVE_LKG_RECONCILE_GATE_REJECTS", "true")
+    monkeypatch.setenv("RUNTIME_TARGET_ENABLED", "true")
+    monkeypatch.setenv(
+        "RUNTIME_TARGET_JSON",
+        json.dumps({"live_continuity": {"state": "ACTIVE_LKG"}}),
+    )
+
+    assert guard._is_failure(_reconcile_503_entry(path="/dry-run")) is True
+    assert guard._is_failure(_reconcile_503_entry(status=500)) is True
+
+    monkeypatch.setenv(
+        "RUNTIME_TARGET_JSON",
+        json.dumps({"live_continuity": {"state": "RECONCILE_ONLY"}}),
+    )
+    assert guard._is_failure(_reconcile_503_entry()) is True
+
+    monkeypatch.setenv(
+        "RUNTIME_TARGET_JSON",
+        json.dumps({"live_continuity": {"state": "ACTIVE_LKG"}}),
+    )
+    monkeypatch.setenv("RUNTIME_TARGET_ENABLED", "false")
+    assert guard._is_failure(_reconcile_503_entry()) is True
