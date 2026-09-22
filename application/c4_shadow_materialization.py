@@ -14,9 +14,9 @@ from collections.abc import Mapping, Sequence
 from dataclasses import is_dataclass
 from datetime import datetime, timezone
 from quant_platform_kit.common.broker_reconciliation import (
+    DEFAULT_BROKER_RECONCILIATION_MAX_AGE,
     BrokerReconciliationEvidence,
     calculate_broker_observation_sha256,
-    evaluate_broker_reconciliation_recovery,
 )
 from us_equity_strategies.research.c4_shadow_zero_submit_cycle import (
     consume_c4_shadow_zero_submit_cycle,
@@ -225,21 +225,26 @@ def _observations_content(value: object) -> tuple[dict[str, object], list[dict[s
     return facts, normalized_orders, dict(_canonical_fact(account_scope))
 
 
-def _orders_content(
+def _orders_parts(
     snapshot: Mapping[str, object],
-) -> tuple[dict[str, object], list[dict[str, object]], dict[str, object]]:
-    _common_snapshot(snapshot, prefix="ORDERS")
+) -> tuple[dict[str, object], dict[str, object], list[dict[str, object]], dict[str, object]]:
+    """Split original digest material from normalized runtime order content."""
+
+    common = _common_snapshot(snapshot, prefix="ORDERS")
     observation_facts, c4_orders, account_scope = _observations_content(snapshot.get("observations"))
-    content = {key: value for key, value in snapshot.items() if key not in {"orders_digest", "observations"}}
-    content["observations"] = observation_facts
-    return dict(_canonical_fact(content)), c4_orders, account_scope
+    original = {key: value for key, value in snapshot.items() if key not in {"orders_digest", "observations"}}
+    original["observations"] = observation_facts
+    digest_content = dict(_canonical_fact(original))
+    # Digests keep original as_of text; compare/consumer paths use normalized UTC.
+    runtime_content = {**digest_content, **common}
+    return digest_content, runtime_content, c4_orders, account_scope
 
 
 def calculate_materialized_orders_sha256(order_snapshot: Mapping[str, object]) -> str:
     """Return the QPK hash of validated complete order-observation content."""
 
-    content, _, _ = _orders_content(_mapping(order_snapshot, reason="C4_BRIDGE_ORDERS_REQUIRED"))
-    return _canonical_digest(content)
+    digest_content, _, _, _ = _orders_parts(_mapping(order_snapshot, reason="C4_BRIDGE_ORDERS_REQUIRED"))
+    return _canonical_digest(digest_content)
 
 
 def _assessment_content(snapshot: Mapping[str, object]) -> dict[str, object]:
@@ -279,25 +284,37 @@ def _validated_reconciliation_ref(
     order_observation_facts: Mapping[str, object],
     reconciliation_evidence: object,
 ) -> dict[str, object]:
-    """Bind C4 inputs to an existing runtime reconciliation receipt."""
+    """Bind C4 inputs to existing receipt fields; not live-recovery success."""
 
     if not isinstance(reconciliation_evidence, BrokerReconciliationEvidence):
         raise _BridgeInputError("C4_BRIDGE_RECONCILIATION_EVIDENCE_REQUIRED")
-    evidence = BrokerReconciliationEvidence.from_dict(reconciliation_evidence.to_dict())
+    try:
+        evidence = BrokerReconciliationEvidence.from_dict(reconciliation_evidence.to_dict())
+    except (TypeError, ValueError) as exc:
+        raise _BridgeInputError("C4_BRIDGE_RECONCILIATION_EVIDENCE_UNTRUSTED_OR_STALE") from exc
+
     expected_scope = _canonical_digest(account["account_scope"])
     expected_orders = _canonical_digest(order_observation_facts["open_orders"])
-    findings = evaluate_broker_reconciliation_recovery(
-        evidence,
-        expected_platform_id="schwab",
-        expected_strategy_profile=str(account["strategy_id"]),
-        expected_account_scope_sha256=expected_scope,
-        expected_open_orders_sha256=expected_orders,
-    )
-    if findings:
-        raise _BridgeInputError("C4_BRIDGE_RECONCILIATION_EVIDENCE_UNTRUSTED_OR_STALE")
     observed_at = _as_of(evidence.to_dict()["observed_at"], reason="C4_BRIDGE_RECONCILIATION_EVIDENCE_INVALID")
+    observed_instant = evidence.observed_at
+    if not isinstance(observed_instant, datetime):
+        raise _BridgeInputError("C4_BRIDGE_RECONCILIATION_EVIDENCE_UNTRUSTED_OR_STALE")
+    reference_now = datetime.now(timezone.utc).replace(microsecond=0)
+    if (
+        observed_instant > reference_now
+        or reference_now - observed_instant > DEFAULT_BROKER_RECONCILIATION_MAX_AGE
+        or evidence.platform_id != "schwab"
+        or evidence.strategy_profile != str(account["strategy_id"])
+        or evidence.account_scope_sha256 != expected_scope
+        or evidence.open_orders_sha256 != expected_orders
+        or evidence.broker_connected is not True
+        or evidence.account_identity_match is not True
+    ):
+        raise _BridgeInputError("C4_BRIDGE_RECONCILIATION_EVIDENCE_UNTRUSTED_OR_STALE")
+
     for snapshot, prefix in ((account, "ACCOUNT"), (orders, "ORDERS"), (assessment, "RISK")):
-        if snapshot["as_of"] != observed_at:
+        snapshot_as_of = _as_of(snapshot["as_of"], reason=f"C4_BRIDGE_{prefix}_AS_OF_INVALID")
+        if snapshot_as_of != observed_at:
             raise _BridgeInputError(f"C4_BRIDGE_{prefix}_RECONCILIATION_AS_OF_MISMATCH")
     return {
         "schema_version": evidence.schema_version,
@@ -351,8 +368,8 @@ def materialize_c4_shadow_zero_submit_cycle(
             raise _BridgeInputError("C4_BRIDGE_ACCOUNT_DIGEST_MISMATCH")
 
         orders = _mapping(order_snapshot, reason="C4_BRIDGE_ORDERS_REQUIRED")
-        orders_content, c4_orders, orders_account_scope = _orders_content(orders)
-        orders_digest = _canonical_digest(orders_content)
+        orders_digest_content, orders_content, c4_orders, orders_account_scope = _orders_parts(orders)
+        orders_digest = _canonical_digest(orders_digest_content)
         if _digest(orders.get("orders_digest"), reason="C4_BRIDGE_ORDERS_DIGEST_INVALID") != orders_digest:
             raise _BridgeInputError("C4_BRIDGE_ORDERS_DIGEST_MISMATCH")
 
@@ -365,17 +382,19 @@ def materialize_c4_shadow_zero_submit_cycle(
         for field, reason in (
             ("account_id", "C4_BRIDGE_ACCOUNT_ORDERS_ACCOUNT_ID_MISMATCH"),
             ("strategy_id", "C4_BRIDGE_ACCOUNT_ORDERS_STRATEGY_ID_MISMATCH"),
-            ("as_of", "C4_BRIDGE_ACCOUNT_ORDERS_AS_OF_MISMATCH"),
         ):
             if account_content[field] != orders_content[field]:
                 raise _BridgeInputError(reason)
+        if account_content["as_of"] != orders_content["as_of"]:
+            raise _BridgeInputError("C4_BRIDGE_ACCOUNT_ORDERS_AS_OF_MISMATCH")
         for field, reason in (
             ("account_id", "C4_BRIDGE_ACCOUNT_RISK_ACCOUNT_ID_MISMATCH"),
             ("strategy_id", "C4_BRIDGE_ACCOUNT_RISK_STRATEGY_ID_MISMATCH"),
-            ("as_of", "C4_BRIDGE_ACCOUNT_RISK_AS_OF_MISMATCH"),
         ):
             if account_content[field] != assessment_content[field]:
                 raise _BridgeInputError(reason)
+        if account_content["as_of"] != assessment_content["as_of"]:
+            raise _BridgeInputError("C4_BRIDGE_ACCOUNT_RISK_AS_OF_MISMATCH")
         if dict(_canonical_fact(account_content["account_scope"])) != orders_account_scope:
             raise _BridgeInputError("C4_BRIDGE_ACCOUNT_ORDERS_SCOPE_MISMATCH")
         if assessment_content["account_digest"] != account_digest:

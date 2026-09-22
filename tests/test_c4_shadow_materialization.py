@@ -4,6 +4,8 @@ import inspect
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from application.broker_reconciliation import SchwabReconciliationObservations
 from application.c4_shadow_materialization import (
     calculate_final_risk_assessment_sha256,
@@ -90,26 +92,43 @@ def _risk(account_digest: str, **overrides: object) -> dict[str, object]:
 
 
 def _reconciliation_evidence(
-    observations: SchwabReconciliationObservations, *, observed_at: str = AS_OF
+    observations: SchwabReconciliationObservations,
+    *,
+    observed_at: str = AS_OF,
+    platform_id: str = "schwab",
+    strategy_profile: str = STRATEGY_ID,
+    account_scope_sha256: str | None = None,
+    open_orders_sha256: str | None = None,
+    broker_connected: bool = True,
+    account_identity_match: bool = True,
+    positions_match: bool = True,
+    cash_match: bool = True,
+    open_orders_match: bool | None = None,
+    recent_executions_match: bool = True,
+    local_execution_ledger_match: bool = True,
 ) -> BrokerReconciliationEvidence:
     return build_broker_reconciliation_evidence(
-        platform_id="schwab",
-        strategy_profile=STRATEGY_ID,
-        account_scope_sha256=calculate_broker_observation_sha256(observations.account_scope),
+        platform_id=platform_id,
+        strategy_profile=strategy_profile,
+        account_scope_sha256=account_scope_sha256
+        or calculate_broker_observation_sha256(observations.account_scope),
         baseline_id="synthetic-c4-baseline",
         baseline_target_sha256="a" * 64,
         runtime_target_sha256="a" * 64,
         observed_at=observed_at,
-        broker_connected=True,
-        account_identity_match=True,
-        positions_match=True,
-        cash_match=True,
-        open_orders_match=observations.open_orders_complete,
-        recent_executions_match=True,
-        local_execution_ledger_match=True,
+        broker_connected=broker_connected,
+        account_identity_match=account_identity_match,
+        positions_match=positions_match,
+        cash_match=cash_match,
+        open_orders_match=(
+            observations.open_orders_complete if open_orders_match is None else open_orders_match
+        ),
+        recent_executions_match=recent_executions_match,
+        local_execution_ledger_match=local_execution_ledger_match,
         positions_sha256="c" * 64,
         cash_sha256="d" * 64,
-        open_orders_sha256=calculate_broker_observation_sha256(observations.open_orders),
+        open_orders_sha256=open_orders_sha256
+        or calculate_broker_observation_sha256(observations.open_orders),
         recent_executions_sha256="e" * 64,
         local_execution_ledger_sha256="f" * 64,
     )
@@ -155,6 +174,34 @@ def test_complete_materialized_facts_reach_c4_zero_submit() -> None:
     _assert_zero_submit(result)
     assert result["orders_ref"]["order_count"] == 1
     assert result["reconciliation_evidence_ref"]["evidence_sha256"] == evidence.evidence_sha256
+
+
+def test_c4_accepts_bound_receipt_without_live_recovery_match() -> None:
+    """C4 needs receipt binding, not full live-recovery reconciliation success."""
+
+    account = _account()
+    orders = _orders()
+    evidence = _reconciliation_evidence(
+        orders["observations"],
+        positions_match=False,
+        cash_match=False,
+        recent_executions_match=False,
+        local_execution_ledger_match=False,
+    )
+    result = _materialize(
+        account_facts=account,
+        order_snapshot=orders,
+        final_risk_assessment=_risk(account["account_digest"]),
+        reconciliation_evidence=evidence,
+    )
+
+    assert result["status"] == "READY_SHADOW_ZERO_SUBMIT"
+    _assert_zero_submit(result)
+    assert result["reconciliation_evidence_ref"]["evidence_sha256"] == evidence.evidence_sha256
+    assert evidence.recent_executions_match is False
+    assert evidence.positions_match is False
+    assert evidence.cash_match is False
+    assert evidence.local_execution_ledger_match is False
 
 
 def test_existing_partial_schwab_observation_parks() -> None:
@@ -293,6 +340,110 @@ def test_stale_reconciliation_evidence_parks_even_when_its_snapshot_time_matches
     assert result["status"] == "PARKED"
     assert result["reason_codes"] == ("C4_BRIDGE_RECONCILIATION_EVIDENCE_UNTRUSTED_OR_STALE",)
     _assert_zero_submit(result)
+
+
+def test_reconciliation_receipt_binding_mismatches_park() -> None:
+    account = _account()
+    orders = _orders()
+    risk = _risk(account["account_digest"])
+    observations = orders["observations"]
+    assert isinstance(observations, SchwabReconciliationObservations)
+
+    binding_cases = (
+        _reconciliation_evidence(observations, platform_id="longbridge"),
+        _reconciliation_evidence(observations, strategy_profile="other_strategy_profile"),
+        _reconciliation_evidence(observations, account_scope_sha256="1" * 64),
+        _reconciliation_evidence(observations, open_orders_sha256="2" * 64),
+    )
+    for evidence in binding_cases:
+        result = _materialize(
+            account_facts=account,
+            order_snapshot=orders,
+            final_risk_assessment=risk,
+            reconciliation_evidence=evidence,
+        )
+        assert result["status"] == "PARKED"
+        assert result["reason_codes"] == ("C4_BRIDGE_RECONCILIATION_EVIDENCE_UNTRUSTED_OR_STALE",)
+        _assert_zero_submit(result)
+
+    skewed_observed_at = (
+        (datetime.now(timezone.utc) - timedelta(minutes=2))
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+    time_mismatch = _materialize(
+        account_facts=account,
+        order_snapshot=orders,
+        final_risk_assessment=risk,
+        reconciliation_evidence=_reconciliation_evidence(
+            observations, observed_at=skewed_observed_at
+        ),
+    )
+    assert time_mismatch["status"] == "PARKED"
+    assert time_mismatch["reason_codes"] == ("C4_BRIDGE_ACCOUNT_RECONCILIATION_AS_OF_MISMATCH",)
+    _assert_zero_submit(time_mismatch)
+
+
+@pytest.mark.parametrize(
+    ("broker_connected", "account_identity_match"),
+    (
+        (False, True),
+        (True, False),
+        (False, False),
+    ),
+)
+def test_receipt_broker_or_identity_false_parks(
+    broker_connected: bool, account_identity_match: bool
+) -> None:
+    account = _account()
+    orders = _orders()
+    evidence = _reconciliation_evidence(
+        orders["observations"],
+        broker_connected=broker_connected,
+        account_identity_match=account_identity_match,
+        positions_match=False,
+        cash_match=False,
+        recent_executions_match=False,
+        local_execution_ledger_match=False,
+    )
+    result = _materialize(
+        account_facts=account,
+        order_snapshot=orders,
+        final_risk_assessment=_risk(account["account_digest"]),
+        reconciliation_evidence=evidence,
+    )
+
+    assert result["status"] == "PARKED"
+    assert result["reason_codes"] == ("C4_BRIDGE_RECONCILIATION_EVIDENCE_UNTRUSTED_OR_STALE",)
+    _assert_zero_submit(result)
+
+
+def test_equivalent_timezone_as_of_reaches_ready_shadow() -> None:
+    instant = (datetime.now(timezone.utc) - timedelta(minutes=1)).replace(microsecond=0)
+    as_of_z = instant.strftime("%Y-%m-%dT%H:%M:%SZ")
+    as_of_offset = instant.isoformat()
+    as_of_plus_eight = instant.astimezone(timezone(timedelta(hours=8))).isoformat()
+
+    account = _account(as_of=as_of_z)
+    orders = _orders(as_of=as_of_offset)
+    risk = _risk(account["account_digest"], as_of=as_of_plus_eight)
+    evidence = _reconciliation_evidence(orders["observations"], observed_at=as_of_z)
+    result = _materialize(
+        account_facts=account,
+        order_snapshot=orders,
+        final_risk_assessment=risk,
+        reconciliation_evidence=evidence,
+    )
+
+    assert result["status"] == "READY_SHADOW_ZERO_SUBMIT"
+    _assert_zero_submit(result)
+    assert result["reconciliation_evidence_ref"]["observed_at"] == as_of_z
+    assert result["account_ref"]["as_of"] == as_of_z
+    assert result["orders_ref"]["as_of"] == as_of_z
+    assert result["risk_ref"]["as_of"] == as_of_z
+    assert as_of_offset != as_of_z
+    assert as_of_plus_eight != as_of_z
 
 
 def test_reject_or_execution_authorized_assessment_parks() -> None:
