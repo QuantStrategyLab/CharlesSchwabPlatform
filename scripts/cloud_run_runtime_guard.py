@@ -542,8 +542,36 @@ def _is_ignorable_monitor_dispatch_capacity_warning(entry: dict[str, Any]) -> bo
     )
 
 
+def _live_continuity_state_from_runtime_target() -> str:
+    raw = (os.environ.get("RUNTIME_TARGET_JSON") or "").strip()
+    if not raw:
+        return ""
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    continuity = payload.get("live_continuity")
+    if not isinstance(continuity, dict):
+        return ""
+    return str(continuity.get("state") or "").strip()
+
+
+def _is_ignorable_active_lkg_reconcile_gate_reject(entry: dict[str, Any]) -> bool:
+    if not _env_bool("RUNTIME_GUARD_IGNORE_ACTIVE_LKG_RECONCILE_GATE_REJECTS", False):
+        return False
+    if not _env_bool("RUNTIME_TARGET_ENABLED", False):
+        return False
+    if _live_continuity_state_from_runtime_target() != "ACTIVE_LKG":
+        return False
+    return _status(entry) == 503 and _request_path(entry) == "/reconcile"
+
+
 def _is_failure(entry: dict[str, Any]) -> bool:
     if _is_ignorable_monitor_dispatch_capacity_warning(entry):
+        return False
+    if _is_ignorable_active_lkg_reconcile_gate_reject(entry):
         return False
     severity = str(entry.get("severity") or "").upper()
     status = _status(entry)

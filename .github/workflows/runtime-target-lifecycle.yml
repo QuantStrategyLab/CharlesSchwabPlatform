@@ -83,6 +83,7 @@ jobs:
         env:
           RUNTIME_GUARD_NAME: CharlesSchwabPlatform lifecycle
           RUNTIME_GUARD_FAIL_WORKFLOW_ON_ALERT: "true"
+          RUNTIME_GUARD_IGNORE_ACTIVE_LKG_RECONCILE_GATE_REJECTS: "true"
         run: |
           set -uo pipefail
           set +e
