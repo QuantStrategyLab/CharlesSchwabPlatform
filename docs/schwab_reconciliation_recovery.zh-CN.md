@@ -2,7 +2,7 @@
 
 当 `live_continuity.state=RECONCILE_ONLY` 时，`POST /reconcile` 可以建立一份
 `schwab_reconciliation_candidate.v1`。它只读取账户身份、全部持仓、现金/购买力、
-近七日订单与成交，以及本地幂等执行账本；不会调用下单、撤单、策略、插件或状态切换。
+近一年订单窗口内的挂单观测与本地幂等执行账本；不会调用下单、撤单、策略、插件或状态切换。
 
 该入口默认关闭。只有显式设置 `SCHWAB_BROKER_RECONCILIATION_ENABLED=true`、
 只读 collector 可用且运行目标仍为 `RECONCILE_ONLY` 时，才会创建券商客户端。
@@ -25,10 +25,16 @@
 
 ## 覆盖完整性（EX-06）
 
-只读采集对挂单/成交仍标记 `open_orders_complete=false` 与
-`recent_executions_complete=false`。候选 `to_safe_dict()` 额外暴露脱敏
-`coverage` 诊断（回看天数、查询语义、原因码），**不**把完整性升格为 true。
+只读采集对挂单在官方依据下可证明完整：单次查询最近 365 天（覆盖官方 GTC
+最长 180 calendar days），并显式 `max_results=3000`（Trader API OAS3 默认上限）。
+仅当响应合法且返回条数**严格少于** 3000 时，`open_orders_complete=true`，
+`coverage.open_orders_complete` 同步为 true；达到或超过上限时保持 false，并给出稳定
+脱敏原因码 `open_orders_max_results_limit_reached`。继续只把非终态订单归入
+`open_orders`。
 
-关闭条件仍是：官方确认有效挂单全量覆盖/截断信号，以及成交流水字段与时效语义。
-在此之前不得靠扩大时间窗宣称 PASS，也不得新建平行对账框架。
+成交流水仍标记 `recent_executions_complete=false`（累计 filled 数量不是带时间戳的
+成交流）。候选 `to_safe_dict()` 额外暴露脱敏 `coverage` 诊断（回看天数、查询语义、
+返回条数、上限是否命中和原因码）。查询窗口固定为 365 天，调用方不能缩短后仍宣称完整。
 
+生产恢复完整对账仍要求挂单与成交两侧均可证明；本改动只让 C4 所需的挂单观测在
+未截断时可证明完整，不授予订单提交权限，也不把成交完整性升格为 true。
