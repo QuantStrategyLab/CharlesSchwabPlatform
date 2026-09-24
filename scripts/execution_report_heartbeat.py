@@ -625,6 +625,8 @@ def _send_telegram(message: str) -> bool:
 
 
 def _send_normal_heartbeat(name: str, detail: str) -> int:
+    if not _env_bool("RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS", False):
+        return 0
     message = format_operational_heartbeat_status(
         locale=_notification_locale(), name=name, detail=detail,
     )
