@@ -373,7 +373,7 @@ jobs:
             --output="${DEPLOY_READBACK_FILE}"
 
       - name: Verify deployed runtime target admission before traffic shift
-        if: steps.config.outputs.deploy_enabled == 'true'
+        if: steps.config.outputs.deploy_enabled == 'true' || steps.config.outputs.env_sync_enabled == 'true' || steps.config.outputs.traffic_shift_enabled == 'true'
         run: |
           set -euo pipefail
           uv run --no-sync python scripts/verify_deployed_runtime_target_admission.py \
