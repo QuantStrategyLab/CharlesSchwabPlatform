@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from quant_platform_kit.common.operational_notification_localization import (
     format_operational_alert,
+    format_operational_heartbeat_status,
     operational_notification_text,
     resolve_operational_notification_locale,
 )
@@ -573,9 +574,31 @@ def _is_accepted_report(payload: dict[str, Any]) -> tuple[bool, str]:
     return False, f"unaccepted status={status or '-'} stage={stage or '-'}"
 
 
+def _telegram_token() -> str:
+    direct_token = (os.environ.get("TELEGRAM_TOKEN") or os.environ.get("TG_TOKEN") or "").strip()
+    if direct_token:
+        return direct_token
+    secret_name = (os.environ.get("TELEGRAM_TOKEN_SECRET_NAME") or "").strip()
+    if not secret_name:
+        return ""
+    command = ["gcloud", "secrets", "versions", "access", "latest", "--secret", secret_name]
+    project = (
+        os.environ.get("RUNTIME_HEARTBEAT_GCP_PROJECT_ID")
+        or os.environ.get("GCP_PROJECT_ID")
+        or os.environ.get("GOOGLE_CLOUD_PROJECT")
+    )
+    if project:
+        command.extend(["--project", project])
+    result = _run_gcloud(command)
+    if result.returncode != 0:
+        print("Unable to read Telegram token from Secret Manager.", file=sys.stderr)
+        return ""
+    return result.stdout.strip()
+
+
 def _send_telegram(message: str) -> bool:
     targets: list[tuple[str, str]] = []
-    token = os.environ.get("TELEGRAM_TOKEN") or os.environ.get("TG_TOKEN")
+    token = _telegram_token()
     for chat_id in _split_values(os.environ.get("GLOBAL_TELEGRAM_CHAT_ID")):
         if token:
             targets.append((token, chat_id))
@@ -599,6 +622,16 @@ def _send_telegram(message: str) -> bool:
             ok = False
             print(f"Telegram send failed: {type(exc).__name__}", file=sys.stderr)
     return ok
+
+
+def _send_normal_heartbeat(name: str, detail: str) -> int:
+    if not _env_bool("RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS", False):
+        return 0
+    message = format_operational_heartbeat_status(
+        locale=_notification_locale(), name=name, detail=detail,
+    )
+    print(message)
+    return 0 if _send_telegram(message[:3900]) else 1
 
 
 def main(now: dt.datetime | None = None) -> int:
@@ -630,6 +663,7 @@ def main(now: dt.datetime | None = None) -> int:
         now = now.replace(tzinfo=dt.timezone.utc)
     now = now.astimezone(dt.timezone.utc)
     since = now - dt.timedelta(hours=lookback_hours)
+    due_since = now - dt.timedelta(hours=24)
     runtime_targets = load_runtime_targets(os.environ)
     try:
         runtime_targets = _hydrate_runtime_target_schedules(
@@ -655,14 +689,14 @@ def main(now: dt.datetime | None = None) -> int:
         raise ValueError("RUNTIME_HEARTBEAT_PUBLICATION_GRACE_MINUTES must be non-negative")
     due_targets, target_schedule_evaluated = filter_due_targets(
         runtime_targets,
-        since=since,
+        since=due_since,
         now=now,
         market_aware=_env_bool("RUNTIME_HEARTBEAT_MARKET_AWARE", True),
         publication_grace=dt.timedelta(minutes=publication_grace_minutes),
     )
     if runtime_targets and target_schedule_evaluated and not due_targets:
         target_names = ", ".join(target_label(target) for target in runtime_targets)
-        schedule_reason = _heartbeat_skip_reason_for_schedule(since, now)
+        schedule_reason = _heartbeat_skip_reason_for_schedule(due_since, now)
         print(
             f"Execution report heartbeat skipped for {name}: "
             + (
@@ -671,12 +705,12 @@ def main(now: dt.datetime | None = None) -> int:
                 f"({target_names})"
             )
         )
-        return 0
+        return _send_normal_heartbeat(name, _notice("heartbeat_no_scheduled_window_due"))
     if not runtime_targets:
-        schedule_skip_reason = _heartbeat_skip_reason_for_schedule(since, now)
+        schedule_skip_reason = _heartbeat_skip_reason_for_schedule(due_since, now)
         if schedule_skip_reason:
             print(f"Execution report heartbeat skipped for {name}: {schedule_skip_reason}")
-            return 0
+            return _send_normal_heartbeat(name, _notice("heartbeat_no_scheduler_run_due"))
     if due_targets:
         required_services = filter_services_for_targets(
             required_services,
@@ -742,6 +776,9 @@ def main(now: dt.datetime | None = None) -> int:
         if not matches:
             inspected.append(f"- {updated.isoformat()} {uri} skipped {filter_reason}")
             continue
+        if updated < due_since:
+            inspected.append(f"- {updated.isoformat()} {uri} skipped predates current heartbeat window")
+            continue
         latest_due_at = required_due_at.get(service_name)
         if latest_due_at is not None and updated < latest_due_at:
             inspected.append(
@@ -759,19 +796,24 @@ def main(now: dt.datetime | None = None) -> int:
 
     if required_keys:
         missing = [key for key in required_keys if key not in accepted_by_service]
-        if not missing:
+        if not missing and not list_errors:
             details = ", ".join(
                 f"{required_labels[key]}@{accepted_by_service[key][1].isoformat()}"
                 for key in required_keys
             )
             print(f"Execution report heartbeat OK for {name}: {details}")
-            return 0
-    if accepted:
+            return _send_normal_heartbeat(
+                name, _notice("heartbeat_accepted_report", detail=details),
+            )
+    if accepted and not list_errors:
         uri, updated, reason = accepted[0]
         print(
             f"Execution report heartbeat OK for {name}: {reason}, updated={updated.isoformat()}, uri={uri}"
         )
-        return 0
+        return _send_normal_heartbeat(
+            name,
+            _notice("heartbeat_accepted_report", detail=f"{reason}, {updated.isoformat()}"),
+        )
 
     issues = []
     technical_details = []
