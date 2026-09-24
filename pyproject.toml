@@ -20,7 +20,7 @@ dependencies = [
     "google-auth",
     "numpy",
     "quant-platform-kit @ git+https://github.com/QuantStrategyLab/QuantPlatformKit.git@c7646a7168b3dafa763ef7751a182d23e8de7790",
-    "us-equity-strategies @ git+https://github.com/QuantStrategyLab/UsEquityStrategies.git@0b89747519dcbec5dd8bfabe11c62bb897551e86",
+    "us-equity-strategies @ git+https://github.com/QuantStrategyLab/UsEquityStrategies.git@4a3943883cd6b5bbfe32a559e56a91b40a81b7ce",
 ]
 
 [project.optional-dependencies]
