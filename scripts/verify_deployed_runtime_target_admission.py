@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
+import tomllib
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
 from strategy_registry import SCHWAB_PLATFORM, resolve_strategy_definition
@@ -106,6 +109,34 @@ def verify_service(*, service: str, service_json: Mapping[str, Any]) -> dict[str
     return {"service": service, "profile": canonical_profile, "execution_mode": execution_mode, "dry_run_only": target_dry_run, "enabled": enabled}
 
 
+def verify_production_ues_pin(*, service: str, service_json: Mapping[str, Any], repository: Path) -> None:
+    """Keep a live image on the UES revision admitted by its deployed risk binding."""
+
+    env = _container_env(service_json)
+    if not _parse_bool(env.get("RUNTIME_TARGET_ENABLED", "true"), field="RUNTIME_TARGET_ENABLED", service=service):
+        return
+    target = json.loads(env.get("RUNTIME_TARGET_JSON") or env.get("QSL_RUNTIME_TARGET_JSON") or "{}")
+    if target.get("execution_mode") != "live":
+        return
+    release = target.get("strategy_release") or {}
+    binding = (target.get("runtime_risk_limits") or {}).get("binding") or {}
+    expected = release.get("strategy_revision")
+    if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{40}", expected) or binding.get("ues_revision") != expected:
+        raise AdmissionError(f"{service}: deployed live strategy release and risk binding lack one matching UES revision")
+
+    project = tomllib.loads((repository / "pyproject.toml").read_text())
+    dependencies = project.get("project", {}).get("dependencies", [])
+    pins = [re.search(r"UsEquityStrategies\.git@([0-9a-f]{40})$", item, re.IGNORECASE) for item in dependencies if isinstance(item, str)]
+    project_pins = [match.group(1) for match in pins if match]
+    config_pin = tomllib.loads((repository / "qsl.toml").read_text()).get("qsl", {}).get("requires", {}).get("us_equity_strategies")
+    packages = tomllib.loads((repository / "uv.lock").read_text()).get("package", [])
+    locked = [item.get("source", {}).get("git", "") for item in packages if item.get("name") == "us-equity-strategies"]
+    lock_pins = [re.search(r"[?&]rev=([0-9a-f]{40})#([0-9a-f]{40})$", item) for item in locked]
+    locked_pins = [match.group(1) for match in lock_pins if match and match.group(1) == match.group(2)]
+    if project_pins != [expected] or config_pin != expected or locked_pins != [expected]:
+        raise AdmissionError(f"{service}: candidate UES pin differs from deployed live release and risk binding")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--project", required=True)
@@ -113,8 +144,10 @@ def main() -> int:
     parser.add_argument("--service", required=True)
     args = parser.parse_args()
     try:
-        result = verify_service(service=args.service, service_json=_describe_service(service=args.service, project=args.project, region=args.region))
-    except AdmissionError as exc:
+        service_json = _describe_service(service=args.service, project=args.project, region=args.region)
+        result = verify_service(service=args.service, service_json=service_json)
+        verify_production_ues_pin(service=args.service, service_json=service_json, repository=Path(__file__).resolve().parent.parent)
+    except (AdmissionError, OSError, ValueError, TypeError, KeyError) as exc:
         print(f"Deployed runtime target admission failed: {exc}", file=sys.stderr)
         return 1
     print("Verified deployed runtime target admission: " f"service={result['service']}, profile={result['profile']}, " f"mode={result['execution_mode']}, dry_run_only={result['dry_run_only']}, enabled={result['enabled']}")
