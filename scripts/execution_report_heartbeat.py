@@ -565,6 +565,17 @@ def _is_accepted_report(payload: dict[str, Any]) -> tuple[bool, str]:
         return False, notification_failure
     if status_key in reject_statuses or stage_key in reject_stages:
         return False, f"rejected status={status or '-'} stage={stage or '-'}"
+    summary = payload.get("summary")
+    execution_status = str(
+        (summary.get("execution_status") if isinstance(summary, dict) else None)
+        or payload.get("execution_status")
+        or ""
+    ).strip().lower()
+    if (
+        execution_status in {"blocked", "error", "failed", "failure"}
+        or execution_status.endswith("_blocked")
+    ):
+        return False, "rejected inner execution status"
     if status_key and status_key in accepted_statuses:
         return True, f"status={status}"
     if stage_key and stage_key in accepted_stages:
