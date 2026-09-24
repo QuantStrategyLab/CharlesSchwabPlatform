@@ -61,6 +61,7 @@ jobs:
       NOTIFY_LANG: ${{ vars.NOTIFY_LANG || 'zh' }}
       GLOBAL_TELEGRAM_CHAT_ID: ${{ secrets.GLOBAL_TELEGRAM_CHAT_ID }}
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+      TELEGRAM_TOKEN_SECRET_NAME: ${{ vars.TELEGRAM_TOKEN_SECRET_NAME }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
