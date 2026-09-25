@@ -1,5 +1,6 @@
 import sys
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -27,6 +28,19 @@ HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT = {
 
 
 class RebalanceServiceTests(unittest.TestCase):
+    def test_heartbeat_account_snapshot_uses_unmodified_broker_cash(self):
+        snapshot = PortfolioSnapshot(
+            as_of=datetime.now(timezone.utc),
+            total_equity=472.0, buying_power=22.0, cash_balance=22.0,
+            positions=(), metadata={
+                "total_equity_source": "broker_liquidation_value",
+                "broker_cash_available_for_trading": 40.0,
+            },
+        )
+        display = rebalance_service._heartbeat_account_snapshot(snapshot)
+        self.assertEqual(display["available_cash"], 40.0)
+        self.assertEqual(display["net_assets"], 472.0)
+
     def test_strategy_risk_rejection_keeps_reason_with_zero_submissions(self):
         submitted_orders = []
         plan = {

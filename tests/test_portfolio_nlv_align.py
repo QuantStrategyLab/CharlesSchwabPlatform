@@ -31,6 +31,7 @@ def test_align_cash_only_sleeve_to_broker_liquidation_shrinks_cash() -> None:
     assert aligned.cash_balance == 22.0
     assert aligned.buying_power == 22.0
     assert aligned.metadata["cash_available_for_trading"] == 22.0
+    assert aligned.metadata["broker_cash_available_for_trading"] == 40.0
 
 
 def test_align_cash_only_sleeve_skipped_when_not_cash_only() -> None:

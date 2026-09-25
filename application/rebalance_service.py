@@ -32,6 +32,22 @@ _DETAIL_FIELD_SPLIT_RE = re.compile(r"\s+(?=[^\s=:：]+[=:：])")
 DRY_RUN_BYPASS_EXECUTION_MARKER_ENV = "DRY_RUN_BYPASS_EXECUTION_MARKER"
 
 
+def _heartbeat_account_snapshot(snapshot) -> dict:
+    """Keep broker values separate from any strategy sleeve projection."""
+    metadata = getattr(snapshot, "metadata", {}) or {}
+    cash = metadata.get("broker_cash_available_for_trading", getattr(snapshot, "cash_balance", None))
+    equity = (
+        getattr(snapshot, "total_equity", None)
+        if metadata.get("total_equity_source") == "broker_liquidation_value"
+        else None
+    )
+    return {
+        "available_cash": cash,
+        "net_assets": equity,
+        "observed_at": getattr(snapshot, "as_of", None),
+    }
+
+
 def _env_flag_enabled(name: str) -> bool:
     return str(os.environ.get(name, "") or "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -697,6 +713,7 @@ def run_strategy_core(
                 execution=execution,
                 portfolio=portfolio,
                 account_label=plan.get("account_hash", ""),
+                account_snapshot=_heartbeat_account_snapshot(snapshot),
             )
         )
     else:
