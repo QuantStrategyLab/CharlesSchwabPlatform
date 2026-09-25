@@ -40,6 +40,26 @@ class FakeResponse:
 
 
 class NotificationTests(unittest.TestCase):
+    def test_heartbeat_displays_broker_cash_and_equity_with_i18n(self):
+        from datetime import datetime, timezone
+
+        for lang, cash, equity in (
+            ("zh", "可用现金: USD 40.00", "账户总权益: USD 472.00"),
+            ("en", "Available cash: USD 40.00", "Total account equity: USD 472.00"),
+        ):
+            rendered = render_heartbeat_notification(
+                translator=build_translator(lang), strategy_display_name="Example",
+                dry_run_only=False, extra_notification_lines=(),
+                execution={"dashboard_text": "", "separator": "---", "signal_display": "none"},
+                portfolio={"total_equity": 472.0, "portfolio_rows": (), "market_values": {}},
+                account_snapshot={
+                    "available_cash": 40.0, "net_assets": 472.0,
+                    "observed_at": datetime(2026, 9, 25, tzinfo=timezone.utc),
+                },
+            )
+            self.assertIn(cash, rendered.compact_text)
+            self.assertIn(equity, rendered.compact_text)
+
     def test_build_translator_supports_chinese(self):
         translate = build_translator("zh")
         self.assertEqual(translate("equity"), "净值")

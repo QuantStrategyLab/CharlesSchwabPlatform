@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import datetime
+import math
 
 from notifications.events import RenderedNotification
 from quant_platform_kit.common.notification_localization import (
@@ -244,6 +246,7 @@ def _build_compact_heartbeat_message(
     signal_snapshot_line,
     risk_control_lines,
     completion_line,
+    account_amount_lines=(),
 ) -> str:
     lines = [
         translator("heartbeat_title"),
@@ -253,6 +256,7 @@ def _build_compact_heartbeat_message(
     account_line = _format_account_line(account_label, translator=translator)
     if account_line:
         lines.append(account_line)
+    lines.extend(account_amount_lines)
     if dry_run_only:
         lines.append(translator("dry_run_banner"))
     if extra_notification_block:
@@ -353,7 +357,25 @@ def render_heartbeat_notification(
     execution,
     portfolio,
     account_label="",
+    account_snapshot=None,
 ) -> RenderedNotification:
+    snapshot = account_snapshot if isinstance(account_snapshot, Mapping) else {}
+    observed_at = snapshot.get("observed_at")
+    observed_at = observed_at.isoformat() if isinstance(observed_at, datetime) else str(observed_at or "").strip()
+    account_amount_lines = []
+    verified = False
+    for field, label in (("available_cash", "heartbeat_available_cash"), ("net_assets", "heartbeat_account_equity")):
+        amount = snapshot.get(field)
+        valid = (
+            isinstance(amount, (int, float)) and not isinstance(amount, bool)
+            and math.isfinite(amount) and bool(observed_at)
+            and (field != "net_assets" or amount > 0)
+        )
+        verified = verified or valid
+        value = f"USD {amount:,.2f}" if valid else translator("heartbeat_unverified")
+        account_amount_lines.append(translator(label, value=value))
+    if verified:
+        account_amount_lines.append(translator("heartbeat_observed_at", value=observed_at))
     signal_display = _localize_notification_text(execution["signal_display"], translator=translator)
     status_display = _localize_notification_text(execution.get("status_display"), translator=translator)
     extra_notification_block = _render_extra_notification_block(
@@ -404,6 +426,7 @@ def render_heartbeat_notification(
         f"{translator('heartbeat_header')}\n"
         f"{translator('strategy_label', name=strategy_display_name)}\n"
         f"{_format_account_line(account_label, translator=translator) + chr(10) if account_label else ''}"
+        f"{chr(10).join(account_amount_lines)}\n"
         f"{extra_notification_block}"
         f"{portfolio_block}"
         f"{chr(10).join(timing_lines) + chr(10) if timing_lines else ''}"
@@ -430,5 +453,6 @@ def render_heartbeat_notification(
         signal_snapshot_line=signal_snapshot_line,
         risk_control_lines=risk_control_lines,
         completion_line=completion_line,
+        account_amount_lines=account_amount_lines,
     )
     return RenderedNotification(detailed_text=detailed_text, compact_text=compact_text)

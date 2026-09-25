@@ -52,6 +52,7 @@ def align_cash_only_sleeve_to_broker_liquidation(
 
     aligned_cash = nlv - position_mv_sum
     updated_metadata = dict(metadata)
+    updated_metadata["broker_cash_available_for_trading"] = cash
     updated_metadata["broker_liquidation_value"] = nlv
     updated_metadata["strategy_equity_before_nlv_align"] = strategy_equity
     updated_metadata["cash_available_for_trading"] = aligned_cash
