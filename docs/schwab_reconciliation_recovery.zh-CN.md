@@ -50,6 +50,8 @@
 `POST /reconcile` 成功路径会通过 `build_reconcile_c4_report_attachment` 调用同一旁路，
 把脱敏后的 C4 状态写入**内部**运行报告 `summary` / `diagnostics`；公开 HTTP 响应仍只
 返回 `schwab_reconciliation_candidate.v1`，不包含账户明细或 C4 原始材料。
+生产批准的 UES 版本若未包含该研究模块，服务仍可启动；内部 C4 诊断标为
+`PARKED/C4_CONSUMER_UNAVAILABLE`，券商对账候选与交易保护不受该旁路影响。
 
 该旁路：
 

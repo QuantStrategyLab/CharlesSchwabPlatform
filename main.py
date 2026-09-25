@@ -20,7 +20,6 @@ from application.broker_reconciliation import (
     validate_reconciliation_candidate,
     validate_reconciliation_preconditions,
 )
-from application.c4_shadow_reconcile_runtime import build_reconcile_c4_report_attachment
 from application.runtime_broker_adapters import build_runtime_broker_adapters
 from application.runtime_report_summary import summarize_execution_cycle_result
 from application.runtime_composer import build_runtime_composer
@@ -1115,6 +1114,43 @@ def _handle_schwab_probe(*, response_body: str = "Probe OK"):
             print(f"failed to persist execution report: {persist_exc}", flush=True)
 
 
+def _build_optional_c4_attachment(*, observations, candidate, runtime_target):
+    """Keep the research-only C4 consumer out of production startup."""
+
+    try:
+        from application.c4_shadow_reconcile_runtime import (
+            build_reconcile_c4_report_attachment,
+        )
+    except ModuleNotFoundError as exc:
+        if exc.name != "us_equity_strategies.research.c4_shadow_zero_submit_cycle":
+            raise
+        return {
+            "summary": {
+                "c4_shadow_status": "PARKED",
+                "c4_shadow_no_order": True,
+                "c4_shadow_submission_attempted": False,
+                "c4_shadow_execution_permitted": False,
+            },
+            "diagnostics": {
+                "c4_shadow_zero_submit": {
+                    "status": "PARKED",
+                    "reason_codes": ["C4_CONSUMER_UNAVAILABLE"],
+                    "no_order": True,
+                    "proposed_orders_count": 0,
+                    "submission_attempted": False,
+                    "execution_permitted": False,
+                    "execution_authorized": False,
+                }
+            },
+        }
+    return build_reconcile_c4_report_attachment(
+        observations=observations,
+        reconciliation_evidence=candidate.evidence,
+        runtime_target=runtime_target,
+        final_risk_assessment_provider=FINAL_RISK_ASSESSMENT_PROVIDER,
+    )
+
+
 def _handle_reconciliation():
     """Collect a no-order, fail-closed recovery candidate for Schwab.
 
@@ -1151,11 +1187,10 @@ def _handle_reconciliation():
             project_id=PROJECT_ID,
         )
         payload = validate_reconciliation_candidate(candidate)
-        c4_attachment = build_reconcile_c4_report_attachment(
+        c4_attachment = _build_optional_c4_attachment(
             observations=observations,
-            reconciliation_evidence=candidate.evidence,
+            candidate=candidate,
             runtime_target=runtime_target,
-            final_risk_assessment_provider=FINAL_RISK_ASSESSMENT_PROVIDER,
         )
         finalize_runtime_report(
             report,
