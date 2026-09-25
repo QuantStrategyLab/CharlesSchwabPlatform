@@ -581,6 +581,33 @@ def load_module(*, strategy_plugin_mounts_json=None, notify_lang="en"):
 
 
 class RequestHandlingTests(unittest.TestCase):
+    def test_optional_c4_missing_from_production_ues_is_parked(self):
+        module = load_module()
+        original_import = __import__
+
+        def missing_c4(name, *args, **kwargs):
+            if name == "application.c4_shadow_reconcile_runtime":
+                raise ModuleNotFoundError(
+                    "C4 consumer unavailable",
+                    name="us_equity_strategies.research.c4_shadow_zero_submit_cycle",
+                )
+            return original_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=missing_c4):
+            attachment = module._build_optional_c4_attachment(
+                observations=object(),
+                candidate=types.SimpleNamespace(evidence=object()),
+                runtime_target=object(),
+            )
+
+        self.assertEqual(attachment["summary"]["c4_shadow_status"], "PARKED")
+        self.assertTrue(attachment["summary"]["c4_shadow_no_order"])
+        self.assertFalse(attachment["summary"]["c4_shadow_execution_permitted"])
+        self.assertEqual(
+            attachment["diagnostics"]["c4_shadow_zero_submit"]["reason_codes"],
+            ["C4_CONSUMER_UNAVAILABLE"],
+        )
+
     def test_cloud_run_route_contracts_are_registered(self):
         module = load_module()
 
