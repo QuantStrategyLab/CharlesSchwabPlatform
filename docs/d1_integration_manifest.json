@@ -22,10 +22,11 @@
     },
     "AIAuditBridge": {
       "base_head": "fe7430d786e64d857522c834bfb846b66fa892d5",
-      "d1_head": "75b21b7f0010e139b96e2eb1b69ae3a1b880b23e",
+      "d1_head": "817ea07628d189df93bba5b1292b7b49d118cedc",
       "producer_source_sha256": "7489ac4f22f818954d2eb8c554f9f303ad5c23192d82440117b2d271af241fcc",
       "producer_entry_sha256": "f36ee83e0dd100bf5fe968b87848c0ecfb8630c8c227fe4dba742be328492a40",
-      "wheel_sha256": "459e9fea2dd3ad5fb219ee279d37c81633806b17e5001aa085694813f4b3bd2b",
+      "wheel_package": "aab-development-review-producer",
+      "wheel_sha256": "79a85072416ae9a97e420810c5e609ddde9376b6daafa7967f864d05d8ddbbf2",
       "entry": "build-development-research-review"
     },
     "QuantRuntimeSettings": {
@@ -51,7 +52,8 @@
   },
   "fixed_evidence": {
     "A_summary_sha256": "7c4a2dcf03c2becb19c012e015f86c5a1f5b6f845afd7d88516a2c515462da91",
-    "review_message_sha256": "b578909e0e36e83cb7ce3cb2dae9fb5df74f142efec596b5f13aae37d0193d55",
+    "review_message_sha256": "8fc742fcdfcf3c93a9a486d66a6618f0005c755cdfbdd9fc9a49155c57dac19a",
+    "review_resolved_environment_sha256": "fdf3cdbb9f9979216620722770488ab1afb2b6ae6af01b818b11d69ff91ab58a",
     "review_duplicate_key": "eb3a9cdac3b0fed7374472e0a0da2b20b2f81947ffcd7c9ee564ab177a5a7e2f",
     "review_result_digest": "6db9f5fa6faed193b03fd6d053e7ad378754310b4d59e74d68dddd55d8528be2",
     "private_evidence_id": "post-c-d1-integration-20260927-001"
