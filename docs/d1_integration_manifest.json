@@ -1,0 +1,65 @@
+{
+  "schema": "qsl.d1.integration_manifest.v1",
+  "candidate_id": "post-c-d1-integration-20260927-001",
+  "producer_revision_sha256": "7489ac4f22f818954d2eb8c554f9f303ad5c23192d82440117b2d271af241fcc",
+  "mode": "offline_synthetic_no_order",
+  "native_read_only_status": "pending_external_secret_access",
+  "trade_authority": false,
+  "repositories": {
+    "CharlesSchwabPlatform": {
+      "base_head": "3ece9e9d95ce2e2cab005ded3661e7aeb8604a70",
+      "uv_lock_sha256": "d80c5ae0da93922f78d7039b5d254d4c755c9506908226a709cfc00325242703",
+      "no_order_module_sha256": "b26fbba1354c61464b3ac1b3b481654c41fddfe1807f79b13b81cf8beb0c0874",
+      "native_partial_parser_sha256": "4fac61dc2e623125fdd9fd70332ab71134efbcfd1a55d2fc01bcc6ab5a7dcba2",
+      "acceptance_entry_sha256": "0a53d617f2527ae747a58f85e5f37c650dfb3b4a4e80647daac7e9108cdaf642",
+      "resolved_environment_sha256": "1abc4045638b2a70345890afddf2626e4dc1f4cf4471feb94b6ab10b10f811e4",
+      "dependencies": {
+        "schwab_py": "1.5.1",
+        "QuantPlatformKit": "c7646a7168b3dafa763ef7751a182d23e8de7790",
+        "UsEquityStrategies": "4a3943883cd6b5bbfe32a559e56a91b40a81b7ce"
+      },
+      "entry": "schwab-d1-no-order-acceptance"
+    },
+    "AIAuditBridge": {
+      "base_head": "fe7430d786e64d857522c834bfb846b66fa892d5",
+      "d1_head": "75b21b7f0010e139b96e2eb1b69ae3a1b880b23e",
+      "producer_source_sha256": "7489ac4f22f818954d2eb8c554f9f303ad5c23192d82440117b2d271af241fcc",
+      "producer_entry_sha256": "f36ee83e0dd100bf5fe968b87848c0ecfb8630c8c227fe4dba742be328492a40",
+      "wheel_sha256": "459e9fea2dd3ad5fb219ee279d37c81633806b17e5001aa085694813f4b3bd2b",
+      "entry": "build-development-research-review"
+    },
+    "QuantRuntimeSettings": {
+      "base_head": "ec233bbbf12d8f2afae49954e89f1bbdca5bb787",
+      "d1_head": "bf3672fe584e3984c7f473989b95bd4cbf92c05e",
+      "consumer_source_sha256": "a235ed7868f041cbd2567ccfa0bbabcf8f60702848d352ff82a483b4fec9194b",
+      "wheel_sha256": "1136a67f3e2d41b7c4d384c4033f580e3839d31700d69ae7763e2ed226410c08",
+      "entry": "qsl-development-research-review"
+    },
+    "UsEquityStrategiesResearchSmoke": {
+      "head": "f1ae84465e157ae3dee966f2d01ba17499b436df",
+      "resolved_QuantPlatformKit": "62bcd5f6d5e236c315a7383ddf7b35e2aac30b62",
+      "resolved_environment_sha256": "acfe4b0fb8a015ea72bb7187284bc6ace720de8c7953363e02944a1d05e644a3"
+    }
+  },
+  "environment_boundary": "Schwab runtime and UES research smoke use separate fixed environments; AAB to QRS crosses through the validated message artifact.",
+  "contracts": {
+    "review_message": "qsl.development_research_review.v1",
+    "review_state": "qsl.development_research_review_state.v1",
+    "execution_ledger": "schwab_execution_event_ledger.v1",
+    "native_partial": "d1_native_partial.v1",
+    "no_order_cycle": "d1_no_order_cycle.v1"
+  },
+  "fixed_evidence": {
+    "A_summary_sha256": "7c4a2dcf03c2becb19c012e015f86c5a1f5b6f845afd7d88516a2c515462da91",
+    "review_message_sha256": "b578909e0e36e83cb7ce3cb2dae9fb5df74f142efec596b5f13aae37d0193d55",
+    "review_duplicate_key": "eb3a9cdac3b0fed7374472e0a0da2b20b2f81947ffcd7c9ee564ab177a5a7e2f",
+    "review_result_digest": "6db9f5fa6faed193b03fd6d053e7ad378754310b4d59e74d68dddd55d8528be2",
+    "private_evidence_id": "post-c-d1-integration-20260927-001"
+  },
+  "network_boundaries": {
+    "broker_read_only_requests": 0,
+    "broker_order_modification_requests": 0,
+    "ai_business_requests": 0,
+    "notification_requests": 0
+  }
+}
