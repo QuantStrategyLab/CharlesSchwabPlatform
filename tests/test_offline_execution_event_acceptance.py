@@ -25,6 +25,9 @@ def test_acceptance_runner_reports_all_frozen_cases_and_fixed_values(tmp_path):
     assert cases["E03"]["assertions"]["owner_totals_equal_account"] is True
     assert cases["E04"]["assertions"]["unknown_identity_stays_unbound"] is True
     assert cases["E04"]["assertions"]["unknown_identity_books_no_fill"] is True
+    assert cases["E04"]["assertions"]["unbound_owner_reservation"] == "100.00"
+    assert cases["E04"]["assertions"]["unbound_account_reservation"] == "100.00"
+    assert cases["E04"]["assertions"]["binding_reservation_not_double_counted"] is True
     assert cases["E05"]["classification"] == "verified-safe-reject"
     assert cases["E06"]["classification"] == "supported"
 

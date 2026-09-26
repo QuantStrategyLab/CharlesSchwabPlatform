@@ -165,10 +165,11 @@ def _case_e03(root: Path) -> dict[str, Any]:
 
 def _case_e04(root: Path) -> dict[str, Any]:
     ledger = _ledger(root, "E04")
-    _intent(ledger, intent_id="intent", order_id=None, owner_id="owner", quantity="1")
+    _intent(ledger, intent_id="intent", order_id=None, owner_id="owner", quantity="1", reserved_amount="100")
     unknown_result = ledger.reconcile_unknown_order_identity(intent_id="intent")
     unknown_state = ledger.snapshot()
     ledger.bind_order_identity(intent_id="intent", order_id="query-confirmed-order")
+    bound_state = ledger.snapshot()
     ledger.record_order_update(
         order_id="query-confirmed-order", status="FILLED", cumulative_filled_quantity="1",
     )
@@ -186,6 +187,10 @@ def _case_e04(root: Path) -> dict[str, Any]:
             "unknown_identity_result": unknown_result,
             "unknown_identity_stays_unbound": unknown_state["intents"]["intent"]["order_id"] == "",
             "unknown_identity_books_no_fill": unknown_state["events"] == [],
+            "unbound_owner_reservation": unknown_state["owners"]["owner"]["reserved_amount"],
+            "unbound_account_reservation": unknown_state["account"]["reserved_amount"],
+            "binding_reservation_not_double_counted": bound_state["owners"]["owner"]["reserved_amount"] == "100.00"
+                and bound_state["account"]["reserved_amount"] == "100.00",
             "exact_identity_reconciled": state["orders"]["query-confirmed-order"]["reconciliation_status"] == "complete",
             "exact_identity_shares": state["account"]["positions"]["BOXX"],
         },

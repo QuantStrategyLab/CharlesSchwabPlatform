@@ -191,3 +191,91 @@ def test_terminal_order_state_does_not_regress_on_late_pending_cancel_report(tmp
     assert order["cumulative_filled_quantity"] == "1"
     assert order["reconciliation_status"] == "incomplete"
     assert order["reservation_status"] == "pending"
+
+
+def test_cumulative_fill_evidence_is_monotonic_across_nonterminal_and_terminal_updates(tmp_path):
+    ledger = _ledger(tmp_path)
+    ledger.record_order_intent(
+        intent_id="intent", order_id="order-a", owner_id="owner-a",
+        symbol="BOXX", side="BUY", quantity="6", reserved_amount="600",
+    )
+    ledger.record_execution_event(_event("fill-1", quantity="1", fee="0.10"))
+    ledger.record_order_update(order_id="order-a", status="PENDING_CANCEL", cumulative_filled_quantity="3")
+    ledger.record_order_update(order_id="order-a", status="CANCELED", cumulative_filled_quantity="1")
+    order = ledger.snapshot()["orders"]["order-a"]
+    assert order["cumulative_filled_quantity"] == "3"
+    assert order["recorded_filled_quantity"] == "1"
+    assert order["reconciliation_status"] == "incomplete"
+    assert order["reservation_status"] == "pending"
+
+
+def test_conflicting_quarantined_event_invalidates_reconciled_order_without_erasing_fill(tmp_path):
+    ledger = _ledger(tmp_path)
+    ledger.record_order_intent(
+        intent_id="intent", order_id="order-a", owner_id="owner-a",
+        symbol="BOXX", side="BUY", quantity="2", reserved_amount="200",
+    )
+    original = _event("stable-id", quantity="1", fee="0.10")
+    ledger.record_execution_event(original)
+    ledger.record_order_update(order_id="order-a", status="CANCELED", cumulative_filled_quantity="1")
+    complete = ledger.snapshot()["orders"]["order-a"]
+    assert complete["reconciliation_status"] == "complete"
+    assert complete["reservation_status"] == "released"
+
+    with pytest.raises(ExecutionEventError, match="conflict"):
+        ledger.record_execution_event({**original, "price": "101"})
+    state = ledger.snapshot()
+    order = state["orders"]["order-a"]
+    assert order["reconciliation_status"] == "incomplete"
+    assert order["reservation_status"] == "pending"
+    assert state["account"]["positions"]["BOXX"] == "1"
+    assert state["account"]["fees"] == "0.10"
+
+
+def test_conflicting_event_id_on_another_order_quarantines_original_order_too(tmp_path):
+    ledger = _ledger(tmp_path)
+    for owner, order in (("owner-a", "order-a"), ("owner-b", "order-b")):
+        ledger.record_order_intent(
+            intent_id=f"intent-{owner}", order_id=order, owner_id=owner,
+            symbol="BOXX", side="BUY", quantity="1", reserved_amount="100",
+        )
+    original = _event("shared-id", order_id="order-a", quantity="1", fee="0.10")
+    ledger.record_execution_event(original)
+    ledger.record_order_update(order_id="order-a", status="CANCELED", cumulative_filled_quantity="1")
+    before = ledger.snapshot()
+    assert before["orders"]["order-a"]["reconciliation_status"] == "complete"
+    assert before["orders"]["order-a"]["reservation_status"] == "released"
+
+    with pytest.raises(ExecutionEventError, match="conflict"):
+        ledger.record_execution_event({**original, "order_id": "order-b"})
+    state = ledger.snapshot()
+    original_order = state["orders"]["order-a"]
+    assert original_order["reconciliation_status"] == "incomplete"
+    assert original_order["reservation_status"] == "pending"
+    assert state["account"]["positions"] == {"BOXX": "1"}
+    assert state["account"]["fees"] == "0.10"
+    assert state["owners"]["owner-a"]["positions"] == {"BOXX": "1"}
+    assert state["owners"]["owner-b"]["positions"] == {}
+
+
+def test_unbound_intent_reservation_is_persisted_once_until_terminal_release(tmp_path):
+    path = tmp_path / "ledger.json"
+    ledger = ExecutionEventLedger(path)
+    ledger.record_order_intent(
+        intent_id="intent", order_id=None, owner_id="owner-a",
+        symbol="BOXX", side="BUY", quantity="2", reserved_amount="200",
+    )
+    unbound = ledger.snapshot()
+    assert unbound["owners"]["owner-a"]["reserved_amount"] == "200.00"
+    assert unbound["account"]["reserved_amount"] == "200.00"
+
+    ledger.bind_order_identity(intent_id="intent", order_id="order-a")
+    bound = ledger.snapshot()
+    assert bound["owners"]["owner-a"]["reserved_amount"] == "200.00"
+    assert bound["account"]["reserved_amount"] == "200.00"
+    restarted = ExecutionEventLedger(path)
+    assert restarted.snapshot() == bound
+    restarted.record_order_update(order_id="order-a", status="CANCELED", cumulative_filled_quantity="0")
+    released = restarted.snapshot()
+    assert released["owners"]["owner-a"]["reserved_amount"] == "0.00"
+    assert released["account"]["reserved_amount"] == "0.00"

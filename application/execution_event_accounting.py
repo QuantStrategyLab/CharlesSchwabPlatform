@@ -21,6 +21,7 @@ _CENT = Decimal("0.01")
 _SUPPORTED_EVENT_TYPE = "FILL"
 _TERMINAL_STATUSES = {"CANCELED", "FILLED", "REJECTED", "EXPIRED"}
 _ORDER_STATUSES = _TERMINAL_STATUSES | {"NEW", "WORKING", "PARTIALLY_FILLED", "PENDING_CANCEL", "UNKNOWN"}
+_STATUS_RANK = {"NEW": 0, "WORKING": 1, "PARTIALLY_FILLED": 2, "PENDING_CANCEL": 3}
 
 
 class ExecutionEventError(ValueError):
@@ -81,6 +82,7 @@ class ExecutionEventLedger:
         self._events: dict[str, dict[str, Any]] = {}
         self._order_updates: dict[str, dict[str, Any]] = {}
         self._quarantined: set[str] = set()
+        self._quarantined_order_ids: set[str] = set()
         self._unsupported: set[str] = set()
         if self.path.exists():
             self._load()
@@ -209,6 +211,8 @@ class ExecutionEventLedger:
             if existing["event_digest"] == digest:
                 return EventReceipt(event_id, digest, intent["owner_id"], duplicate=True)
             self._quarantined.add(event_id)
+            self._quarantined_order_ids.add(existing["order_id"])
+            self._quarantined_order_ids.add(order_id)
             self._rebuild()
             self._save()
             raise ExecutionEventError("event id conflict: conflicting payload quarantined")
@@ -232,12 +236,17 @@ class ExecutionEventLedger:
             raise ExecutionEventError("unsupported order status")
         cumulative = _decimal(cumulative_filled_quantity, "cumulative_filled_quantity", nonnegative=True)
         prior_update = self._order_updates.get(order_id)
-        if prior_update is not None and prior_update["status"] in _TERMINAL_STATUSES:
-            if status in _TERMINAL_STATUSES and status != prior_update["status"]:
-                raise ExecutionEventError("conflicting terminal order status")
-            if status not in _TERMINAL_STATUSES:
-                status = prior_update["status"]
+        if prior_update is not None:
             cumulative = max(cumulative, Decimal(prior_update["cumulative_filled_quantity"]))
+            prior_status = prior_update["status"]
+            if prior_status in _TERMINAL_STATUSES:
+                if status in _TERMINAL_STATUSES and status != prior_status:
+                    raise ExecutionEventError("conflicting terminal order status")
+                if status not in _TERMINAL_STATUSES:
+                    status = prior_status
+            elif prior_status != "UNKNOWN" and status not in _TERMINAL_STATUSES:
+                if _STATUS_RANK.get(status, -1) < _STATUS_RANK.get(prior_status, -1):
+                    status = prior_status
         self._order_updates[order_id] = {
             "status": status,
             "cumulative_filled_quantity": _decimal_text(cumulative),
@@ -327,7 +336,7 @@ class ExecutionEventLedger:
             order["status"] = update["status"]
             order["terminal"] = update["status"] in _TERMINAL_STATUSES
             order["cumulative_filled_quantity"] = update["cumulative_filled_quantity"]
-        for order in orders.values():
+        for order_id, order in orders.items():
             reported = order["cumulative_filled_quantity"]
             recorded = Decimal(order["recorded_filled_quantity"])
             filled_status_mismatch = (
@@ -340,9 +349,17 @@ class ExecutionEventLedger:
             else:
                 order["reconciliation_status"] = "complete"
                 order["reservation_status"] = "released" if order["terminal"] else "pending"
+            if order_id in self._quarantined_order_ids:
+                order["reconciliation_status"] = "incomplete"
+                order["reservation_status"] = "pending"
             if order["reservation_status"] == "pending":
                 reserved = Decimal(order["reserved_amount"])
                 owners[order["owner_id"]]["reserved_amount"] += reserved
+                account["reserved_amount"] += reserved
+        for intent in self._intents.values():
+            if not intent["order_id"]:
+                reserved = Decimal(intent["reserved_amount"])
+                owners[intent["owner_id"]]["reserved_amount"] += reserved
                 account["reserved_amount"] += reserved
         owner_json = {}
         for owner_id, data in owners.items():
@@ -361,6 +378,7 @@ class ExecutionEventLedger:
             "orders": {key: dict(value) for key, value in sorted(orders.items())},
             "events": [dict(item) for item in event_order],
             "quarantined_event_ids": sorted(self._quarantined),
+            "quarantined_order_ids": sorted(self._quarantined_order_ids),
             "unsupported_event_ids": sorted(self._unsupported),
             "owners": owner_json,
             "account": {
@@ -396,6 +414,7 @@ class ExecutionEventLedger:
             if order_id:
                 self._orders[order_id] = self._new_order_state(intent)
         self._quarantined = set(raw.get("quarantined_event_ids", []))
+        self._quarantined_order_ids = set(raw.get("quarantined_order_ids", []))
         self._unsupported = set(raw.get("unsupported_event_ids", []))
 
     def _save(self) -> None:
