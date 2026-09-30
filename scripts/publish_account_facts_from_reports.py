@@ -285,11 +285,24 @@ def _service_revision_matches(expected_revision: str) -> bool:
     for item in traffic:
         if not isinstance(item, Mapping):
             return False
+        revision_name = item.get("revisionName")
         percent = item.get("percent")
+        if "percent" not in item:
+            tag = item.get("tag")
+            if (
+                not isinstance(tag, str)
+                or re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", tag) is None
+                or not isinstance(revision_name, str)
+                or not revision_name.strip()
+            ):
+                return False
+            percent = 0
         if isinstance(percent, bool) or not isinstance(percent, int):
             return False
+        if not 0 <= percent <= 100:
+            return False
         total_percent += percent
-        if item.get("revisionName") == expected_revision:
+        if revision_name == expected_revision:
             expected_percent += percent
     return total_percent == 100 and expected_percent == 100
 
