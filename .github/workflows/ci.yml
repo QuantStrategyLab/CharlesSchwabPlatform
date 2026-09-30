@@ -122,6 +122,9 @@ jobs:
             tests/test_execution_uncertainty.py \
             tests/test_deployed_runtime_target_admission.py
 
+      - name: Verify account facts publisher
+        run: uv run --no-sync pytest -q tests/test_publish_account_facts_from_reports.py
+
       - name: Verify no-traffic deployment workflow
         run: bash tests/test_safe_no_traffic_deploy_workflow.sh
 

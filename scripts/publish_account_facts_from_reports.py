@@ -25,15 +25,10 @@ SYNC_URL = "https://qsl-strategy-switch-console.pigbibi.workers.dev/api/account-
 USER_AGENT = "QSL-Schwab-AccountFacts/1.0"
 PROJECT_ID = "charlesschwabquant"
 REGION = "us-central1"
-SERVICE_NAME = "charles-schwab-quant-service"
 STRATEGY_PROFILE = "soxl_soxx_trend_income"
 ACCOUNT_SCOPE = "live"
 ACCOUNT_SELECTOR = ("live",)
 PLATFORM = "charles_schwab"
-REPORT_PREFIX = (
-    "gs://qsl-runtime-logs-shared/execution-reports/charles_schwab/"
-    "soxl_soxx_trend_income/"
-)
 MAX_AGE = timedelta(hours=36)
 FUTURE_SKEW = timedelta(minutes=5)
 _REPORT_PARTS = re.compile(r"^(\d{4}-\d{2})/(\d{8}T\d{6}Z)\.json$")
@@ -74,17 +69,18 @@ def _money_text(value: object) -> str:
     return value
 
 
-def _report_uri_parts(uri: str) -> tuple[str, str]:
+def _report_uri_parts(uri: str, report_prefix: str) -> tuple[str, str]:
     parsed = urlsplit(uri)
-    expected = urlsplit(REPORT_PREFIX)
+    expected = urlsplit(report_prefix)
     if (
-        parsed.scheme != "gs"
-        or parsed.netloc != "qsl-runtime-logs-shared"
+        not _valid_report_prefix(report_prefix)
+        or parsed.scheme != "gs"
+        or not parsed.netloc
         or parsed.query
         or parsed.fragment
         or parsed.username is not None
         or parsed.password is not None
-        or expected.scheme != "gs"
+        or parsed.netloc != expected.netloc
     ):
         raise _ProjectionError("report_uri_invalid")
     path = parsed.path.lstrip("/")
@@ -97,7 +93,29 @@ def _report_uri_parts(uri: str) -> tuple[str, str]:
     return match.group(1), match.group(2)
 
 
-def _binding_id(account_hash: str) -> str:
+def _valid_report_prefix(report_prefix: str) -> bool:
+    if (
+        not isinstance(report_prefix, str)
+        or not report_prefix
+        or report_prefix.strip() != report_prefix
+    ):
+        return False
+    expected = urlsplit(report_prefix)
+    return not (
+        expected.scheme != "gs"
+        or not expected.netloc
+        or expected.query
+        or expected.fragment
+        or expected.username is not None
+        or expected.password is not None
+        or not expected.path.endswith("/")
+        or expected.path.lstrip("/")
+        != "execution-reports/charles_schwab/soxl_soxx_trend_income/"
+        or any(char in expected.path for char in "*?[]")
+    )
+
+
+def _binding_id(account_hash: str, service_name: str) -> str:
     binding = {
         "account_hash": account_hash,
         "account_scope": ACCOUNT_SCOPE,
@@ -106,7 +124,7 @@ def _binding_id(account_hash: str) -> str:
         "net_assets_currency": "USD",
         "platform": "schwab",
         "project_id": PROJECT_ID,
-        "service_name": SERVICE_NAME,
+        "service_name": service_name,
     }
     canonical = json.dumps(
         binding,
@@ -121,6 +139,8 @@ def project_schwab_account_facts_history(
     report: Mapping[str, Any],
     *,
     source_report_uri: str,
+    report_prefix: str,
+    expected_service_name: str,
     expected_runtime_revision: str,
     expected_target_id: str,
     now: datetime,
@@ -132,7 +152,8 @@ def project_schwab_account_facts_history(
         if (
             report.get("platform") != PLATFORM
             or report.get("project_id") != PROJECT_ID
-            or report.get("service_name") != SERVICE_NAME
+            or not expected_service_name
+            or report.get("service_name") != expected_service_name
             or report.get("strategy_profile") != STRATEGY_PROFILE
             or report.get("account_scope") not in (None, ACCOUNT_SCOPE)
             or report.get("status") != "ok"
@@ -179,7 +200,7 @@ def project_schwab_account_facts_history(
         if observed_at < current - MAX_AGE or observed_at > current + FUTURE_SKEW:
             raise _ProjectionError("observation_out_of_window")
 
-        report_month, report_run_id = _report_uri_parts(source_report_uri)
+        report_month, report_run_id = _report_uri_parts(source_report_uri, report_prefix)
         if (
             report_month != started_at.strftime("%Y-%m")
             or report_run_id != report.get("run_id")
@@ -196,7 +217,7 @@ def project_schwab_account_facts_history(
             "source_binding": {
                 "kind": SOURCE_BINDING_KIND,
                 "status": "bound",
-                "id": _binding_id(account_hash),
+                "id": _binding_id(account_hash, expected_service_name),
             },
             "observed_started_at": observation["observed_at"],
             "observed_finished_at": observation["observed_at"],
@@ -239,6 +260,29 @@ def _publish_once(body: Mapping[str, Any], *, sync_url: str, token: str) -> dict
         with build_opener(_NoRedirect()).open(request, timeout=15) as response:
             status = getattr(response, "status", None)
             if isinstance(status, int) and 200 <= status < 300:
+                try:
+                    payload = json.loads(response.read())
+                except (AttributeError, TypeError, ValueError):
+                    return {
+                        "status": "skipped",
+                        "reason": "publish_failed",
+                        "category": "response_invalid",
+                        "http_status": status,
+                    }
+                if (
+                    not isinstance(payload, Mapping)
+                    or payload.get("ok") is not True
+                    or payload.get("stored") is not True
+                    or not isinstance(payload.get("unchanged"), bool)
+                ):
+                    return {
+                        "status": "skipped",
+                        "reason": "publish_failed",
+                        "category": "response_invalid",
+                        "http_status": status,
+                    }
+                if payload["unchanged"]:
+                    return {"status": "unchanged", "reason": "observation_unchanged"}
                 return {"status": "published"}
             return {"status": "skipped", "reason": "publish_failed", "http_status": status}
     except HTTPError as exc:
@@ -267,24 +311,24 @@ def _gcloud_json(*args: str) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
-def _service_revision_matches(expected_revision: str) -> bool:
+def _service_traffic(service_name: str) -> dict[str, int] | None:
     service = _gcloud_json(
-        "gcloud", "run", "services", "describe", SERVICE_NAME,
+        "gcloud", "run", "services", "describe", service_name,
         "--project", PROJECT_ID, "--region", REGION, "--format=json",
     )
     if service is None:
-        return False
+        return None
     status = service.get("status")
     if not isinstance(status, Mapping):
-        return False
+        return None
     traffic = status.get("traffic")
     if not isinstance(traffic, list):
-        return False
-    expected_percent = 0
+        return None
     total_percent = 0
+    serving: dict[str, int] = {}
     for item in traffic:
         if not isinstance(item, Mapping):
-            return False
+            return None
         revision_name = item.get("revisionName")
         percent = item.get("percent")
         if "percent" not in item:
@@ -295,16 +339,116 @@ def _service_revision_matches(expected_revision: str) -> bool:
                 or not isinstance(revision_name, str)
                 or not revision_name.strip()
             ):
-                return False
+                return None
             percent = 0
         if isinstance(percent, bool) or not isinstance(percent, int):
-            return False
+            return None
         if not 0 <= percent <= 100:
-            return False
+            return None
         total_percent += percent
-        if revision_name == expected_revision:
-            expected_percent += percent
-    return total_percent == 100 and expected_percent == 100
+        if percent:
+            if not isinstance(revision_name, str) or not revision_name.strip():
+                return None
+            serving[revision_name] = serving.get(revision_name, 0) + percent
+    if total_percent != 100 or len(serving) != 1:
+        return None
+    revision_name, percent = next(iter(serving.items()))
+    return {revision_name: percent}
+
+
+def _service_revision_matches(expected_revision: str, service_name: str) -> bool:
+    traffic = _service_traffic(service_name)
+    if traffic is None:
+        return False
+    return traffic.get(expected_revision) == 100
+
+
+def _current_serving_revision(service_name: str) -> str | None:
+    traffic = _service_traffic(service_name)
+    if traffic is None:
+        return None
+    return next(iter(traffic))
+
+
+def _listed_uri(item: object) -> str | None:
+    if isinstance(item, str):
+        return item.split("#", 1)[0]
+    if isinstance(item, Mapping):
+        uri = item.get("url")
+        if isinstance(uri, str):
+            return uri.split("#", 1)[0]
+    return None
+
+
+def _latest_recent_report_uri(
+    *,
+    report_prefix: str,
+    now: datetime,
+) -> str | None:
+    if (
+        not _valid_report_prefix(report_prefix)
+        or not isinstance(now, datetime)
+        or now.tzinfo is None
+        or now.utcoffset() is None
+    ):
+        return None
+    current = now.astimezone(timezone.utc)
+    lower_bound = current - MAX_AGE
+    upper_bound = current + FUTURE_SKEW
+    cursor = lower_bound.date()
+    last_date = upper_bound.date()
+    candidates: list[tuple[datetime, str]] = []
+    while cursor <= last_date:
+        month = cursor.strftime("%Y-%m")
+        glob = f"{report_prefix}{month}/{cursor:%Y%m%d}T*.json"
+        try:
+            result = subprocess.run(
+                ("gcloud", "storage", "ls", "--json", glob, "--project", PROJECT_ID),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError:
+            return None
+        if result.returncode != 0:
+            failure_text = (result.stderr or result.stdout or "").lower()
+            if "matched no objects" in failure_text or "no urls matched" in failure_text:
+                items = []
+            else:
+                return None
+        else:
+            try:
+                items = json.loads(result.stdout)
+            except (TypeError, ValueError):
+                return None
+        if not isinstance(items, list):
+            return None
+        for item in items:
+            uri = _listed_uri(item)
+            if uri is None:
+                continue
+            try:
+                report_month, run_id = _report_uri_parts(uri, report_prefix)
+                archived_at = datetime.strptime(run_id, "%Y%m%dT%H%M%SZ").replace(
+                    tzinfo=timezone.utc
+                )
+            except (ValueError, _ProjectionError):
+                continue
+            if (
+                report_month != month
+                or archived_at.date() != cursor
+                or not lower_bound <= archived_at <= upper_bound
+            ):
+                continue
+            candidates.append((archived_at, uri))
+        cursor += timedelta(days=1)
+    if not candidates:
+        return None
+    newest_at = max(item[0] for item in candidates)
+    newest_uris = {uri for timestamp, uri in candidates if timestamp == newest_at}
+    if len(newest_uris) != 1:
+        return None
+    return next(iter(newest_uris))
 
 
 def _read_report(uri: str) -> Mapping[str, Any] | None:
@@ -330,6 +474,8 @@ def _safe_result_text(result: Mapping[str, Any]) -> str:
     reason = result.get("reason")
     if status == "published":
         return "published"
+    if status == "unchanged" and reason == "observation_unchanged":
+        return "unchanged:observation_unchanged"
     if status == "skipped" and isinstance(reason, str) and re.fullmatch(r"[a-z_]+", reason):
         http_status = result.get("http_status")
         if isinstance(http_status, int) and not isinstance(http_status, bool) and 100 <= http_status <= 599:
@@ -343,17 +489,36 @@ def _safe_result_text(result: Mapping[str, Any]) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--report-uri", required=True)
-    parser.add_argument("--expected-runtime-revision", required=True)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--latest-scheduled-report", action="store_true")
+    mode.add_argument("--report-uri")
+    parser.add_argument("--expected-runtime-revision")
     args = parser.parse_args(argv)
 
     if os.getenv("GITHUB_ACTIONS") != "true":
         print("skipped:workflow_context_required")
         return 2
+    if args.latest_scheduled_report and os.getenv("GITHUB_EVENT_NAME") != "schedule":
+        print("skipped:schedule_context_required")
+        return 2
+    if (
+        (args.latest_scheduled_report and args.expected_runtime_revision is not None)
+        or (not args.latest_scheduled_report and not args.expected_runtime_revision)
+    ):
+        print("skipped:runtime_revision_invalid")
+        return 2
     token = os.getenv("SCHWAB_ACCOUNT_FACTS_SYNC_TOKEN", "")
     sync_url = os.getenv("ACCOUNT_FACTS_SYNC_URL", "")
+    report_prefix = os.getenv("SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX", "")
+    service_name = os.getenv("SCHWAB_ACCOUNT_FACTS_SERVICE_NAME", "")
     if not token or sync_url != SYNC_URL:
         print("skipped:publish_configuration_unavailable")
+        return 2
+    if not report_prefix or not service_name:
+        print("skipped:source_configuration_unavailable")
+        return 2
+    if not _valid_report_prefix(report_prefix):
+        print("skipped:source_configuration_unavailable")
         return 2
     if os.getenv("SCHWAB_NET_ASSETS_CURRENCY") != "USD":
         print("skipped:net_assets_currency_unconfirmed")
@@ -362,27 +527,44 @@ def main(argv: list[str] | None = None) -> int:
     if not target_id.strip():
         print("skipped:target_identity_unavailable")
         return 2
+    now = datetime.now(timezone.utc)
+    report_uri = args.report_uri
+    expected_revision = args.expected_runtime_revision
+    if args.latest_scheduled_report:
+        expected_revision = _current_serving_revision(service_name)
+        if not isinstance(expected_revision, str) or _REVISION.fullmatch(expected_revision) is None:
+            print("skipped:runtime_revision_readback_mismatch")
+            return 2
+        report_uri = _latest_recent_report_uri(report_prefix=report_prefix, now=now)
+        if report_uri is None:
+            print("skipped:report_unavailable")
+            return 2
+    if not isinstance(report_uri, str):
+        print("skipped:report_uri_invalid")
+        return 2
     try:
-        _report_uri_parts(args.report_uri)
+        _report_uri_parts(report_uri, report_prefix)
     except _ProjectionError as exc:
         print(f"skipped:{exc.reason}")
         return 2
-    if not _REVISION.fullmatch(args.expected_runtime_revision):
+    if not isinstance(expected_revision, str) or not _REVISION.fullmatch(expected_revision):
         print("skipped:runtime_revision_invalid")
         return 2
-    if not _service_revision_matches(args.expected_runtime_revision):
+    if not _service_revision_matches(expected_revision, service_name):
         print("skipped:runtime_revision_readback_mismatch")
         return 2
-    report = _read_report(args.report_uri)
+    report = _read_report(report_uri)
     if report is None:
         print("skipped:report_unavailable")
         return 2
     projected = project_schwab_account_facts_history(
         report,
-        source_report_uri=args.report_uri,
-        expected_runtime_revision=args.expected_runtime_revision,
+        source_report_uri=report_uri,
+        report_prefix=report_prefix,
+        expected_service_name=service_name,
+        expected_runtime_revision=expected_revision,
         expected_target_id=target_id,
-        now=datetime.now(timezone.utc),
+        now=now,
     )
     if projected.get("status") == "skipped":
         print(_safe_result_text(projected))
@@ -394,7 +576,7 @@ def main(argv: list[str] | None = None) -> int:
         token=token,
     )
     print(_safe_result_text(result))
-    return 0 if result.get("status") == "published" else 2
+    return 0 if result.get("status") in {"published", "unchanged"} else 2
 
 
 if __name__ == "__main__":

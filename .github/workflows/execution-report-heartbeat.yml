@@ -109,3 +109,36 @@ jobs:
           sync-url: ${{ vars.EXECUTION_EVIDENCE_SYNC_URL }}
         env:
           EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
+
+  account_facts:
+    name: Sync Schwab account facts from the scheduled report
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ACCOUNT_FACTS_SYNC_URL: ${{ vars.ACCOUNT_FACTS_SYNC_URL }}
+      SCHWAB_NET_ASSETS_CURRENCY: ${{ vars.SCHWAB_NET_ASSETS_CURRENCY }}
+      SCHWAB_ACCOUNT_FACTS_TARGET_ID: ${{ secrets.SCHWAB_ACCOUNT_FACTS_TARGET_ID }}
+      SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX: ${{ secrets.SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX }}
+      SCHWAB_ACCOUNT_FACTS_SERVICE_NAME: ${{ secrets.SCHWAB_ACCOUNT_FACTS_SERVICE_NAME }}
+      SCHWAB_ACCOUNT_FACTS_SYNC_TOKEN: ${{ secrets.SCHWAB_ACCOUNT_FACTS_SYNC_TOKEN }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Sync the latest in-window archived account observation
+        run: python3 scripts/publish_account_facts_from_reports.py --latest-scheduled-report
