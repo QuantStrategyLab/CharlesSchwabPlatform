@@ -241,6 +241,7 @@ class ExecutionCycleResult:
     allocation: dict
     trade_logs: tuple[str, ...]
     submitted_orders: tuple[dict, ...] = ()
+    account_observation: dict[str, object] | None = None
 
 
 DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD = 1000.0

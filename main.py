@@ -13,6 +13,11 @@ from application.execution_receipt_adapter import (
     attach_cycle_execution_receipt,
     attach_terminal_fallback_execution_receipt,
 )
+from application.account_observation import (
+    build_account_observation,
+    declare_net_assets_currency,
+    expected_account_hash_from_selector,
+)
 from application.broker_reconciliation import (
     SchwabReconciliationReadError,
     build_reconciliation_candidate,
@@ -349,7 +354,18 @@ def build_broker_adapters():
         submit_equity_order_fn=submit_equity_order,
         fetch_order_status_fn=fetch_order_status,
         cash_only_execution=CASH_ONLY_EXECUTION,
+        expected_account_hash=expected_account_hash_from_selector(
+            getattr(RUNTIME_SETTINGS.runtime_target, "account_selector", ())
+        ),
     )
+
+
+def _runtime_revision_diagnostics(**fields):
+    diagnostics = dict(fields)
+    runtime_revision = (os.getenv("K_REVISION") or "").strip()
+    if runtime_revision:
+        diagnostics["runtime_revision"] = runtime_revision
+    return diagnostics
 
 
 def build_strategy_adapters():
@@ -778,7 +794,7 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
             finalize_runtime_report(
                 report,
                 status="skipped",
-                diagnostics={"skip_reason": "market_closed"},
+                diagnostics=_runtime_revision_diagnostics(skip_reason="market_closed"),
             )
             return "Market Closed", 200
         if _schwab_force_run_env() and not market_open:
@@ -801,7 +817,7 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
             finalize_runtime_report(
                 report,
                 status="skipped",
-                diagnostics={"skip_reason": unsupported_reason},
+                diagnostics=_runtime_revision_diagnostics(skip_reason=unsupported_reason),
             )
             return "Unsupported Strategy", 200
         log_runtime_event(
@@ -855,6 +871,14 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
             execution_result,
             dry_run=bool(report.get("dry_run")),
         )
+        account_observation = getattr(execution_result, "account_observation", None)
+        if isinstance(account_observation, dict):
+            declared_observation = declare_net_assets_currency(
+                account_observation,
+                net_assets_currency=os.getenv("SCHWAB_NET_ASSETS_CURRENCY"),
+            )
+            if declared_observation is not None:
+                execution_summary["account_observation"] = declared_observation
         try:
             attach_cycle_execution_receipt(report, execution_result)
         except ValueError:
@@ -866,10 +890,10 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
             report,
             status="ok",
             summary=execution_summary,
-            diagnostics={
-                "signal": signal_diagnostics,
+            diagnostics=_runtime_revision_diagnostics(
+                signal=signal_diagnostics,
                 **({"signal_snapshot": signal_snapshot} if has_signal_snapshot else {}),
-            },
+            ),
         )
         log_runtime_event(
             log_context,
@@ -885,7 +909,11 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
             message="strategy_cycle_failed",
             error_type=type(exc).__name__,
         )
-        finalize_runtime_report(report, status="error")
+        finalize_runtime_report(
+            report,
+            status="error",
+            diagnostics=_runtime_revision_diagnostics(),
+        )
         log_runtime_event(
             log_context,
             "strategy_cycle_failed",
@@ -1060,13 +1088,21 @@ def _handle_schwab_probe(*, response_body: str = "Probe OK"):
         # provider's JS-SetBackendUrl fault), causing the runtime guard to
         # report a healthy service as failed on one transient response.
         snapshot = build_broker_adapters().fetch_managed_snapshot(client)
+        summary = {
+            "buying_power": float(snapshot.buying_power or 0.0),
+            "total_equity": float(snapshot.total_equity or 0.0),
+        }
+        account_observation = build_account_observation(
+            snapshot,
+            net_assets_currency=os.getenv("SCHWAB_NET_ASSETS_CURRENCY"),
+        )
+        if account_observation is not None:
+            summary["account_observation"] = account_observation
         finalize_runtime_report(
             report,
             status="ok",
-            summary={
-                "buying_power": float(snapshot.buying_power or 0.0),
-                "total_equity": float(snapshot.total_equity or 0.0),
-            },
+            summary=summary,
+            diagnostics=_runtime_revision_diagnostics(),
         )
         log_runtime_event(
             log_context,
@@ -1085,7 +1121,11 @@ def _handle_schwab_probe(*, response_body: str = "Probe OK"):
                 message="health_probe_failed",
                 error_type=type(exc).__name__,
             )
-            finalize_runtime_report(report, status="error")
+            finalize_runtime_report(
+                report,
+                status="error",
+                diagnostics=_runtime_revision_diagnostics(),
+            )
         if log_context is not None:
             log_runtime_event(
                 log_context,

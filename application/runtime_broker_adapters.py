@@ -67,15 +67,16 @@ class SchwabRuntimeBrokerAdapters:
     submit_equity_order_fn: Any
     fetch_order_status_fn: Any | None = None
     cash_only_execution: bool = True
+    expected_account_hash: str | None = None
     clock: Any = _utcnow
 
     def fetch_managed_snapshot(self, client):
         for attempt in range(_ACCOUNT_TRANSIENT_MAX_ATTEMPTS):
             try:
-                snapshot = self.fetch_account_snapshot_fn(
-                    client,
-                    strategy_symbols=list(self.managed_symbols),
-                )
+                snapshot_kwargs = {"strategy_symbols": list(self.managed_symbols)}
+                if self.expected_account_hash is not None:
+                    snapshot_kwargs["expected_account_hash"] = self.expected_account_hash
+                snapshot = self.fetch_account_snapshot_fn(client, **snapshot_kwargs)
                 return align_cash_only_sleeve_to_broker_liquidation(
                     snapshot,
                     cash_only_execution=bool(self.cash_only_execution),
@@ -265,6 +266,7 @@ def build_runtime_broker_adapters(
     submit_equity_order_fn,
     fetch_order_status_fn=None,
     cash_only_execution: bool = True,
+    expected_account_hash: str | None = None,
     clock=_utcnow,
 ) -> SchwabRuntimeBrokerAdapters:
     return SchwabRuntimeBrokerAdapters(
@@ -275,5 +277,6 @@ def build_runtime_broker_adapters(
         submit_equity_order_fn=submit_equity_order_fn,
         fetch_order_status_fn=fetch_order_status_fn,
         cash_only_execution=bool(cash_only_execution),
+        expected_account_hash=expected_account_hash,
         clock=clock,
     )
