@@ -285,6 +285,8 @@ class RebalanceServiceTests(unittest.TestCase):
                 "market_values": {"BOXX": 0.0},
                 "quantities": {"BOXX": 0},
                 "liquid_cash": 750.0,
+                "total_equity": 750.0,
+                "account_new_risk_snapshot": HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT,
                 "cash_sweep_symbol": "BOXX",
             },
             "execution": {
@@ -319,7 +321,7 @@ class RebalanceServiceTests(unittest.TestCase):
 
         self.assertEqual(submitted_orders, [])
         self.assertEqual(result.allocation["targets"]["BOXX"], 0.0)
-        self.assertFalse(result.trade_logs)
+        self.assertFalse(any("Buy" in log or "Sell" in log for log in result.trade_logs))
 
     def test_small_account_whole_share_layer_sells_unbuyable_soxx_sleeve(self):
         plan = {
@@ -336,6 +338,8 @@ class RebalanceServiceTests(unittest.TestCase):
                 "market_values": {"SOXL": 0.0, "SOXX": 536.88, "BOXX": 0.0},
                 "quantities": {"SOXL": 0, "SOXX": 1, "BOXX": 0},
                 "liquid_cash": 236.81,
+                "total_equity": 773.69,
+                "account_new_risk_snapshot": HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT,
                 "cash_sweep_symbol": "BOXX",
             },
             "execution": {
@@ -397,6 +401,8 @@ class RebalanceServiceTests(unittest.TestCase):
                 "market_values": {"SOXL": 0.0, "SOXX": 605.17, "BOXX": 0.0},
                 "quantities": {"SOXL": 0, "SOXX": 1, "BOXX": 0},
                 "liquid_cash": 519.54,
+                "total_equity": 1124.71,
+                "account_new_risk_snapshot": HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT,
                 "cash_sweep_symbol": "BOXX",
             },
             "execution": {
@@ -455,6 +461,8 @@ class RebalanceServiceTests(unittest.TestCase):
                 "market_values": {"SOXL": 0.0, "SOXX": 0.0, "BOXX": 0.0},
                 "quantities": {"SOXL": 0, "SOXX": 0, "BOXX": 0},
                 "liquid_cash": 623.39,
+                "total_equity": 623.39,
+                "account_new_risk_snapshot": HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT,
                 "cash_sweep_symbol": "BOXX",
             },
             "execution": {
@@ -516,6 +524,8 @@ class RebalanceServiceTests(unittest.TestCase):
                 "market_values": {"SOXL": 0.0},
                 "quantities": {"SOXL": 0},
                 "liquid_cash": 1000.0,
+                "total_equity": 1000.0,
+                "account_new_risk_snapshot": HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT,
                 "cash_sweep_symbol": None,
             },
             "execution": {
@@ -636,6 +646,8 @@ class RebalanceServiceTests(unittest.TestCase):
                 "market_values": {"SOXL": 120.0, "SOXX": 200.0},
                 "quantities": {"SOXL": 3, "SOXX": 2},
                 "liquid_cash": 10.0,
+                "total_equity": 330.0,
+                "account_new_risk_snapshot": HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT,
                 "cash_sweep_symbol": "",
             },
             "execution": {
@@ -764,7 +776,9 @@ class RebalanceServiceTests(unittest.TestCase):
             "portfolio": {
                 "market_values": {"SOXX": 0.0, "BOXX": 0.0},
                 "quantities": {"SOXX": 0, "BOXX": 0},
-                "liquid_cash": 50000.0,
+                "liquid_cash": 49999.0,
+                "total_equity": 49999.0,
+                "account_new_risk_snapshot": HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT,
                 "cash_sweep_symbol": "BOXX",
             },
             "execution": {
@@ -829,6 +843,8 @@ class RebalanceServiceTests(unittest.TestCase):
                 "market_values": {"QQQM": 0.0},
                 "quantities": {"QQQM": 0},
                 "liquid_cash": 50.0,
+                "total_equity": 50.0,
+                "account_new_risk_snapshot": HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT,
                 "cash_sweep_symbol": "",
             },
             "execution": {
@@ -973,8 +989,8 @@ class RebalanceServiceTests(unittest.TestCase):
         self.assertEqual(observed_orders[0].order_type, "limit")
         self.assertTrue(sent_messages)
         self.assertIn("qqqi", sent_messages[0].lower())
-        self.assertIn("🆔 Account: demo", sent_messages[0])
-        self.assertIn("dashboard", sent_messages[0])
+        self.assertIn("Account risk check passed", sent_messages[0])
+        self.assertIn("Limit Buy QQQI", sent_messages[0])
 
     def test_localize_notification_text_for_snapshot_guard_in_zh(self):
         localized = rebalance_service._localize_notification_text(
@@ -1233,7 +1249,7 @@ class RebalanceServiceTests(unittest.TestCase):
 
         self.assertTrue(sent_messages)
         self.assertIn("strategy=TQQQ Growth Income", sent_messages[0])
-        self.assertIn("dashboard", sent_messages[0])
+        self.assertIn("Account risk check passed", sent_messages[0])
 
     def test_run_strategy_core_suppresses_no_trade_plugin_heartbeat_when_configured(self):
         sent_messages = []

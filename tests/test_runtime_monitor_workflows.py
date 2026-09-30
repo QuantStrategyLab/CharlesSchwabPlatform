@@ -17,13 +17,24 @@ def test_execution_report_heartbeat_has_market_neutral_daily_schedule() -> None:
 
 
 def test_runtime_monitor_workflows_retry_gcp_authentication() -> None:
-    for name in ("execution-report-heartbeat.yml", "runtime-guard.yml"):
-        workflow = (ROOT / ".github/workflows" / name).read_text()
+    heartbeat_workflow = (ROOT / ".github/workflows/execution-report-heartbeat.yml").read_text()
+    heartbeat_job = heartbeat_workflow.split("\n  heartbeat:\n", 1)[1].split(
+        "\n  account_facts:\n", 1
+    )[0]
+    publisher_job = heartbeat_workflow.split("\n  account_facts:\n", 1)[1]
 
-        assert workflow.count("google-github-actions/auth@v3") == 2
-        assert "id: gcp_auth_primary" in workflow
-        assert "continue-on-error: true" in workflow
-        assert "steps.gcp_auth_primary.outcome == 'failure'" in workflow
+    assert heartbeat_job.count("google-github-actions/auth@v3") == 2
+    assert "id: gcp_auth_primary" in heartbeat_job
+    assert "continue-on-error: true" in heartbeat_job
+    assert "steps.gcp_auth_primary.outcome == 'failure'" in heartbeat_job
+    assert publisher_job.count("google-github-actions/auth@v3") == 1
+    assert "needs:" not in publisher_job
+
+    runtime_guard = (ROOT / ".github/workflows/runtime-guard.yml").read_text()
+    assert runtime_guard.count("google-github-actions/auth@v3") == 2
+    assert "id: gcp_auth_primary" in runtime_guard
+    assert "continue-on-error: true" in runtime_guard
+    assert "steps.gcp_auth_primary.outcome == 'failure'" in runtime_guard
 
 
 def test_runtime_guard_uses_locked_runtime_environment() -> None:
