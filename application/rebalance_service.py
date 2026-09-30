@@ -731,4 +731,6 @@ def run_strategy_core(
     if notification_delivery_summary:
         execution["notification_delivery_summary"] = notification_delivery_summary
     _record_platform_execution_telemetry(config, execution_result)
+    if account_observation is None:
+        return execution_result
     return replace(execution_result, account_observation=account_observation)
