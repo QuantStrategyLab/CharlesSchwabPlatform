@@ -1,0 +1,61 @@
+name: Schwab Account Facts Sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      report_uri:
+        description: Exact archived Schwab runtime report URI under the fixed SOXL prefix.
+        required: true
+        type: string
+      expected_runtime_revision:
+        description: Exact Cloud Run revision name expected in the report and service readback.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: schwab-account-facts-sync
+  cancel-in-progress: false
+
+env:
+  GCP_PROJECT_ID: charlesschwabquant
+  GCP_REGION: us-central1
+  CLOUD_RUN_SERVICE: charles-schwab-quant-service
+  GCP_WORKLOAD_IDENTITY_PROVIDER: projects/401309731911/locations/global/workloadIdentityPools/github-actions/providers/github-main
+  GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: schwab-platform-deploy@charlesschwabquant.iam.gserviceaccount.com
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Project and publish the selected archived report
+        env:
+          REPORT_URI: ${{ inputs.report_uri }}
+          EXPECTED_RUNTIME_REVISION: ${{ inputs.expected_runtime_revision }}
+          ACCOUNT_FACTS_SYNC_URL: ${{ vars.ACCOUNT_FACTS_SYNC_URL }}
+          SCHWAB_NET_ASSETS_CURRENCY: ${{ vars.SCHWAB_NET_ASSETS_CURRENCY }}
+          SCHWAB_ACCOUNT_FACTS_TARGET_ID: ${{ vars.SCHWAB_ACCOUNT_FACTS_TARGET_ID }}
+          SCHWAB_ACCOUNT_FACTS_SYNC_TOKEN: ${{ secrets.SCHWAB_ACCOUNT_FACTS_SYNC_TOKEN }}
+        run: >-
+          python3 scripts/publish_account_facts_from_reports.py
+          --report-uri "$REPORT_URI"
+          --expected-runtime-revision "$EXPECTED_RUNTIME_REVISION"

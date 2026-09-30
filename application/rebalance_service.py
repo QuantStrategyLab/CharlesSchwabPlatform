@@ -5,8 +5,10 @@ from __future__ import annotations
 import os
 import re
 import json
+from dataclasses import replace
 from datetime import datetime, timezone
 
+from application.account_observation import build_account_observation
 from application.execution_service import execute_rebalance_cycle, ExecutionCycleResult
 from application.execution_claim import claim_execution_marker
 from application.runtime_dependencies import SchwabRebalanceConfig, SchwabRebalanceRuntime
@@ -518,6 +520,7 @@ def run_strategy_core(
         return current_plan, current_portfolio, current_execution, current_allocation
 
     snapshot = runtime.portfolio_port.get_portfolio_snapshot()
+    account_observation = build_account_observation(snapshot)
     plan, portfolio, execution, allocation = load_plan(snapshot)
     execution_port = (
         runtime.execution_port_factory(plan["account_hash"])
@@ -728,4 +731,6 @@ def run_strategy_core(
     if notification_delivery_summary:
         execution["notification_delivery_summary"] = notification_delivery_summary
     _record_platform_execution_telemetry(config, execution_result)
-    return execution_result
+    if account_observation is None:
+        return execution_result
+    return replace(execution_result, account_observation=account_observation)
