@@ -33,6 +33,7 @@ MAX_AGE = timedelta(hours=36)
 FUTURE_SKEW = timedelta(minutes=5)
 _REPORT_PARTS = re.compile(r"^(\d{4}-\d{2})/(\d{8}T\d{6}Z)\.json$")
 _DECIMAL_TEXT = re.compile(r"^-?(?:0|[1-9]\d*)(?:\.\d+)?$")
+_ACCOUNT_TYPE_TOKEN = re.compile(r"[A-Za-z_]{1,32}\Z", re.ASCII)
 _REVISION = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 
 
@@ -143,6 +144,7 @@ def project_schwab_account_facts_history(
     expected_service_name: str,
     expected_runtime_revision: str,
     expected_target_id: str,
+    expected_cash_currency: str | None = None,
     now: datetime,
 ) -> dict[str, Any]:
     """Return the strict Schwab history body or an amount-free skip reason."""
@@ -200,6 +202,39 @@ def project_schwab_account_facts_history(
         if observed_at < current - MAX_AGE or observed_at > current + FUTURE_SKEW:
             raise _ProjectionError("observation_out_of_window")
 
+        cash: list[dict[str, str]] = []
+        if (
+            observation.get("cash_balance_source") == "cashBalance"
+            and observation.get("cash_currency") == "USD"
+            and observation.get("cash_currency_source") == "owner_confirmed"
+            and expected_cash_currency == "USD"
+        ):
+            try:
+                cash_balance = _money_text(observation.get("cash_balance"))
+            except _ProjectionError:
+                cash_balance = None
+            if cash_balance is not None:
+                cash = [
+                    {
+                        "currency": "USD",
+                        "cash_balance": cash_balance,
+                        "source_tag": "cashBalance",
+                        "currency_source": "owner_confirmed",
+                    }
+                ]
+
+        broker_account_type = None
+        raw_account_type = observation.get("broker_account_type")
+        if (
+            isinstance(raw_account_type, str)
+            and _ACCOUNT_TYPE_TOKEN.fullmatch(raw_account_type) is not None
+            and observation.get("broker_account_type_source") == "securitiesAccount.type"
+        ):
+            broker_account_type = {
+                "value": raw_account_type,
+                "source_tag": "securitiesAccount.type",
+            }
+
         report_month, report_run_id = _report_uri_parts(source_report_uri, report_prefix)
         if (
             report_month != started_at.strftime("%Y-%m")
@@ -209,7 +244,7 @@ def project_schwab_account_facts_history(
 
         if not isinstance(expected_target_id, str) or not expected_target_id.strip():
             raise _ProjectionError("target_identity_unavailable")
-        return {
+        return_body = {
             "schema_version": HISTORY_SCHEMA,
             "snapshot_schema_version": SNAPSHOT_SCHEMA,
             "account_scope": ACCOUNT_SCOPE,
@@ -231,9 +266,12 @@ def project_schwab_account_facts_history(
                     "currency_source": "owner_confirmed",
                 }
             ],
-            "cash": [],
+            "cash": cash,
             "account_hash": account_hash,
         }
+        if broker_account_type is not None:
+            return_body["broker_account_type"] = broker_account_type
+        return return_body
     except _ProjectionError as exc:
         return {"status": "skipped", "reason": exc.reason}
 
@@ -524,6 +562,7 @@ def main(argv: list[str] | None = None) -> int:
         print("skipped:net_assets_currency_unconfirmed")
         return 2
     target_id = os.getenv("SCHWAB_ACCOUNT_FACTS_TARGET_ID", "")
+    cash_currency = os.getenv("SCHWAB_CASH_CURRENCY")
     if not target_id.strip():
         print("skipped:target_identity_unavailable")
         return 2
@@ -564,6 +603,7 @@ def main(argv: list[str] | None = None) -> int:
         expected_service_name=service_name,
         expected_runtime_revision=expected_revision,
         expected_target_id=target_id,
+        expected_cash_currency=cash_currency,
         now=now,
     )
     if projected.get("status") == "skipped":

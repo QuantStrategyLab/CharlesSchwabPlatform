@@ -94,6 +94,7 @@ jobs:
       # control-plane variable while retaining a legacy-secret fallback during migration.
       RUNTIME_TARGET_JSON: ${{ vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}
       SCHWAB_DRY_RUN_ONLY: ${{ vars.SCHWAB_DRY_RUN_ONLY }}
+      SCHWAB_CASH_CURRENCY: ${{ vars.SCHWAB_CASH_CURRENCY }}
       SCHWAB_FEATURE_SNAPSHOT_PATH: ${{ vars.SCHWAB_FEATURE_SNAPSHOT_PATH }}
       SCHWAB_FEATURE_SNAPSHOT_MANIFEST_PATH: ${{ vars.SCHWAB_FEATURE_SNAPSHOT_MANIFEST_PATH }}
       SCHWAB_FEATURE_SNAPSHOT_FALLBACK_MODE: ${{ vars.SCHWAB_FEATURE_SNAPSHOT_FALLBACK_MODE }}
@@ -344,6 +345,11 @@ jobs:
             exit 1
           fi
 
+          if [ -n "${SCHWAB_CASH_CURRENCY:-}" ] && [ "${SCHWAB_CASH_CURRENCY}" != "USD" ]; then
+            echo "SCHWAB_CASH_CURRENCY must be USD when configured." >&2
+            exit 1
+          fi
+
       - name: Authenticate to Google Cloud
         id: auth
         if: steps.config.outputs.enabled == 'true'
@@ -365,11 +371,16 @@ jobs:
           DEPLOY_READBACK_FILE: ${{ runner.temp }}/cloud-run-no-traffic-baseline.json
         run: |
           set -euo pipefail
+          cash_currency_args=()
+          if [ -n "${SCHWAB_CASH_CURRENCY:-}" ]; then
+            cash_currency_args+=(--cash-currency="${SCHWAB_CASH_CURRENCY}")
+          fi
           python3 scripts/verify_cloud_run_no_traffic_deploy.py capture \
             --project="${GCP_PROJECT_ID}" \
             --region="${CLOUD_RUN_REGION}" \
             --service="${CLOUD_RUN_SERVICE}" \
             --scheduler-location="${CLOUD_SCHEDULER_LOCATION:-${CLOUD_RUN_REGION}}" \
+            "${cash_currency_args[@]}" \
             --output="${DEPLOY_READBACK_FILE}"
 
       - name: Verify deployed runtime target admission before traffic shift
@@ -403,6 +414,11 @@ jobs:
           immutable_image="${image_repo}@${image_digest}"
           echo "image_digest=${image_digest}" >> "${GITHUB_OUTPUT}"
 
+          cash_deploy_env_args=()
+          if [ -n "${SCHWAB_CASH_CURRENCY:-}" ]; then
+            cash_deploy_env_args+=(--update-env-vars="SCHWAB_CASH_CURRENCY=${SCHWAB_CASH_CURRENCY}")
+          fi
+
           gcloud run deploy "${CLOUD_RUN_SERVICE}" \
             --project="${GCP_PROJECT_ID}" \
             --region="${CLOUD_RUN_REGION}" \
@@ -418,6 +434,7 @@ jobs:
             --timeout=300s \
             --labels="managed-by=github-actions,commit-sha=${GITHUB_SHA},github-run-id=${GITHUB_RUN_ID}" \
             --no-traffic \
+            "${cash_deploy_env_args[@]}" \
             --quiet
 
       - name: Verify no-traffic deployment readback
@@ -427,11 +444,16 @@ jobs:
           EXPECTED_IMAGE_DIGEST: ${{ steps.deploy.outputs.image_digest }}
         run: |
           set -euo pipefail
+          cash_currency_args=()
+          if [ -n "${SCHWAB_CASH_CURRENCY:-}" ]; then
+            cash_currency_args+=(--cash-currency="${SCHWAB_CASH_CURRENCY}")
+          fi
           python3 scripts/verify_cloud_run_no_traffic_deploy.py verify \
             --project="${GCP_PROJECT_ID}" \
             --region="${CLOUD_RUN_REGION}" \
             --service="${CLOUD_RUN_SERVICE}" \
             --scheduler-location="${CLOUD_SCHEDULER_LOCATION:-${CLOUD_RUN_REGION}}" \
+            "${cash_currency_args[@]}" \
             --before="${DEPLOY_READBACK_FILE}" \
             --expected-sha="${EXPECTED_SHA}" \
             --expected-image-digest="${EXPECTED_IMAGE_DIGEST}"

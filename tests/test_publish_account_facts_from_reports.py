@@ -74,6 +74,186 @@ def test_valid_same_cycle_observation_projects_with_native_time_and_empty_cash()
     assert body["cash"] == []
 
 
+def test_cash_and_raw_account_type_project_as_independent_same_report_facts():
+    prefix = "gs://example-bucket/execution-reports/charles_schwab/soxl_soxx_trend_income/"
+    report = _valid_report()
+    report["summary"]["account_observation"].update(
+        {
+            "cash_balance": "123.4500",
+            "cash_balance_source": "cashBalance",
+            "cash_currency": "USD",
+            "cash_currency_source": "owner_confirmed",
+            "broker_account_type": "PROVIDER_UNKNOWN",
+            "broker_account_type_source": "securitiesAccount.type",
+        }
+    )
+
+    body = publisher.project_schwab_account_facts_history(
+        report,
+        source_report_uri=prefix + "2026-09/20260930T222000Z.json",
+        report_prefix=prefix,
+        expected_service_name="synthetic-service",
+        expected_runtime_revision="service-00007-abc",
+        expected_target_id="synthetic-target",
+        expected_cash_currency="USD",
+        now=datetime(2026, 10, 1, 1, 20, tzinfo=timezone.utc),
+    )
+
+    assert body["broker_reported_balances"] == [
+        {
+            "currency": "USD",
+            "net_assets": "123.45",
+            "source_tag": "liquidationValue",
+            "currency_source": "owner_confirmed",
+        }
+    ]
+    assert body["cash"] == [
+        {
+            "currency": "USD",
+            "cash_balance": "123.4500",
+            "source_tag": "cashBalance",
+            "currency_source": "owner_confirmed",
+        }
+    ]
+    assert body["broker_account_type"] == {
+        "value": "PROVIDER_UNKNOWN",
+        "source_tag": "securitiesAccount.type",
+    }
+    assert body["account_hash"] == "synthetic-account-hash"
+    assert body["source_binding"]["id"] == publisher._binding_id(
+        "synthetic-account-hash", "synthetic-service"
+    )
+
+
+def test_cash_requires_native_source_and_separate_exact_usd_confirmation():
+    prefix = "gs://example-bucket/execution-reports/charles_schwab/soxl_soxx_trend_income/"
+    uri = prefix + "2026-09/20260930T222000Z.json"
+    cases = (
+        {"cash_balance": "1.25", "cash_balance_source": "cashBalance"},
+        {
+            "cash_balance": "1.25",
+            "cash_balance_source": "cashBalance",
+            "cash_currency": "USD",
+        },
+        {
+            "cash_balance": "1.25",
+            "cash_balance_source": "cashBalance",
+            "cash_currency": "USD",
+            "cash_currency_source": "owner_confirmed_wrongly",
+        },
+        {
+            "cash_balance": "1.25",
+            "cash_balance_source": "cashAvailableForTrading",
+            "cash_currency": "USD",
+            "cash_currency_source": "owner_confirmed",
+        },
+        {
+            "cash_balance": "1234567890123456.123456789",
+            "cash_balance_source": "cashBalance",
+            "cash_currency": "USD",
+            "cash_currency_source": "owner_confirmed",
+        },
+        {
+            "cash_balance": "1e999999999",
+            "cash_balance_source": "cashBalance",
+            "cash_currency": "USD",
+            "cash_currency_source": "owner_confirmed",
+        },
+    )
+    for additions in cases:
+        report = _valid_report()
+        report["summary"]["account_observation"].update(additions)
+        body = publisher.project_schwab_account_facts_history(
+            report,
+            source_report_uri=uri,
+            report_prefix=prefix,
+            expected_service_name="synthetic-service",
+            expected_runtime_revision="service-00007-abc",
+            expected_target_id="synthetic-target",
+            now=datetime(2026, 10, 1, 1, 20, tzinfo=timezone.utc),
+        )
+        assert body["cash"] == []
+        assert body["broker_reported_balances"][0]["net_assets"] == "123.45"
+
+    for configured_currency in (None, "EUR"):
+        report = _valid_report()
+        report["summary"]["account_observation"].update(
+            {
+                "cash_balance": "1.25",
+                "cash_balance_source": "cashBalance",
+                "cash_currency": "USD",
+                "cash_currency_source": "owner_confirmed",
+            }
+        )
+        body = publisher.project_schwab_account_facts_history(
+            report,
+            source_report_uri=uri,
+            report_prefix=prefix,
+            expected_service_name="synthetic-service",
+            expected_runtime_revision="service-00007-abc",
+            expected_target_id="synthetic-target",
+            expected_cash_currency=configured_currency,
+            now=datetime(2026, 10, 1, 1, 20, tzinfo=timezone.utc),
+        )
+        assert body["cash"] == []
+
+
+def test_optional_raw_type_is_validated_but_legacy_report_remains_accepted():
+    prefix = "gs://example-bucket/execution-reports/charles_schwab/soxl_soxx_trend_income/"
+    uri = prefix + "2026-09/20260930T222000Z.json"
+    for token in ("CASH", "MARGIN", "PROVIDER_UNKNOWN"):
+        report = _valid_report()
+        report["summary"]["account_observation"].update(
+            {
+                "broker_account_type": token,
+                "broker_account_type_source": "securitiesAccount.type",
+            }
+        )
+        body = publisher.project_schwab_account_facts_history(
+            report,
+            source_report_uri=uri,
+            report_prefix=prefix,
+            expected_service_name="synthetic-service",
+            expected_runtime_revision="service-00007-abc",
+            expected_target_id="synthetic-target",
+            now=datetime(2026, 10, 1, 1, 20, tzinfo=timezone.utc),
+        )
+        assert body["broker_account_type"] == {
+            "value": token,
+            "source_tag": "securitiesAccount.type",
+        }
+
+    for token, source in (("bad token", "securitiesAccount.type"), ("MARGIN", "wrong_source")):
+        report = _valid_report()
+        report["summary"]["account_observation"].update(
+            {"broker_account_type": token, "broker_account_type_source": source}
+        )
+        body = publisher.project_schwab_account_facts_history(
+            report,
+            source_report_uri=uri,
+            report_prefix=prefix,
+            expected_service_name="synthetic-service",
+            expected_runtime_revision="service-00007-abc",
+            expected_target_id="synthetic-target",
+            now=datetime(2026, 10, 1, 1, 20, tzinfo=timezone.utc),
+        )
+        assert "status" not in body
+        assert "broker_account_type" not in body
+
+    legacy = _valid_report()
+    body = publisher.project_schwab_account_facts_history(
+        legacy,
+        source_report_uri=uri,
+        report_prefix=prefix,
+        expected_service_name="synthetic-service",
+        expected_runtime_revision="service-00007-abc",
+        expected_target_id="synthetic-target",
+        now=datetime(2026, 10, 1, 1, 20, tzinfo=timezone.utc),
+    )
+    assert "broker_account_type" not in body
+    assert body["cash"] == []
+
+
 def test_stale_snapshot_is_rejected_without_relabeling_time():
     prefix = "gs://example-bucket/execution-reports/charles_schwab/soxl_soxx_trend_income/"
     uri = prefix + "2026-09/20260929T222000Z.json"

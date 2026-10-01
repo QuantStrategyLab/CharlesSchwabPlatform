@@ -5,7 +5,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
+import re
 from typing import Any
+
+
+_ACCOUNT_TYPE_TOKEN = re.compile(r"[A-Za-z_]{1,32}\Z", re.ASCII)
+_CASH_MONEY_TEXT = re.compile(r"^-?(?:0|[1-9]\d*)(?:\.\d+)?$")
 
 
 def expected_account_hash_from_selector(account_selector: Any) -> str | None:
@@ -44,10 +49,28 @@ def _money_text(value: Any) -> str | None:
     return format(amount, "f")
 
 
+def _cash_money_text(value: Any) -> str | None:
+    """Accept the bounded decimal text contract used by account-facts cash rows."""
+
+    if not isinstance(value, str) or _CASH_MONEY_TEXT.fullmatch(value) is None:
+        return None
+    whole, _, fraction = value.lstrip("-").partition(".")
+    if len(whole) > 15 or len(fraction) > 8:
+        return None
+    try:
+        amount = Decimal(value)
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    if not amount.is_finite():
+        return None
+    return value
+
+
 def build_account_observation(
     snapshot: Any,
     *,
     net_assets_currency: str | None = None,
+    cash_currency: str | None = None,
 ) -> dict[str, object] | None:
     """Project verified values without changing the snapshot or raising into execution."""
 
@@ -80,6 +103,12 @@ def build_account_observation(
             metadata.get("cash_available_for_withdrawal")
         )
 
+        raw_cash_balance = metadata.get("broker_cash_balance")
+        raw_cash_balance_source = metadata.get("broker_cash_balance_source")
+        cash_balance = _cash_money_text(raw_cash_balance)
+        raw_account_type = metadata.get("broker_account_type")
+        raw_account_type_source = metadata.get("broker_account_type_source")
+
         observation: dict[str, object] = {
             "account_hash": account_hash,
             "currency": None,
@@ -95,9 +124,23 @@ def build_account_observation(
                 "cashAvailableForWithdrawal" if available_for_withdrawal is not None else None
             ),
         }
-        return declare_net_assets_currency(
+        if cash_balance is not None and raw_cash_balance_source == "cashBalance":
+            observation["cash_balance"] = cash_balance
+            observation["cash_balance_source"] = "cashBalance"
+        if (
+            isinstance(raw_account_type, str)
+            and _ACCOUNT_TYPE_TOKEN.fullmatch(raw_account_type) is not None
+            and raw_account_type_source == "securitiesAccount.type"
+        ):
+            observation["broker_account_type"] = raw_account_type
+            observation["broker_account_type_source"] = "securitiesAccount.type"
+        declared_observation = declare_net_assets_currency(
             observation,
             net_assets_currency=net_assets_currency,
+        )
+        return declare_cash_balance_currency(
+            declared_observation,
+            cash_currency=cash_currency,
         )
     except Exception:
         # Reporting must never change the outcome of an already-run strategy cycle.
@@ -127,8 +170,32 @@ def declare_net_assets_currency(
     return projected
 
 
+def declare_cash_balance_currency(
+    observation: Mapping[str, object] | None,
+    *,
+    cash_currency: str | None = None,
+) -> dict[str, object] | None:
+    """Apply an independent owner-confirmed currency only to native cashBalance."""
+
+    if not isinstance(observation, Mapping):
+        return None
+    projected = dict(observation)
+    projected["cash_currency"] = None
+    projected["cash_currency_source"] = None
+    if (
+        cash_currency != "USD"
+        or not isinstance(projected.get("cash_balance"), str)
+        or projected.get("cash_balance_source") != "cashBalance"
+    ):
+        return projected
+    projected["cash_currency"] = "USD"
+    projected["cash_currency_source"] = "owner_confirmed"
+    return projected
+
+
 __all__ = [
     "build_account_observation",
+    "declare_cash_balance_currency",
     "declare_net_assets_currency",
     "expected_account_hash_from_selector",
 ]

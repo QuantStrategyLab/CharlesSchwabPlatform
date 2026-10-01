@@ -20,6 +20,12 @@ SERVICE_FORMAT = (
 IAM_FORMAT = "json(bindings[].role,bindings[].members,bindings[].condition)"
 SCHEDULER_FORMAT = "json(name,state,schedule,timeZone,httpTarget.uri,httpTarget.oidcToken)"
 REVISION_FORMAT = "json(metadata.name,metadata.labels,spec.containers[].image)"
+CASH_CURRENCY_FORMAT = (
+    'json(spec.template.spec.containers[].env.always().filter("name=SCHWAB_CASH_CURRENCY").map().extract(value))'
+)
+CASH_REVISION_FORMAT = (
+    'json(spec.containers[].env.always().filter("name=SCHWAB_CASH_CURRENCY").map().extract(value))'
+)
 
 
 def _run_json(command: list[str]) -> object:
@@ -38,6 +44,71 @@ def _canonical(value: object) -> str:
 
 def _digest(value: object) -> str:
     return hashlib.sha256(_canonical(value).encode("utf-8")).hexdigest()
+
+
+def _cash_values(value: object) -> list[object]:
+    """Read only the explicitly projected non-secret cash-currency values."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [item for child in value for item in _cash_values(child)]
+    if isinstance(value, dict):
+        return [item for child in value.values() for item in _cash_values(child)]
+    return [value]
+
+
+def _cash_currency(args: argparse.Namespace, *, revision: bool = False) -> str | None:
+    if not getattr(args, "cash_currency", None):
+        return None
+    if revision:
+        payload = _run_json([
+            "gcloud", "run", "revisions", "describe", args.revision_name,
+            f"--project={args.project}", f"--region={args.region}",
+            f"--format={CASH_REVISION_FORMAT}",
+        ])
+    else:
+        payload = _run_json([
+            "gcloud", "run", "services", "describe", args.service,
+            f"--project={args.project}", f"--region={args.region}",
+            f"--format={CASH_CURRENCY_FORMAT}",
+        ])
+    values = _cash_values(payload)
+    if not values:
+        return None
+    if len(values) != 1 or not isinstance(values[0], str):
+        raise RuntimeError("cash currency environment projection is ambiguous")
+    return values[0]
+
+
+def _configuration_projection(spec: object, *, allow_cash_currency: bool) -> object:
+    if not allow_cash_currency or not isinstance(spec, dict):
+        return spec
+    # SERVICE_FORMAT returns only names and secret references, never plaintext
+    # environment values. Remove the single explicitly allowed env name before
+    # hashing so an absent-to-USD addition does not mask any other config drift.
+    projected = json.loads(_canonical(spec))
+    template = projected.get("template")
+    template_spec = template.get("spec") if isinstance(template, dict) else None
+    containers = template_spec.get("containers") if isinstance(template_spec, dict) else None
+    if isinstance(containers, list):
+        cash_entries = [
+            entry
+            for container in containers if isinstance(container, dict)
+            for entry in (container.get("env") if isinstance(container.get("env"), list) else [])
+            if isinstance(entry, dict) and entry.get("name") == "SCHWAB_CASH_CURRENCY"
+        ]
+        if len(cash_entries) > 1:
+            raise RuntimeError("cash currency environment entry is duplicated")
+        if cash_entries and "valueFrom" in cash_entries[0]:
+            raise RuntimeError("cash currency environment entry must not use a secret reference")
+        for container in containers:
+            if not isinstance(container, dict) or not isinstance(container.get("env"), list):
+                continue
+            container["env"] = [
+                entry for entry in container["env"]
+                if not (isinstance(entry, dict) and entry.get("name") == "SCHWAB_CASH_CURRENCY")
+            ]
+    return projected
 
 
 def _active_traffic(traffic: object) -> list[dict[str, object]]:
@@ -75,12 +146,18 @@ def _snapshot(args: argparse.Namespace) -> dict[str, object]:
     # Keep only digests in the on-runner baseline.  Service-account identities,
     # endpoint URIs, and secret-reference names are needed for comparison but
     # must not be persisted or printed by this verification helper.
+    cash_currency = _cash_currency(args)
+    if getattr(args, "cash_currency", None) and cash_currency not in (None, args.cash_currency):
+        raise RuntimeError("cash currency baseline does not match the approved declaration")
     return {
         # A no-traffic revision is allowed to appear as a zero-percent status
         # entry.  Compare only effective traffic, otherwise a correct deploy
         # would fail its own readback merely because the new revision exists.
         "traffic": _digest(_active_traffic(status.get("traffic"))),
-        "configuration": _digest(service.get("spec")),
+        "configuration": _digest(_configuration_projection(
+            service.get("spec"), allow_cash_currency=bool(getattr(args, "cash_currency", None))
+        )),
+        **({"cash_currency": cash_currency} if getattr(args, "cash_currency", None) else {}),
         "iam": _digest(iam),
         "scheduler": _digest(scheduler),
     }
@@ -125,10 +202,26 @@ def _verify(args: argparse.Namespace) -> None:
         raise RuntimeError("created revision commit SHA does not match expected SHA")
     if f"@{args.expected_image_digest}" not in str(image):
         raise RuntimeError("created revision image digest does not match the pushed image")
-    print(
+    if getattr(args, "cash_currency", None):
+        before_currency = before.get("cash_currency")
+        if before_currency not in (None, args.cash_currency):
+            raise RuntimeError("deployment baseline cash currency is not an allowed value")
+        # Re-read only the explicitly named, non-secret value from the service
+        # and created revision. Neither full env values nor the projection are
+        # written into the baseline or emitted in diagnostics.
+        revision_name = metadata.get("name")
+        if not isinstance(revision_name, str) or not revision_name:
+            raise RuntimeError("created revision name is missing")
+        args.revision_name = revision_name
+        if after.get("cash_currency") != args.cash_currency or _cash_currency(args, revision=True) != args.cash_currency:
+            raise RuntimeError("cash currency declaration did not reach the created revision")
+    message = (
         "Verified no-traffic deployment: commit SHA and image digest match; "
         "traffic, scheduler, IAM, and configuration digests are unchanged."
     )
+    if getattr(args, "cash_currency", None):
+        message += " The explicitly approved cash currency matches."
+    print(message)
 
 
 def main() -> int:
@@ -140,6 +233,7 @@ def main() -> int:
         command.add_argument("--region", required=True)
         command.add_argument("--service", required=True)
         command.add_argument("--scheduler-location", required=True)
+        command.add_argument("--cash-currency", choices=("USD",))
     subparsers.choices["capture"].add_argument("--output", required=True, type=Path)
     verify = subparsers.choices["verify"]
     verify.add_argument("--before", required=True, type=Path)
