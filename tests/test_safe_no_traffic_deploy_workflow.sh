@@ -35,6 +35,8 @@ grep -Fq 'Capture no-traffic deployment baseline' "$workflow"
 grep -Fq 'Verify no-traffic deployment readback' "$workflow"
 grep -Fq 'scripts/verify_cloud_run_no_traffic_deploy.py capture' "$workflow"
 grep -Fq 'scripts/verify_cloud_run_no_traffic_deploy.py verify' "$workflow"
+grep -Fq 'cash_currency_args+=(--cash-currency="${SCHWAB_CASH_CURRENCY}")' "$workflow"
+test "$(grep -Fc '"${cash_currency_args[@]}"' "$workflow")" -eq 2
 grep -Fq -- '--expected-image-digest="${EXPECTED_IMAGE_DIGEST}"' "$workflow"
 grep -Fq 'image_summary.digest' "$workflow"
 
@@ -42,6 +44,9 @@ grep -Fq 'for key in ("traffic", "scheduler", "iam", "configuration"):' "$readba
 grep -Fq 'raise RuntimeError(f"{key} changed during no-traffic deployment")' "$readback"
 grep -Fq 'Compare only effective traffic' "$readback"
 grep -Fq 'if percent > 0:' "$readback"
+grep -Fq 'json(spec.template.spec.containers[].env.always().filter("name=SCHWAB_CASH_CURRENCY").map().extract(value))' "$readback"
+grep -Fq 'json(spec.containers[].env.always().filter("name=SCHWAB_CASH_CURRENCY").map().extract(value))' "$readback"
+grep -Fq 'deployment baseline cash currency is not an allowed value' "$readback"
 if grep -Fq 'secrets versions access' "$readback" || grep -Fq 'containers.env.value,' "$readback"; then
   echo "readback must not access Secret Manager values or plaintext environment values" >&2
   exit 1

@@ -15,6 +15,7 @@ from application.execution_receipt_adapter import (
 )
 from application.account_observation import (
     build_account_observation,
+    declare_cash_balance_currency,
     declare_net_assets_currency,
     expected_account_hash_from_selector,
 )
@@ -878,7 +879,12 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
                 net_assets_currency=os.getenv("SCHWAB_NET_ASSETS_CURRENCY"),
             )
             if declared_observation is not None:
-                execution_summary["account_observation"] = declared_observation
+                cash_declared_observation = declare_cash_balance_currency(
+                    declared_observation,
+                    cash_currency=os.getenv("SCHWAB_CASH_CURRENCY"),
+                )
+                if cash_declared_observation is not None:
+                    execution_summary["account_observation"] = cash_declared_observation
         try:
             attach_cycle_execution_receipt(report, execution_result)
         except ValueError:
@@ -1095,6 +1101,7 @@ def _handle_schwab_probe(*, response_body: str = "Probe OK"):
         account_observation = build_account_observation(
             snapshot,
             net_assets_currency=os.getenv("SCHWAB_NET_ASSETS_CURRENCY"),
+            cash_currency=os.getenv("SCHWAB_CASH_CURRENCY"),
         )
         if account_observation is not None:
             summary["account_observation"] = account_observation

@@ -100,3 +100,160 @@ def test_no_traffic_capture_keeps_resource_secret_reference_and_iam_arrays(monke
     result = readback._snapshot(SimpleNamespace(service="synthetic", project="synthetic", region="synthetic", scheduler_location="synthetic"))
     assert result["configuration"] == readback._digest(service_spec)
     assert result["iam"] == readback._digest(policy)
+
+
+@pytest.mark.parametrize(
+    ("baseline_currency", "service_currency", "revision_currency", "passes"),
+    [
+        (None, "USD", "USD", True),
+        ("USD", "USD", "USD", True),
+        ("EUR", "USD", "USD", False),
+        (None, "EUR", "USD", False),
+        (None, None, "USD", False),
+        (None, "USD", "EUR", False),
+        (None, "USD", None, False),
+    ],
+)
+def test_explicit_cash_declaration_allows_only_absent_to_usd(baseline_currency, service_currency, revision_currency, passes, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from scripts import verify_cloud_run_no_traffic_deploy as readback
+
+    sha, digest = "a" * 40, "sha256:" + "b" * 64
+    before = tmp_path / "before.json"
+    before.write_text(json.dumps({
+        "traffic": "traffic",
+        "scheduler": "scheduler",
+        "iam": "iam",
+        "configuration": "configuration",
+        "cash_currency": baseline_currency,
+    }))
+    args = SimpleNamespace(
+        before=before, project="synthetic", region="synthetic", service="synthetic",
+        scheduler_location="synthetic", expected_sha=sha,
+        expected_image_digest=digest, cash_currency="USD",
+    )
+    monkeypatch.setattr(readback, "_snapshot", lambda _args: {
+        "traffic": "traffic", "scheduler": "scheduler", "iam": "iam",
+        "configuration": "configuration", "cash_currency": service_currency,
+    })
+    monkeypatch.setattr(readback, "_created_revision", lambda _args: {
+        "metadata": {"name": "synthetic-revision", "labels": {"commit-sha": sha}},
+        "spec": {"containers": [{"image": "synthetic/image@" + digest}]},
+    })
+    monkeypatch.setattr(readback, "_cash_currency", lambda _args, revision=False: revision_currency if revision else service_currency)
+    monkeypatch.setattr(readback, "print", lambda *_args, **_kwargs: None, raising=False)
+
+    if passes:
+        readback._verify(args)
+    else:
+        with pytest.raises(RuntimeError):
+            readback._verify(args)
+
+
+def test_explicit_cash_declaration_does_not_mask_other_service_configuration(monkeypatch):
+    from types import SimpleNamespace
+    from scripts import verify_cloud_run_no_traffic_deploy as readback
+
+    baseline = {"template": {"spec": {"containers": [{
+        "resources": {"limits": {"cpu": "1"}}, "env": [{"name": "OTHER_SETTING"}],
+    }]}}}
+    cash_added = {"template": {"spec": {"containers": [{
+        "resources": {"limits": {"cpu": "1"}}, "env": [
+            {"name": "OTHER_SETTING"}, {"name": "SCHWAB_CASH_CURRENCY"},
+        ],
+    }]}}}
+    assert readback._digest(readback._configuration_projection(baseline, allow_cash_currency=True)) == readback._digest(
+        readback._configuration_projection(cash_added, allow_cash_currency=True)
+    )
+    after = {"template": {"spec": {"containers": [{
+        "resources": {"limits": {"cpu": "2"}}, "env": [
+            {"name": "OTHER_SETTING"}, {"name": "SCHWAB_CASH_CURRENCY"},
+        ],
+    }]}}}
+    assert readback._digest(readback._configuration_projection(baseline, allow_cash_currency=True)) != readback._digest(
+        readback._configuration_projection(after, allow_cash_currency=True)
+    )
+    after = {"template": {"spec": {"containers": [{
+        "resources": {"limits": {"cpu": "1"}}, "env": [
+            {"name": "SCHWAB_CASH_CURRENCY"}, {"name": "OTHER_SETTING_CHANGED"},
+        ],
+    }]}}}
+    assert readback._digest(readback._configuration_projection(baseline, allow_cash_currency=True)) != readback._digest(
+        readback._configuration_projection(after, allow_cash_currency=True)
+    )
+    assert readback._digest(readback._configuration_projection(baseline, allow_cash_currency=False)) != readback._digest(
+        readback._configuration_projection(after, allow_cash_currency=False)
+    )
+
+
+@pytest.mark.parametrize(
+    "cash_entries",
+    [
+        [{"name": "SCHWAB_CASH_CURRENCY", "valueFrom": {"secretKeyRef": {"name": "synthetic", "key": "1"}}}],
+        [{"name": "SCHWAB_CASH_CURRENCY"}, {"name": "SCHWAB_CASH_CURRENCY"}],
+    ],
+)
+def test_explicit_cash_declaration_rejects_secret_or_duplicate_entry(cash_entries):
+    from scripts import verify_cloud_run_no_traffic_deploy as readback
+
+    spec = {"template": {"spec": {"containers": [{"env": cash_entries}]}}}
+    with pytest.raises(RuntimeError, match="cash currency environment entry"):
+        readback._configuration_projection(spec, allow_cash_currency=True)
+
+
+def test_no_cash_declaration_keeps_original_success_message(tmp_path, monkeypatch, capsys):
+    from types import SimpleNamespace
+    from scripts import verify_cloud_run_no_traffic_deploy as readback
+
+    sha, digest = "a" * 40, "sha256:" + "b" * 64
+    before = tmp_path / "before.json"
+    baseline = {key: "synthetic" for key in ("traffic", "configuration", "iam", "scheduler")}
+    before.write_text(json.dumps(baseline))
+    args = SimpleNamespace(
+        before=before, project="synthetic", region="synthetic", service="synthetic",
+        scheduler_location="synthetic", expected_sha=sha, expected_image_digest=digest,
+    )
+    monkeypatch.setattr(readback, "_snapshot", lambda _args: baseline)
+    monkeypatch.setattr(readback, "_created_revision", lambda _args: {
+        "metadata": {"labels": {"commit-sha": sha}},
+        "spec": {"containers": [{"image": "synthetic/image@" + digest}]},
+    })
+
+    readback._verify(args)
+
+    output = capsys.readouterr().out
+    assert "traffic, scheduler, IAM, and configuration digests are unchanged." in output
+    assert "cash currency matches" not in output
+
+
+@pytest.mark.parametrize(
+    ("revision", "payload", "expected_format"),
+    [
+        (False, {"spec": {"template": {"spec": {"containers": [{"env": [["USD"]]}]}}}}, "service"),
+        (True, {"spec": {"containers": [{"env": [["USD"]]}]}}, "revision"),
+        (False, None, "service"),
+        (True, None, "revision"),
+    ],
+)
+def test_cash_currency_projection_is_targeted_and_never_persists_other_env_values(monkeypatch, revision, payload, expected_format):
+    from types import SimpleNamespace
+    from scripts import verify_cloud_run_no_traffic_deploy as readback
+
+    commands = []
+
+    def run_json(command):
+        commands.append(command)
+        return payload
+
+    monkeypatch.setattr(readback, "_run_json", run_json)
+    args = SimpleNamespace(
+        cash_currency="USD", service="synthetic", project="synthetic", region="synthetic",
+        revision_name="synthetic-revision",
+    )
+    assert readback._cash_currency(args, revision=revision) == ("USD" if payload else None)
+    expected = readback.CASH_REVISION_FORMAT if expected_format == "revision" else readback.CASH_CURRENCY_FORMAT
+    assert commands[0][-1] == f"--format={expected}"
+    assert "env.always().filter(\"name=SCHWAB_CASH_CURRENCY\").map().extract(value)" in commands[0][-1]
+    assert "SYNTHETIC_OTHER" not in json.dumps(payload)
+    assert "PRIVATE" not in json.dumps(payload)
+    assert "env[].value" not in commands[0][-1]
