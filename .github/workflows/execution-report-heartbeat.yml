@@ -8,6 +8,11 @@ on:
         required: false
         type: string
         default: "36"
+      notify_on_success:
+        description: "Opt in to normal healthy-check notifications for this manual run."
+        required: false
+        type: boolean
+        default: false
       fail_workflow_on_alert:
         description: "Fail this workflow when an alert is emitted."
         required: false
@@ -46,7 +51,7 @@ jobs:
       RUNTIME_HEARTBEAT_ACCEPT_STATUSES: ${{ vars.RUNTIME_HEARTBEAT_ACCEPT_STATUSES }}
       RUNTIME_HEARTBEAT_REJECT_STATUSES: ${{ vars.RUNTIME_HEARTBEAT_REJECT_STATUSES }}
       RUNTIME_HEARTBEAT_MARKET_AWARE: ${{ vars.RUNTIME_HEARTBEAT_MARKET_AWARE || 'true' }}
-      RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS: ${{ github.event_name != 'schedule' && vars.RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS || 'false' }}
+      RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS: ${{ github.event_name == 'workflow_dispatch' && inputs.notify_on_success && 'true' || 'false' }}
       RUNTIME_HEARTBEAT_MARKET_CALENDAR: ${{ vars.SCHWAB_MARKET_CALENDAR }}
       RUNTIME_HEARTBEAT_MARKET_TIMEZONE: ${{ vars.SCHWAB_MARKET_TIMEZONE }}
       RUNTIME_HEARTBEAT_PUBLICATION_GRACE_MINUTES: ${{ vars.RUNTIME_HEARTBEAT_PUBLICATION_GRACE_MINUTES || '30' }}
