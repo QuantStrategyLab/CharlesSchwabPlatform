@@ -1,0 +1,66 @@
+name: Schwab Runtime Daily Manual
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Explicitly publish the incomplete prepared daily projection once.
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: schwab-runtime-daily-manual
+  cancel-in-progress: false
+
+env:
+  GCP_PROJECT_ID: charlesschwabquant
+  GCP_REGION: us-central1
+  GCP_WORKLOAD_IDENTITY_PROVIDER: projects/401309731911/locations/global/workloadIdentityPools/github-actions/providers/github-main
+  GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: schwab-platform-deploy@charlesschwabquant.iam.gserviceaccount.com
+
+jobs:
+  daily:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RUNTIME_TARGET_JSON: ${{ vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}
+      CLOUD_RUN_SERVICE_TARGETS_JSON: ${{ vars.CLOUD_RUN_SERVICE_TARGETS_JSON || secrets.CLOUD_RUN_SERVICE_TARGETS_JSON }}
+      CLOUD_RUN_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
+      CLOUD_RUN_SERVICES: ${{ secrets.CLOUD_RUN_SERVICES }}
+      SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX: ${{ secrets.SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX }}
+      RUNTIME_HEARTBEAT_MARKET_CALENDAR: ${{ vars.SCHWAB_MARKET_CALENDAR }}
+      RUNTIME_HEARTBEAT_MARKET_TIMEZONE: ${{ vars.SCHWAB_MARKET_TIMEZONE }}
+      RUNTIME_HEARTBEAT_PUBLICATION_GRACE_MINUTES: ${{ vars.RUNTIME_HEARTBEAT_PUBLICATION_GRACE_MINUTES || '30' }}
+      RUNTIME_HEARTBEAT_SCHEDULER_LOCATION: ${{ vars.RUNTIME_HEARTBEAT_SCHEDULER_LOCATION || vars.CLOUD_RUN_REGION || 'us-central1' }}
+      CLOUD_SCHEDULER_MAIN_TIME: ${{ vars.CLOUD_SCHEDULER_MAIN_TIME }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+
+      - name: Install locked runtime dependencies
+        run: uv sync --frozen --no-dev
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+
+      - name: Prepare runtime daily
+        if: ${{ !inputs.publish }}
+        run: uv run --no-sync python scripts/run_runtime_daily_from_reports.py
+
+      - name: Publish runtime daily
+        if: ${{ inputs.publish }}
+        env:
+          EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
+        run: uv run --no-sync python scripts/run_runtime_daily_from_reports.py --publish

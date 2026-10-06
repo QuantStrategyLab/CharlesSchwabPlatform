@@ -306,6 +306,7 @@ def prepare_daily(
     expected_runtime_revision: str,
     observed_at: dt.datetime,
     session_dates_loader: Callable[..., set[dt.date]] | None = None,
+    schedule_provider: Callable[..., dict[str, Any] | None] | None = None,
 ) -> PreparedDaily:
     """Compute a privacy-safe body from independent policy and private reads."""
     try:
@@ -363,7 +364,10 @@ def prepare_daily(
         )
         if not math.isfinite(minutes) or minutes < 0:
             raise ValueError
-        schedule = matured_schedule(
+        # The manual runner supplies a provider gated on actual cloud facts.
+        # Missing facts return None before sealing; declared cron is no fallback.
+        provider = matured_schedule if schedule_provider is None else schedule_provider
+        schedule = provider(
             policy,
             observed_at=now,
             session_dates_loader=session_dates_loader,

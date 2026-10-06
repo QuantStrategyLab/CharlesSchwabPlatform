@@ -128,6 +128,7 @@ jobs:
           uv run --no-sync pytest -q \
             tests/test_runtime_daily_report_projection.py \
             tests/test_publish_runtime_daily_from_reports.py \
+            tests/test_run_runtime_daily_from_reports.py \
             tests/test_publish_account_facts_from_reports.py \
             tests/test_account_observation.py \
             tests/test_runtime_monitor_workflows.py \
