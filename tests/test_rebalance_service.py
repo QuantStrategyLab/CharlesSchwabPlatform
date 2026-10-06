@@ -2347,3 +2347,38 @@ class RebalanceServiceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+def test_cycle_notification_keeps_structured_attention_without_free_text_inference():
+    from types import SimpleNamespace
+    from application.rebalance_service import _should_publish_cycle_notification
+
+    config = SimpleNamespace(dry_run_only=False, notify_no_trade_cycles=False, notification_attention_reason_codes=())
+    def result(execution=None, orders=()):
+        return SimpleNamespace(execution=execution or {}, submitted_orders=orders, trade_logs=("risk-looking localized free text",))
+    assert not _should_publish_cycle_notification(result(), config=config)
+    for reason in ("negative_cash", "pending_sell_release", "account_new_risk_gate", "account_owner_contested"):
+        assert _should_publish_cycle_notification(result({"notification_attention_reason_codes": (reason,)}), config=config)
+    for status in ("blocked", "pending_reconciliation", "deferred_market_data", "unknown"):
+        assert _should_publish_cycle_notification(result({"execution_status": status}), config=config)
+    for field in ("fail_reason", "persistence_error", "notification_error", "reconciliation_required"):
+        assert _should_publish_cycle_notification(result({field: "synthetic_error"}), config=config)
+    config.notification_attention_reason_codes = ("strategy_plugin_error",)
+    assert _should_publish_cycle_notification(result(), config=config)
+
+
+def test_cycle_notification_quiets_successful_preview_but_keeps_real_and_rejected_orders():
+    from types import SimpleNamespace
+    from application.rebalance_service import _should_publish_cycle_notification
+
+    config = SimpleNamespace(dry_run_only=False, notify_no_trade_cycles=False, notification_attention_reason_codes=())
+    for status in ("submitted", "filled", "partiallyfilled"):
+        result = SimpleNamespace(execution={}, submitted_orders=({"status": status},))
+        assert _should_publish_cycle_notification(result, config=config)
+    config.dry_run_only = True
+    result = SimpleNamespace(execution={"execution_status": "dry_run"}, submitted_orders=({"status": "dry_run"},))
+    assert not _should_publish_cycle_notification(result, config=config)
+    for status in ("rejected", "unknown"):
+        result = SimpleNamespace(execution={}, submitted_orders=({"status": status},))
+        assert _should_publish_cycle_notification(result, config=config)

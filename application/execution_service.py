@@ -1376,6 +1376,13 @@ def execute_rebalance_cycle(
     trade_logs.extend(format_small_account_allocation_drift_notes(drift_notes, translator=translator))
 
     result_execution = dict(execution or {})
+    attention_reasons = list(result_execution.get("notification_attention_reason_codes") or ())
+    if account_new_risk_buy_blocked:
+        attention_reasons.append("account_new_risk_gate")
+    if buys_blocked_reason:
+        attention_reasons.append(buys_blocked_reason)
+    if attention_reasons:
+        result_execution["notification_attention_reason_codes"] = tuple(dict.fromkeys(attention_reasons))
     if submitted_orders:
         if dry_run_only:
             result_execution.setdefault("execution_status", "dry_run")
