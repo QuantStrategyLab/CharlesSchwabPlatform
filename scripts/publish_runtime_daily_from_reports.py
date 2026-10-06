@@ -334,8 +334,22 @@ def prepare_daily(
                 break
             try:
                 payload = entry["payload"]
-                observation = payload.get("summary", {}).get("account_observation", {})
-                if observation.get("account_hash") != account_hash:
+                # Preserve the original exception path for malformed containers:
+                # they remain excluded bad reports, not new whole-batch skips.
+                summary = payload.get("summary", {})
+                observation = summary.get("account_observation", {})
+                report_hash = observation.get("account_hash")
+                if report_hash != account_hash:
+                    if "account_observation" not in summary:
+                        return PreparedDaily("source_observation_missing")
+                    if "account_hash" not in observation:
+                        return PreparedDaily("source_hash_missing")
+                    if (
+                        not isinstance(report_hash, str)
+                        or not report_hash
+                        or report_hash != report_hash.strip()
+                    ):
+                        return PreparedDaily("source_identity_invalid_shape")
                     return PreparedDaily("source_identity_mismatch")
                 uri = entry["object_uri"]
                 month, stamp = _report_uri_parts(uri, report_prefix)

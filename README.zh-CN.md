@@ -68,6 +68,8 @@ uv run --no-sync python scripts/check_qpk_pin_consistency.py
 
 `scripts/publish_runtime_daily_from_reports.py` 只为 `charles-schwab-quant-service / soxl_soxx_trend_income / live` 准备隐私安全的日报投影。身份必须独立来自唯一的现有 runtime policy 及 `RUNTIME_TARGET_JSON.runtime_risk_limits.binding.account_hash`；每份报告的 hash 逐字相等后才派生既有 account-facts binding ID，不能由报告自己证明预期账户。
 
+原有身份跳过分支现细分为：缺 observation 的 `source_observation_missing`、缺 hash 键的 `source_hash_missing`、hash 已提供但为 null/非字符串/空白/带首尾空白的 `source_identity_invalid_shape`。只有合法非空、无首尾空白的字符串与独立 hash 逐字不同，才记 `source_identity_mismatch`；不 trim、不忽略大小写、不从其他别名补身份。非对象 payload/summary/observation 仍保留原有坏报告排除及 incomplete 行为，不新增整批拒绝，也不重排来源校验。此前通用 mismatch 不能证明实际属于哪类。producer 的 observation 本来可缺省，跳过、错误、旧路径或观察投影未成立都可能不写入；仅凭缺字段不能断言账户配置错误。
+
 准备与读取分离：默认命令只准备空的 incomplete 投影，不联网、不发布。可调用的有界归档 reader 复用既有 URI 合同，最多读取 20 份报告并限制字节；latest-only、截断列表都不代表全天完整。先前未决报告的覆盖和保留范围尚未核验，首版即使枚举耗尽也始终 incomplete。schedule 复用既有纯 scheduler/calendar policy，仅映射已证实成熟的当前业务日 due，其余保持 unevaluable。
 
 发布须单独显式调用函数，只用 `EXECUTION_EVIDENCE_SYNC_TOKEN`、固定 HTTPS QRS 日报地址和 `X-QSL-Source-Binding-ID`。禁止 redirect，单次请求，有界验证 stored ACK，不自动重试，不回退到账户事实或 dispatch token。命令不发布、不调用 heartbeat/account-facts main，只输出固定 reason code；原报告、hash、source ID、URI、金额、订单、凭据及自由异常文本不得进入日志或共享产物。

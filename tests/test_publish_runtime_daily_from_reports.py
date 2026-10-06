@@ -605,3 +605,141 @@ def test_request_and_ack_use_the_verified_snapshot_even_if_exposed_dict_changes(
     assert json.loads(opener.open.call_args.args[0].data) == expected
     assert b"PRIVATE-LATE-MUTATION" not in opener.open.call_args.args[0].data
     opener.open.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "mutation,expected",
+    [
+        ("missing_summary", "source_observation_missing"),
+        ("missing_observation", "source_observation_missing"),
+        ("empty_observation", "source_hash_missing"),
+        ("alias_only", "source_hash_missing"),
+        ("null_hash", "source_identity_invalid_shape"),
+        ("boolean_hash", "source_identity_invalid_shape"),
+        ("number_hash", "source_identity_invalid_shape"),
+        ("list_hash", "source_identity_invalid_shape"),
+        ("object_hash", "source_identity_invalid_shape"),
+        ("empty_hash", "source_identity_invalid_shape"),
+        ("blank_hash", "source_identity_invalid_shape"),
+        ("padded_hash", "source_identity_invalid_shape"),
+        ("case_mismatch", "source_identity_mismatch"),
+        ("other_hash", "source_identity_mismatch"),
+    ],
+)
+def test_report_identity_failure_categories_are_private_and_keep_the_exact_gate(
+    mutation,
+    expected,
+    capsys,
+):
+    entry = envelope()
+    payload = entry["payload"]
+    observation = payload["summary"]["account_observation"]
+    values = {
+        "null_hash": None,
+        "boolean_hash": True,
+        "number_hash": 42,
+        "list_hash": [HASH],
+        "object_hash": {"private": HASH},
+        "empty_hash": "",
+        "blank_hash": " \t",
+        "padded_hash": " " + HASH + " ",
+        "case_mismatch": HASH.swapcase(),
+        "other_hash": "PRIVATE-OTHER-ACCOUNT",
+    }
+    if mutation == "missing_summary":
+        payload.pop("summary")
+    elif mutation == "missing_observation":
+        payload["summary"].pop("account_observation")
+    elif mutation == "empty_observation":
+        payload["summary"]["account_observation"] = {}
+    elif mutation == "alias_only":
+        observation.pop("account_hash")
+        observation["account_id"] = HASH
+        payload["account_hash"] = HASH
+    else:
+        observation["account_hash"] = values[mutation]
+    prepared = prepare([entry])
+    assert prepared.reason == expected and prepared.projection is None
+    assert prepared._source_binding_id is None and prepared._preparation_digest is None
+    result, opener = publish(prepared)
+    assert result == {"status": "skipped", "reason": "projection_unavailable"}
+    opener.open.assert_not_called()
+    assert "PRIVATE" not in repr(prepared) + json.dumps(result)
+    assert capsys.readouterr().out == capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize("container", ["payload", "summary", "account_observation"])
+@pytest.mark.parametrize("value", [None, [], "PRIVATE-MALFORMED", False])
+@pytest.mark.parametrize("bad_first", [False, True])
+def test_malformed_containers_preserve_original_partial_batch_behavior(
+    container,
+    value,
+    bad_first,
+):
+    valid = envelope()
+    bad = envelope(stamp="20261006T200200Z")
+    if container == "payload":
+        bad["payload"] = value
+    elif container == "summary":
+        bad["payload"]["summary"] = value
+    else:
+        bad["payload"]["summary"]["account_observation"] = value
+    entries = [bad, valid] if bad_first else [valid, bad]
+    prepared = prepare(entries)
+    assert prepared.reason == "prepared"
+    assert (
+        prepared.projection["records"][0]["runs"]
+        == prepare([valid]).projection["records"][0]["runs"]
+    )
+    assert "report_read_error" in prepared.projection["read_errors"]
+    assert prepared.projection["completeness"] == "incomplete"
+    assert prepared.projection["records"][0]["status"] == "read_incomplete"
+    result, opener = publish(prepared)
+    assert result["status"] == "stored_acknowledged"
+    opener.open.assert_called_once()
+
+
+def test_missing_report_identity_still_precedes_provenance_and_revision_checks():
+    entry = envelope()
+    entry["payload"]["summary"].pop("account_observation")
+    entry["payload"]["diagnostics"]["runtime_revision"] = "other-revision"
+    entry["object_uri"] = "gs://PRIVATE-FOREIGN/other.json"
+    assert prepare([entry]).reason == "source_observation_missing"
+
+
+@pytest.mark.parametrize(
+    "observation,expected",
+    [
+        ({}, "source_hash_missing"),
+        ({"account_hash": None}, "source_identity_invalid_shape"),
+    ],
+)
+def test_manual_runner_relays_fixed_identity_reason_without_publishing(
+    observation, expected
+):
+    from scripts.run_runtime_daily_from_reports import run_daily
+    from scripts.runtime_daily_source_facts import SourceFacts
+
+    entry = envelope()
+    entry["payload"]["summary"]["account_observation"] = observation
+    env = {
+        **environment(),
+        "GCP_PROJECT_ID": caller.PROJECT_ID,
+        "GCP_REGION": "us-central1",
+        "SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX": PREFIX,
+    }
+    publisher = Mock()
+    result = run_daily(
+        env,
+        publish=True,
+        observed_at=NOW,
+        fact_reader=Mock(
+            return_value=SourceFacts(
+                "verified", REVISION, "0 16 * * 1-5", "America/New_York"
+            )
+        ),
+        archive_reader=Mock(return_value=caller.ReadBatch([entry])),
+        publisher=publisher,
+    )
+    assert result == {"status": "skipped", "reason": expected}
+    publisher.assert_not_called()
