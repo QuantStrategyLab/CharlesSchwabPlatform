@@ -2138,9 +2138,7 @@ class RebalanceServiceTests(unittest.TestCase):
             dry_run_only=True,
         )
 
-        self.assertTrue(sent_messages)
-        self.assertIn("模拟运行", sent_messages[0])
-        self.assertIn("模拟下单", sent_messages[0])
+        self.assertEqual(sent_messages, [])
 
     def test_run_strategy_skips_when_execution_marker_already_exists(self):
         sent_messages = []
@@ -2238,9 +2236,7 @@ class RebalanceServiceTests(unittest.TestCase):
         self.assertEqual(len(checked_keys), 1)
         self.assertIn("paper", checked_keys[0])
         self.assertEqual(observed_orders, [])
-        self.assertEqual(len(sent_messages), 1)
-        self.assertIn("Heartbeat", sent_messages[0])
-        self.assertIn("No rebalance needed", sent_messages[0])
+        self.assertEqual(sent_messages, [])
 
     def test_dry_run_bypass_execution_marker_continues_rebalance(self):
         import os
