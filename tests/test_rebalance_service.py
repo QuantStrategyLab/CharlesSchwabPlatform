@@ -1624,7 +1624,7 @@ class RebalanceServiceTests(unittest.TestCase):
         def fail_submit(*_args, **_kwargs):
             raise AssertionError("submit_equity_order should not be called in dry-run mode")
 
-        run_strategy_core(
+        result = run_strategy_core(
             object(),
             None,
             fetch_reference_history=lambda client: [{"close": 1.0, "high": 1.0, "low": 1.0}],
@@ -1642,10 +1642,18 @@ class RebalanceServiceTests(unittest.TestCase):
             dry_run_only=True,
         )
 
-        self.assertTrue(sent_messages)
-        self.assertIn("模拟下单: sell BOXX: 5shares", sent_messages[0])
-        self.assertIn("模拟下单: limit buy QQQM ($264.00): 1shares", sent_messages[0])
-        self.assertNotIn("buy BOXX", sent_messages[0])
+        preview_orders = result.submitted_orders
+        self.assertIn(
+            ("sell", "BOXX", 5),
+            [(order["side"], order["symbol"], order["quantity"]) for order in preview_orders],
+        )
+        self.assertIn(
+            ("buy", "QQQM", 1, 264.0),
+            [(order["side"], order["symbol"], order["quantity"], order.get("limit_price")) for order in preview_orders],
+        )
+        self.assertFalse(any(order["side"] == "buy" and order["symbol"] == "BOXX" for order in preview_orders))
+        self.assertTrue(all(order["status"] == "dry_run" for order in preview_orders))
+        self.assertEqual(sent_messages, [])
 
     def test_run_strategy_core_does_not_sweep_back_into_cash_symbol_after_selling_it(self):
         sent_messages = []
@@ -1715,7 +1723,7 @@ class RebalanceServiceTests(unittest.TestCase):
         def fail_submit(*_args, **_kwargs):
             raise AssertionError("submit_equity_order should not be called in dry-run mode")
 
-        run_strategy_core(
+        result = run_strategy_core(
             object(),
             None,
             fetch_reference_history=lambda client: [{"close": 1.0, "high": 1.0, "low": 1.0}],
@@ -1733,10 +1741,18 @@ class RebalanceServiceTests(unittest.TestCase):
             dry_run_only=True,
         )
 
-        self.assertTrue(sent_messages)
-        self.assertIn("模拟下单: sell BOXX: 10shares", sent_messages[0])
-        self.assertIn("模拟下单: limit buy QQQM ($50.00): 11shares", sent_messages[0])
-        self.assertNotIn("buy BOXX", sent_messages[0])
+        preview_orders = result.submitted_orders
+        self.assertIn(
+            ("sell", "BOXX", 10),
+            [(order["side"], order["symbol"], order["quantity"]) for order in preview_orders],
+        )
+        self.assertIn(
+            ("buy", "QQQM", 11, 50.0),
+            [(order["side"], order["symbol"], order["quantity"], order.get("limit_price")) for order in preview_orders],
+        )
+        self.assertFalse(any(order["side"] == "buy" and order["symbol"] == "BOXX" for order in preview_orders))
+        self.assertTrue(all(order["status"] == "dry_run" for order in preview_orders))
+        self.assertEqual(sent_messages, [])
 
     def test_run_strategy_core_retries_refresh_until_sold_cash_is_available(self):
         sent_messages = []
