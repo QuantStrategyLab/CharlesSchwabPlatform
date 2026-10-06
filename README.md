@@ -69,3 +69,17 @@ uv run --no-sync python scripts/check_qpk_pin_consistency.py
 ## License
 
 See [LICENSE](LICENSE).
+
+## Read-only daily caller candidate
+
+`scripts/publish_runtime_daily_from_reports.py` prepares a privacy-safe daily projection for only `charles-schwab-quant-service / soxl_soxx_trend_income / live`. The source identity comes independently from the unique existing runtime policy and `RUNTIME_TARGET_JSON.runtime_risk_limits.binding.account_hash`; every report must match that hash exactly before the established account-facts binding ID is derived. Reports never establish their own expected account.
+
+Preparation and source reads are separate. The default command prepares an empty, incomplete projection without network access or publication. The callable bounded archive reader uses the existing report URI contract, at most 20 reports and bounded bytes. It never treats a latest report or a truncated listing as a full day. Prior-unresolved coverage/retention is not yet verified, so this first reader always reports incomplete coverage, even after listing exhaustion. The existing pure scheduler/calendar policy supplies only proven matured current-business-day due facts; all other states remain unevaluable.
+
+Publication is a separate explicitly invoked function, using only `EXECUTION_EVIDENCE_SYNC_TOKEN`, the fixed HTTPS QRS daily endpoint and `X-QSL-Source-Binding-ID`. It disables redirects, attempts one request, and bounds and validates the stored ACK. There is no automatic retry or account-facts/dispatch token fallback. The command does not publish or invoke heartbeat/account-facts mains, and prints fixed reason codes only. Raw reports, hashes, source IDs, URIs, amounts, orders, credentials and exception text must stay private.
+
+This source candidate does not activate any workflow. Before a separately approved cutover, verify the already-injected independent identity, receiver registry/header gate, exact report prefix and existing IAM, serving revision, effective scheduler facts, full-day/prior-unresolved coverage and intended endpoint/token references inside the existing cloud boundary. Real-data preparation, a stored ACK, authenticated account/date readback, production UI and a natural cycle remain separate acceptance steps. Synthetic tests do not establish live connectivity.
+
+The ACK account key is the trusted receiver’s canonical UI alias, not an independently verified caller identity. Physical attribution relies on the caller’s exact independent hash check and the receiver’s per-POST comparison against its current protected binding. A valid response is only `stored_acknowledged` with `receiver_reported_account`; authenticated account/date readback is still required. An already available trusted expected UI key may be compared, but no duplicate alias variable or permission is introduced. The existing `RUNTIME_HEARTBEAT_PUBLICATION_GRACE_MINUTES` is honored; malformed values leave schedule unevaluable.
+
+Preparation also seals a canonical body/source-identity digest. Before any transport is opened, publication rejects changes to that body or identity and rejects manually constructed results without preparation evidence. The verified byte snapshot is used for both the request and ACK expectations. This is an in-process guard against accidental mutation, not a security boundary against a caller that controls Python code; receiver validation still applies.

@@ -63,3 +63,17 @@ uv run --no-sync python scripts/check_qpk_pin_consistency.py
 ## 许可证
 
 详见 [LICENSE](LICENSE)。
+
+## 只读日报 caller 候选
+
+`scripts/publish_runtime_daily_from_reports.py` 只为 `charles-schwab-quant-service / soxl_soxx_trend_income / live` 准备隐私安全的日报投影。身份必须独立来自唯一的现有 runtime policy 及 `RUNTIME_TARGET_JSON.runtime_risk_limits.binding.account_hash`；每份报告的 hash 逐字相等后才派生既有 account-facts binding ID，不能由报告自己证明预期账户。
+
+准备与读取分离：默认命令只准备空的 incomplete 投影，不联网、不发布。可调用的有界归档 reader 复用既有 URI 合同，最多读取 20 份报告并限制字节；latest-only、截断列表都不代表全天完整。先前未决报告的覆盖和保留范围尚未核验，首版即使枚举耗尽也始终 incomplete。schedule 复用既有纯 scheduler/calendar policy，仅映射已证实成熟的当前业务日 due，其余保持 unevaluable。
+
+发布须单独显式调用函数，只用 `EXECUTION_EVIDENCE_SYNC_TOKEN`、固定 HTTPS QRS 日报地址和 `X-QSL-Source-Binding-ID`。禁止 redirect，单次请求，有界验证 stored ACK，不自动重试，不回退到账户事实或 dispatch token。命令不发布、不调用 heartbeat/account-facts main，只输出固定 reason code；原报告、hash、source ID、URI、金额、订单、凭据及自由异常文本不得进入日志或共享产物。
+
+此源码候选不启用任何 workflow。另行批准切换前，仍须在原云权限内核验现有注入的独立身份、receiver registry/header gate、精确报告前缀和已有 IAM、serving revision、实际 scheduler、全天与先前未决覆盖以及既有 endpoint/token 引用。真实投影预检、stored ACK、登录态账户/日期回读、生产页面和自然周期各自验收；合成测试不能证明真实连通。
+
+ACK 的 account_key 是可信 receiver 返回的 canonical UI 别名，不代表 caller 独立核验了该别名。物理账户归属依赖 caller 对独立 hash 的精确比较，以及 receiver 每次 POST 对当前 protected binding 的匹配。合法响应仅标 `stored_acknowledged` / `receiver_reported_account`，仍须登录态账户/日期回读；已有可信预期 UI key 时可额外比较，但不新增重复别名变量或权限。复用现有 `RUNTIME_HEARTBEAT_PUBLICATION_GRACE_MINUTES`，错误值保持 schedule unevaluable。
+
+准备时还会固定 canonical body 与 source identity 的摘要。打开任何 transport 前，发布函数拒绝准备后内容或身份的改变，也拒绝没有准备证据的手工构造结果；请求和 ACK 预期都使用核验后的同一字节快照。这是进程内防止误变的约束，不是对掌握 Python 代码的恶意调用者的安全边界，receiver 校验仍然必需。
