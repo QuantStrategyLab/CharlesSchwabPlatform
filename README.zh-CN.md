@@ -77,3 +77,11 @@ uv run --no-sync python scripts/check_qpk_pin_consistency.py
 ACK 的 account_key 是可信 receiver 返回的 canonical UI 别名，不代表 caller 独立核验了该别名。物理账户归属依赖 caller 对独立 hash 的精确比较，以及 receiver 每次 POST 对当前 protected binding 的匹配。合法响应仅标 `stored_acknowledged` / `receiver_reported_account`，仍须登录态账户/日期回读；已有可信预期 UI key 时可额外比较，但不新增重复别名变量或权限。复用现有 `RUNTIME_HEARTBEAT_PUBLICATION_GRACE_MINUTES`，错误值保持 schedule unevaluable。
 
 准备时还会固定 canonical body 与 source identity 的摘要。打开任何 transport 前，发布函数拒绝准备后内容或身份的改变，也拒绝没有准备证据的手工构造结果；请求和 ACK 预期都使用核验后的同一字节快照。这是进程内防止误变的约束，不是对掌握 Python 代码的恶意调用者的安全边界，receiver 校验仍然必需。
+
+### 手动接线与真实验收分离
+
+`runtime-daily-sync.yml` 是独立的 main-only 手动 workflow，合并源码不会触发云读取或日报 POST。原 account-facts 的必填输入、默认行为和 heartbeat 定时任务均不变。新入口默认只 prepare，仅显式 typed `publish` 输入才增加一次发布尝试；prepare 步骤不注入发布 token。两种模式复用已有 WIF 身份与锁定依赖，不新建 environment 门、凭据或 IAM 授权，不部署、不调用券商。
+
+明确运行后，`scripts/run_runtime_daily_from_reports.py` 通过有界只读 metadata adapter 核对固定服务实际 serving traffic 和既有 scheduler 候选，再复用已合并的有界报告 reader 与 caller。只接受稳定、唯一且总计 100% 流量的 revision。scheduler 必须唯一、enabled，且指向同一服务的既定 `/run` 路径；只比较该 URI，绝不调用。暂停、歧义、目标不符或无法核验均保持 `unevaluable`，声明 cron 或 TTL 不能替代实际事实。原 caller CLI 继续离线。
+
+首次真实 prepare 仍是原云权限边界内的独立验收步骤。报告 prefix、身份/hash、私有 metadata、原报告和自由异常文本不进入共享输出；日报 endpoint 仅在新发布步骤局部使用，不修改旧 execution-evidence URL。只输出固定分类：`prepared` 或 `stored_acknowledged` 加 `completeness=incomplete` 不代表全天健康或登录态回读通过。coverage 仍无条件 false；当前业务日截至观察点的完整枚举、保留的先前未决历史及终态证据、真实 due obligations 均需另行证明。没有人工 complete 开关，枚举耗尽、空目录或少于20份报告都不能提供该证明。
