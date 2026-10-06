@@ -1,7 +1,12 @@
 # CharlesSchwabPlatform
 
+CharlesSchwabPlatform is the execution runtime that actually talks to Charles Schwab's brokerage API for US equities, as part of QuantStrategyLab's larger multi-repository trading system. It takes runtime-enabled strategy profiles — the trading logic itself lives elsewhere, in `UsEquityStrategies` and `UsEquitySnapshotPipelines` — and handles the Schwab-specific plumbing: authentication, order placement, dry-run/live gating, notifications, and Cloud Run deployment. If you're working on Schwab connectivity, execution safety, or how this platform gets deployed and operated, this is the repository you want.
 
-## QSL architecture role
+[Chinese README](README.zh-CN.md)
+
+> Investing involves risk. This project does not provide investment advice and is for education, research, and engineering review only.
+
+## Architecture role
 
 - **Layer**: `runtime-platform`.
 - **Responsibility**: Charles Schwab US equity execution runtime.
@@ -9,17 +14,7 @@
 - **Consumes**: UsEquityStrategies, UsEquitySnapshotPipelines artifacts, QuantPlatformKit, QuantRuntimeSettings.
 - **Must not**: own strategy research logic or store credentials in Git.
 
-[Chinese README](README.zh-CN.md)
-
-> Investing involves risk. This project does not provide investment advice and is for education, research, and engineering review only.
-
-## What this repository is
-
-CharlesSchwabPlatform is a QuantStrategyLab Charles Schwab US equity execution platform. It runs runtime-enabled US equity profiles through Schwab token, order, notification, and Cloud Run integrations.
-
 Live execution is fail-closed behind a durable atomic execution claim. Cloud Run must keep both request concurrency and maximum instances at `1`; the claim is the cross-revision guard that prevents duplicate broker submission if requests overlap. An unresolved claim never expires automatically and requires order/report reconciliation before manual recovery.
-
-It is an execution layer, not a strategy research repository. Strategy logic comes from `UsEquityStrategies`; snapshot and validation artifacts come from `UsEquitySnapshotPipelines` when a profile requires them.
 
 ## Runtime boundary
 
@@ -45,13 +40,13 @@ Direct runtime profiles can usually run from market history or portfolio state. 
 
 - `tests/`: unit, contract, and regression tests.
 - `.github/workflows/`: CI, scheduled jobs, release, or deployment workflows.
+- `scripts/`: operator scripts and local helpers.
+- `research/`: research configs and non-live candidate artifacts.
 
 ## Paper command consumer
 
 The isolated, default-disabled Schwab paper command consumer is documented in
 [`docs/paper_execution_command_consumer.md`](docs/paper_execution_command_consumer.md).
-- `scripts/`: operator scripts and local helpers.
-- `research/`: research configs and non-live candidate artifacts.
 
 ## Quick start
 

@@ -1,7 +1,12 @@
 # CharlesSchwabPlatform
 
+CharlesSchwabPlatform 是 QuantStrategyLab 多仓库交易系统里真正和 Charles Schwab 经纪商 API 打交道的执行 runtime。策略逻辑本身在别处——`UsEquityStrategies` 和 `UsEquitySnapshotPipelines`；这个仓库负责把 runtime-enabled 的策略 profile 接到 Schwab 相关的具体环节：认证、下单、dry-run/live 控制、通知，以及 Cloud Run 部署。如果你要处理 Schwab 连接、执行安全机制，或者这个平台怎么部署和运维，就是在这个仓库里。
 
-## QSL 架构角色
+[English README](README.md)
+
+> 投资有风险。本项目不构成投资建议，仅用于学习、研究和工程审阅。
+
+## 架构角色
 
 - **层级**：`执行平台`。
 - **职责**：Charles Schwab 美股执行运行时。
@@ -9,17 +14,7 @@
 - **消费对象**：UsEquityStrategies、UsEquitySnapshotPipelines artifacts、QuantPlatformKit、QuantRuntimeSettings。
 - **禁止事项**：承载策略研究逻辑或把凭据写入 Git。
 
-[English README](README.md)
-
-> 投资有风险。本项目不构成投资建议，仅用于学习、研究和工程审阅。
-
-## 这个仓库是什么
-
-CharlesSchwabPlatform 是 QuantStrategyLab 的Charles Schwab 美股执行平台。通过 Schwab token、订单、通知和 Cloud Run 集成执行 runtime-enabled 美股 profile。
-
 实盘执行必须先取得持久化原子 claim，失败时关闭执行。Cloud Run 的请求并发数和最大实例数都必须保持为 `1`；原子 claim 负责阻止新旧 revision 重叠时重复向券商提交。未完成的 claim 不会自动过期，必须先核对订单和执行报告，再由人工恢复。
-
-它属于执行层，不是策略研究仓库。策略逻辑来自 `UsEquityStrategies`；如果 profile 依赖 snapshot，验证和产物来自 `UsEquitySnapshotPipelines`。
 
 ## 运行边界
 
