@@ -361,6 +361,37 @@ def _has_submitted_orders(result: ExecutionCycleResult) -> bool:
     return bool(tuple(getattr(result, "submitted_orders", ()) or ()))
 
 
+
+def _should_publish_cycle_notification(result: ExecutionCycleResult, *, config) -> bool:
+    if getattr(config, "notification_attention_reason_codes", ()):
+        return True
+    execution = getattr(result, "execution", {}) or {}
+    if not isinstance(execution, dict):
+        return True
+    metadata = execution.get("signal_metadata") or {}
+    for scope in (execution, metadata):
+        if not isinstance(scope, dict):
+            return True
+        if any(scope.get(key) for key in (
+            "error", "errors", "fail_reason", "execution_blocked_reason",
+            "plugin_error", "persistence_error", "report_persistence_error",
+            "notification_error", "pending_reconciliation", "reconciliation_required",
+            "market_data_retry_required", "notification_attention_reason_codes",
+        )):
+            return True
+        status = str(scope.get("execution_status") or "").strip().lower()
+        if status not in {"", "no_op", "no_action", "completed", "executed", "dry_run", "dry_run_completed"}:
+            return True
+    submitted_orders = tuple(getattr(result, "submitted_orders", ()) or ())
+    for order in submitted_orders:
+        status = str(order.get("status") or "").strip().lower() if isinstance(order, dict) else "unknown"
+        if status in {"rejected", "unknown", "failed", "error"}:
+            return True
+    if bool(getattr(config, "dry_run_only", False)):
+        return False
+    return bool(submitted_orders) or bool(getattr(config, "notify_no_trade_cycles", False))
+
+
 def _record_execution_outcome(
     *,
     config: SchwabRebalanceConfig,
@@ -535,6 +566,7 @@ def run_strategy_core(
     execution_marker_key = _build_execution_marker_key(config=config, execution=execution, plan=plan)
     execution_state_store = getattr(config, "execution_state_store", None)
     execution_already_recorded = False
+    notification_attention_reason_codes = []
     execution_claim_acquired = False
     dry_run_bypass_marker = _dry_run_bypasses_execution_marker(config)
     if dry_run_bypass_marker:
@@ -571,6 +603,7 @@ def run_strategy_core(
                     f"Account owner fence failed before broker submission: {type(exc).__name__}"
                 ) from exc
             if not owner_claim.allowed:
+                notification_attention_reason_codes.append("account_owner_contested")
                 print(
                     (
                         f"Account owner fence blocked submission for account={account_id}: "
@@ -676,6 +709,8 @@ def run_strategy_core(
             )
     portfolio = execution_result.portfolio
     execution = execution_result.execution
+    if notification_attention_reason_codes:
+        execution["notification_attention_reason_codes"] = tuple(notification_attention_reason_codes)
     signal_metadata = dict(execution.get("signal_metadata") or {})
     signal_metadata["cash_only_execution"] = bool(getattr(config, "cash_only_execution", True))
     execution["cash_only_execution"] = signal_metadata["cash_only_execution"]
@@ -691,7 +726,8 @@ def run_strategy_core(
     )
     trade_logs = list(execution_result.trade_logs)
 
-    if _has_submitted_orders(execution_result):
+    publish_cycle_notification = _should_publish_cycle_notification(execution_result, config=config)
+    if _has_submitted_orders(execution_result) and publish_cycle_notification:
         try:
             notification_publisher.publish(
                 notification_renderers.render_trade_notification(
@@ -706,7 +742,7 @@ def run_strategy_core(
             )
         except Exception:
             print("pending_order_notification_failed", flush=True)
-    elif getattr(config, "notify_no_trade_cycles", True):
+    elif publish_cycle_notification:
         notification_publisher.publish(
             notification_renderers.render_heartbeat_notification(
                 translator=config.translator,

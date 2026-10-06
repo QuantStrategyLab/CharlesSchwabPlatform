@@ -30,6 +30,7 @@ class SchwabRebalanceConfig:
     execution_dedup_enabled: bool = False
     execution_state_store: Any = None
     execution_state_account_scope: str = ""
+    notification_attention_reason_codes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
