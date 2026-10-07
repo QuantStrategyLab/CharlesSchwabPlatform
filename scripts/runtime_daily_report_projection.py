@@ -27,7 +27,11 @@ from quant_platform_kit.common.execution_receipts import attach_execution_receip
 
 from application.account_observation import expected_account_hash_from_selector
 from scripts.publish_account_facts_from_reports import _report_uri_parts
-from scripts.runtime_heartbeat_policy import match_payload_target, target_key
+from scripts.runtime_heartbeat_policy import (
+    _payload_value,
+    match_payload_target,
+    target_key,
+)
 
 _TARGET = {
     "service": "charles-schwab-quant-service",
@@ -35,6 +39,36 @@ _TARGET = {
     "account_scope": "live",
 }
 _ZONE = ZoneInfo("America/New_York")
+SCOPE_DIAGNOSTIC_FIELDS = frozenset(
+    {
+        "outer_platform",
+        "project",
+        "runtime_map",
+        "target_service",
+        "target_profile",
+        "target_scope",
+        "required_profile",
+        "required_scope",
+        "selector_shape",
+        "nested_platform",
+        "detail_unevaluable",
+        *(
+            source + "_alias_" + name
+            for source in ("top", "runtime")
+            for name in (
+                "service_name",
+                "service",
+                "cloud_run_service",
+                "strategy_profile",
+                "strategy",
+                "profile",
+                "account_scope",
+                "account_group",
+                "account_region",
+            )
+        ),
+    }
+)
 _SCHEDULE_FIELDS = frozenset(
     {
         "state",
@@ -203,25 +237,29 @@ def project_daily_runtime(
 
 def _scope_problem(payload: object) -> str | None:
     """Validate report/target namespaces, not the private account binding."""
+    return _scope_problem_detail(payload)[0]
+
+
+def _scope_problem_detail(payload: object) -> tuple[str | None, str | None]:
+    """Keep the original predicate's order, problem codes and exceptions."""
     if (
         not isinstance(payload, Mapping)
         or payload.get("schema_version") != "runtime_report.v1"
     ):
-        return "invalid_report"
-    if (
-        payload.get("platform") != "charles_schwab"
-        or payload.get("project_id") != "charlesschwabquant"
-    ):
-        return "wrong_platform"
+        return "invalid_report", None
+    if payload.get("platform") != "charles_schwab":
+        return "wrong_platform", "outer_platform"
+    if payload.get("project_id") != "charlesschwabquant":
+        return "wrong_platform", "project"
     runtime = payload.get("runtime_target")
     if not isinstance(runtime, Mapping):
-        return "wrong_target"
+        return "wrong_target", "runtime_map"
     identity, _ = match_payload_target(payload, [dict(_TARGET)])
     if identity != target_key(_TARGET):
-        return "wrong_target"
+        return "wrong_target", "target_match"
     # The shared matcher prefers top-level fields. Reject contradictory aliases
     # rather than letting that preference hide another nested service or scope.
-    for source in (payload, runtime):
+    for source_name, source in (("top", payload), ("runtime", runtime)):
         for names, expected in (
             (("service_name", "service", "cloud_run_service"), _TARGET["service"]),
             (("strategy_profile", "strategy", "profile"), _TARGET["strategy_profile"]),
@@ -230,15 +268,13 @@ def _scope_problem(payload: object) -> str | None:
                 _TARGET["account_scope"],
             ),
         ):
-            if any(
-                source.get(key) is not None and source[key] != expected for key in names
-            ):
-                return "wrong_target"
-    if (
-        runtime.get("strategy_profile") != _TARGET["strategy_profile"]
-        or runtime.get("account_scope") != "live"
-    ):
-        return "wrong_target"
+            for key in names:
+                if source.get(key) is not None and source[key] != expected:
+                    return "wrong_target", source_name + "_alias_" + key
+    if runtime.get("strategy_profile") != _TARGET["strategy_profile"]:
+        return "wrong_target", "required_profile"
+    if runtime.get("account_scope") != "live":
+        return "wrong_target", "required_scope"
     if "account_selector" in runtime:
         selectors = runtime["account_selector"]
         if (
@@ -249,10 +285,55 @@ def _scope_problem(payload: object) -> str | None:
                 for value in selectors
             )
         ):
-            return "wrong_target"
+            return "wrong_target", "selector_shape"
     if "platform_id" in runtime and runtime["platform_id"] != "schwab":
-        return "wrong_platform"
-    return None
+        return "wrong_platform", "nested_platform"
+    return None, None
+
+
+def _scope_failure_field(payload: object) -> str:
+    """Diagnostic only: refine a rejected scope without emitting any value."""
+    try:
+        problem, field = _scope_problem_detail(payload)
+        if problem not in {"wrong_platform", "wrong_target"}:
+            return "detail_unevaluable"
+        if field == "target_match":
+            # Reuse the matcher's exact extraction and comparison order only
+            # after its original rejection. Never use this to admit a report.
+            values = (
+                (
+                    "target_service",
+                    _payload_value(
+                        payload, ("service_name", "service", "cloud_run_service")
+                    ).lower(),
+                    _TARGET["service"],
+                ),
+                (
+                    "target_profile",
+                    _payload_value(
+                        payload, ("strategy_profile", "strategy", "profile")
+                    ).lower(),
+                    _TARGET["strategy_profile"],
+                ),
+                (
+                    "target_scope",
+                    _payload_value(
+                        payload, ("account_scope", "account_group", "account_region")
+                    ).lower(),
+                    _TARGET["account_scope"],
+                ),
+            )
+            field = next(
+                (
+                    name
+                    for name, value, expected in values
+                    if value != expected.strip().lower()
+                ),
+                "detail_unevaluable",
+            )
+        return field if field in SCOPE_DIAGNOSTIC_FIELDS else "detail_unevaluable"
+    except Exception:
+        return "detail_unevaluable"
 
 
 def _account_identity_problem(

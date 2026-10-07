@@ -34,7 +34,9 @@ from scripts.publish_account_facts_from_reports import (
     _valid_report_prefix,
 )
 from scripts.runtime_daily_report_projection import (
+    SCOPE_DIAGNOSTIC_FIELDS,
     _account_identity_problem,
+    _scope_failure_field,
     _scope_problem,
     project_daily_runtime,
 )
@@ -400,6 +402,7 @@ def diagnose_report_prefilter(
             return None
         now = _instant(observed_at.isoformat())
         counts = {"zero_run_" + key: 0 for key in PREFILTER_DIAGNOSTIC_CATEGORIES}
+        scope_counts = {"zero_run_scope_" + key: 0 for key in SCOPE_DIAGNOSTIC_FIELDS}
         for entry in batch.entries:
             reason = "unevaluable"
             if type(entry) is dict and type(entry.get("payload")) is dict:
@@ -431,11 +434,20 @@ def diagnose_report_prefilter(
             if reason not in PREFILTER_DIAGNOSTIC_CATEGORIES:
                 return None
             counts["zero_run_" + reason] += 1
+            if reason == "scope_invalid":
+                try:
+                    field = _scope_failure_field(payload)
+                except Exception:
+                    field = "detail_unevaluable"
+                if field not in SCOPE_DIAGNOSTIC_FIELDS:
+                    field = "detail_unevaluable"
+                scope_counts["zero_run_scope_" + field] += 1
         return {
             "zero_run_entries": len(batch.entries),
             "zero_run_read_failed": batch.read_failed,
             "zero_run_truncated": batch.truncated,
             **counts,
+            **scope_counts,
         }
     except Exception:
         return None

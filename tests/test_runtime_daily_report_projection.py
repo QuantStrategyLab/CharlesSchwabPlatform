@@ -914,3 +914,164 @@ def test_malformed_candidate_is_not_a_complete_schedule_only_day(state):
     item = record([{"schema_version": "broken"}], schedule_facts=schedule(state))
     assert item["status"] == "read_incomplete"
     assert item["completeness"] == "incomplete"
+
+
+SCOPE_STAGE_FIELDS = (
+    "outer_platform",
+    "project",
+    "runtime_map",
+    "target_service",
+    "target_profile",
+    "target_scope",
+    "required_profile",
+    "required_scope",
+    "selector_shape",
+    "nested_platform",
+    "detail_unevaluable",
+    *(
+        source + "_alias_" + field
+        for source in ("top", "runtime")
+        for field in (
+            "service_name",
+            "service",
+            "cloud_run_service",
+            "strategy_profile",
+            "strategy",
+            "profile",
+            "account_scope",
+            "account_group",
+            "account_region",
+        )
+    ),
+)
+
+
+def scope_stage_case(field):
+    value = production_report()
+    runtime = value["runtime_target"]
+    if field == "outer_platform":
+        value["platform"] = "PRIVATE-PLATFORM"
+    elif field == "project":
+        value["project_id"] = "PRIVATE-PROJECT"
+    elif field == "runtime_map":
+        value["runtime_target"] = []
+    elif field == "target_service":
+        value["service_name"] = "PRIVATE-SERVICE"
+    elif field == "target_profile":
+        value["strategy_profile"] = "PRIVATE-PROFILE"
+    elif field == "target_scope":
+        value["account_scope"] = "PRIVATE-SCOPE"
+    elif field == "required_profile":
+        runtime.pop("strategy_profile")
+    elif field == "required_scope":
+        value["account_scope"] = "live"
+        runtime.pop("account_scope")
+    elif field == "selector_shape":
+        runtime["account_selector"] = [PRODUCER_HASH, "PRIVATE-EXTRA"]
+    elif field == "nested_platform":
+        runtime["platform_id"] = "PRIVATE-PLATFORM"
+    elif "_alias_" in field:
+        source, alias = field.split("_alias_")
+        value["account_scope"] = "live"
+        destination = value if source == "top" else runtime
+        expected = (
+            TARGET["service"]
+            if alias in {"service_name", "service", "cloud_run_service"}
+            else TARGET["strategy_profile"]
+            if alias in {"strategy_profile", "strategy", "profile"}
+            else "live"
+        )
+        # Normalized primary fields pass the matcher but fail exact alias checks.
+        destination[alias] = (
+            expected.upper()
+            if source == "top"
+            and alias in {"service_name", "strategy_profile", "account_scope"}
+            else "PRIVATE-ALIAS"
+        )
+    return value
+
+
+@pytest.mark.parametrize(
+    "field", [field for field in SCOPE_STAGE_FIELDS if field != "detail_unevaluable"]
+)
+def test_scope_detail_names_exact_first_field_without_report_values(field):
+    from scripts import runtime_daily_report_projection as projection
+
+    value = scope_stage_case(field)
+    before = copy.deepcopy(value)
+    assert projection._scope_failure_field(value) == field
+    assert value == before
+    assert "PRIVATE" not in projection._scope_failure_field(value)
+
+
+@pytest.mark.parametrize("selector_kind", ["native", "live", "omitted"])
+def test_scope_detail_never_turns_valid_forms_into_failures(selector_kind):
+    from scripts import runtime_daily_report_projection as projection
+
+    value = production_report(selector_kind)
+    assert projection._scope_problem(value) is None
+    assert projection._scope_problem_detail(value) == (None, None)
+    assert projection._scope_failure_field(value) == "detail_unevaluable"
+
+
+@pytest.mark.parametrize("fault", ["exception", "inconsistent_match", "unknown_stage"])
+def test_scope_detail_unknowns_remain_explicitly_unevaluable(fault, monkeypatch):
+    from scripts import runtime_daily_report_projection as projection
+
+    value = production_report()
+    if fault == "exception":
+
+        def unavailable(_payload):
+            raise ValueError("PRIVATE-ERROR")
+
+        monkeypatch.setattr(projection, "_scope_problem_detail", unavailable)
+    elif fault == "inconsistent_match":
+        monkeypatch.setattr(
+            projection,
+            "match_payload_target",
+            lambda *_args: (None, "PRIVATE-EXPLANATION"),
+        )
+    else:
+        monkeypatch.setattr(
+            projection,
+            "_scope_problem_detail",
+            lambda _payload: ("wrong_target", "PRIVATE-FIELD"),
+        )
+    assert projection._scope_failure_field(value) == "detail_unevaluable"
+
+
+@pytest.mark.parametrize(
+    "earlier,later",
+    [
+        ("outer_platform", "project"),
+        ("project", "runtime_map"),
+        ("target_service", "target_profile"),
+        ("target_profile", "target_scope"),
+        ("top_alias_service", "runtime_alias_profile"),
+        ("runtime_alias_strategy", "selector_shape"),
+        ("required_profile", "required_scope"),
+        ("selector_shape", "nested_platform"),
+    ],
+)
+def test_scope_subfield_priority_follows_original_predicate(earlier, later):
+    from scripts import runtime_daily_report_projection as projection
+
+    first, second, original = (
+        scope_stage_case(earlier),
+        scope_stage_case(later),
+        production_report(),
+    )
+    for key, value in second.items():
+        if (
+            key == "runtime_target"
+            and isinstance(value, dict)
+            and isinstance(first.get(key), dict)
+        ):
+            for name, nested in value.items():
+                if nested != original[key].get(name):
+                    first[key][name] = nested
+            for name in set(original[key]) - set(value):
+                first[key].pop(name, None)
+        elif value != original.get(key):
+            first[key] = value
+    assert projection._scope_failure_field(first) == earlier
