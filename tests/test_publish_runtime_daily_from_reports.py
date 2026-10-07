@@ -1098,3 +1098,216 @@ def test_admitted_projection_inputs_all_satisfy_the_existing_gates_and_exact_ide
     ]
     assert prepare([*bad, good]).reason == "prepared"
     assert seen == [good]
+
+
+ZERO_RUN_CATEGORIES = (
+    "uri_invalid",
+    "time_invalid",
+    "schema_invalid",
+    "scope_invalid",
+    "revision_mismatch",
+    "path_mismatch",
+    "time_order_invalid",
+    "size_invalid",
+    "unevaluable",
+    "provenance_passed",
+)
+
+
+def zero_run_counts(entries=0, *, read_failed=False, truncated=False, **counts):
+    return {
+        "zero_run_entries": entries,
+        "zero_run_read_failed": read_failed,
+        "zero_run_truncated": truncated,
+        **{"zero_run_" + key: counts.get(key, 0) for key in ZERO_RUN_CATEGORIES},
+    }
+
+
+def diagnose_prefilter(entries=(), **kwargs):
+    options = dict(
+        batch=caller.ReadBatch(entries),
+        report_prefix=PREFIX,
+        expected_runtime_revision=REVISION,
+        observed_at=NOW,
+    )
+    options.update(kwargs)
+    return caller.diagnose_report_prefilter(**options)
+
+
+def prefilter_case(kind):
+    item = envelope()
+    value = item["payload"]
+    if kind == "uri_invalid":
+        item["object_uri"] += "/PRIVATE-invalid"
+    elif kind == "time_invalid":
+        value["started_at"] = "PRIVATE-TIME"
+    elif kind == "schema_invalid":
+        value["schema_version"] = "PRIVATE-SCHEMA"
+    elif kind == "scope_invalid":
+        value["runtime_target"]["account_scope"] = "PRIVATE-SCOPE"
+    elif kind == "revision_mismatch":
+        value["diagnostics"]["runtime_revision"] = "PRIVATE-REVISION"
+    elif kind == "path_mismatch":
+        value["run_id"] = "PRIVATE-RUN"
+    elif kind == "time_order_invalid":
+        value["finished_at"] = "2026-10-06T19:00:00Z"
+    elif kind == "size_invalid":
+        value["oversized"] = "x" * caller.MAX_REPORT_BYTES
+    elif kind == "unevaluable":
+        value["diagnostics"] = []
+    return item
+
+
+@pytest.mark.parametrize("category", ZERO_RUN_CATEGORIES)
+def test_zero_run_prefilter_reports_fixed_first_failure_without_mutation(category):
+    item = prefilter_case(category)
+    before = copy.deepcopy(item)
+    assert diagnose_prefilter([item]) == zero_run_counts(1, **{category: 1})
+    assert item == before
+    assert "PRIVATE" not in json.dumps(diagnose_prefilter([item]))
+
+
+@pytest.mark.parametrize("first", ZERO_RUN_CATEGORIES[:8])
+def test_zero_run_prefilter_preserves_first_failure_priority(first):
+    item = prefilter_case(first)
+    item["payload"]["later_unserializable"] = object()
+    expected = "unevaluable" if first == "size_invalid" else first
+    assert diagnose_prefilter([item]) == zero_run_counts(1, **{expected: 1})
+
+
+@pytest.mark.parametrize(
+    "read_failed,truncated",
+    [(False, False), (True, False), (False, True), (True, True)],
+)
+def test_zero_run_prefilter_retains_existing_read_flags(read_failed, truncated):
+    batch = caller.ReadBatch([], read_failed=read_failed, truncated=truncated)
+    assert diagnose_prefilter(batch=batch) == zero_run_counts(
+        read_failed=read_failed, truncated=truncated
+    )
+    assert (
+        batch.entries == []
+        and batch.read_failed is read_failed
+        and batch.truncated is truncated
+    )
+
+
+@pytest.mark.parametrize(
+    "fault",
+    ["prefix", "revision", "time", "entries", "overflow", "read_failed", "truncated"],
+)
+def test_zero_run_prefilter_missing_or_invalid_context_is_unknown(fault):
+    options = {}
+    if fault == "prefix":
+        options["report_prefix"] = "PRIVATE-PREFIX"
+    elif fault == "revision":
+        options["expected_runtime_revision"] = "PRIVATE-REVISION"
+    elif fault == "time":
+        options["observed_at"] = NOW.replace(tzinfo=None)
+    elif fault == "entries":
+        options["batch"] = caller.ReadBatch(iter([envelope()]))
+    elif fault == "overflow":
+        options["batch"] = caller.ReadBatch([envelope()] * 21)
+    else:
+        options["batch"] = caller.ReadBatch([], **{fault: 1})
+    assert diagnose_prefilter(**options) is None
+
+
+def test_zero_run_prefilter_does_not_inspect_opaque_containers_or_account_hash():
+    class Opaque(dict):
+        def get(self, *_args):
+            raise AssertionError("opaque callback must not run")
+
+    entries = [Opaque(), {"payload": Opaque()}]
+    assert diagnose_prefilter(entries) == zero_run_counts(2, unevaluable=2)
+    item = envelope()
+    item["payload"]["summary"]["account_observation"]["account_hash"] = (
+        "UNRELATED-PRIVATE"
+    )
+    assert diagnose_prefilter([item]) == zero_run_counts(1, provenance_passed=1)
+    assert diagnose_prefilter([item] * 20) == zero_run_counts(20, provenance_passed=20)
+
+
+def legacy_provenance_result(
+    payload, *, object_uri, report_prefix, expected_runtime_revision, observed_at
+):
+    # Frozen original expression, including eager URI/time parsing and exceptions.
+    month, stamp = caller._report_uri_parts(object_uri, report_prefix)
+    started = caller._instant(payload.get("started_at"))
+    finished = caller._instant(payload.get("finished_at"))
+    return not (
+        caller._identity_problem(payload) is not None
+        or payload.get("diagnostics", {}).get("runtime_revision")
+        != expected_runtime_revision
+        or stamp != payload.get("run_id")
+        or stamp != started.strftime("%Y%m%dT%H%M%SZ")
+        or month != started.strftime("%Y-%m")
+        or not started <= finished <= observed_at
+        or len(json.dumps(payload).encode("utf-8")) > caller.MAX_REPORT_BYTES
+    )
+
+
+@pytest.mark.parametrize("category", ZERO_RUN_CATEGORIES)
+@pytest.mark.parametrize("later_fault", [False, True])
+def test_zero_run_decomposition_preserves_original_bool_and_exception(
+    category, later_fault
+):
+    item = prefilter_case(category)
+    if later_fault:
+        item["payload"]["unserializable"] = object()
+    options = dict(
+        object_uri=item["object_uri"],
+        report_prefix=PREFIX,
+        expected_runtime_revision=REVISION,
+        observed_at=NOW,
+    )
+
+    def observed(function):
+        try:
+            return ("value", function(item["payload"], **options))
+        except Exception as exc:
+            return ("exception", type(exc), exc.args)
+
+    assert observed(caller._report_provenance_passes) == observed(
+        legacy_provenance_result
+    )
+
+
+@pytest.mark.parametrize("fault", [None, [], "PRIVATE", 1, True, float("nan")])
+def test_zero_run_prefilter_malformed_payloads_are_unevaluable(fault):
+    assert diagnose_prefilter(
+        [{"payload": fault, "object_uri": PREFIX}]
+    ) == zero_run_counts(1, unevaluable=1)
+
+
+@pytest.mark.parametrize(
+    "earlier,later",
+    [
+        ("uri_invalid", "time_invalid"),
+        ("time_invalid", "schema_invalid"),
+        ("schema_invalid", "revision_mismatch"),
+        ("scope_invalid", "revision_mismatch"),
+        ("revision_mismatch", "path_mismatch"),
+        ("path_mismatch", "time_order_invalid"),
+    ],
+)
+def test_zero_run_prefilter_multiple_failures_report_original_first_stage(
+    earlier, later
+):
+    first, second, original = prefilter_case(earlier), prefilter_case(later), envelope()
+    for key, value in second["payload"].items():
+        if value != original["payload"].get(key):
+            first["payload"][key] = value
+    assert diagnose_prefilter([first]) == zero_run_counts(1, **{earlier: 1})
+
+
+def test_zero_run_prefilter_old_day_and_malformed_postgate_container_are_not_admission_counts():
+    old = envelope(stamp="20261005T200100Z")
+    malformed = envelope()
+    malformed["payload"]["summary"] = []
+    assert diagnose_prefilter([old, malformed]) == zero_run_counts(
+        2, provenance_passed=2
+    )
+    projected = prepare([old, malformed])
+    assert projected.projection["records"][0]["runs"] == []
+    assert len(projected.projection["records"][0]["excluded_reports"]) == 1
+    assert "report_read_error" in projected.projection["read_errors"]

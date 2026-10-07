@@ -827,3 +827,203 @@ def test_projection_summary_rejects_unsealed_or_non_whitelisted_shape(mutation):
         "prepared", body, prepared._source_binding_id, seal
     )
     assert runner._prepared_projection_summary(synthetic) == {}
+
+
+@pytest.mark.parametrize(
+    "kind",
+    ["empty", "revision", "schema", "old_day", "mixed", "read_error", "truncated"],
+)
+def test_zero_run_diagnostics_use_only_original_batch_and_sealed_exclusions(kind):
+    from test_publish_runtime_daily_from_reports import prefilter_case, zero_run_counts
+
+    entries = []
+    expected = zero_run_counts()
+    if kind in {"revision", "mixed"}:
+        entries.append(prefilter_case("revision_mismatch"))
+        expected["zero_run_revision_mismatch"] += 1
+    if kind == "schema":
+        entries.append(prefilter_case("schema_invalid"))
+        expected["zero_run_schema_invalid"] += 1
+    if kind in {"old_day", "mixed"}:
+        entries.append(envelope(stamp="20261005T200100Z"))
+        expected["zero_run_provenance_passed"] += 1
+    expected["zero_run_entries"] = len(entries)
+    expected["zero_run_read_failed"] = kind == "read_error"
+    expected["zero_run_truncated"] = kind == "truncated"
+    expected["zero_run_other_business_date"] = int(kind in {"old_day", "mixed"})
+    batch = caller.ReadBatch(
+        entries, read_failed=kind == "read_error", truncated=kind == "truncated"
+    )
+    result, readers = run(archive_reader=Mock(return_value=batch))
+    assert result["status"] == "prepared" and result["projected_run_count"] == 0
+    assert {k: v for k, v in result.items() if k.startswith("zero_run_")} == expected
+    assert (
+        result["daily_status"] == "read_incomplete"
+        and result["completeness"] == "incomplete"
+    )
+    readers["fact_reader"].assert_called_once()
+    readers["archive_reader"].assert_called_once()
+    readers["publisher"].assert_not_called()
+    assert "PRIVATE" not in json.dumps(result)
+
+
+def test_zero_run_diagnostics_never_run_for_nonzero_or_identity_skip(monkeypatch):
+    from test_publish_runtime_daily_from_reports import mismatch_entry
+
+    diagnostic = Mock(side_effect=AssertionError("zero-only diagnostic"))
+    monkeypatch.setattr(caller, "diagnose_report_prefilter", diagnostic)
+    result, _ = run()
+    assert result["projected_run_count"] == 1
+    result, readers = run(
+        archive_reader=Mock(return_value=caller.ReadBatch([mismatch_entry()]))
+    )
+    assert result["reason"] == "source_identity_mismatch"
+    assert not any(key.startswith("zero_run_") for key in result)
+    diagnostic.assert_not_called()
+    readers["publisher"].assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "none",
+        "raise",
+        "unknown_key",
+        "boolean_count",
+        "negative",
+        "overflow",
+        "total",
+        "flag",
+        "entries",
+        "nonempty",
+    ],
+)
+def test_zero_run_diagnostics_invalid_counts_preserve_prepare(fault, monkeypatch):
+    from test_publish_runtime_daily_from_reports import zero_run_counts
+
+    counts = zero_run_counts()
+    if fault == "none":
+        counts = None
+    elif fault == "unknown_key":
+        counts["PRIVATE-KEY"] = 1
+    elif fault == "boolean_count":
+        counts["zero_run_uri_invalid"] = True
+    elif fault == "negative":
+        counts["zero_run_uri_invalid"] = -1
+    elif fault == "overflow":
+        counts["zero_run_uri_invalid"] = 21
+    elif fault == "total":
+        counts["zero_run_uri_invalid"] = 1
+    elif fault == "flag":
+        counts["zero_run_read_failed"] = 1
+    elif fault == "entries":
+        counts["zero_run_entries"] = True
+    elif fault == "nonempty":
+        counts = zero_run_counts(1, provenance_passed=1)
+    diagnostic = Mock(
+        return_value=counts,
+        side_effect=RuntimeError("PRIVATE-ERROR") if fault == "raise" else None,
+    )
+    monkeypatch.setattr(caller, "diagnose_report_prefilter", diagnostic)
+    result, readers = run(archive_reader=Mock(return_value=caller.ReadBatch([])))
+    assert result["status"] == "prepared" and result["projected_run_count"] == 0
+    assert not any(key.startswith("zero_run_") for key in result)
+    readers["publisher"].assert_not_called()
+
+
+def test_zero_run_diagnostics_leave_publisher_body_binding_and_seal_unchanged(
+    monkeypatch,
+):
+    entries = [envelope(stamp="20261005T200100Z")]
+    calls = []
+
+    def capture(prepared, **_kwargs):
+        calls.append(
+            (
+                copy.deepcopy(prepared.projection),
+                prepared._source_binding_id,
+                prepared._preparation_digest,
+            )
+        )
+        return {"status": "stored_acknowledged"}
+
+    options = dict(
+        archive_reader=Mock(return_value=caller.ReadBatch(entries)),
+        publisher=Mock(side_effect=capture),
+    )
+    result, readers = run(publish=True, **options)
+    assert result["zero_run_other_business_date"] == 1
+    monkeypatch.setattr(caller, "diagnose_report_prefilter", Mock(return_value=None))
+    control, _ = run(publish=True, **options)
+    assert calls[0] == calls[1]
+    assert {k: v for k, v in result.items() if not k.startswith("zero_run_")} == control
+    assert readers["publisher"].call_count == 2
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "body_changed",
+        "seal_missing",
+        "bad_reason",
+        "bad_shape",
+        "too_many",
+        "count_exceeds_passed",
+    ],
+)
+def test_zero_run_diagnostics_require_sealed_whitelisted_exclusion_snapshot(fault):
+    from test_publish_runtime_daily_from_reports import prepare
+
+    batch = caller.ReadBatch([envelope(stamp="20261005T200100Z")])
+    prepared = prepare(batch=batch)
+    body = copy.deepcopy(prepared.projection)
+    excluded = body["records"][0]["excluded_reports"]
+    if fault in {"body_changed", "bad_reason"}:
+        excluded[0]["reason"] = "PRIVATE-REASON"
+    elif fault == "bad_shape":
+        body["records"][0]["excluded_reports"] = {"PRIVATE": 1}
+    elif fault == "too_many":
+        excluded *= 21
+    elif fault == "count_exceeds_passed":
+        excluded *= 2
+    digest = (
+        prepared._preparation_digest
+        if fault == "body_changed"
+        else caller._preparation_digest(
+            caller._canonical_body(body), prepared._source_binding_id
+        )
+    )
+    if fault == "seal_missing":
+        digest = None
+    changed = caller.PreparedDaily(
+        "prepared", body, prepared._source_binding_id, digest
+    )
+    assert (
+        runner._zero_run_diagnostics(
+            changed,
+            batch=batch,
+            report_prefix=PREFIX,
+            expected_runtime_revision=REVISION,
+            observed_at=NOW,
+        )
+        == {}
+    )
+
+
+def test_zero_run_diagnostic_cli_output_is_only_fixed_counts_and_existing_classifications(
+    capsys,
+):
+    from test_publish_runtime_daily_from_reports import prefilter_case
+
+    result, _ = run(
+        archive_reader=Mock(
+            return_value=caller.ReadBatch([prefilter_case("revision_mismatch")])
+        )
+    )
+    assert runner.main([], environ={}, operation=Mock(return_value=result)) == 0
+    output = capsys.readouterr().out
+    assert json.loads(output)["zero_run_revision_mismatch"] == 1
+    assert not any(
+        value in output
+        for value in (PREFIX, REVISION, "PRIVATE", "202610", "runtime_revision")
+    )
