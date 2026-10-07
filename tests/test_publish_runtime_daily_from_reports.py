@@ -1115,11 +1115,17 @@ ZERO_RUN_CATEGORIES = (
 
 
 def zero_run_counts(entries=0, *, read_failed=False, truncated=False, **counts):
+    from test_runtime_daily_report_projection import SCOPE_STAGE_FIELDS
+
     return {
         "zero_run_entries": entries,
         "zero_run_read_failed": read_failed,
         "zero_run_truncated": truncated,
         **{"zero_run_" + key: counts.get(key, 0) for key in ZERO_RUN_CATEGORIES},
+        **{
+            "zero_run_scope_" + key: counts.get("scope_" + key, 0)
+            for key in SCOPE_STAGE_FIELDS
+        },
     }
 
 
@@ -1162,7 +1168,10 @@ def prefilter_case(kind):
 def test_zero_run_prefilter_reports_fixed_first_failure_without_mutation(category):
     item = prefilter_case(category)
     before = copy.deepcopy(item)
-    assert diagnose_prefilter([item]) == zero_run_counts(1, **{category: 1})
+    expected = zero_run_counts(1, **{category: 1})
+    if category == "scope_invalid":
+        expected["zero_run_scope_runtime_alias_account_scope"] = 1
+    assert diagnose_prefilter([item]) == expected
     assert item == before
     assert "PRIVATE" not in json.dumps(diagnose_prefilter([item]))
 
@@ -1172,7 +1181,10 @@ def test_zero_run_prefilter_preserves_first_failure_priority(first):
     item = prefilter_case(first)
     item["payload"]["later_unserializable"] = object()
     expected = "unevaluable" if first == "size_invalid" else first
-    assert diagnose_prefilter([item]) == zero_run_counts(1, **{expected: 1})
+    counts = zero_run_counts(1, **{expected: 1})
+    if first == "scope_invalid":
+        counts["zero_run_scope_runtime_alias_account_scope"] = 1
+    assert diagnose_prefilter([item]) == counts
 
 
 @pytest.mark.parametrize(
@@ -1297,7 +1309,10 @@ def test_zero_run_prefilter_multiple_failures_report_original_first_stage(
     for key, value in second["payload"].items():
         if value != original["payload"].get(key):
             first["payload"][key] = value
-    assert diagnose_prefilter([first]) == zero_run_counts(1, **{earlier: 1})
+    counts = zero_run_counts(1, **{earlier: 1})
+    if earlier == "scope_invalid":
+        counts["zero_run_scope_runtime_alias_account_scope"] = 1
+    assert diagnose_prefilter([first]) == counts
 
 
 def test_zero_run_prefilter_old_day_and_malformed_postgate_container_are_not_admission_counts():
@@ -1456,3 +1471,47 @@ def test_native_projection_context_comes_only_from_independent_binding(monkeypat
     wrong["payload"]["summary"]["account_observation"]["account_hash"] = "OTHER-NATIVE"
     assert prepare_production([wrong]).reason == "source_identity_mismatch"
     assert seen == [PRODUCER_HASH]
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "outer_platform",
+        "project",
+        "runtime_map",
+        "target_service",
+        "target_profile",
+        "target_scope",
+        "top_alias_service",
+        "runtime_alias_profile",
+        "required_profile",
+        "required_scope",
+        "selector_shape",
+        "nested_platform",
+    ],
+)
+def test_scope_subcounts_preserve_coarse_total_and_only_classify_same_batch(field):
+    from test_runtime_daily_report_projection import PRODUCER_REVISION, scope_stage_case
+
+    entry = production_envelope()
+    entry["payload"] = scope_stage_case(field)
+    batch = caller.ReadBatch([entry] * 20, read_failed=True, truncated=True)
+    expected = zero_run_counts(
+        20, read_failed=True, truncated=True, scope_invalid=20, **{"scope_" + field: 20}
+    )
+    before = copy.deepcopy(batch)
+    assert (
+        diagnose_prefilter(batch=batch, expected_runtime_revision=PRODUCER_REVISION)
+        == expected
+    )
+    assert batch == before
+
+
+def test_failed_scope_subclassification_keeps_total_with_explicit_unknown(monkeypatch):
+    entry = prefilter_case("scope_invalid")
+    monkeypatch.setattr(
+        caller, "_scope_failure_field", lambda _payload: "detail_unevaluable"
+    )
+    assert diagnose_prefilter([entry]) == zero_run_counts(
+        1, scope_invalid=1, scope_detail_unevaluable=1
+    )

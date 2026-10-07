@@ -122,7 +122,10 @@ def _zero_run_diagnostics(
         categories = {
             "zero_run_" + key for key in caller.PREFILTER_DIAGNOSTIC_CATEGORIES
         }
-        integers = categories | {"zero_run_entries"}
+        scope_fields = {
+            "zero_run_scope_" + key for key in caller.SCOPE_DIAGNOSTIC_FIELDS
+        }
+        integers = categories | scope_fields | {"zero_run_entries"}
         flags = {"zero_run_read_failed", "zero_run_truncated"}
         if (
             type(counts) is not dict
@@ -138,6 +141,8 @@ def _zero_run_diagnostics(
             or counts["zero_run_read_failed"] is not batch.read_failed
             or counts["zero_run_truncated"] is not batch.truncated
             or sum(counts[key] for key in categories) != counts["zero_run_entries"]
+            or sum(counts[key] for key in scope_fields)
+            != counts["zero_run_scope_invalid"]
         ):
             return {}
         excluded = record.get("excluded_reports")

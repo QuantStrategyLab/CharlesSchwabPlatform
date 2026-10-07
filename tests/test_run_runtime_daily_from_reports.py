@@ -1027,3 +1027,57 @@ def test_zero_run_diagnostic_cli_output_is_only_fixed_counts_and_existing_classi
         value in output
         for value in (PREFIX, REVISION, "PRIVATE", "202610", "runtime_revision")
     )
+
+
+def test_scope_subcounts_reach_only_zero_run_safe_stdout_without_extra_reads(capsys):
+    from test_publish_runtime_daily_from_reports import (
+        production_envelope,
+        production_environment,
+    )
+    from test_runtime_daily_report_projection import PRODUCER_REVISION, scope_stage_case
+
+    entry = production_envelope()
+    entry["payload"] = scope_stage_case("project")
+    env = {**environment(), **production_environment()}
+    result, readers = run(
+        environ=env,
+        observation=facts.SourceFacts(
+            "verified", PRODUCER_REVISION, "0 16 * * 1-5", "America/New_York"
+        ),
+        archive_reader=Mock(return_value=caller.ReadBatch([entry])),
+    )
+    assert result["zero_run_scope_invalid"] == result["zero_run_scope_project"] == 1
+    assert result["projected_run_count"] == 0
+    assert runner.main([], environ={}, operation=Mock(return_value=result)) == 0
+    assert "PRIVATE" not in capsys.readouterr().out
+    readers["fact_reader"].assert_called_once()
+    readers["archive_reader"].assert_called_once()
+    readers["publisher"].assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "fault",
+    ["negative", "boolean", "overflow", "unknown_key", "child_sum", "missing_child"],
+)
+def test_scope_subcount_validation_rejects_malformed_diagnostics(fault, monkeypatch):
+    from test_publish_runtime_daily_from_reports import zero_run_counts
+
+    counts = zero_run_counts()
+    key = "zero_run_scope_project"
+    if fault == "negative":
+        counts[key] = -1
+    elif fault == "boolean":
+        counts[key] = True
+    elif fault == "overflow":
+        counts[key] = 21
+    elif fault == "unknown_key":
+        counts["zero_run_scope_PRIVATE"] = 0
+    elif fault == "child_sum":
+        counts[key] = 1
+    else:
+        counts.pop(key)
+    monkeypatch.setattr(caller, "diagnose_report_prefilter", Mock(return_value=counts))
+    result, readers = run(archive_reader=Mock(return_value=caller.ReadBatch([])))
+    assert result["status"] == "prepared" and result["projected_run_count"] == 0
+    assert not any(key.startswith("zero_run_") for key in result)
+    readers["publisher"].assert_not_called()
