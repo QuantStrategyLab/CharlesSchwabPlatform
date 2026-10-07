@@ -1235,7 +1235,7 @@ def legacy_provenance_result(
     started = caller._instant(payload.get("started_at"))
     finished = caller._instant(payload.get("finished_at"))
     return not (
-        caller._identity_problem(payload) is not None
+        caller._scope_problem(payload) is not None
         or payload.get("diagnostics", {}).get("runtime_revision")
         != expected_runtime_revision
         or stamp != payload.get("run_id")
@@ -1311,3 +1311,148 @@ def test_zero_run_prefilter_old_day_and_malformed_postgate_container_are_not_adm
     assert projected.projection["records"][0]["runs"] == []
     assert len(projected.projection["records"][0]["excluded_reports"]) == 1
     assert "report_read_error" in projected.projection["read_errors"]
+
+
+def production_envelope(selector_kind="native"):
+    from quant_platform_kit.common.runtime_reports import build_runtime_report_cloud_uri
+    from test_runtime_daily_report_projection import production_report
+
+    payload = production_report(selector_kind)
+    return {
+        "payload": payload,
+        "object_uri": build_runtime_report_cloud_uri(
+            payload, cloud_prefix_uri="gs://synthetic-private/execution-reports"
+        ),
+    }
+
+
+def production_environment():
+    from test_runtime_daily_report_projection import PRODUCER_HASH
+
+    env = environment()
+    target = json.loads(env["RUNTIME_TARGET_JSON"])
+    target.update(platform_id="schwab", account_selector=[PRODUCER_HASH])
+    target["runtime_risk_limits"]["binding"]["account_hash"] = PRODUCER_HASH
+    env["RUNTIME_TARGET_JSON"] = json.dumps(target)
+    return env
+
+
+def prepare_production(entries, **kwargs):
+    from test_runtime_daily_report_projection import PRODUCER_REVISION
+
+    options = dict(
+        environ=production_environment(), expected_runtime_revision=PRODUCER_REVISION
+    )
+    options.update(kwargs)
+    return prepare(entries, **options)
+
+
+@pytest.mark.parametrize("selector_kind", ["native", "live", "omitted"])
+def test_source_built_producer_contract_reaches_existing_bound_projection(
+    selector_kind,
+):
+    entry = production_envelope(selector_kind)
+    before = copy.deepcopy(entry)
+    result = prepare_production([entry])
+    assert result.reason == "prepared"
+    assert len(result.projection["records"][0]["runs"]) == 1
+    assert result.projection["completeness"] == "incomplete"
+    assert result._preparation_digest
+    assert entry == before
+    assert "SYNTHETIC-NATIVE" not in json.dumps(result.projection)
+
+
+@pytest.mark.parametrize(
+    "failure,reason",
+    [
+        ("selector", "source_selector_mismatch"),
+        ("observation", "source_observation_missing"),
+        ("hash_missing", "source_hash_missing"),
+        ("hash_invalid", "source_identity_invalid_shape"),
+        ("hash_mismatch", "source_identity_mismatch"),
+    ],
+)
+@pytest.mark.parametrize(
+    "order", [(0, 1, 2), (0, 2, 1), (1, 0, 2), (1, 2, 0), (2, 0, 1), (2, 1, 0)]
+)
+def test_native_identity_failures_are_atomic_for_every_mixed_order(
+    failure, reason, order
+):
+    bad, good, excluded = (
+        production_envelope(),
+        production_envelope(),
+        production_envelope(),
+    )
+    if failure == "selector":
+        bad["payload"]["runtime_target"]["account_selector"] = ["OTHER-NATIVE"]
+    elif failure == "observation":
+        bad["payload"]["summary"].pop("account_observation")
+    elif failure == "hash_missing":
+        bad["payload"]["summary"]["account_observation"].pop("account_hash")
+    elif failure == "hash_invalid":
+        bad["payload"]["summary"]["account_observation"]["account_hash"] = None
+    else:
+        bad["payload"]["summary"]["account_observation"]["account_hash"] = (
+            "OTHER-NATIVE"
+        )
+    excluded["payload"]["runtime_target"]["account_scope"] = "other"
+    values = [bad, good, excluded]
+    prepared = prepare_production([values[index] for index in order])
+    assert prepared.reason == reason and prepared.projection is None
+    outcome, transport = publish(prepared, environ=production_environment())
+    assert outcome == {"status": "skipped", "reason": "projection_unavailable"}
+    transport.open.assert_not_called()
+
+
+@pytest.mark.parametrize("binding", [None, "", " ", [], True])
+def test_native_report_never_supplies_missing_or_invalid_independent_binding(binding):
+    env = production_environment()
+    config = json.loads(env["RUNTIME_TARGET_JSON"])
+    config["runtime_risk_limits"]["binding"]["account_hash"] = binding
+    env["RUNTIME_TARGET_JSON"] = json.dumps(config)
+    result = prepare_production([production_envelope()], environ=env)
+    assert result.reason == "source_identity_unavailable" and result.projection is None
+
+
+@pytest.mark.parametrize("field", ["summary", "account_observation"])
+def test_native_malformed_observation_container_preserves_original_partial_behavior(
+    field,
+):
+    bad = production_envelope()
+    if field == "summary":
+        bad["payload"][field] = []
+    else:
+        bad["payload"]["summary"][field] = []
+    result = prepare_production([bad, production_envelope()])
+    assert result.reason == "prepared"
+    assert len(result.projection["records"][0]["runs"]) == 1
+    assert "report_read_error" in result.projection["read_errors"]
+
+
+def test_native_selector_exactness_does_not_normalize_case_or_binding_digest():
+    from test_runtime_daily_report_projection import PRODUCER_HASH
+
+    entry = production_envelope()
+    entry["payload"]["runtime_target"]["account_selector"] = [PRODUCER_HASH.swapcase()]
+    assert prepare_production([entry]).reason == "source_selector_mismatch"
+    result = prepare_production([production_envelope()])
+    assert result._source_binding_id == _binding_id(PRODUCER_HASH, TARGET["service"])
+
+
+def test_native_projection_context_comes_only_from_independent_binding(monkeypatch):
+    from test_runtime_daily_report_projection import PRODUCER_HASH
+
+    projector = caller.project_daily_runtime
+    seen = []
+
+    def checked_projector(**kwargs):
+        seen.append(kwargs["expected_account_hash"])
+        return projector(**kwargs)
+
+    monkeypatch.setattr(caller, "project_daily_runtime", checked_projector)
+    assert prepare_production([production_envelope()]).reason == "prepared"
+    assert seen == [PRODUCER_HASH]
+    wrong = production_envelope()
+    wrong["payload"]["summary"]["account_observation"]["account_hash"] = "OTHER-NATIVE"
+    assert prepare_production([wrong]).reason == "source_identity_mismatch"
+    assert seen == [PRODUCER_HASH]

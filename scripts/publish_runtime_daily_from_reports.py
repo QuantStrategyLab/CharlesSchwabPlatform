@@ -34,7 +34,8 @@ from scripts.publish_account_facts_from_reports import (
     _valid_report_prefix,
 )
 from scripts.runtime_daily_report_projection import (
-    _identity_problem,
+    _account_identity_problem,
+    _scope_problem,
     project_daily_runtime,
 )
 from scripts.runtime_heartbeat_policy import (
@@ -353,12 +354,10 @@ def _report_provenance_problem(
     month, stamp = _report_uri_parts(object_uri, report_prefix)
     started = _instant(payload.get("started_at"))
     finished = _instant(payload.get("finished_at"))
-    identity_problem = _identity_problem(payload)
-    if identity_problem is not None:
+    scope_problem = _scope_problem(payload)
+    if scope_problem is not None:
         return (
-            "schema_invalid"
-            if identity_problem == "invalid_report"
-            else "scope_invalid"
+            "schema_invalid" if scope_problem == "invalid_report" else "scope_invalid"
         )
     if (
         payload.get("diagnostics", {}).get("runtime_revision")
@@ -563,21 +562,9 @@ def prepare_daily(
                     raise ValueError
                 # Preserve the original exception path for malformed containers:
                 # they remain excluded bad reports, not new whole-batch skips.
-                summary = payload.get("summary", {})
-                observation = summary.get("account_observation", {})
-                report_hash = observation.get("account_hash")
-                if report_hash != account_hash:
-                    if "account_observation" not in summary:
-                        return PreparedDaily("source_observation_missing")
-                    if "account_hash" not in observation:
-                        return PreparedDaily("source_hash_missing")
-                    if (
-                        not isinstance(report_hash, str)
-                        or not report_hash
-                        or report_hash != report_hash.strip()
-                    ):
-                        return PreparedDaily("source_identity_invalid_shape")
-                    return PreparedDaily("source_identity_mismatch")
+                identity_problem = _account_identity_problem(payload, account_hash)
+                if identity_problem is not None:
+                    return PreparedDaily(identity_problem)
                 admitted.append({"payload": payload, "object_uri": uri})
             except Exception:
                 failed = True
@@ -609,6 +596,7 @@ def prepare_daily(
         # No current reader proves retention and all earlier unresolved runs.
         coverage_complete=False,
         read_errors=["report_read_error"] if failed else [],
+        expected_account_hash=account_hash,
     )
     if not _within_budget(projection):
         return PreparedDaily("projection_budget_exceeded")
