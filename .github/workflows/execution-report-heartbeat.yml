@@ -85,6 +85,7 @@ jobs:
         run: sleep 10
 
       - name: Retry Google Cloud authentication
+        id: gcp_auth_retry
         if: ${{ steps.gcp_auth_primary.outcome == 'failure' }}
         uses: google-github-actions/auth@v3
         with:
@@ -98,6 +99,7 @@ jobs:
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
 
       - name: Install locked runtime dependencies
+        id: install_runtime_deps
         run: |
           set -euo pipefail
           uv sync --frozen --no-dev
@@ -114,6 +116,15 @@ jobs:
           sync-url: ${{ vars.EXECUTION_EVIDENCE_SYNC_URL }}
         env:
           EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
+
+      - name: Publish daily runtime projection
+        if: ${{ !cancelled() && steps.install_runtime_deps.outcome == 'success' && vars.RUNTIME_DAILY_SYNC_ENABLED == 'true' && (steps.gcp_auth_primary.outcome == 'success' || steps.gcp_auth_retry.outcome == 'success') }}
+        env:
+          EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
+          SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX: ${{ secrets.SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX }}
+          GCP_REGION: us-central1
+        run: uv run --no-sync python scripts/run_runtime_daily_from_reports.py --publish
+
 
   account_facts:
     name: Sync Schwab account facts from the scheduled report
