@@ -743,3 +743,198 @@ def test_manual_runner_relays_fixed_identity_reason_without_publishing(
     )
     assert result == {"status": "skipped", "reason": expected}
     publisher.assert_not_called()
+
+
+def diagnose(entries, *, batch=None, **overrides):
+    args = {
+        "environ": environment(),
+        "batch": batch if batch is not None else caller.ReadBatch(entries),
+        "report_prefix": PREFIX,
+        "expected_runtime_revision": REVISION,
+        "observed_at": NOW,
+    }
+    args.update(overrides)
+    return caller.diagnose_identity_mismatch(**args)
+
+
+def mismatch_entry(*, account_hash="PRIVATE-OTHER-IDENTITY"):
+    entry = envelope()
+    entry["payload"]["summary"]["account_observation"]["account_hash"] = account_hash
+    return entry
+
+
+def diagnostic_counts(passed=0, failed=0, unknown=0, case_only=0):
+    return {
+        "mismatch_provenance_passed": passed,
+        "mismatch_provenance_failed": failed,
+        "mismatch_provenance_unknown": unknown,
+        "mismatch_passed_ascii_case_only": case_only,
+    }
+
+
+def test_diagnostic_mixed_batch_emits_only_bounded_whitelisted_counts(capsys):
+    case_only = mismatch_entry(account_hash=HASH.swapcase())
+    other = mismatch_entry()
+    stale = mismatch_entry()
+    stale["payload"]["diagnostics"]["runtime_revision"] = "PRIVATE-OLD-REVISION"
+    malformed = mismatch_entry()
+    malformed["payload"]["diagnostics"] = []
+    entries = [case_only, other, stale, malformed, envelope()]
+    before = copy.deepcopy(entries)
+    assert diagnose(entries) == diagnostic_counts(2, 1, 1, 1)
+    assert entries == before
+    result = diagnose(entries)
+    assert all(type(value) is int and 0 <= value <= 20 for value in result.values())
+    assert "PRIVATE" not in json.dumps(result)
+    assert capsys.readouterr().out == capsys.readouterr().err == ""
+
+
+@pytest.mark.parametrize(
+    "mutation,category",
+    [
+        ("service", "failed"),
+        ("profile", "failed"),
+        ("scope", "failed"),
+        ("project", "failed"),
+        ("alias", "failed"),
+        ("revision", "failed"),
+        ("month", "failed"),
+        ("run_id", "failed"),
+        ("future", "failed"),
+        ("time_order", "failed"),
+        ("oversized", "failed"),
+        ("foreign_uri", "unknown"),
+        ("naive_time", "unknown"),
+        ("overflow_time", "unknown"),
+        ("bad_diagnostics", "unknown"),
+        ("unserializable", "unknown"),
+    ],
+)
+def test_diagnostic_non_account_gates_never_turn_failure_or_uncertainty_into_pass(
+    mutation, category
+):
+    entry = mismatch_entry()
+    payload = entry["payload"]
+    if mutation == "service":
+        payload["service_name"] = "other-service"
+    elif mutation == "profile":
+        payload["strategy_profile"] = "other-profile"
+    elif mutation == "scope":
+        payload["account_scope"] = "paper"
+    elif mutation == "project":
+        payload["project_id"] = "other-project"
+    elif mutation == "alias":
+        payload["runtime_target"]["service_name"] = "other-service"
+    elif mutation == "revision":
+        payload["diagnostics"]["runtime_revision"] = "PRIVATE-OLD-REVISION"
+    elif mutation == "month":
+        entry["object_uri"] = PREFIX + "2026-09/20261006T200100Z.json"
+    elif mutation == "run_id":
+        payload["run_id"] = "20261006T200200Z"
+    elif mutation == "future":
+        payload["finished_at"] = "2026-10-07T20:02:00Z"
+    elif mutation == "time_order":
+        payload["finished_at"] = "2026-10-06T19:00:00Z"
+    elif mutation == "oversized":
+        payload["PRIVATE-LARGE"] = "x" * caller.MAX_REPORT_BYTES
+    elif mutation == "foreign_uri":
+        entry["object_uri"] = "gs://PRIVATE-OTHER/other.json"
+    elif mutation == "naive_time":
+        payload["started_at"] = "2026-10-06T20:01:00"
+    elif mutation == "overflow_time":
+        payload["started_at"] = "999999-10-06T20:01:00Z"
+    elif mutation == "bad_diagnostics":
+        payload["diagnostics"] = []
+    else:
+        payload["PRIVATE-OBJECT"] = object()
+    assert diagnose([entry]) == diagnostic_counts(**{category: 1})
+    assert prepare([entry]).reason == "source_identity_mismatch"
+
+
+@pytest.mark.parametrize("value", [None, False, 7, [], {}, "", " ", " " + HASH])
+def test_diagnostic_invalid_hashes_are_not_counted_as_legal_mismatches(value):
+    assert diagnose([mismatch_entry(account_hash=value)]) == diagnostic_counts()
+
+
+def test_diagnostic_never_substitutes_response_digest_or_binding_digest_for_hash():
+    entry = envelope()
+    observation = entry["payload"]["summary"]["account_observation"]
+    observation["source_digest_sha256"] = "PRIVATE-RESPONSE-DIGEST"
+    observation["source_binding"] = {"id": "PRIVATE-COMPOUND-BINDING-DIGEST"}
+    assert diagnose([entry]) == diagnostic_counts()
+    observation.pop("account_hash")
+    assert diagnose([entry]) == diagnostic_counts()
+    observation["account_hash"] = observation["source_digest_sha256"]
+    assert diagnose([entry]) == diagnostic_counts(passed=1)
+
+
+def test_diagnostic_prior_date_can_pass_existing_time_gate_without_being_today():
+    entry = envelope(stamp="20261005T200100Z")
+    entry["payload"]["summary"]["account_observation"]["account_hash"] = "PRIVATE-OTHER"
+    assert diagnose([entry]) == diagnostic_counts(passed=1)
+
+
+@pytest.mark.parametrize(
+    "expected,reported", [("straße", "STRASSE"), ("é", "É"), (HASH, "PRIVATE-其他")]
+)
+def test_diagnostic_non_ascii_is_not_declared_ascii_case_only(expected, reported):
+    env = environment()
+    target = json.loads(env["RUNTIME_TARGET_JSON"])
+    target["runtime_risk_limits"]["binding"]["account_hash"] = expected
+    env["RUNTIME_TARGET_JSON"] = json.dumps(target)
+    assert diagnose(
+        [mismatch_entry(account_hash=reported)], environ=env
+    ) == diagnostic_counts(passed=1)
+
+
+def test_diagnostic_case_count_is_limited_to_gate_passing_mismatches():
+    entry = mismatch_entry(account_hash=HASH.swapcase())
+    entry["payload"]["diagnostics"]["runtime_revision"] = "older-revision"
+    assert diagnose([entry]) == diagnostic_counts(failed=1)
+
+
+def test_diagnostic_never_reads_beyond_twenty_or_infers_unseen_mismatches():
+    entries = [mismatch_entry()] * 20 + [mismatch_entry(account_hash=HASH.swapcase())]
+    batch = caller.ReadBatch(entries, read_failed=True, truncated=True)
+    assert diagnose([], batch=batch) == diagnostic_counts(passed=20)
+    assert batch.read_failed and batch.truncated and len(batch.entries) == 21
+    iterator = Mock()
+    iterator.__iter__ = Mock(
+        side_effect=AssertionError("must not iterate a new source")
+    )
+    assert diagnose([], batch=caller.ReadBatch(iterator)) is None
+    iterator.__iter__.assert_not_called()
+
+
+def test_diagnostic_no_network_no_hash_derivation_and_no_container_callbacks(
+    monkeypatch,
+):
+    def denied(*_args, **_kwargs):
+        raise AssertionError("diagnostic attempted an external or identity operation")
+
+    for name in ("read_archive", "publish_prepared", "_binding_id"):
+        monkeypatch.setattr(caller, name, denied)
+    monkeypatch.setattr("requests.Session.request", denied)
+    monkeypatch.setattr("urllib.request.OpenerDirector.open", denied)
+    monkeypatch.setattr("google.auth.default", denied)
+
+    class HostileList(list):
+        def __getitem__(self, _key):
+            raise AssertionError("untrusted container callback")
+
+    assert diagnose([], batch=caller.ReadBatch(HostileList([mismatch_entry()]))) is None
+    assert diagnose([mismatch_entry()]) == diagnostic_counts(passed=1)
+
+
+@pytest.mark.parametrize("change", ["identity", "prefix", "revision", "time"])
+def test_diagnostic_unavailable_context_is_not_fabricated_zero_counts(change):
+    args = {}
+    if change == "identity":
+        args["environ"] = {}
+    elif change == "prefix":
+        args["report_prefix"] = "gs://PRIVATE-OTHER/"
+    elif change == "revision":
+        args["expected_runtime_revision"] = "PRIVATE INVALID"
+    else:
+        args["observed_at"] = dt.datetime(2026, 10, 6)
+    assert diagnose([mismatch_entry()], **args) is None

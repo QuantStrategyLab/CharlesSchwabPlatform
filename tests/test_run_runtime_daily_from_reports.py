@@ -628,3 +628,100 @@ def test_workflow_event_branch_and_publish_matrix_is_mutually_exclusive(
     assert prepare_runs == (expected and publish is not True)
     assert publish_runs == (expected and publish is True)
     assert not (prepare_runs and publish_runs)
+
+
+def test_runner_identity_failure_adds_counts_after_original_result_with_no_reread_or_post(
+    capsys,
+):
+    from test_publish_runtime_daily_from_reports import (
+        HASH,
+        diagnostic_counts,
+        mismatch_entry,
+    )
+
+    entries = [mismatch_entry(account_hash=HASH.swapcase()), mismatch_entry()]
+    stale = mismatch_entry()
+    stale["payload"]["diagnostics"]["runtime_revision"] = "PRIVATE-OLD"
+    entries.append(stale)
+    archive = Mock(return_value=caller.ReadBatch(entries))
+    result, readers = run(publish=True, archive_reader=archive)
+    assert result == {
+        "status": "skipped",
+        "reason": "source_identity_mismatch",
+        **diagnostic_counts(2, 1, 0, 1),
+    }
+    readers["fact_reader"].assert_called_once()
+    archive.assert_called_once()
+    readers["publisher"].assert_not_called()
+    assert "PRIVATE" not in json.dumps(result)
+    operation = Mock(return_value=result)
+    assert runner.main([], environ={}, operation=operation) == 2
+    output = capsys.readouterr().out
+    assert "source_identity_mismatch" in output and "PRIVATE" not in output
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "raise",
+        "private_key",
+        "boolean",
+        "overflow",
+        "total_overflow",
+        "case_overflow",
+        "negative",
+        "zero",
+        "none",
+    ],
+)
+def test_runner_diagnostic_failure_or_malformed_counts_preserve_original_skip(
+    fault, monkeypatch
+):
+    from test_publish_runtime_daily_from_reports import (
+        diagnostic_counts,
+        mismatch_entry,
+    )
+
+    counts = diagnostic_counts(passed=1)
+    if fault == "private_key":
+        counts["PRIVATE-KEY"] = 1
+    elif fault == "boolean":
+        counts["mismatch_provenance_passed"] = True
+    elif fault == "overflow":
+        counts["mismatch_provenance_passed"] = 21
+    elif fault == "total_overflow":
+        counts = diagnostic_counts(20, 1)
+    elif fault == "case_overflow":
+        counts["mismatch_passed_ascii_case_only"] = 2
+    elif fault == "negative":
+        counts["mismatch_provenance_unknown"] = -1
+    elif fault == "zero":
+        counts = diagnostic_counts()
+    elif fault == "none":
+        counts = None
+    diagnostic = Mock(
+        side_effect=OSError("PRIVATE-DIAGNOSTIC") if fault == "raise" else None,
+        return_value=counts,
+    )
+    monkeypatch.setattr(caller, "diagnose_identity_mismatch", diagnostic)
+    result, readers = run(
+        publish=True,
+        archive_reader=Mock(return_value=caller.ReadBatch([mismatch_entry()])),
+    )
+    assert result == {"status": "skipped", "reason": "source_identity_mismatch"}
+    readers["publisher"].assert_not_called()
+
+
+def test_runner_never_diagnoses_non_mismatch_results(monkeypatch):
+    diagnostic = Mock(side_effect=AssertionError("diagnostic must remain gated"))
+    monkeypatch.setattr(caller, "diagnose_identity_mismatch", diagnostic)
+    result, _ = run()
+    assert result["status"] == "prepared"
+    entry = envelope()
+    entry["payload"]["summary"].pop("account_observation")
+    result, readers = run(
+        publish=True, archive_reader=Mock(return_value=caller.ReadBatch([entry]))
+    )
+    assert result == {"status": "skipped", "reason": "source_observation_missing"}
+    diagnostic.assert_not_called()
+    readers["publisher"].assert_not_called()
