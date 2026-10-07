@@ -56,6 +56,14 @@ MAX_ITEMS = 20
 MAX_BODY_BYTES = 64 * 1024
 MAX_REPORT_BYTES = 1024 * 1024
 MAX_ACK_BYTES = 4096
+IDENTITY_DIAGNOSTIC_KEYS = frozenset(
+    {
+        "mismatch_provenance_passed",
+        "mismatch_provenance_failed",
+        "mismatch_provenance_unknown",
+        "mismatch_passed_ascii_case_only",
+    }
+)
 
 
 @dataclass(repr=False)
@@ -298,6 +306,104 @@ def read_archive(
     return result
 
 
+def _report_provenance_passes(
+    payload: Mapping[str, Any],
+    *,
+    object_uri: str,
+    report_prefix: str,
+    expected_runtime_revision: str,
+    observed_at: dt.datetime,
+) -> bool:
+    """The original non-account checks, in their original evaluation order."""
+    month, stamp = _report_uri_parts(object_uri, report_prefix)
+    started = _instant(payload.get("started_at"))
+    finished = _instant(payload.get("finished_at"))
+    return not (
+        _identity_problem(payload) is not None
+        or payload.get("diagnostics", {}).get("runtime_revision")
+        != expected_runtime_revision
+        or stamp != payload.get("run_id")
+        or stamp != started.strftime("%Y%m%dT%H%M%SZ")
+        or month != started.strftime("%Y-%m")
+        or not started <= finished <= observed_at
+        or len(json.dumps(payload).encode("utf-8")) > MAX_REPORT_BYTES
+    )
+
+
+def diagnose_identity_mismatch(
+    *,
+    environ: Mapping[str, str],
+    batch: ReadBatch,
+    report_prefix: str,
+    expected_runtime_revision: str,
+    observed_at: dt.datetime,
+) -> dict[str, int] | None:
+    """Count only the supplied first 20 memory entries, never read more data.
+
+    This cannot admit a report, repair a hash, change coverage, or publish.
+    Missing context is unavailable (None), not a fabricated zero-count result.
+    Source truncation/read errors are deliberately neither cleared nor inferred.
+    """
+    try:
+        account_hash, _policy = _select_identity(environ)
+        if (
+            not _valid_report_prefix(report_prefix)
+            or not isinstance(expected_runtime_revision, str)
+            or _REVISION.fullmatch(expected_runtime_revision) is None
+            or not isinstance(observed_at, dt.datetime)
+            or type(batch.entries) not in (list, tuple)
+        ):
+            return None
+        now = _instant(observed_at.isoformat())
+        counts = dict.fromkeys(IDENTITY_DIAGNOSTIC_KEYS, 0)
+        # Exact built-in containers avoid iterator callbacks or hidden readers.
+        for entry in batch.entries[:MAX_ITEMS]:
+            if type(entry) is not dict:
+                continue
+            payload = entry.get("payload")
+            if type(payload) is not dict:
+                continue
+            summary = payload.get("summary")
+            if type(summary) is not dict:
+                continue
+            observation = summary.get("account_observation")
+            if type(observation) is not dict:
+                continue
+            report_hash = observation.get("account_hash")
+            if (
+                type(report_hash) is not str
+                or not report_hash
+                or report_hash != report_hash.strip()
+                or report_hash == account_hash
+            ):
+                continue
+            try:
+                passed = _report_provenance_passes(
+                    payload,
+                    object_uri=entry["object_uri"],
+                    report_prefix=report_prefix,
+                    expected_runtime_revision=expected_runtime_revision,
+                    observed_at=now,
+                )
+            except Exception:
+                counts["mismatch_provenance_unknown"] += 1
+                continue
+            if not passed:
+                counts["mismatch_provenance_failed"] += 1
+                continue
+            counts["mismatch_provenance_passed"] += 1
+            if (
+                report_hash.isascii()
+                and account_hash.isascii()
+                and report_hash.lower() == account_hash.lower()
+            ):
+                # Syntactic relation only. Never use it for identity or binding.
+                counts["mismatch_passed_ascii_case_only"] += 1
+        return counts
+    except Exception:
+        return None
+
+
 def prepare_daily(
     *,
     environ: Mapping[str, str],
@@ -352,18 +458,12 @@ def prepare_daily(
                         return PreparedDaily("source_identity_invalid_shape")
                     return PreparedDaily("source_identity_mismatch")
                 uri = entry["object_uri"]
-                month, stamp = _report_uri_parts(uri, report_prefix)
-                started = _instant(payload.get("started_at"))
-                finished = _instant(payload.get("finished_at"))
-                if (
-                    _identity_problem(payload) is not None
-                    or payload.get("diagnostics", {}).get("runtime_revision")
-                    != expected_runtime_revision
-                    or stamp != payload.get("run_id")
-                    or stamp != started.strftime("%Y%m%dT%H%M%SZ")
-                    or month != started.strftime("%Y-%m")
-                    or not started <= finished <= now
-                    or len(json.dumps(payload).encode("utf-8")) > MAX_REPORT_BYTES
+                if not _report_provenance_passes(
+                    payload,
+                    object_uri=uri,
+                    report_prefix=report_prefix,
+                    expected_runtime_revision=expected_runtime_revision,
+                    observed_at=now,
                 ):
                     raise ValueError
                 admitted.append({"payload": payload, "object_uri": uri})

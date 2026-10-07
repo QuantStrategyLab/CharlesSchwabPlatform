@@ -40,6 +40,29 @@ _PUBLICATION_REASONS = frozenset(
 )
 
 
+def _valid_mismatch_counts(counts: object) -> bool:
+    if type(counts) is not dict or set(counts) != caller.IDENTITY_DIAGNOSTIC_KEYS:
+        return False
+    if any(
+        type(value) is not int or not 0 <= value <= caller.MAX_ITEMS
+        for value in counts.values()
+    ):
+        return False
+    total = sum(
+        counts[key]
+        for key in (
+            "mismatch_provenance_passed",
+            "mismatch_provenance_failed",
+            "mismatch_provenance_unknown",
+        )
+    )
+    return (
+        0 < total <= caller.MAX_ITEMS
+        and counts["mismatch_passed_ascii_case_only"]
+        <= counts["mismatch_provenance_passed"]
+    )
+
+
 def run_daily(
     environ: Mapping[str, str],
     *,
@@ -49,7 +72,7 @@ def run_daily(
     archive_reader: Callable[..., Any] = caller.read_archive,
     publisher: Callable[..., Any] = caller.publish_prepared,
     session_dates_loader: Callable[..., Any] | None = None,
-) -> dict[str, str]:
+) -> dict[str, str | int]:
     try:
         if type(publish) is not bool:
             return {"status": "skipped", "reason": "invalid_mode"}
@@ -95,7 +118,26 @@ def run_daily(
             ),
         )
         if prepared.reason != "prepared" or prepared.projection is None:
-            return {"status": "skipped", "reason": prepared.reason}
+            skipped: dict[str, str | int] = {
+                "status": "skipped",
+                "reason": prepared.reason,
+            }
+            if prepared.reason == "source_identity_mismatch":
+                # Diagnose only after the original failure. No source reread,
+                # admission change, projection mutation or publication follows.
+                try:
+                    counts = caller.diagnose_identity_mismatch(
+                        environ=environ,
+                        batch=batch,
+                        report_prefix=prefix,
+                        expected_runtime_revision=facts.runtime_revision,
+                        observed_at=now,
+                    )
+                    if _valid_mismatch_counts(counts):
+                        skipped.update(counts)
+                except Exception:
+                    pass
+            return skipped
         schedule = prepared.projection["records"][0]["schedule"]["state"]
         result = {
             "status": "prepared",
@@ -133,7 +175,7 @@ def main(
     argv: list[str] | None = None,
     *,
     environ: Mapping[str, str] | None = None,
-    operation: Callable[..., dict[str, str]] = run_daily,
+    operation: Callable[..., dict[str, str | int]] = run_daily,
 ) -> int:
     args = sys.argv[1:] if argv is None else argv
     if args not in ([], ["--publish"]):

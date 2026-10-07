@@ -70,6 +70,10 @@ uv run --no-sync python scripts/check_qpk_pin_consistency.py
 
 原有身份跳过分支现细分为：缺 observation 的 `source_observation_missing`、缺 hash 键的 `source_hash_missing`、hash 已提供但为 null/非字符串/空白/带首尾空白的 `source_identity_invalid_shape`。只有合法非空、无首尾空白的字符串与独立 hash 逐字不同，才记 `source_identity_mismatch`；不 trim、不忽略大小写、不从其他别名补身份。非对象 payload/summary/observation 仍保留原有坏报告排除及 incomplete 行为，不新增整批拒绝，也不重排来源校验。此前通用 mismatch 不能证明实际属于哪类。producer 的 observation 本来可缺省，跳过、错误、旧路径或观察投影未成立都可能不写入；仅凭缺字段不能断言账户配置错误。
 
+在该 exact mismatch 已经终止 prepare 后，manual runner 可附加四个固定整数诊断，只看同一已读内存批次的前20项：`mismatch_provenance_passed`、`mismatch_provenance_failed`、`mismatch_provenance_unknown`、`mismatch_passed_ascii_case_only`。前三项只统计合法非空 mismatch 对原非账户 scope/current-revision/URI/time/大小门的通过、不通过或无法判断；第四项只在通过组中统计“原字符串不同、均为ASCII、转小写的副本相同”。这是语法诊断，不代表券商官方身份等价、准入通过或允许规范化 hash/binding digest。原生券商账户 hash、账户响应摘要和复合 source-binding digest 仍是不同字段。
+
+原 reason、skipped、exit2、无 projection/POST 均不变，不增加来源请求。诊断上下文缺失或计数非法时不附计数，不伪造零结果；各计数0–20，前三项合计最多20。这些数字不能推断未读archive，截断/读错事实和 coverage incomplete 保持不变；通过既有时间条件也不代表报告属于当前业务日。不输出任何单项 hash、长度、指纹、账户、URI、时间、revision 值或自由异常。
+
 准备与读取分离：默认命令只准备空的 incomplete 投影，不联网、不发布。可调用的有界归档 reader 复用既有 URI 合同，最多读取 20 份报告并限制字节；latest-only、截断列表都不代表全天完整。先前未决报告的覆盖和保留范围尚未核验，首版即使枚举耗尽也始终 incomplete。schedule 复用既有纯 scheduler/calendar policy，仅映射已证实成熟的当前业务日 due，其余保持 unevaluable。
 
 发布须单独显式调用函数，只用 `EXECUTION_EVIDENCE_SYNC_TOKEN`、固定 HTTPS QRS 日报地址和 `X-QSL-Source-Binding-ID`。禁止 redirect，单次请求，有界验证 stored ACK，不自动重试，不回退到账户事实或 dispatch token。命令不发布、不调用 heartbeat/account-facts main，只输出固定 reason code；原报告、hash、source ID、URI、金额、订单、凭据及自由异常文本不得进入日志或共享产物。
