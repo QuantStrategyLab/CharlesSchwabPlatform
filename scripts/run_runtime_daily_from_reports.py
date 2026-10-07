@@ -53,20 +53,20 @@ _DAILY_SUMMARY_STATUSES = frozenset(
 )
 
 
-def _prepared_projection_summary(
+def _sealed_projection_record(
     prepared: caller.PreparedDaily,
-) -> dict[str, str | int]:
+) -> dict[str, Any] | None:
     """Read the existing sealed projection; do not create admission metadata."""
     try:
         if prepared.reason != "prepared" or not caller._within_budget(
             prepared.projection
         ):
-            return {}
+            return None
         body = caller._canonical_body(prepared.projection)
         if prepared._preparation_digest != caller._preparation_digest(
             body, prepared._source_binding_id
         ):
-            return {}
+            return None
         projection = json.loads(body)
         records = projection.get("records")
         if (
@@ -74,7 +74,7 @@ def _prepared_projection_summary(
             or len(records) != 1
             or type(records[0]) is not dict
         ):
-            return {}
+            return None
         status, runs = records[0].get("status"), records[0].get("runs")
         if (
             type(status) is not str
@@ -82,8 +82,82 @@ def _prepared_projection_summary(
             or type(runs) is not list
             or len(runs) > caller.MAX_ITEMS
         ):
+            return None
+        return records[0]
+    except Exception:
+        return None
+
+
+def _prepared_projection_summary(
+    prepared: caller.PreparedDaily,
+) -> dict[str, str | int]:
+    record = _sealed_projection_record(prepared)
+    if record is None:
+        return {}
+    return {
+        "daily_status": record["status"],
+        "projected_run_count": len(record["runs"]),
+    }
+
+
+def _zero_run_diagnostics(
+    prepared: caller.PreparedDaily,
+    *,
+    batch: caller.ReadBatch,
+    report_prefix: str,
+    expected_runtime_revision: str,
+    observed_at: dt.datetime,
+) -> dict[str, int | bool]:
+    """Supplement only sealed empty runs with bounded, fixed memory facts."""
+    try:
+        record = _sealed_projection_record(prepared)
+        if record is None or record["runs"]:
             return {}
-        return {"daily_status": status, "projected_run_count": len(runs)}
+        counts = caller.diagnose_report_prefilter(
+            batch=batch,
+            report_prefix=report_prefix,
+            expected_runtime_revision=expected_runtime_revision,
+            observed_at=observed_at,
+        )
+        categories = {
+            "zero_run_" + key for key in caller.PREFILTER_DIAGNOSTIC_CATEGORIES
+        }
+        integers = categories | {"zero_run_entries"}
+        flags = {"zero_run_read_failed", "zero_run_truncated"}
+        if (
+            type(counts) is not dict
+            or set(counts) != integers | flags
+            or any(
+                type(counts[key]) is not int or not 0 <= counts[key] <= caller.MAX_ITEMS
+                for key in integers
+            )
+            or any(type(counts[key]) is not bool for key in flags)
+            or type(batch) is not caller.ReadBatch
+            or type(batch.entries) not in (list, tuple)
+            or counts["zero_run_entries"] != len(batch.entries)
+            or counts["zero_run_read_failed"] is not batch.read_failed
+            or counts["zero_run_truncated"] is not batch.truncated
+            or sum(counts[key] for key in categories) != counts["zero_run_entries"]
+        ):
+            return {}
+        excluded = record.get("excluded_reports")
+        if type(excluded) is not list or any(
+            type(item) is not dict
+            or item.get("reason")
+            not in {
+                "other_business_date",
+                "invalid_run_time",
+                "missing_run_time",
+                "inverted_run_time",
+                "future_run_time",
+            }
+            for item in excluded
+        ):
+            return {}
+        other_day = sum(item["reason"] == "other_business_date" for item in excluded)
+        if other_day > counts["zero_run_provenance_passed"]:
+            return {}
+        return {**counts, "zero_run_other_business_date": other_day}
     except Exception:
         return {}
 
@@ -197,6 +271,16 @@ def run_daily(
             else "scheduler_unavailable",
         }
         result.update(_prepared_projection_summary(prepared))
+        if result.get("projected_run_count") == 0:
+            result.update(
+                _zero_run_diagnostics(
+                    prepared,
+                    batch=batch,
+                    report_prefix=prefix,
+                    expected_runtime_revision=facts.runtime_revision,
+                    observed_at=now,
+                )
+            )
         if publish:
             publication_env = dict(environ)
             # A step-local daily route, not a change to legacy execution evidence.

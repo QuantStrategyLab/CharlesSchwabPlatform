@@ -64,6 +64,20 @@ IDENTITY_DIAGNOSTIC_KEYS = frozenset(
         "mismatch_passed_ascii_case_only",
     }
 )
+PREFILTER_DIAGNOSTIC_CATEGORIES = frozenset(
+    {
+        "uri_invalid",
+        "time_invalid",
+        "schema_invalid",
+        "scope_invalid",
+        "revision_mismatch",
+        "path_mismatch",
+        "time_order_invalid",
+        "size_invalid",
+        "unevaluable",
+        "provenance_passed",
+    }
+)
 
 
 @dataclass(repr=False)
@@ -315,19 +329,117 @@ def _report_provenance_passes(
     observed_at: dt.datetime,
 ) -> bool:
     """The original non-account checks, in their original evaluation order."""
+    return (
+        _report_provenance_problem(
+            payload,
+            object_uri=object_uri,
+            report_prefix=report_prefix,
+            expected_runtime_revision=expected_runtime_revision,
+            observed_at=observed_at,
+        )
+        is None
+    )
+
+
+def _report_provenance_problem(
+    payload: Mapping[str, Any],
+    *,
+    object_uri: str,
+    report_prefix: str,
+    expected_runtime_revision: str,
+    observed_at: dt.datetime,
+) -> str | None:
+    """Decompose the same predicate, preserving short-circuit and exceptions."""
     month, stamp = _report_uri_parts(object_uri, report_prefix)
     started = _instant(payload.get("started_at"))
     finished = _instant(payload.get("finished_at"))
-    return not (
-        _identity_problem(payload) is not None
-        or payload.get("diagnostics", {}).get("runtime_revision")
+    identity_problem = _identity_problem(payload)
+    if identity_problem is not None:
+        return (
+            "schema_invalid"
+            if identity_problem == "invalid_report"
+            else "scope_invalid"
+        )
+    if (
+        payload.get("diagnostics", {}).get("runtime_revision")
         != expected_runtime_revision
-        or stamp != payload.get("run_id")
+    ):
+        return "revision_mismatch"
+    if (
+        stamp != payload.get("run_id")
         or stamp != started.strftime("%Y%m%dT%H%M%SZ")
         or month != started.strftime("%Y-%m")
-        or not started <= finished <= observed_at
-        or len(json.dumps(payload).encode("utf-8")) > MAX_REPORT_BYTES
-    )
+    ):
+        return "path_mismatch"
+    if not started <= finished <= observed_at:
+        return "time_order_invalid"
+    if len(json.dumps(payload).encode("utf-8")) > MAX_REPORT_BYTES:
+        return "size_invalid"
+    return None
+
+
+def diagnose_report_prefilter(
+    *,
+    batch: ReadBatch,
+    report_prefix: str,
+    expected_runtime_revision: str,
+    observed_at: dt.datetime,
+) -> dict[str, int | bool] | None:
+    """Classify this memory batch without identity comparison or source reads."""
+    try:
+        if (
+            type(batch) is not ReadBatch
+            or type(batch.entries) not in (list, tuple)
+            or len(batch.entries) > MAX_ITEMS
+            or type(batch.read_failed) is not bool
+            or type(batch.truncated) is not bool
+            or not _valid_report_prefix(report_prefix)
+            or not isinstance(expected_runtime_revision, str)
+            or _REVISION.fullmatch(expected_runtime_revision) is None
+            or not isinstance(observed_at, dt.datetime)
+        ):
+            return None
+        now = _instant(observed_at.isoformat())
+        counts = {"zero_run_" + key: 0 for key in PREFILTER_DIAGNOSTIC_CATEGORIES}
+        for entry in batch.entries:
+            reason = "unevaluable"
+            if type(entry) is dict and type(entry.get("payload")) is dict:
+                payload = entry["payload"]
+                try:
+                    _report_uri_parts(entry["object_uri"], report_prefix)
+                except Exception:
+                    reason = "uri_invalid"
+                else:
+                    try:
+                        _instant(payload.get("started_at"))
+                        _instant(payload.get("finished_at"))
+                    except Exception:
+                        reason = "time_invalid"
+                    else:
+                        try:
+                            reason = (
+                                _report_provenance_problem(
+                                    payload,
+                                    object_uri=entry["object_uri"],
+                                    report_prefix=report_prefix,
+                                    expected_runtime_revision=expected_runtime_revision,
+                                    observed_at=now,
+                                )
+                                or "provenance_passed"
+                            )
+                        except Exception:
+                            pass
+            if reason not in PREFILTER_DIAGNOSTIC_CATEGORIES:
+                return None
+            counts["zero_run_" + reason] += 1
+        return {
+            "zero_run_entries": len(batch.entries),
+            "zero_run_read_failed": batch.read_failed,
+            "zero_run_truncated": batch.truncated,
+            **counts,
+        }
+    except Exception:
+        return None
 
 
 def diagnose_identity_mismatch(

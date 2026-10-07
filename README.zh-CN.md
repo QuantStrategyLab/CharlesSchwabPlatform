@@ -78,6 +78,10 @@ manual runner 只读已封存投影的两个有界字段：白名单 `daily_stat
 
 原 reason、skipped、exit2、无 projection/POST 均不变，不增加来源请求。诊断上下文缺失或计数非法时不附计数，不伪造零结果；各计数0–20，前三项合计最多20。这些数字不能推断未读archive，截断/读错事实和 coverage incomplete 保持不变；通过既有时间条件也不代表报告属于当前业务日。不输出任何单项 hash、长度、指纹、账户、URI、时间、revision 值或自由异常。
 
+仅当已校验 seal 的投影 runs 为零时，runner 可从同一次已读内存批次附加固定 `zero_run_*` 诊断。`zero_run_entries` 是0–20条已解码输入的数量，不是尝试读取的对象数或接纳数；`zero_run_read_failed`、`zero_run_truncated` 保留 reader 原布尔值。十个互斥首失败计数的后缀为 `uri_invalid`、`time_invalid`、`schema_invalid`、`scope_invalid`、`revision_mismatch`、`path_mismatch`、`time_order_invalid`、`size_invalid`、`unevaluable`、`provenance_passed`，遵循原 URI、时间解析、schema/scope、revision、路径、时间顺序、size 检查次序，合计恰等于输入数。异常或无法安全判断的形状保持 unevaluable；解码前已被 reader 丢弃的对象不在计数内，read_failed 不能还原其具体原因。
+
+`zero_run_other_business_date` 只统计既有 sealed projection 中固定的跨业务日排除原因。非账户门通过后仍可能因 observation 容器异常被丢弃，或在 exact 身份检查通过后因旧业务日被投影排除；`provenance_passed` 因此不是接纳数，零 runs 也不证明所有报告都未过来源门。合格旧日报告的身份失败仍拒绝整个批次。该诊断不判断或归一化账户身份；上下文、批次上限、计数或 seal 非法时不附诊断，不伪造零值。不增加来源读取、prefix 扫描、Cloud Run 环境读取、凭据访问、workflow 变更或发布。计数不能证明 producer bucket/prefix 一致或 archive 完整，`coverage_unconfirmed`、incomplete 与 null fills 保持不变；只输出固定布尔及有界整数，不含路径、hash、账户、run ID、日期、revision 或自由异常。
+
 准备与读取分离：默认命令只准备空的 incomplete 投影，不联网、不发布。可调用的有界归档 reader 复用既有 URI 合同，最多读取 20 份报告并限制字节；latest-only、截断列表都不代表全天完整。先前未决报告的覆盖和保留范围尚未核验，首版即使枚举耗尽也始终 incomplete。schedule 复用既有纯 scheduler/calendar policy，仅映射已证实成熟的当前业务日 due，其余保持 unevaluable。
 
 发布须单独显式调用函数，只用 `EXECUTION_EVIDENCE_SYNC_TOKEN`、固定 HTTPS QRS 日报地址和 `X-QSL-Source-Binding-ID`。禁止 redirect，单次请求，有界验证 stored ACK，不自动重试，不回退到账户事实或 dispatch token。命令不发布、不调用 heartbeat/account-facts main，只输出固定 reason code；原报告、hash、source ID、URI、金额、订单、凭据及自由异常文本不得进入日志或共享产物。
