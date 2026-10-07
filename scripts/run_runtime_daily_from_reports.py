@@ -40,6 +40,54 @@ _PUBLICATION_REASONS = frozenset(
 )
 
 
+_DAILY_SUMMARY_STATUSES = frozenset(
+    {
+        "reconciliation_required",
+        "unknown",
+        "blocked",
+        "failed",
+        "conflict",
+        "read_incomplete",
+        "insufficient",
+    }
+)
+
+
+def _prepared_projection_summary(
+    prepared: caller.PreparedDaily,
+) -> dict[str, str | int]:
+    """Read the existing sealed projection; do not create admission metadata."""
+    try:
+        if prepared.reason != "prepared" or not caller._within_budget(
+            prepared.projection
+        ):
+            return {}
+        body = caller._canonical_body(prepared.projection)
+        if prepared._preparation_digest != caller._preparation_digest(
+            body, prepared._source_binding_id
+        ):
+            return {}
+        projection = json.loads(body)
+        records = projection.get("records")
+        if (
+            type(records) is not list
+            or len(records) != 1
+            or type(records[0]) is not dict
+        ):
+            return {}
+        status, runs = records[0].get("status"), records[0].get("runs")
+        if (
+            type(status) is not str
+            or status not in _DAILY_SUMMARY_STATUSES
+            or type(runs) is not list
+            or len(runs) > caller.MAX_ITEMS
+        ):
+            return {}
+        return {"daily_status": status, "projected_run_count": len(runs)}
+    except Exception:
+        return {}
+
+
 def _valid_mismatch_counts(counts: object) -> bool:
     if type(counts) is not dict or set(counts) != caller.IDENTITY_DIAGNOSTIC_KEYS:
         return False
@@ -148,6 +196,7 @@ def run_daily(
             if facts.reason in SAFE_REASONS
             else "scheduler_unavailable",
         }
+        result.update(_prepared_projection_summary(prepared))
         if publish:
             publication_env = dict(environ)
             # A step-local daily route, not a change to legacy execution evidence.

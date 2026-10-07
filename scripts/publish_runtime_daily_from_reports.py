@@ -440,6 +440,15 @@ def prepare_daily(
                 break
             try:
                 payload = entry["payload"]
+                uri = entry["object_uri"]
+                if not _report_provenance_passes(
+                    payload,
+                    object_uri=uri,
+                    report_prefix=report_prefix,
+                    expected_runtime_revision=expected_runtime_revision,
+                    observed_at=now,
+                ):
+                    raise ValueError
                 # Preserve the original exception path for malformed containers:
                 # they remain excluded bad reports, not new whole-batch skips.
                 summary = payload.get("summary", {})
@@ -457,15 +466,6 @@ def prepare_daily(
                     ):
                         return PreparedDaily("source_identity_invalid_shape")
                     return PreparedDaily("source_identity_mismatch")
-                uri = entry["object_uri"]
-                if not _report_provenance_passes(
-                    payload,
-                    object_uri=uri,
-                    report_prefix=report_prefix,
-                    expected_runtime_revision=expected_runtime_revision,
-                    observed_at=now,
-                ):
-                    raise ValueError
                 admitted.append({"payload": payload, "object_uri": uri})
             except Exception:
                 failed = True

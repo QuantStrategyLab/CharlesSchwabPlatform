@@ -725,3 +725,105 @@ def test_runner_never_diagnoses_non_mismatch_results(monkeypatch):
     assert result == {"status": "skipped", "reason": "source_observation_missing"}
     diagnostic.assert_not_called()
     readers["publisher"].assert_not_called()
+
+
+@pytest.mark.parametrize("all_excluded", [False, True])
+def test_runner_summary_distinguishes_preparation_from_available_projected_reports(
+    all_excluded,
+):
+    from test_publish_runtime_daily_from_reports import excluded_mismatch
+
+    entries = [excluded_mismatch()]
+    if not all_excluded:
+        entries.append(envelope())
+    result, readers = run(archive_reader=Mock(return_value=caller.ReadBatch(entries)))
+    assert result["status"] == "prepared"
+    assert result["daily_status"] == "read_incomplete"
+    assert result["projected_run_count"] == (0 if all_excluded else 1)
+    assert type(result["projected_run_count"]) is int
+    assert result["completeness"] == "incomplete"
+    readers["fact_reader"].assert_called_once()
+    readers["archive_reader"].assert_called_once()
+    readers["publisher"].assert_not_called()
+    assert "PRIVATE" not in json.dumps(result)
+
+
+@pytest.mark.parametrize(
+    "order", [(0, 1, 2), (0, 2, 1), (1, 0, 2), (1, 2, 0), (2, 0, 1), (2, 1, 0)]
+)
+def test_runner_qualified_prior_day_mismatch_still_skips_in_every_order(order):
+    from test_publish_runtime_daily_from_reports import excluded_mismatch
+
+    bad = envelope(stamp="20261005T200100Z")
+    bad["payload"]["summary"]["account_observation"]["account_hash"] = "PRIVATE-OTHER"
+    values = [bad, envelope(), excluded_mismatch()]
+    result, readers = run(
+        publish=True,
+        archive_reader=Mock(return_value=caller.ReadBatch([values[i] for i in order])),
+    )
+    assert (
+        result["status"] == "skipped" and result["reason"] == "source_identity_mismatch"
+    )
+    assert "daily_status" not in result and "projected_run_count" not in result
+    readers["publisher"].assert_not_called()
+    operation = Mock(return_value=result)
+    assert runner.main([], environ={}, operation=operation) == 2
+
+
+def test_projection_summary_reads_original_sealed_projection_without_mutation():
+    from test_publish_runtime_daily_from_reports import prepare
+
+    prepared = prepare([envelope()])
+    body = copy.deepcopy(prepared.projection)
+    seal = prepared._preparation_digest
+    binding = prepared._source_binding_id
+    assert runner._prepared_projection_summary(prepared) == {
+        "daily_status": "read_incomplete",
+        "projected_run_count": 1,
+    }
+    assert prepared.projection == body and prepared._preparation_digest == seal
+    assert prepared._source_binding_id == binding
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "changed_body",
+        "unknown_status",
+        "healthy_status",
+        "wrong_runs",
+        "too_many_runs",
+        "wrong_records",
+        "missing_seal",
+    ],
+)
+def test_projection_summary_rejects_unsealed_or_non_whitelisted_shape(mutation):
+    from test_publish_runtime_daily_from_reports import prepare
+
+    prepared = prepare([envelope()])
+    body = copy.deepcopy(prepared.projection)
+    if mutation == "changed_body":
+        prepared.projection["records"][0]["status"] = "PRIVATE-STATUS"
+        assert runner._prepared_projection_summary(prepared) == {}
+        return
+    if mutation == "unknown_status":
+        body["records"][0]["status"] = "PRIVATE-STATUS"
+    elif mutation == "healthy_status":
+        body["records"][0]["status"] = "healthy"
+    elif mutation == "wrong_runs":
+        body["records"][0]["runs"] = {"private": "value"}
+    elif mutation == "too_many_runs":
+        body["records"][0]["runs"] *= 21
+    elif mutation == "wrong_records":
+        body["records"] *= 2
+    seal = (
+        None
+        if mutation == "missing_seal"
+        else caller._preparation_digest(
+            caller._canonical_body(body), prepared._source_binding_id
+        )
+    )
+    synthetic = caller.PreparedDaily(
+        "prepared", body, prepared._source_binding_id, seal
+    )
+    assert runner._prepared_projection_summary(synthetic) == {}
