@@ -25,6 +25,7 @@ from zoneinfo import ZoneInfo
 
 from quant_platform_kit.common.execution_receipts import attach_execution_receipt
 
+from application.account_observation import expected_account_hash_from_selector
 from scripts.publish_account_facts_from_reports import _report_uri_parts
 from scripts.runtime_heartbeat_policy import match_payload_target, target_key
 
@@ -96,6 +97,7 @@ def project_daily_runtime(
     schedule_facts: Mapping[str, Any] | None = None,
     coverage_complete: bool = False,
     read_errors: Sequence[str] = (),
+    expected_account_hash: str | None = None,
 ) -> dict[str, Any]:
     """Return the existing records/runs/schedule/completeness/fills shape.
 
@@ -105,6 +107,9 @@ def project_daily_runtime(
     Unknown/mismatched schedule fields fail closed. ``coverage_complete=True``
     is a caller assertion, not evidence that a listing or scheduler is genuine.
     The function never derives a receipt, account key, fill record or zero fills.
+    Native/explicit-empty selectors require independent expected_account_hash
+    context from the source caller. This parameter is not authentication and is
+    never inferred from the report; the default retains only old legacy forms.
     """
     if not isinstance(target, Mapping) or dict(target) != _TARGET:
         raise ValueError("invalid_target")
@@ -128,7 +133,7 @@ def project_daily_runtime(
     unmatched: list[dict[str, Any]] = []
     for item in reports:
         payload = item.get("payload", item) if isinstance(item, Mapping) else None
-        reason = _identity_problem(payload)
+        reason = _identity_problem(payload, expected_account_hash=expected_account_hash)
         if not reason and not _valid_source(item):
             reason = "invalid_source_object"
         if reason:
@@ -196,7 +201,8 @@ def project_daily_runtime(
     }
 
 
-def _identity_problem(payload: object) -> str | None:
+def _scope_problem(payload: object) -> str | None:
+    """Validate report/target namespaces, not the private account binding."""
     if (
         not isinstance(payload, Mapping)
         or payload.get("schema_version") != "runtime_report.v1"
@@ -233,11 +239,83 @@ def _identity_problem(payload: object) -> str | None:
         or runtime.get("account_scope") != "live"
     ):
         return "wrong_target"
-    if "account_selector" in runtime and runtime["account_selector"] != ["live"]:
-        return "wrong_target"
-    if "platform_id" in runtime and runtime["platform_id"] != "charles_schwab":
+    if "account_selector" in runtime:
+        selectors = runtime["account_selector"]
+        if (
+            type(selectors) is not list
+            or len(selectors) > 1
+            or any(
+                not isinstance(value, str) or not value or value != value.strip()
+                for value in selectors
+            )
+        ):
+            return "wrong_target"
+    if "platform_id" in runtime and runtime["platform_id"] != "schwab":
         return "wrong_platform"
     return None
+
+
+def _account_identity_problem(
+    payload: Mapping[str, Any],
+    expected_account_hash: str,
+) -> str | None:
+    """Compare to caller-provided identity; preserve original container errors."""
+    summary = payload.get("summary", {})
+    observation = summary.get("account_observation", {})
+    report_hash = observation.get("account_hash")
+    if report_hash != expected_account_hash:
+        if "account_observation" not in summary:
+            return "source_observation_missing"
+        if "account_hash" not in observation:
+            return "source_hash_missing"
+        if (
+            not isinstance(report_hash, str)
+            or not report_hash
+            or report_hash != report_hash.strip()
+        ):
+            return "source_identity_invalid_shape"
+        return "source_identity_mismatch"
+    selector_hash = expected_account_hash_from_selector(
+        payload["runtime_target"].get("account_selector")
+    )
+    if selector_hash is not None and selector_hash != expected_account_hash:
+        return "source_selector_mismatch"
+    return None
+
+
+def _identity_problem(
+    payload: object,
+    *,
+    expected_account_hash: str | None = None,
+) -> str | None:
+    problem = _scope_problem(payload)
+    if problem is not None:
+        return problem
+    runtime = payload["runtime_target"]
+    if expected_account_hash is None:
+        # Preserve the old unbound legacy forms only. New native/empty selector
+        # forms require independent caller context, never the report's own hash.
+        return (
+            None
+            if "account_selector" not in runtime
+            or runtime["account_selector"] == ["live"]
+            else "wrong_target"
+        )
+    if (
+        not isinstance(expected_account_hash, str)
+        or not expected_account_hash
+        or expected_account_hash != expected_account_hash.strip()
+        or len(expected_account_hash) > 512
+    ):
+        return "wrong_target"
+    try:
+        return (
+            "wrong_target"
+            if _account_identity_problem(payload, expected_account_hash)
+            else None
+        )
+    except Exception:
+        return "wrong_target"
 
 
 def _valid_source(item: Mapping[str, Any]) -> bool:

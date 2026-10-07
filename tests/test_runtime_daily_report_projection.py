@@ -69,6 +69,238 @@ def report(outcome="no_signal", **updates):
     return value
 
 
+PRODUCER_HASH = "SYNTHETIC-NATIVE-BROKER-HASH-CaseExact"
+PRODUCER_REVISION = "charles-schwab-quant-service-00001-synthetic"
+
+
+def production_report(selector_kind="native"):
+    """Use real production resolver/composer/serializer, never import live main."""
+    from decimal import Decimal
+    from types import SimpleNamespace
+
+    from application.account_observation import build_account_observation
+    from application.runtime_composer import SchwabRuntimeComposer
+    from application.runtime_reporting_adapters import build_runtime_reporting_adapters
+    from quant_platform_kit.common.runtime_reports import (
+        build_runtime_report_base,
+        finalize_runtime_report,
+    )
+    from quant_platform_kit.common.runtime_target import resolve_runtime_target_from_env
+    from strategy_registry import SCHWAB_PLATFORM
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("No client, persistence or notification in this fixture")
+
+    config = {
+        "platform_id": SCHWAB_PLATFORM,
+        "strategy_profile": TARGET["strategy_profile"],
+        "service_name": TARGET["service"],
+        "account_scope": "live",
+        "dry_run_only": False,
+        "execution_mode": "live",
+    }
+    if selector_kind != "omitted":
+        config["account_selector"] = [
+            PRODUCER_HASH if selector_kind == "native" else "live"
+        ]
+    runtime = resolve_runtime_target_from_env(
+        env={"RUNTIME_TARGET_JSON": json.dumps(config)},
+        expected_platform_id=SCHWAB_PLATFORM,
+    )
+    start = NOW - dt.timedelta(minutes=59)
+    composer = SchwabRuntimeComposer(
+        project_id="charlesschwabquant",
+        service_name=TARGET["service"],
+        secret_id="",
+        app_key=None,
+        app_secret=None,
+        token_path="",
+        strategy_profile=TARGET["strategy_profile"],
+        strategy_domain="us_equity",
+        strategy_display_name="Synthetic",
+        strategy_display_name_localized="Synthetic",
+        notify_lang="en",
+        tg_token=None,
+        tg_chat_id=None,
+        managed_symbols=(),
+        benchmark_symbol="",
+        signal_effective_after_trading_days=1,
+        dry_run_only=False,
+        limit_buy_premium=1.0,
+        sell_settle_delay_sec=0.0,
+        post_sell_refresh_attempts=0,
+        post_sell_refresh_interval_sec=0.0,
+        safe_haven_cash_substitute_threshold_usd=0.0,
+        broker_adapters=None,
+        strategy_adapters=None,
+        client_builder=forbidden,
+        run_id_builder=lambda: start.strftime("%Y%m%dT%H%M%SZ"),
+        event_logger=forbidden,
+        report_builder=build_runtime_report_base,
+        report_persister=forbidden,
+        env_reader=lambda _name, default="": default,
+        printer=forbidden,
+        runtime_target=runtime,
+        reporting_builder=lambda **kwargs: build_runtime_reporting_adapters(
+            clock=lambda: start, **kwargs
+        ),
+    )
+    _, value = composer.build_reporting_adapters().start_run()
+    observation = build_account_observation(
+        SimpleNamespace(
+            metadata={
+                "account_hash": PRODUCER_HASH,
+                "total_equity_source": "broker_liquidation_value",
+            },
+            as_of=start + dt.timedelta(seconds=30),
+            total_equity=Decimal("1.00"),
+        ),
+        net_assets_currency="USD",
+    )
+    assert observation is not None
+    finalize_runtime_report(
+        value,
+        status="ok",
+        finished_at=start + dt.timedelta(minutes=1),
+        summary={"account_observation": observation},
+        diagnostics={"runtime_revision": PRODUCER_REVISION},
+    )
+    return json.loads(json.dumps(value))
+
+
+@pytest.mark.parametrize("selector_kind", ["native", "live", "omitted"])
+def test_actual_producer_shapes_project_only_with_independent_identity_context(
+    selector_kind,
+):
+    value = production_report(selector_kind)
+    assert value["platform"] == "charles_schwab"
+    assert value["runtime_target"]["platform_id"] == "schwab"
+    result = project_daily_runtime(
+        target=TARGET,
+        reports=[value],
+        observed_at=NOW,
+        expected_account_hash=PRODUCER_HASH,
+    )
+    assert len(result["records"][0]["runs"]) == 1
+    assert PRODUCER_HASH not in json.dumps(result)
+
+
+@pytest.mark.parametrize("selector_kind", ["native", "omitted"])
+def test_new_producer_selector_forms_are_not_admitted_by_unbound_direct_projector(
+    selector_kind,
+):
+    result = project_daily_runtime(
+        target=TARGET, reports=[production_report(selector_kind)], observed_at=NOW
+    )
+    assert result["records"][0]["runs"] == []
+
+
+@pytest.mark.parametrize(
+    "expected",
+    ["", "OTHER-NATIVE", " SYNTHETIC-NATIVE-BROKER-HASH-CaseExact ", True, 1, []],
+)
+def test_direct_producer_projection_rejects_invalid_or_mismatched_binding(expected):
+    result = project_daily_runtime(
+        target=TARGET,
+        reports=[production_report()],
+        observed_at=NOW,
+        expected_account_hash=expected,
+    )
+    assert result["records"][0]["runs"] == []
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "outer_platform",
+        "project",
+        "nested_platform",
+        "service_alias",
+        "profile_alias",
+        "scope_alias",
+        "scope",
+        "multi",
+        "string",
+        "null",
+        "blank",
+        "padded",
+        "wrong_native",
+        "wrong_observation",
+        "missing_observation",
+    ],
+)
+def test_producer_projection_keeps_namespace_scope_alias_and_identity_fail_closed(
+    fault,
+):
+    value = production_report()
+    runtime = value["runtime_target"]
+    if fault == "outer_platform":
+        value["platform"] = "schwab"
+    elif fault == "project":
+        value["project_id"] = "other"
+    elif fault == "nested_platform":
+        runtime["platform_id"] = "charles_schwab"
+    elif fault == "service_alias":
+        runtime["service"] = "other"
+    elif fault == "profile_alias":
+        runtime["profile"] = "other"
+    elif fault == "scope_alias":
+        runtime["account_group"] = "other"
+    elif fault == "scope":
+        runtime["account_scope"] = "paper"
+    elif fault == "multi":
+        runtime["account_selector"] = [PRODUCER_HASH, "other"]
+    elif fault == "string":
+        runtime["account_selector"] = PRODUCER_HASH
+    elif fault == "null":
+        runtime["account_selector"] = None
+    elif fault == "blank":
+        runtime["account_selector"] = [""]
+    elif fault == "padded":
+        runtime["account_selector"] = [" " + PRODUCER_HASH]
+    elif fault == "wrong_native":
+        runtime["account_selector"] = [PRODUCER_HASH.swapcase()]
+    elif fault == "wrong_observation":
+        value["summary"]["account_observation"]["account_hash"] = (
+            PRODUCER_HASH.swapcase()
+        )
+    else:
+        value["summary"].pop("account_observation")
+    result = project_daily_runtime(
+        target=TARGET,
+        reports=[value],
+        observed_at=NOW,
+        expected_account_hash=PRODUCER_HASH,
+    )
+    assert result["records"][0]["runs"] == []
+
+
+@pytest.mark.parametrize("selector_present", [False, True])
+def test_default_direct_projector_preserves_only_baseline_legacy_selector_forms(
+    selector_present,
+):
+    value = report()
+    if not selector_present:
+        value["runtime_target"].pop("account_selector")
+    result = project_daily_runtime(target=TARGET, reports=[value], observed_at=NOW)
+    assert len(result["records"][0]["runs"]) == 1
+    # This baseline, unbound projection is not a source identity attestation.
+    assert "account_hash" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("shape", [None, [], "PRIVATE"])
+def test_bound_direct_projector_fails_closed_on_bad_observation_containers(shape):
+    value = production_report()
+    value["summary"]["account_observation"] = shape
+    result = project_daily_runtime(
+        target=TARGET,
+        reports=[value],
+        observed_at=NOW,
+        expected_account_hash=PRODUCER_HASH,
+    )
+    assert result["records"][0]["runs"] == []
+
+
 def schedule(state="due", day=DAY):
     return {
         "state": state,

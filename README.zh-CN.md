@@ -68,9 +68,15 @@ uv run --no-sync python scripts/check_qpk_pin_consistency.py
 
 `scripts/publish_runtime_daily_from_reports.py` 只为 `charles-schwab-quant-service / soxl_soxx_trend_income / live` 准备隐私安全的日报投影。身份必须独立来自唯一的现有 runtime policy 及 `RUNTIME_TARGET_JSON.runtime_risk_limits.binding.account_hash`；只有与该 hash 逐字相等的报告才能作为投影输入，既有 account-facts binding ID 从独立身份派生，不能由报告自己证明预期账户。
 
+Producer 有两个不同的平台命名空间：报告外层 `platform=charles_schwab`，runtime resolver 要求嵌套 `runtime_target.platform_id=schwab`。嵌套 platform ID 如存在须精确匹配 runtime 合同，不接受任意别名；project/service/profile/scope 及矛盾别名仍严格拒绝。`account_scope=live` 是目标范围，不是账户 selector。既有 producer resolver 支持单个原生券商 selector、精确 legacy `live` 自动查找哨兵，或未配置 selector（序列化为空列表）；只接受这些 JSON 形状，多值、null、非列表、空字符串或带首尾空白的 selector 仍拒绝。
+
+真实 caller 的预期账户仍只来自独立 policy。共享身份检查保留 observation 缺失、hash 缺失/非法/逐字不匹配的原分类，然后要求显式原生 selector 与同一独立 hash 逐字一致；冲突以 `source_selector_mismatch` 整批停止。Legacy 自动查找不是账户身份，其实际 observation 仍须通过独立 exact 检查。selector、报告 hash 或别名不能补出缺失 binding，不做 hash 归一化。
+
+纯 projector 的可选 `expected_account_hash` 仅是该 caller 传入的私有上下文，不是认证或第二套身份 authority，不能从报告推导且不会写入输出。缺少上下文时，直接调用只保留原先 selector 字段缺省或 `['live']` 两种形式，拒绝新增原生/显式空列表形式；提供上下文时复用同一身份检查，非法或不符即拒绝。Legacy 无绑定投影不代表身份已验证。回归使用真实 resolver/composer/serializer 生成合成报告，不能据此断言此前真实批次具体哪个字段失败。
+
 对于通过非账户资格门的报告，身份跳过分支细分为：缺 observation 的 `source_observation_missing`、缺 hash 键的 `source_hash_missing`、hash 已提供但为 null/非字符串/空白/带首尾空白的 `source_identity_invalid_shape`。只有合法非空、无首尾空白的字符串与独立 hash 逐字不同，才记 `source_identity_mismatch`；不 trim、不忽略大小写、不从其他别名补身份。非对象 payload/summary/observation 仍保留原有坏报告排除及 incomplete 行为。此前通用 mismatch 不能证明实际属于哪类。producer 的 observation 本来可缺省，跳过、错误、旧路径或观察投影未成立都可能不写入；仅凭缺字段不能断言账户配置错误。
 
-既有 schema/platform/scope/current-revision/URI/run-id/time/大小资格门保持原判定，先于报告身份比较执行。本就不合格的报告继续排除并保留 read_error/incomplete，不能仅因身份不同或缺失阻塞其它合格报告；不扩大任何报告的准入集合。合格报告的身份失败无论排列顺序都仍整批停止。旧业务日不是豁免：通过既有时间与当前 revision 谓词的报告仍必须逐字匹配独立账户。
+schema/platform/scope/current-revision/URI/run-id/time/大小资格门继续严格执行，先于报告身份比较；嵌套平台和 selector 按上述 producer 合同修正。本就不合格的报告继续排除并保留 read_error/incomplete，不能仅因身份不同或缺失阻塞其它合格报告；真实 caller 在独立身份上下文下接纳上述已证实的 producer 平台/selector 形式，有意修正此前对这些合法形式的拒绝；其它 project/service/profile/scope/revision/URI/time/大小门继续严格执行。合格报告的身份失败无论排列顺序都仍整批停止。旧业务日不是豁免：通过既有时间与当前 revision 谓词的报告仍必须逐字匹配独立账户。
 
 manual runner 只读已封存投影的两个有界字段：白名单 `daily_status` 和现有 runs 列表长度 `projected_run_count`（整数0–20），不新增第二套准入元数据。全排除明确为 `daily_status=read_incomplete`、`projected_run_count=0`、runs为空、read_errors含 `coverage_unconfirmed`、coverage incomplete、`fills.count=null`。`status=prepared` 仅表示制备结束；零投影run不代表零交易、完整历史或健康状态。摘要不改变投影、seal、来源身份或发布行为。
 
