@@ -40,7 +40,7 @@ from scripts.runtime_daily_report_projection import (
     _scope_problem,
     project_daily_runtime,
 )
-from scripts.runtime_heartbeat_policy import (
+from quant_platform_kit.common.runtime_heartbeat_policy import (
     filter_due_targets,
     load_runtime_targets,
     target_latest_due_at,

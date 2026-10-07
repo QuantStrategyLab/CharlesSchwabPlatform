@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 
 from scripts.publish_account_facts_from_reports import PROJECT_ID, REGION, _REVISION
 from scripts.publish_runtime_daily_from_reports import TARGET, matured_schedule
-from scripts.runtime_heartbeat_policy import cron_matches
+from quant_platform_kit.common.runtime_heartbeat_policy import cron_matches
 
 MAX_METADATA_BYTES = 64 * 1024
 SERVICE_FIELDS = (
