@@ -27,7 +27,7 @@ from quant_platform_kit.common.execution_receipts import attach_execution_receip
 
 from application.account_observation import expected_account_hash_from_selector
 from scripts.publish_account_facts_from_reports import _report_uri_parts
-from scripts.runtime_heartbeat_policy import (
+from quant_platform_kit.common.runtime_heartbeat_policy import (
     _payload_value,
     match_payload_target,
     target_key,

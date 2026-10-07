@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 
-from scripts.runtime_heartbeat_policy import (
+from quant_platform_kit.common.runtime_heartbeat_policy import (
     filter_due_targets,
     load_runtime_targets,
     match_payload_target,

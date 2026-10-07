@@ -22,30 +22,7 @@ from quant_platform_kit.common.operational_notification_localization import (
     resolve_operational_notification_locale,
 )
 
-try:
-    from scripts.runtime_heartbeat_policy import (
-        filter_due_targets,
-        filter_services_for_targets,
-        load_runtime_targets,
-        match_payload_target,
-        runtime_target_configuration_has_enabled_targets,
-        runtime_target_configuration_present,
-        target_key,
-        target_label,
-        target_latest_due_at,
-    )
-except ModuleNotFoundError:
-    from runtime_heartbeat_policy import (  # type: ignore[no-redef]
-        filter_due_targets,
-        filter_services_for_targets,
-        load_runtime_targets,
-        match_payload_target,
-        runtime_target_configuration_has_enabled_targets,
-        runtime_target_configuration_present,
-        target_key,
-        target_label,
-        target_latest_due_at,
-    )
+from quant_platform_kit.common.runtime_heartbeat_policy import filter_due_targets, filter_services_for_targets, load_runtime_targets, match_payload_target, runtime_target_configuration_has_enabled_targets, runtime_target_configuration_present, target_key, target_label, target_latest_due_at
 
 
 DEFAULT_ACCEPT_STATUSES = {"ok", "skipped", "success", "completed", "no_action"}
