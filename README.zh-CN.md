@@ -66,9 +66,13 @@ uv run --no-sync python scripts/check_qpk_pin_consistency.py
 
 ## 只读日报 caller 候选
 
-`scripts/publish_runtime_daily_from_reports.py` 只为 `charles-schwab-quant-service / soxl_soxx_trend_income / live` 准备隐私安全的日报投影。身份必须独立来自唯一的现有 runtime policy 及 `RUNTIME_TARGET_JSON.runtime_risk_limits.binding.account_hash`；每份报告的 hash 逐字相等后才派生既有 account-facts binding ID，不能由报告自己证明预期账户。
+`scripts/publish_runtime_daily_from_reports.py` 只为 `charles-schwab-quant-service / soxl_soxx_trend_income / live` 准备隐私安全的日报投影。身份必须独立来自唯一的现有 runtime policy 及 `RUNTIME_TARGET_JSON.runtime_risk_limits.binding.account_hash`；只有与该 hash 逐字相等的报告才能作为投影输入，既有 account-facts binding ID 从独立身份派生，不能由报告自己证明预期账户。
 
-原有身份跳过分支现细分为：缺 observation 的 `source_observation_missing`、缺 hash 键的 `source_hash_missing`、hash 已提供但为 null/非字符串/空白/带首尾空白的 `source_identity_invalid_shape`。只有合法非空、无首尾空白的字符串与独立 hash 逐字不同，才记 `source_identity_mismatch`；不 trim、不忽略大小写、不从其他别名补身份。非对象 payload/summary/observation 仍保留原有坏报告排除及 incomplete 行为，不新增整批拒绝，也不重排来源校验。此前通用 mismatch 不能证明实际属于哪类。producer 的 observation 本来可缺省，跳过、错误、旧路径或观察投影未成立都可能不写入；仅凭缺字段不能断言账户配置错误。
+对于通过非账户资格门的报告，身份跳过分支细分为：缺 observation 的 `source_observation_missing`、缺 hash 键的 `source_hash_missing`、hash 已提供但为 null/非字符串/空白/带首尾空白的 `source_identity_invalid_shape`。只有合法非空、无首尾空白的字符串与独立 hash 逐字不同，才记 `source_identity_mismatch`；不 trim、不忽略大小写、不从其他别名补身份。非对象 payload/summary/observation 仍保留原有坏报告排除及 incomplete 行为。此前通用 mismatch 不能证明实际属于哪类。producer 的 observation 本来可缺省，跳过、错误、旧路径或观察投影未成立都可能不写入；仅凭缺字段不能断言账户配置错误。
+
+既有 schema/platform/scope/current-revision/URI/run-id/time/大小资格门保持原判定，先于报告身份比较执行。本就不合格的报告继续排除并保留 read_error/incomplete，不能仅因身份不同或缺失阻塞其它合格报告；不扩大任何报告的准入集合。合格报告的身份失败无论排列顺序都仍整批停止。旧业务日不是豁免：通过既有时间与当前 revision 谓词的报告仍必须逐字匹配独立账户。
+
+manual runner 只读已封存投影的两个有界字段：白名单 `daily_status` 和现有 runs 列表长度 `projected_run_count`（整数0–20），不新增第二套准入元数据。全排除明确为 `daily_status=read_incomplete`、`projected_run_count=0`、runs为空、read_errors含 `coverage_unconfirmed`、coverage incomplete、`fills.count=null`。`status=prepared` 仅表示制备结束；零投影run不代表零交易、完整历史或健康状态。摘要不改变投影、seal、来源身份或发布行为。
 
 在该 exact mismatch 已经终止 prepare 后，manual runner 可附加四个固定整数诊断，只看同一已读内存批次的前20项：`mismatch_provenance_passed`、`mismatch_provenance_failed`、`mismatch_provenance_unknown`、`mismatch_passed_ascii_case_only`。前三项只统计合法非空 mismatch 对原非账户 scope/current-revision/URI/time/大小门的通过、不通过或无法判断；第四项只在通过组中统计“原字符串不同、均为ASCII、转小写的副本相同”。这是语法诊断，不代表券商官方身份等价、准入通过或允许规范化 hash/binding digest。原生券商账户 hash、账户响应摘要和复合 source-binding digest 仍是不同字段。
 

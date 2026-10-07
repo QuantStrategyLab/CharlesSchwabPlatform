@@ -699,12 +699,16 @@ def test_malformed_containers_preserve_original_partial_batch_behavior(
     opener.open.assert_called_once()
 
 
-def test_missing_report_identity_still_precedes_provenance_and_revision_checks():
+def test_unqualified_report_is_excluded_before_its_missing_identity_is_considered():
     entry = envelope()
     entry["payload"]["summary"].pop("account_observation")
     entry["payload"]["diagnostics"]["runtime_revision"] = "other-revision"
     entry["object_uri"] = "gs://PRIVATE-FOREIGN/other.json"
-    assert prepare([entry]).reason == "source_observation_missing"
+    prepared = prepare([entry])
+    assert prepared.reason == "prepared"
+    assert prepared.projection["records"][0]["runs"] == []
+    assert "report_read_error" in prepared.projection["read_errors"]
+    assert prepared.projection["completeness"] == "incomplete"
 
 
 @pytest.mark.parametrize(
@@ -848,7 +852,11 @@ def test_diagnostic_non_account_gates_never_turn_failure_or_uncertainty_into_pas
     else:
         payload["PRIVATE-OBJECT"] = object()
     assert diagnose([entry]) == diagnostic_counts(**{category: 1})
-    assert prepare([entry]).reason == "source_identity_mismatch"
+    prepared = prepare([entry])
+    assert prepared.reason == "prepared"
+    assert prepared.projection["records"][0]["runs"] == []
+    assert prepared.projection["records"][0]["status"] == "read_incomplete"
+    assert "report_read_error" in prepared.projection["read_errors"]
 
 
 @pytest.mark.parametrize("value", [None, False, 7, [], {}, "", " ", " " + HASH])
@@ -938,3 +946,155 @@ def test_diagnostic_unavailable_context_is_not_fabricated_zero_counts(change):
     else:
         args["observed_at"] = dt.datetime(2026, 10, 6)
     assert diagnose([mismatch_entry()], **args) is None
+
+
+def excluded_mismatch(kind="revision"):
+    entry = mismatch_entry()
+    if kind == "revision":
+        entry["payload"]["diagnostics"]["runtime_revision"] = "older-revision"
+    elif kind == "scope":
+        entry["payload"]["account_scope"] = "paper"
+    elif kind == "uri":
+        entry["object_uri"] = "gs://synthetic-other/outside.json"
+    elif kind == "time":
+        entry["payload"]["finished_at"] = "2026-10-07T20:02:00Z"
+    elif kind == "oversized":
+        entry["payload"]["private_large"] = "x" * caller.MAX_REPORT_BYTES
+    else:
+        entry["payload"] = None
+    return entry
+
+
+@pytest.mark.parametrize(
+    "kind", ["revision", "scope", "uri", "time", "oversized", "shape"]
+)
+@pytest.mark.parametrize("bad_first", [False, True])
+def test_unqualified_mismatch_no_longer_blocks_qualified_matching_report(
+    kind, bad_first
+):
+    bad, good = excluded_mismatch(kind), envelope()
+    entries = [bad, good] if bad_first else [good, bad]
+    prepared = prepare(entries)
+    assert prepared.reason == "prepared"
+    record = prepared.projection["records"][0]
+    assert record["runs"] == prepare([good]).projection["records"][0]["runs"]
+    assert record["status"] == "read_incomplete"
+    assert record["completeness"] == prepared.projection["completeness"] == "incomplete"
+    assert "report_read_error" in prepared.projection["read_errors"]
+    assert "coverage_unconfirmed" in prepared.projection["read_errors"]
+    assert prepared._preparation_digest
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "observation",
+        "hash_missing",
+        "hash_invalid",
+        "mismatch",
+        "case_only",
+        "prior_day",
+    ],
+)
+@pytest.mark.parametrize(
+    "order", [(0, 1, 2), (0, 2, 1), (1, 0, 2), (1, 2, 0), (2, 0, 1), (2, 1, 0)]
+)
+def test_qualified_identity_failure_stops_every_mixed_batch_order_without_post(
+    failure, order
+):
+    qualified = envelope(
+        stamp="20261005T200100Z" if failure == "prior_day" else "20261006T200200Z"
+    )
+    observation = qualified["payload"]["summary"]["account_observation"]
+    if failure == "observation":
+        qualified["payload"]["summary"].pop("account_observation")
+        expected = "source_observation_missing"
+    elif failure == "hash_missing":
+        observation.pop("account_hash")
+        expected = "source_hash_missing"
+    elif failure == "hash_invalid":
+        observation["account_hash"] = None
+        expected = "source_identity_invalid_shape"
+    else:
+        observation["account_hash"] = (
+            HASH.swapcase() if failure == "case_only" else "PRIVATE-OTHER"
+        )
+        expected = "source_identity_mismatch"
+    values = [qualified, envelope(), excluded_mismatch()]
+    prepared = prepare([values[i] for i in order])
+    assert prepared.reason == expected and prepared.projection is None
+    assert prepared._source_binding_id is None and prepared._preparation_digest is None
+    result, opener = publish(prepared)
+    assert result == {"status": "skipped", "reason": "projection_unavailable"}
+    opener.open.assert_not_called()
+
+
+def test_all_excluded_reports_remain_unavailable_incomplete_and_never_infer_zero_fills():
+    prepared = prepare([excluded_mismatch("revision"), excluded_mismatch("scope")])
+    assert prepared.reason == "prepared"
+    record = prepared.projection["records"][0]
+    assert record["runs"] == []
+    assert record["status"] == "read_incomplete"
+    assert record["completeness"] == prepared.projection["completeness"] == "incomplete"
+    assert set(prepared.projection["read_errors"]) == {
+        "report_read_error",
+        "coverage_unconfirmed",
+    }
+    assert record["fills"]["count"] is None and record["fills"]["records"] == []
+
+
+@pytest.mark.parametrize(
+    "read_failed,truncated", [(True, False), (False, True), (True, True)]
+)
+def test_qualification_does_not_clear_source_read_errors_or_truncation(
+    read_failed, truncated
+):
+    batch = caller.ReadBatch(
+        [excluded_mismatch(), envelope()], read_failed=read_failed, truncated=truncated
+    )
+    prepared = prepare(batch=batch)
+    assert prepared.reason == "prepared"
+    assert len(prepared.projection["records"][0]["runs"]) == 1
+    assert prepared.projection["completeness"] == "incomplete"
+    assert "report_read_error" in prepared.projection["read_errors"]
+    assert (batch.read_failed, batch.truncated) == (read_failed, truncated)
+
+
+def test_qualification_never_inspects_or_admits_the_twenty_first_report():
+    prepared = prepare([excluded_mismatch()] * 20 + [envelope()])
+    assert prepared.reason == "prepared"
+    assert prepared.projection["records"][0]["runs"] == []
+    assert prepared.projection["records"][0]["status"] == "read_incomplete"
+    assert "report_read_error" in prepared.projection["read_errors"]
+
+
+def test_admitted_projection_inputs_all_satisfy_the_existing_gates_and_exact_identity(
+    monkeypatch,
+):
+    projector = caller.project_daily_runtime
+    seen = []
+
+    def checked_projector(**kwargs):
+        for entry in kwargs["reports"]:
+            assert caller._report_provenance_passes(
+                entry["payload"],
+                object_uri=entry["object_uri"],
+                report_prefix=PREFIX,
+                expected_runtime_revision=REVISION,
+                observed_at=NOW,
+            )
+            assert (
+                entry["payload"]["summary"]["account_observation"]["account_hash"]
+                == HASH
+            )
+            seen.append(entry)
+        return projector(**kwargs)
+
+    monkeypatch.setattr(caller, "project_daily_runtime", checked_projector)
+    good = envelope()
+    bad = [
+        excluded_mismatch(kind)
+        for kind in ["revision", "scope", "uri", "time", "oversized", "shape"]
+    ]
+    assert prepare([*bad, good]).reason == "prepared"
+    assert seen == [good]
