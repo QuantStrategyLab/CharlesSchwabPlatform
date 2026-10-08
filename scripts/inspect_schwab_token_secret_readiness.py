@@ -24,17 +24,14 @@ from scripts.publish_account_facts_from_reports import PROJECT_ID
 
 API_HOST = "secretmanager.googleapis.com"
 SECRET_ID = "schwab_token"
-# Numeric alias appears in this workflow's existing workload-identity resource.
-PROJECT_NUMBER = "401309731911"
-PROJECT_ALIASES = frozenset({PROJECT_ID, PROJECT_NUMBER})
-SECRET_RESOURCE_NAMES = frozenset(
-    f"projects/{project}/secrets/{SECRET_ID}" for project in PROJECT_ALIASES
-)
 API_ROOT = f"https://{API_HOST}/v1/projects/{PROJECT_ID}/secrets/{SECRET_ID}"
 MAX_RESPONSE_BYTES = 64 * 1024
 PERMISSION = "secretmanager.versions.access"
+_SECRET_NAME = re.compile(
+    rf"projects/({re.escape(PROJECT_ID)}|[1-9][0-9]{{5,19}})/secrets/{re.escape(SECRET_ID)}\Z"
+)
 _VERSION_NAME = re.compile(
-    rf"projects/({PROJECT_ID}|{PROJECT_NUMBER})/secrets/{re.escape(SECRET_ID)}/versions/([1-9][0-9]*)\Z"
+    rf"projects/({re.escape(PROJECT_ID)}|[1-9][0-9]{{5,19}})/secrets/{re.escape(SECRET_ID)}/versions/([1-9][0-9]*)\Z"
 )
 
 
@@ -57,6 +54,10 @@ def _safe_json_response(response: Any) -> Mapping[str, Any]:
     status = getattr(response, "status_code", None)
     if status == 404:
         raise _ReadFailure("not_found")
+    if status == 401:
+        raise _ReadFailure("authentication_unavailable")
+    if status == 403:
+        raise _ReadFailure("permission_denied")
     if status != 200:
         raise _ReadFailure("metadata_unavailable")
     deadline = time.monotonic() + 15
@@ -83,28 +84,36 @@ def _request_json(
     url: str,
     body: Mapping[str, Any] | None = None,
     params: Mapping[str, str] | None = None,
+    canonical_secret_name: str | None = None,
 ) -> Mapping[str, Any]:
     parsed = urllib.parse.urlsplit(url)
     metadata_path = f"/v1/projects/{PROJECT_ID}/secrets/{SECRET_ID}"
-    latest_paths = {
-        f"/v1/{resource}/versions/latest" for resource in SECRET_RESOURCE_NAMES
-    }
+    if canonical_secret_name is not None and not _SECRET_NAME.fullmatch(
+        canonical_secret_name
+    ):
+        raise ValueError("request_target_rejected")
+    latest_path = (
+        f"/v1/{canonical_secret_name}/versions/latest"
+        if canonical_secret_name is not None
+        else None
+    )
     permission_path = parsed.path.removeprefix("/v1/").removesuffix(":testIamPermissions")
     is_permission_path = bool(
         parsed.path.endswith(":testIamPermissions")
-        and permission_path in SECRET_RESOURCE_NAMES
+        and canonical_secret_name is not None
+        and permission_path == canonical_secret_name
     )
     if (
         parsed.scheme != "https"
         or parsed.netloc != API_HOST
         or parsed.query
         or parsed.fragment
-        or not (parsed.path == metadata_path or parsed.path in latest_paths or is_permission_path)
+        or not (parsed.path == metadata_path or parsed.path == latest_path or is_permission_path)
     ):
         raise ValueError("request_target_rejected")
     if (
         (
-            (parsed.path == metadata_path or parsed.path in latest_paths)
+            (parsed.path == metadata_path or parsed.path == latest_path)
             and (method != "GET" or body is not None)
         )
         or (
@@ -159,6 +168,20 @@ def inspect_secret_readiness(
                 "latest_version_enabled": None,
                 "permission_reported": None,
                 }
+            if exc.reason == "authentication_unavailable":
+                return {
+                    "status": "metadata_authentication_unavailable",
+                    "secret_exists": None,
+                    "latest_version_enabled": None,
+                    "permission_reported": None,
+                }
+            if exc.reason == "permission_denied":
+                return {
+                    "status": "metadata_permission_denied",
+                    "secret_exists": None,
+                    "latest_version_enabled": None,
+                    "permission_reported": None,
+                }
             return {
                 "status": "metadata_unavailable",
                 "secret_exists": None,
@@ -173,7 +196,12 @@ def inspect_secret_readiness(
                 "permission_reported": None,
             }
         secret_name = secret.get("name")
-        if secret_name not in SECRET_RESOURCE_NAMES:
+        secret_match = (
+            _SECRET_NAME.fullmatch(secret_name)
+            if isinstance(secret_name, str)
+            else None
+        )
+        if secret_match is None:
             return {
                 "status": "metadata_unavailable",
                 "secret_exists": None,
@@ -187,6 +215,7 @@ def inspect_secret_readiness(
                 method="GET",
                 url=f"https://{API_HOST}/v1/{secret_name}/versions/latest",
                 params={"fields": "name,state"},
+                canonical_secret_name=secret_name,
             )
         except Exception:
             return {
@@ -196,10 +225,14 @@ def inspect_secret_readiness(
                 "permission_reported": None,
             }
         version_name = version.get("name")
-        match = _VERSION_NAME.fullmatch(version_name) if isinstance(version_name, str) else None
+        match = (
+            _VERSION_NAME.fullmatch(version_name)
+            if isinstance(version_name, str)
+            else None
+        )
         if (
-        match is None
-            or match.group(1) not in PROJECT_ALIASES
+            match is None
+            or match.group(1) not in {PROJECT_ID, secret_match.group(1)}
             or version.get("state") not in {"ENABLED", "DISABLED", "DESTROYED"}
         ):
             return {
@@ -215,6 +248,7 @@ def inspect_secret_readiness(
                 method="POST",
                 url=f"https://{API_HOST}/v1/{secret_name}:testIamPermissions",
                 body={"permissions": [PERMISSION]},
+                canonical_secret_name=secret_name,
             )
         except Exception:
             return {

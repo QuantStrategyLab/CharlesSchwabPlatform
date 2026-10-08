@@ -137,9 +137,10 @@ def test_invalid_version_resource_stops_before_permission_test():
 
 
 def test_official_secret_number_resource_shape_uses_secret_level_permission_endpoint():
+    canonical_project_number = "123456789012"
     session = checked_session(
         permissions=[readiness.PERMISSION],
-        project_alias=readiness.PROJECT_NUMBER,
+        project_alias=canonical_project_number,
     )
 
     result = readiness.inspect_secret_readiness(ENV, session=session)
@@ -151,18 +152,34 @@ def test_official_secret_number_resource_shape_uses_secret_level_permission_endp
         "permission_reported": True,
     }
     assert session.get.call_args_list[1].args == (
-        f"https://{readiness.API_HOST}/v1/projects/{readiness.PROJECT_NUMBER}/secrets/schwab_token/versions/latest",
+        f"https://{readiness.API_HOST}/v1/projects/{canonical_project_number}/secrets/schwab_token/versions/latest",
     )
     assert session.post.call_args.args == (
-        f"https://{readiness.API_HOST}/v1/projects/{readiness.PROJECT_NUMBER}/secrets/schwab_token:testIamPermissions",
+        f"https://{readiness.API_HOST}/v1/projects/{canonical_project_number}/secrets/schwab_token:testIamPermissions",
     )
 
 
-def test_canonical_project_number_version_is_accepted_after_project_id_metadata():
+def test_version_resource_cannot_introduce_numeric_project_alias():
+    canonical_project_number = "987654321098"
     session = checked_session(
         permissions=[readiness.PERMISSION],
         project_alias=readiness.PROJECT_ID,
-        version_project_alias=readiness.PROJECT_NUMBER,
+        version_project_alias=canonical_project_number,
+    )
+
+    result = readiness.inspect_secret_readiness(ENV, session=session)
+
+    assert result["status"] == "version_unavailable"
+    assert result["latest_version_enabled"] is None
+    session.post.assert_not_called()
+
+
+def test_original_project_id_version_is_accepted_after_numeric_metadata_name():
+    canonical_project_number = "987654321098"
+    session = checked_session(
+        permissions=[readiness.PERMISSION],
+        project_alias=canonical_project_number,
+        version_project_alias=readiness.PROJECT_ID,
     )
 
     result = readiness.inspect_secret_readiness(ENV, session=session)
@@ -170,8 +187,33 @@ def test_canonical_project_number_version_is_accepted_after_project_id_metadata(
     assert result["latest_version_enabled"] is True
     assert result["permission_reported"] is True
     assert session.post.call_args.args == (
-        f"https://{readiness.API_HOST}/v1/projects/{readiness.PROJECT_ID}/secrets/schwab_token:testIamPermissions",
+        f"https://{readiness.API_HOST}/v1/projects/{canonical_project_number}/secrets/schwab_token:testIamPermissions",
     )
+
+
+def test_version_rejects_unrelated_numeric_project_resource():
+    session = Mock()
+    canonical_project_number = "987654321098"
+    unrelated_project_number = "123456789012"
+    session.get.side_effect = [
+        Response(
+            {
+                "name": f"projects/{canonical_project_number}/secrets/schwab_token"
+            }
+        ),
+        Response(
+            {
+                "name": f"projects/{unrelated_project_number}/secrets/schwab_token/versions/7",
+                "state": "ENABLED",
+            }
+        ),
+    ]
+
+    result = readiness.inspect_secret_readiness(ENV, session=session)
+
+    assert result["status"] == "version_unavailable"
+    assert result["latest_version_enabled"] is None
+    session.post.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -205,6 +247,34 @@ def test_unexpected_http_status_does_not_follow_redirect_or_expose_body():
     assert session.get.call_count == 1
     assert session.post.call_count == 0
     assert "BODY-MUST-NOT-ESCAPE" not in json.dumps(result)
+
+
+@pytest.mark.parametrize(
+    ("status", "expected"),
+    [
+        (401, "metadata_authentication_unavailable"),
+        (403, "metadata_permission_denied"),
+    ],
+)
+def test_metadata_authentication_and_permission_failures_are_distinguished(
+    status, expected
+):
+    session = Mock()
+    session.get.return_value = Response(
+        {"private": "BODY-MUST-NOT-ESCAPE"}, status=status
+    )
+
+    result = readiness.inspect_secret_readiness(ENV, session=session)
+
+    assert result == {
+        "status": expected,
+        "secret_exists": None,
+        "latest_version_enabled": None,
+        "permission_reported": None,
+    }
+    assert "BODY-MUST-NOT-ESCAPE" not in json.dumps(result)
+    session.get.assert_called_once()
+    session.post.assert_not_called()
 
 
 def test_project_mismatch_fails_before_creating_adc_session(monkeypatch):
