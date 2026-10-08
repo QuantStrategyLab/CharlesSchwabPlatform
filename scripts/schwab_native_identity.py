@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import importlib
 import json
 import math
 import time
@@ -17,15 +18,113 @@ MAX_TOKEN_BYTES = 64 * 1024
 MAX_RESPONSE_BYTES = 64 * 1024
 MAX_ACCOUNTS = 100
 REQUEST_TIMEOUT = (5, 15)
+SECRET_READ_TIMEOUT = 15
 _CLOCK_SKEW_SECONDS = 30
 
 
 def _load_existing_token(project_id: str, secret_id: str) -> str:
-    # This QPK helper reads versions/latest into memory; unlike the SDK client
-    # builder it neither writes a token file nor installs a refresh callback.
-    from quant_platform_kit.schwab.auth import load_secret_payload
+    """Read one fixed Secret version without retries or local token writes."""
+    from google.cloud import secretmanager_v1
 
-    return load_secret_payload(project_id, secret_id)
+    client = secretmanager_v1.SecretManagerServiceClient()
+    response = client.access_secret_version(
+        request={"name": f"projects/{project_id}/secrets/{secret_id}/versions/latest"},
+        retry=None,
+        timeout=SECRET_READ_TIMEOUT,
+    )
+    payload = response.payload.data
+    if not isinstance(payload, bytes) or len(payload) > MAX_TOKEN_BYTES:
+        return ""
+    return payload.decode("utf-8")
+
+
+def _is_instance_from(error: Exception, module_name: str, class_names: tuple[str, ...]) -> bool:
+    try:
+        module = importlib.import_module(module_name)
+    except Exception:
+        return False
+    types = tuple(
+        candidate
+        for name in class_names
+        if isinstance((candidate := getattr(module, name, None)), type)
+    )
+    return bool(types) and isinstance(error, types)
+
+
+def _classify_token_load_error(error: Exception) -> str:
+    """Map SDK failures to fixed safe categories without inspecting messages."""
+    if isinstance(error, ImportError):
+        return "token_dependency_unavailable"
+    if isinstance(error, UnicodeDecodeError):
+        return "token_invalid"
+    if _is_instance_from(
+        error,
+        "google.api_core.exceptions",
+        ("PermissionDenied", "Forbidden"),
+    ):
+        return "token_permission_denied"
+    if _is_instance_from(
+        error, "google.api_core.exceptions", ("NotFound",)
+    ):
+        return "token_not_found"
+    if _is_instance_from(
+        error, "google.api_core.exceptions", ("FailedPrecondition",)
+    ):
+        return "token_version_unavailable"
+    if _is_instance_from(
+        error,
+        "google.auth.exceptions",
+        ("DefaultCredentialsError", "RefreshError"),
+    ) or _is_instance_from(
+        error, "google.api_core.exceptions", ("Unauthenticated", "Unauthorized")
+    ):
+        return "token_adc_unavailable"
+    if _is_instance_from(error, "google.auth.exceptions", ("TransportError",)) or (
+        _is_instance_from(
+            error,
+            "google.api_core.exceptions",
+            (
+                "DeadlineExceeded",
+                "GatewayTimeout",
+                "InternalServerError",
+                "RetryError",
+                "ServiceUnavailable",
+                "TooManyRequests",
+            ),
+        )
+    ):
+        return "token_network_unavailable"
+    return "token_load_failed"
+
+
+def check_token_load_status(
+    *,
+    environ: Mapping[str, str],
+    observed_at: dt.datetime,
+    secret_loader: Callable[[str, str], str] | None = None,
+) -> str:
+    """Read and validate the existing token without contacting Schwab."""
+    if (
+        environ.get("GCP_PROJECT_ID") != PROJECT_ID
+        or not isinstance(observed_at, dt.datetime)
+        or observed_at.tzinfo is None
+        or observed_at.utcoffset() is None
+    ):
+        return "configuration_invalid"
+    try:
+        now = observed_at.timestamp()
+    except (OverflowError, OSError, ValueError):
+        return "configuration_invalid"
+    try:
+        loader = _load_existing_token if secret_loader is None else secret_loader
+        payload = loader(PROJECT_ID, SECRET_ID)
+    except Exception as error:
+        return _classify_token_load_error(error)
+    try:
+        access_token, status = _access_token(payload, now=now)
+    except Exception:
+        return "token_invalid"
+    return "token_payload_valid" if access_token is not None else status
 
 
 def _finite_timestamp(value: object) -> bool:
@@ -112,8 +211,8 @@ def verify_native_identity(
     try:
         loader = _load_existing_token if secret_loader is None else secret_loader
         payload = loader(PROJECT_ID, SECRET_ID)
-    except Exception:
-        return "token_unavailable"
+    except Exception as error:
+        return _classify_token_load_error(error)
     try:
         access_token, token_status = _access_token(payload, now=now)
     except Exception:

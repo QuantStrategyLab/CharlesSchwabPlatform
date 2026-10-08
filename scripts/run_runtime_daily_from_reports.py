@@ -25,7 +25,7 @@ from scripts.runtime_daily_source_facts import (
     effective_schedule,
     read_source_facts,
 )
-from scripts.schwab_native_identity import verify_native_identity
+from scripts.schwab_native_identity import check_token_load_status, verify_native_identity
 
 _PUBLICATION_REASONS = frozenset(
     {
@@ -55,7 +55,13 @@ _DAILY_SUMMARY_STATUSES = frozenset(
 _NATIVE_IDENTITY_FAILURES = frozenset(
     {
         "configuration_invalid",
-        "token_unavailable",
+        "token_dependency_unavailable",
+        "token_adc_unavailable",
+        "token_permission_denied",
+        "token_not_found",
+        "token_version_unavailable",
+        "token_network_unavailable",
+        "token_load_failed",
         "token_invalid",
         "token_expired",
         "token_rejected",
@@ -210,17 +216,23 @@ def run_daily(
     *,
     publish: bool = False,
     verify_native_identity_only: bool = False,
+    check_token_load_only: bool = False,
     observed_at: dt.datetime | None = None,
     fact_reader: Callable[..., Any] = read_source_facts,
     identity_reader: Callable[..., str] = verify_native_identity,
+    token_load_checker: Callable[..., str] = check_token_load_status,
     archive_reader: Callable[..., Any] = caller.read_archive,
     publisher: Callable[..., Any] = caller.publish_prepared,
     session_dates_loader: Callable[..., Any] | None = None,
 ) -> dict[str, str | int]:
     try:
-        if type(publish) is not bool or type(verify_native_identity_only) is not bool:
+        if (
+            type(publish) is not bool
+            or type(verify_native_identity_only) is not bool
+            or type(check_token_load_only) is not bool
+        ):
             return {"status": "skipped", "reason": "invalid_mode"}
-        if publish and verify_native_identity_only:
+        if sum((publish, verify_native_identity_only, check_token_load_only)) > 1:
             return {"status": "skipped", "reason": "conflicting_modes"}
         now = (
             observed_at if observed_at is not None else dt.datetime.now(dt.timezone.utc)
@@ -234,6 +246,20 @@ def run_daily(
         prefix = environ.get("SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX")
         if environ.get("GCP_PROJECT_ID") != caller.PROJECT_ID:
             return {"status": "skipped", "reason": "source_configuration_invalid"}
+        if check_token_load_only:
+            try:
+                token_status = token_load_checker(environ=environ, observed_at=now)
+            except Exception:
+                token_status = "token_load_failed"
+            if token_status == "token_payload_valid":
+                return {"status": "token_load_checked", "reason": token_status}
+            reason = (
+                token_status
+                if isinstance(token_status, str)
+                and token_status in _NATIVE_IDENTITY_FAILURES
+                else "token_load_failed"
+            )
+            return {"status": "skipped", "reason": reason}
         if not verify_native_identity_only and (
             not caller._valid_report_prefix(prefix)
             or environ.get("GCP_REGION") != REGION
@@ -355,7 +381,12 @@ def main(
     operation: Callable[..., dict[str, str | int]] = run_daily,
 ) -> int:
     args = sys.argv[1:] if argv is None else argv
-    if args not in ([], ["--publish"], ["--verify-native-identity"]):
+    if args not in (
+        [],
+        ["--publish"],
+        ["--verify-native-identity"],
+        ["--check-token-load"],
+    ):
         print("skipped:unsupported_arguments")
         return 2
     try:
@@ -363,12 +394,18 @@ def main(
             os.environ if environ is None else environ,
             publish=args == ["--publish"],
             verify_native_identity_only=args == ["--verify-native-identity"],
+            check_token_load_only=args == ["--check-token-load"],
         )
         print(json.dumps(result, sort_keys=True))
         return (
             0
             if result.get("status")
-            in {"prepared", "stored_acknowledged", "native_identity_verified"}
+            in {
+                "prepared",
+                "stored_acknowledged",
+                "native_identity_verified",
+                "token_load_checked",
+            }
             else 2
         )
     except Exception:
