@@ -100,6 +100,25 @@ def test_step_scopes_the_sync_token_and_uses_protected_prefix_and_region() -> No
     assert "EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}" in step
     assert "SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX: ${{ secrets.SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX }}" in step
     assert "GCP_REGION: us-central1" in step
+    assert (
+        "RUNTIME_TARGET_JSON: ${{ secrets.SCHWAB_RUNTIME_DAILY_TARGET_JSON || "
+        "vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}"
+    ) in step
+
+
+def test_daily_target_override_is_step_scoped_and_preserves_other_heartbeat_steps() -> None:
+    workflow = _workflow_text()
+    daily_step = _step_block(workflow, STEP_NAME)
+    heartbeat_job = _heartbeat_job(workflow)
+    assignment = (
+        "RUNTIME_TARGET_JSON: ${{ secrets.SCHWAB_RUNTIME_DAILY_TARGET_JSON || "
+        "vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}"
+    )
+    job_env = re.search(r"(?ms)^    env:\n(.*?)^    steps:", heartbeat_job)
+    assert job_env is not None
+    assert "RUNTIME_TARGET_JSON: ${{ vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}" in job_env.group(1)
+    assert assignment in daily_step
+    assert workflow.count(assignment) == 1
 
 
 def test_sync_token_is_not_exposed_job_wide() -> None:
