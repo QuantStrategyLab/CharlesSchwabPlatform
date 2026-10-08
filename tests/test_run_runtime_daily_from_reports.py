@@ -44,6 +44,12 @@ def environment():
     }
 
 
+def environment_with_protected_daily_target():
+    env = environment()
+    env["SCHWAB_RUNTIME_DAILY_TARGET_JSON"] = env["RUNTIME_TARGET_JSON"]
+    return env
+
+
 def service():
     return {
         "name": RESOURCE,
@@ -456,6 +462,86 @@ def test_publish_requires_native_identity_before_report_read_or_post():
     publisher.assert_not_called()
 
 
+def test_protected_daily_target_avoids_native_get_even_when_token_would_be_expired():
+    identity_reader = Mock(return_value="token_expired")
+    result, readers = run(
+        environ=environment_with_protected_daily_target(),
+        publish=True,
+        identity_reader=identity_reader,
+    )
+
+    assert result["status"] == "stored_acknowledged"
+    identity_reader.assert_not_called()
+    readers["fact_reader"].assert_called_once()
+    readers["archive_reader"].assert_called_once()
+    readers["publisher"].assert_called_once()
+
+
+def test_protected_daily_target_accepts_equivalent_json_formatting_and_key_order():
+    env = environment()
+    target = json.loads(env["RUNTIME_TARGET_JSON"])
+    env["SCHWAB_RUNTIME_DAILY_TARGET_JSON"] = json.dumps(
+        target, indent=2, sort_keys=True
+    )
+    assert env["SCHWAB_RUNTIME_DAILY_TARGET_JSON"] != env["RUNTIME_TARGET_JSON"]
+    identity_reader = Mock(return_value="token_expired")
+
+    result, readers = run(
+        environ=env,
+        publish=True,
+        identity_reader=identity_reader,
+    )
+
+    assert result["status"] == "stored_acknowledged"
+    identity_reader.assert_not_called()
+    readers["archive_reader"].assert_called_once()
+    readers["publisher"].assert_called_once()
+
+
+def test_publish_without_protected_daily_target_keeps_native_get():
+    result, readers = run(publish=True)
+
+    assert result["status"] == "stored_acknowledged"
+    readers["identity_reader"].assert_called_once()
+    assert readers["identity_reader"].call_args.kwargs["expected_account_hash"] == caller._select_identity(
+        environment()
+    )[0]
+    readers["archive_reader"].assert_called_once()
+    readers["publisher"].assert_called_once()
+
+
+@pytest.mark.parametrize("private_value", ["{", "different_complete_json"])
+def test_invalid_or_conflicting_protected_target_stops_before_archive_and_post(
+    private_value,
+):
+    env = environment_with_protected_daily_target()
+    if private_value == "different_complete_json":
+        target = json.loads(env["SCHWAB_RUNTIME_DAILY_TARGET_JSON"])
+        target["unrelated_config_field"] = "synthetic-conflict"
+        env["SCHWAB_RUNTIME_DAILY_TARGET_JSON"] = json.dumps(target)
+    else:
+        env["SCHWAB_RUNTIME_DAILY_TARGET_JSON"] = private_value
+    identity_reader = Mock()
+    fact_reader = Mock(return_value=verified_facts())
+    archive_reader = Mock()
+    publisher = Mock()
+
+    result, _ = run(
+        environ=env,
+        publish=True,
+        identity_reader=identity_reader,
+        fact_reader=fact_reader,
+        archive_reader=archive_reader,
+        publisher=publisher,
+    )
+
+    assert result == {"status": "skipped", "reason": "source_identity_unavailable"}
+    identity_reader.assert_not_called()
+    fact_reader.assert_not_called()
+    archive_reader.assert_not_called()
+    publisher.assert_not_called()
+
+
 def test_native_identity_only_mode_reads_no_daily_source_or_publisher():
     env = environment()
     env.pop("SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX")
@@ -472,6 +558,52 @@ def test_native_identity_only_mode_reads_no_daily_source_or_publisher():
     readers["fact_reader"].assert_not_called()
     readers["archive_reader"].assert_not_called()
     readers["publisher"].assert_not_called()
+
+
+def test_native_identity_only_still_checks_broker_with_protected_target_present():
+    env = environment_with_protected_daily_target()
+    env.pop("SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX")
+    identity_reader = Mock(return_value="verified")
+
+    result, readers = run(
+        environ=env,
+        verify_native_identity_only=True,
+        identity_reader=identity_reader,
+    )
+
+    assert result == {"status": "native_identity_verified"}
+    identity_reader.assert_called_once()
+    readers["fact_reader"].assert_not_called()
+    readers["archive_reader"].assert_not_called()
+    readers["publisher"].assert_not_called()
+
+
+def test_protected_daily_target_does_not_admit_a_report_with_another_native_hash():
+    entry = envelope()
+    entry["payload"]["summary"]["account_observation"]["account_hash"] = (
+        "SYNTHETIC-OTHER-NATIVE-HASH"
+    )
+    archive_reader = Mock(return_value=caller.ReadBatch([entry]))
+    opener = Mock()
+
+    def publisher(prepared, **kwargs):
+        return caller.publish_prepared(
+            prepared, opener_factory=lambda *_args: opener, **kwargs
+        )
+
+    result, readers = run(
+        environ=environment_with_protected_daily_target(),
+        publish=True,
+        archive_reader=archive_reader,
+        publisher=publisher,
+    )
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "source_identity_mismatch"
+    assert result["mismatch_provenance_passed"] == 1
+    readers["identity_reader"].assert_not_called()
+    archive_reader.assert_called_once()
+    opener.open.assert_not_called()
 
 
 def test_token_load_mode_checks_only_existing_secret_and_never_reads_daily_or_broker():
@@ -673,7 +805,12 @@ def test_new_workflow_is_manual_main_only_and_preparation_has_no_token():
     prepare = workflow.split("- name: Prepare runtime daily", 1)[1].split(
         "- name: Publish runtime daily", 1
     )[0]
+    publish_step = workflow.split("- name: Publish runtime daily", 1)[1].split(
+        "- name:", 1
+    )[0]
     assert "--publish" not in prepare and "SYNC_TOKEN" not in prepare
+    assert "SCHWAB_RUNTIME_DAILY_TARGET_JSON" not in prepare
+    assert "SCHWAB_RUNTIME_DAILY_TARGET_JSON: ${{ secrets.SCHWAB_RUNTIME_DAILY_TARGET_JSON }}" in publish_step
     assert workflow.count("secrets.EXECUTION_EVIDENCE_SYNC_TOKEN") == 1
     assert "run_runtime_daily_from_reports.py --publish" in workflow
     assert "run_runtime_daily_from_reports.py --verify-native-identity" in workflow

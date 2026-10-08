@@ -211,6 +211,40 @@ def _valid_mismatch_counts(counts: object) -> bool:
     )
 
 
+def _protected_daily_identity_matches(
+    environ: Mapping[str, str],
+    *,
+    account_hash: str,
+    policy: Mapping[str, Any],
+) -> bool | None:
+    """Use the dedicated protected daily target only when it exactly matches.
+
+    ``None`` means the Secret was not supplied and the caller must use the live
+    native identity reader. A malformed or conflicting value fails closed.
+    """
+    private_raw = environ.get("SCHWAB_RUNTIME_DAILY_TARGET_JSON")
+    if private_raw is None or private_raw == "":
+        return None
+    current_raw = environ.get("RUNTIME_TARGET_JSON")
+    if (
+        not isinstance(private_raw, str)
+        or not private_raw
+        or not isinstance(current_raw, str)
+    ):
+        return False
+    try:
+        private_target = caller._json_object(private_raw)
+        current_target = caller._json_object(current_raw)
+        if private_target != current_target:
+            return False
+        private_environ = dict(environ)
+        private_environ["RUNTIME_TARGET_JSON"] = private_raw
+        private_hash, private_policy = caller._select_identity(private_environ)
+    except Exception:
+        return False
+    return private_hash == account_hash and private_policy == policy
+
+
 def run_daily(
     environ: Mapping[str, str],
     *,
@@ -266,26 +300,35 @@ def run_daily(
         ):
             return {"status": "skipped", "reason": "source_configuration_invalid"}
         try:
-            expected_account_hash, _policy = caller._select_identity(environ)
+            expected_account_hash, policy = caller._select_identity(environ)
         except Exception:
             return {"status": "skipped", "reason": "source_identity_unavailable"}
+        use_protected_daily_identity = False
+        if publish:
+            protected_identity = _protected_daily_identity_matches(
+                environ, account_hash=expected_account_hash, policy=policy
+            )
+            if protected_identity is False:
+                return {"status": "skipped", "reason": "source_identity_unavailable"}
+            use_protected_daily_identity = protected_identity is True
         if publish or verify_native_identity_only:
-            try:
-                identity_status = identity_reader(
-                    environ=environ,
-                    expected_account_hash=expected_account_hash,
-                    observed_at=now,
-                )
-            except Exception:
-                identity_status = "native_identity_unavailable"
-            if identity_status != "verified":
-                reason = (
-                    identity_status
-                    if isinstance(identity_status, str)
-                    and identity_status in _NATIVE_IDENTITY_FAILURES
-                    else "native_identity_unavailable"
-                )
-                return {"status": "skipped", "reason": reason}
+            if not use_protected_daily_identity:
+                try:
+                    identity_status = identity_reader(
+                        environ=environ,
+                        expected_account_hash=expected_account_hash,
+                        observed_at=now,
+                    )
+                except Exception:
+                    identity_status = "native_identity_unavailable"
+                if identity_status != "verified":
+                    reason = (
+                        identity_status
+                        if isinstance(identity_status, str)
+                        and identity_status in _NATIVE_IDENTITY_FAILURES
+                        else "native_identity_unavailable"
+                    )
+                    return {"status": "skipped", "reason": reason}
             if verify_native_identity_only:
                 return {"status": "native_identity_verified"}
         facts = fact_reader(environ)

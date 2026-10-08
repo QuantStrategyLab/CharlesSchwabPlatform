@@ -123,6 +123,7 @@ jobs:
           EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
           SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX: ${{ secrets.SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX }}
           GCP_REGION: us-central1
+          SCHWAB_RUNTIME_DAILY_TARGET_JSON: ${{ secrets.SCHWAB_RUNTIME_DAILY_TARGET_JSON }}
           RUNTIME_TARGET_JSON: ${{ secrets.SCHWAB_RUNTIME_DAILY_TARGET_JSON || vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}
         run: uv run --no-sync python scripts/run_runtime_daily_from_reports.py --publish
 

@@ -72,14 +72,23 @@ metadata Viewer，也不以 `testIamPermissions` 的观察结果代替真实读�
 `diagnose_source_access` 互斥。它使用既有云端身份在内存中读取 `schwab_token`，不输出
 token 或原生账户号/hash，也不刷新或写回 token；随后只调用一次有界的 Schwab 原生账户号
 只读接口，并将结果与受保护运行目标中预先配置的身份精确比较。日报 report 自己携带的
-身份字段不能证明预期身份。
+身份字段不能证明预期身份。此模式始终进行实时原生账户核验，即使日报发布 Secret 已配置。
 
-`publish` 在读取日报报告及发送唯一一次 POST 之前执行同一原生身份核验。身份不匹配、
-多重匹配、响应无效或身份读取不可用时停止发布。遇到 `token_expired`，停止并通过既有
-获批的 Schwab token 负责人流程重新授权/轮换 token；本 workflow 不会自动刷新。其他固定
-读取原因按类别检查既有云身份、payload access 权限、Secret/版本状态或服务可用性；无需
-为此增加 metadata Viewer。修复后先单独运行一次
-`verify_native_identity`，只有核验通过才运行 `publish`。不要下载、打印或粘贴 token 内容。
+`publish` 有两种受控身份路径：配置了 `SCHWAB_RUNTIME_DAILY_TARGET_JSON` 时，只在日报发布
+步骤向 runner 注入该 Secret；runner 要求它与当前完整 `RUNTIME_TARGET_JSON` 完全一致，且
+目标和绑定身份均通过现有校验。此时将用户确认的受保护绑定作为稳定的预期身份，不请求
+Schwab 原生账户接口；仍会核验归档报告的目标、原生 hash、来源与时间、当前运行 revision，
+并保留 source-binding 和 receiver ACK 校验。这个绑定是稳定配置依据，不是发布时对券商
+当前账户身份的动态核验。缺少该 Secret 时，发布沿用原行为：先调用有界的原生账户号只读
+接口；配置不匹配或格式无效时，在读取报告和 POST 前停止。只有受保护配置由原应用及用户
+确认后才能设置，不能由公开布尔、历史 alias 或报告自身生成。该 Secret 不改变券商凭据、
+交易权限、运行目标或风险配置。
+
+旧实时核验路径遇到 `token_expired`、身份不匹配、多重匹配、响应无效或身份读取不可用时，
+会停止发布。用稳定受保护绑定的发布路径不读取 Schwab token，因此不受 access token 到期
+影响；`check_token_load` 和 `verify_native_identity` 的实际 token 校验行为不变。本 workflow
+不会自动刷新或写回 token。其他固定读取原因按类别检查既有云身份、payload access 权限、
+Secret/版本状态或服务可用性；无需为此增加 metadata Viewer。不要下载、打印或粘贴 token 内容。
 
 ### 只读检查 token 加载状态
 
