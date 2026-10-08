@@ -98,8 +98,11 @@ def verified_facts():
     return facts.SourceFacts("verified", REVISION, "0 16 * * 1-5", "America/New_York")
 
 
-def run(*, environ=None, publish=False, observation=None, **overrides):
+def run(
+    *, environ=None, publish=False, verify_native_identity_only=False, observation=None, **overrides
+):
     readers = {
+        "identity_reader": Mock(return_value="verified"),
         "fact_reader": Mock(return_value=observation or verified_facts()),
         "archive_reader": Mock(return_value=caller.ReadBatch([envelope()])),
         "publisher": Mock(
@@ -113,6 +116,7 @@ def run(*, environ=None, publish=False, observation=None, **overrides):
     result = runner.run_daily(
         environment() if environ is None else environ,
         publish=publish,
+        verify_native_identity_only=verify_native_identity_only,
         observed_at=NOW,
         session_dates_loader=lambda *_a, **_k: {NOW.date()},
         **readers,
@@ -421,6 +425,48 @@ def test_runner_to_real_caller_uses_synthetic_transport_and_preserves_incomplete
     opener.open.assert_called_once()
 
 
+def test_publish_requires_native_identity_before_report_read_or_post():
+    archive = Mock()
+    publisher = Mock()
+    fact_reader = Mock(return_value=verified_facts())
+    identity_reader = Mock(return_value="native_identity_mismatch")
+
+    result, readers = run(
+        publish=True,
+        identity_reader=identity_reader,
+        fact_reader=fact_reader,
+        archive_reader=archive,
+        publisher=publisher,
+    )
+
+    assert result == {"status": "skipped", "reason": "native_identity_mismatch"}
+    identity_reader.assert_called_once()
+    assert identity_reader.call_args.kwargs["expected_account_hash"] == caller._select_identity(
+        environment()
+    )[0]
+    fact_reader.assert_not_called()
+    archive.assert_not_called()
+    publisher.assert_not_called()
+
+
+def test_native_identity_only_mode_reads_no_daily_source_or_publisher():
+    env = environment()
+    env.pop("SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX")
+    identity_reader = Mock(return_value="verified")
+
+    result, readers = run(
+        environ=env,
+        verify_native_identity_only=True,
+        identity_reader=identity_reader,
+    )
+
+    assert result == {"status": "native_identity_verified"}
+    identity_reader.assert_called_once()
+    readers["fact_reader"].assert_not_called()
+    readers["archive_reader"].assert_not_called()
+    readers["publisher"].assert_not_called()
+
+
 def test_publish_without_token_is_skipped_and_never_opens_transport():
     env = environment()
     env.pop("EXECUTION_EVIDENCE_SYNC_TOKEN", None)
@@ -532,6 +578,8 @@ def test_cli_empty_is_prepare_and_publish_is_explicit(capsys):
     assert operation.call_args.kwargs["publish"] is False
     assert runner.main(["--publish"], environ={}, operation=operation) == 0
     assert operation.call_args.kwargs["publish"] is True
+    assert runner.main(["--verify-native-identity"], environ={}, operation=operation) == 0
+    assert operation.call_args.kwargs["verify_native_identity_only"] is True
     assert "coverage_unconfirmed" in capsys.readouterr().out
 
 
@@ -547,6 +595,11 @@ def test_new_workflow_is_manual_main_only_and_preparation_has_no_token():
     ):
         assert forbidden not in workflow
     assert "type: boolean" in workflow and "default: false" in workflow
+    identity_input = workflow.split("      verify_native_identity:", 1)[1].split(
+        "permissions:", 1
+    )[0]
+    assert "type: boolean" in identity_input
+    assert "default: false" in identity_input
     assert "github.event_name == 'workflow_dispatch'" in workflow
     assert "github.ref == 'refs/heads/main'" in workflow
     assert "google-github-actions/auth@v3" in workflow
@@ -558,6 +611,12 @@ def test_new_workflow_is_manual_main_only_and_preparation_has_no_token():
     assert "--publish" not in prepare and "SYNC_TOKEN" not in prepare
     assert workflow.count("secrets.EXECUTION_EVIDENCE_SYNC_TOKEN") == 1
     assert "run_runtime_daily_from_reports.py --publish" in workflow
+    assert "run_runtime_daily_from_reports.py --verify-native-identity" in workflow
+    identity_step = workflow.split(
+        "- name: Verify native Schwab account identity", 1
+    )[1].split("- name:", 1)[0]
+    assert "EXECUTION_EVIDENCE_SYNC_TOKEN" not in identity_step
+    assert "SCHWAB_APP_SECRET" not in identity_step
     for forbidden in (
         "execution_report_heartbeat.py",
         "publish_account_facts_from_reports.py",
@@ -579,8 +638,9 @@ def test_new_workflow_is_manual_main_only_and_preparation_has_no_token():
 @pytest.mark.parametrize("ref", ["refs/heads/main", "refs/heads/private-branch"])
 @pytest.mark.parametrize("publish", [None, False, True])
 @pytest.mark.parametrize("diagnose", [None, False, True])
+@pytest.mark.parametrize("verify", [None, False, True])
 def test_workflow_event_branch_and_modes_are_mutually_exclusive(
-    event, ref, publish, diagnose
+    event, ref, publish, diagnose, verify
 ):
     import ast
 
@@ -597,6 +657,11 @@ def test_workflow_event_branch_and_modes_are_mutually_exclusive(
         r"        if: \$\{\{ (.+) \}\}",
         workflow,
     ).group(1)
+    identity = re.search(
+        r"- name: Verify native Schwab account identity\n"
+        r"        if: \$\{\{ (.+) \}\}",
+        workflow,
+    ).group(1)
 
     def evaluate(expression):
         expression = (
@@ -604,6 +669,7 @@ def test_workflow_event_branch_and_modes_are_mutually_exclusive(
             .replace("github.ref", repr(ref))
             .replace("inputs.publish", repr(publish))
             .replace("inputs.diagnose_source_access", repr(diagnose))
+            .replace("inputs.verify_native_identity", repr(verify))
         )
         expression = expression.replace("&&", " and ").replace("!", "not ")
         parsed = ast.parse(expression, mode="eval")
@@ -627,16 +693,18 @@ def test_workflow_event_branch_and_modes_are_mutually_exclusive(
         )
 
     runnable = evaluate(job)
-    prepare_runs, publish_runs, diagnostic_runs = (
+    prepare_runs, publish_runs, diagnostic_runs, identity_runs = (
         runnable and evaluate(prepare),
         runnable and evaluate(post),
         runnable and evaluate(diagnostic),
+        runnable and evaluate(identity),
     )
     valid_dispatch = event == "workflow_dispatch" and ref == "refs/heads/main"
-    assert prepare_runs == (valid_dispatch and not publish and not diagnose)
-    assert publish_runs == (valid_dispatch and bool(publish) and not diagnose)
-    assert diagnostic_runs == (valid_dispatch and bool(diagnose) and not publish)
-    assert sum((prepare_runs, publish_runs, diagnostic_runs)) <= 1
+    assert prepare_runs == (valid_dispatch and not publish and not diagnose and not verify)
+    assert publish_runs == (valid_dispatch and bool(publish) and not diagnose and not verify)
+    assert diagnostic_runs == (valid_dispatch and bool(diagnose) and not publish and not verify)
+    assert identity_runs == (valid_dispatch and bool(verify) and not publish and not diagnose)
+    assert sum((prepare_runs, publish_runs, diagnostic_runs, identity_runs)) <= 1
 
 
 def test_runner_identity_failure_adds_counts_after_original_result_with_no_reread_or_post(

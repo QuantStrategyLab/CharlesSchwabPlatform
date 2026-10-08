@@ -25,6 +25,7 @@ from scripts.runtime_daily_source_facts import (
     effective_schedule,
     read_source_facts,
 )
+from scripts.schwab_native_identity import verify_native_identity
 
 _PUBLICATION_REASONS = frozenset(
     {
@@ -49,6 +50,20 @@ _DAILY_SUMMARY_STATUSES = frozenset(
         "conflict",
         "read_incomplete",
         "insufficient",
+    }
+)
+_NATIVE_IDENTITY_FAILURES = frozenset(
+    {
+        "configuration_invalid",
+        "token_unavailable",
+        "token_invalid",
+        "token_expired",
+        "token_rejected",
+        "native_account_access_denied",
+        "native_identity_unavailable",
+        "native_identity_response_invalid",
+        "native_identity_ambiguous",
+        "native_identity_mismatch",
     }
 )
 
@@ -194,15 +209,19 @@ def run_daily(
     environ: Mapping[str, str],
     *,
     publish: bool = False,
+    verify_native_identity_only: bool = False,
     observed_at: dt.datetime | None = None,
     fact_reader: Callable[..., Any] = read_source_facts,
+    identity_reader: Callable[..., str] = verify_native_identity,
     archive_reader: Callable[..., Any] = caller.read_archive,
     publisher: Callable[..., Any] = caller.publish_prepared,
     session_dates_loader: Callable[..., Any] | None = None,
 ) -> dict[str, str | int]:
     try:
-        if type(publish) is not bool:
+        if type(publish) is not bool or type(verify_native_identity_only) is not bool:
             return {"status": "skipped", "reason": "invalid_mode"}
+        if publish and verify_native_identity_only:
+            return {"status": "skipped", "reason": "conflicting_modes"}
         now = (
             observed_at if observed_at is not None else dt.datetime.now(dt.timezone.utc)
         )
@@ -213,16 +232,36 @@ def run_daily(
         ):
             return {"status": "skipped", "reason": "observation_time_invalid"}
         prefix = environ.get("SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX")
-        if (
+        if environ.get("GCP_PROJECT_ID") != caller.PROJECT_ID:
+            return {"status": "skipped", "reason": "source_configuration_invalid"}
+        if not verify_native_identity_only and (
             not caller._valid_report_prefix(prefix)
-            or environ.get("GCP_PROJECT_ID") != caller.PROJECT_ID
             or environ.get("GCP_REGION") != REGION
         ):
             return {"status": "skipped", "reason": "source_configuration_invalid"}
         try:
-            caller._select_identity(environ)
+            expected_account_hash, _policy = caller._select_identity(environ)
         except Exception:
             return {"status": "skipped", "reason": "source_identity_unavailable"}
+        if publish or verify_native_identity_only:
+            try:
+                identity_status = identity_reader(
+                    environ=environ,
+                    expected_account_hash=expected_account_hash,
+                    observed_at=now,
+                )
+            except Exception:
+                identity_status = "native_identity_unavailable"
+            if identity_status != "verified":
+                reason = (
+                    identity_status
+                    if isinstance(identity_status, str)
+                    and identity_status in _NATIVE_IDENTITY_FAILURES
+                    else "native_identity_unavailable"
+                )
+                return {"status": "skipped", "reason": reason}
+            if verify_native_identity_only:
+                return {"status": "native_identity_verified"}
         facts = fact_reader(environ)
         if (
             not isinstance(facts.runtime_revision, str)
@@ -316,15 +355,22 @@ def main(
     operation: Callable[..., dict[str, str | int]] = run_daily,
 ) -> int:
     args = sys.argv[1:] if argv is None else argv
-    if args not in ([], ["--publish"]):
+    if args not in ([], ["--publish"], ["--verify-native-identity"]):
         print("skipped:unsupported_arguments")
         return 2
     try:
         result = operation(
-            os.environ if environ is None else environ, publish=args == ["--publish"]
+            os.environ if environ is None else environ,
+            publish=args == ["--publish"],
+            verify_native_identity_only=args == ["--verify-native-identity"],
         )
         print(json.dumps(result, sort_keys=True))
-        return 0 if result.get("status") in {"prepared", "stored_acknowledged"} else 2
+        return (
+            0
+            if result.get("status")
+            in {"prepared", "stored_acknowledged", "native_identity_verified"}
+            else 2
+        )
     except Exception:
         print("skipped:operation_failed")
         return 2

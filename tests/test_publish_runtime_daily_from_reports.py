@@ -737,6 +737,7 @@ def test_manual_runner_relays_fixed_identity_reason_without_publishing(
         env,
         publish=True,
         observed_at=NOW,
+        identity_reader=Mock(return_value="verified"),
         fact_reader=Mock(
             return_value=SourceFacts(
                 "verified", REVISION, "0 16 * * 1-5", "America/New_York"
