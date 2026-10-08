@@ -578,8 +578,9 @@ def test_new_workflow_is_manual_main_only_and_preparation_has_no_token():
 )
 @pytest.mark.parametrize("ref", ["refs/heads/main", "refs/heads/private-branch"])
 @pytest.mark.parametrize("publish", [None, False, True])
-def test_workflow_event_branch_and_publish_matrix_is_mutually_exclusive(
-    event, ref, publish
+@pytest.mark.parametrize("diagnose", [None, False, True])
+def test_workflow_event_branch_and_modes_are_mutually_exclusive(
+    event, ref, publish, diagnose
 ):
     import ast
 
@@ -591,12 +592,18 @@ def test_workflow_event_branch_and_publish_matrix_is_mutually_exclusive(
     post = re.search(
         r"- name: Publish runtime daily\n        if: \$\{\{ (.+) \}\}", workflow
     ).group(1)
+    diagnostic = re.search(
+        r"- name: Check Schwab token Secret metadata and read permission\n"
+        r"        if: \$\{\{ (.+) \}\}",
+        workflow,
+    ).group(1)
 
     def evaluate(expression):
         expression = (
             expression.replace("github.event_name", repr(event))
             .replace("github.ref", repr(ref))
             .replace("inputs.publish", repr(publish))
+            .replace("inputs.diagnose_source_access", repr(diagnose))
         )
         expression = expression.replace("&&", " and ").replace("!", "not ")
         parsed = ast.parse(expression, mode="eval")
@@ -620,14 +627,16 @@ def test_workflow_event_branch_and_publish_matrix_is_mutually_exclusive(
         )
 
     runnable = evaluate(job)
-    prepare_runs, publish_runs = (
+    prepare_runs, publish_runs, diagnostic_runs = (
         runnable and evaluate(prepare),
         runnable and evaluate(post),
+        runnable and evaluate(diagnostic),
     )
-    expected = event == "workflow_dispatch" and ref == "refs/heads/main"
-    assert prepare_runs == (expected and publish is not True)
-    assert publish_runs == (expected and publish is True)
-    assert not (prepare_runs and publish_runs)
+    valid_dispatch = event == "workflow_dispatch" and ref == "refs/heads/main"
+    assert prepare_runs == (valid_dispatch and not publish and not diagnose)
+    assert publish_runs == (valid_dispatch and bool(publish) and not diagnose)
+    assert diagnostic_runs == (valid_dispatch and bool(diagnose) and not publish)
+    assert sum((prepare_runs, publish_runs, diagnostic_runs)) <= 1
 
 
 def test_runner_identity_failure_adds_counts_after_original_result_with_no_reread_or_post(
