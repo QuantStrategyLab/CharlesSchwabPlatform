@@ -104,4 +104,5 @@ jobs:
         if: ${{ inputs.publish && !inputs.diagnose_source_access && !inputs.verify_native_identity && !inputs.check_token_load }}
         env:
           EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
+          SCHWAB_RUNTIME_DAILY_TARGET_JSON: ${{ secrets.SCHWAB_RUNTIME_DAILY_TARGET_JSON }}
         run: uv run --no-sync python scripts/run_runtime_daily_from_reports.py --publish

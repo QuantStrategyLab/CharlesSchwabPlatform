@@ -119,6 +119,8 @@ def test_daily_target_override_is_step_scoped_and_preserves_other_heartbeat_step
     assert "RUNTIME_TARGET_JSON: ${{ vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}" in job_env.group(1)
     assert assignment in daily_step
     assert workflow.count(assignment) == 1
+    assert "SCHWAB_RUNTIME_DAILY_TARGET_JSON: ${{ secrets.SCHWAB_RUNTIME_DAILY_TARGET_JSON }}" in daily_step
+    assert "SCHWAB_RUNTIME_DAILY_TARGET_JSON" not in job_env.group(1)
 
 
 def test_sync_token_is_not_exposed_job_wide() -> None:
