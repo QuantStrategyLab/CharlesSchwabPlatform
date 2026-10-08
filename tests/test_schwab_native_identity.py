@@ -5,6 +5,8 @@ import json
 from unittest.mock import Mock
 
 import pytest
+from google.api_core import exceptions as api_exceptions
+from google.auth import exceptions as auth_exceptions
 
 from scripts import schwab_native_identity as identity
 
@@ -171,9 +173,91 @@ def test_secret_read_failure_is_fixed_and_stops_before_network():
         session=session,
     )
 
-    assert result == "token_unavailable"
+    assert result == "token_load_failed"
     assert "SECRET-AND-ERROR-BODY" not in result
     session.get.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (ImportError("PRIVATE"), "token_dependency_unavailable"),
+        (auth_exceptions.DefaultCredentialsError("PRIVATE"), "token_adc_unavailable"),
+        (api_exceptions.PermissionDenied("PRIVATE"), "token_permission_denied"),
+        (api_exceptions.NotFound("PRIVATE"), "token_not_found"),
+        (api_exceptions.FailedPrecondition("PRIVATE"), "token_version_unavailable"),
+        (auth_exceptions.TransportError("PRIVATE"), "token_network_unavailable"),
+        (api_exceptions.ServiceUnavailable("PRIVATE"), "token_network_unavailable"),
+        (RuntimeError("PRIVATE"), "token_load_failed"),
+    ],
+)
+def test_secret_loader_failures_have_fixed_type_based_classification(error, expected):
+    session = Mock()
+    loader = Mock(side_effect=error)
+
+    result = identity.verify_native_identity(
+        environ=ENV,
+        expected_account_hash=EXPECTED_HASH,
+        observed_at=NOW,
+        secret_loader=loader,
+        session=session,
+    )
+
+    assert result == expected
+    assert "PRIVATE" not in result
+    loader.assert_called_once_with(identity.PROJECT_ID, identity.SECRET_ID)
+    session.get.assert_not_called()
+
+
+def test_real_loader_uses_fixed_latest_and_disables_sdk_retry(monkeypatch):
+    from google.cloud import secretmanager_v1
+
+    client = Mock()
+    client.access_secret_version.return_value.payload.data = b"SYNTHETIC-TOKEN"
+    monkeypatch.setattr(
+        secretmanager_v1, "SecretManagerServiceClient", lambda: client
+    )
+
+    assert identity._load_existing_token(identity.PROJECT_ID, identity.SECRET_ID) == (
+        "SYNTHETIC-TOKEN"
+    )
+    client.access_secret_version.assert_called_once_with(
+        request={
+            "name": f"projects/{identity.PROJECT_ID}/secrets/{identity.SECRET_ID}/versions/latest"
+        },
+        retry=None,
+        timeout=identity.SECRET_READ_TIMEOUT,
+    )
+
+
+def test_real_loader_rejects_oversized_secret_payload(monkeypatch):
+    from google.cloud import secretmanager_v1
+
+    client = Mock()
+    client.access_secret_version.return_value.payload.data = b"x" * (
+        identity.MAX_TOKEN_BYTES + 1
+    )
+    monkeypatch.setattr(
+        secretmanager_v1, "SecretManagerServiceClient", lambda: client
+    )
+
+    assert identity._load_existing_token(identity.PROJECT_ID, identity.SECRET_ID) == ""
+    client.access_secret_version.assert_called_once()
+
+
+def test_token_load_status_checks_shape_and_expiry_without_broker_io():
+    assert identity.check_token_load_status(
+        environ=ENV,
+        observed_at=NOW,
+        secret_loader=Mock(return_value=token_payload()),
+    ) == "token_payload_valid"
+    assert identity.check_token_load_status(
+        environ=ENV,
+        observed_at=NOW,
+        secret_loader=Mock(
+            return_value=token_payload(expires_at=NOW.timestamp() - 1)
+        ),
+    ) == "token_expired"
 
 
 def test_wrong_project_or_missing_exact_selector_does_not_read_secret():

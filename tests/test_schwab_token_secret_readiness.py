@@ -354,13 +354,23 @@ def test_diagnostic_input_is_default_off_and_excludes_prepare_and_publish():
     assert "type: boolean" in input_block
     assert "default: false" in input_block
     assert "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'" in workflow
-    assert "!inputs.publish && !inputs.diagnose_source_access" in workflow
-    assert "inputs.diagnose_source_access && !inputs.publish" in workflow
-    assert "inputs.publish && !inputs.diagnose_source_access" in workflow
+    token_check_input = workflow.split("      check_token_load:", 1)[1].split(
+        "    permissions:", 1
+    )[0]
+    assert "type: boolean" in token_check_input
+    assert "default: false" in token_check_input
+    assert "inputs.check_token_load" in workflow
+    assert "skipped:conflicting_operation_inputs" in workflow
     diagnostic = workflow.split(
         "- name: Check Schwab token Secret metadata and read permission", 1
-    )[1].split("- name: Publish runtime daily", 1)[0]
+    )[1].split("- name:", 1)[0]
     assert "inspect_schwab_token_secret_readiness.py --metadata-only" in diagnostic
+    token_step = workflow.split(
+        "- name: Check existing Schwab token load status", 1
+    )[1].split("- name:", 1)[0]
+    assert "--check-token-load" in token_step
+    assert "EXECUTION_EVIDENCE_SYNC_TOKEN" not in token_step
+    assert "SCHWAB_APP_SECRET" not in token_step
     assert "EXECUTION_EVIDENCE_SYNC_TOKEN" not in diagnostic
     assert "SCHWAB_APP_SECRET" not in workflow
     assert "SCHWAB_API_KEY" not in workflow
