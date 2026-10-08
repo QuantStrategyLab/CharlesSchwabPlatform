@@ -13,6 +13,11 @@ on:
         required: false
         type: boolean
         default: false
+      verify_native_identity:
+        description: Verify the configured account against Schwab's read-only account-number endpoint using the existing token; no refresh or publication.
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -52,8 +57,10 @@ jobs:
         env:
           PUBLISH: ${{ inputs.publish }}
           DIAGNOSE_SOURCE_ACCESS: ${{ inputs.diagnose_source_access }}
+          VERIFY_NATIVE_IDENTITY: ${{ inputs.verify_native_identity }}
         run: |
-          if [[ "$PUBLISH" == "true" && "$DIAGNOSE_SOURCE_ACCESS" == "true" ]]; then
+          if [[ "$PUBLISH" == "true" && ( "$DIAGNOSE_SOURCE_ACCESS" == "true" || "$VERIFY_NATIVE_IDENTITY" == "true" ) ]] || \
+             [[ "$DIAGNOSE_SOURCE_ACCESS" == "true" && "$VERIFY_NATIVE_IDENTITY" == "true" ]]; then
             echo "skipped:conflicting_operation_inputs"
             exit 2
           fi
@@ -71,15 +78,19 @@ jobs:
           service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
 
       - name: Prepare runtime daily
-        if: ${{ !inputs.publish && !inputs.diagnose_source_access }}
+        if: ${{ !inputs.publish && !inputs.diagnose_source_access && !inputs.verify_native_identity }}
         run: uv run --no-sync python scripts/run_runtime_daily_from_reports.py
 
+      - name: Verify native Schwab account identity
+        if: ${{ inputs.verify_native_identity && !inputs.publish && !inputs.diagnose_source_access }}
+        run: uv run --no-sync python scripts/run_runtime_daily_from_reports.py --verify-native-identity
+
       - name: Check Schwab token Secret metadata and read permission
-        if: ${{ inputs.diagnose_source_access && !inputs.publish }}
+        if: ${{ inputs.diagnose_source_access && !inputs.publish && !inputs.verify_native_identity }}
         run: uv run --no-sync python scripts/inspect_schwab_token_secret_readiness.py --metadata-only
 
       - name: Publish runtime daily
-        if: ${{ inputs.publish && !inputs.diagnose_source_access }}
+        if: ${{ inputs.publish && !inputs.diagnose_source_access && !inputs.verify_native_identity }}
         env:
           EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
         run: uv run --no-sync python scripts/run_runtime_daily_from_reports.py --publish

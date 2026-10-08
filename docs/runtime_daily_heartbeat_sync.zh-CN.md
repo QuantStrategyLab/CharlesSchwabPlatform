@@ -57,8 +57,23 @@ runner 状态为 `stored_acknowledged`、`account_attribution=receiver_reported_
 权限字段名为 `permission_reported`，仅表示该 API 响应报告了该权限。Google 明确说明
 `testIamPermissions` 可能 fail-open，不能用来证明 payload 实际可访问。诊断只证明
 Secret 元数据和版本状态可读，并记录权限观察；不证明 token 新鲜、账户身份匹配或
-session 可安全使用。后续身份核验与日报发布仍须分开执行；本诊断不能修复私有账户绑定，
-也不会自动打开 publish。
+session 可安全使用。此 metadata 诊断是可选辅助项；身份核验不要求 Secret Manager
+metadata Viewer，也不以 `testIamPermissions` 的观察结果代替真实读取。
+
+### 原生账户身份核验与恢复
+
+`verify_native_identity` 是另一个默认关闭的手动输入，与 `publish` 和
+`diagnose_source_access` 互斥。它使用既有云端身份在内存中读取 `schwab_token`，不输出
+token 或原生账户号/hash，也不刷新或写回 token；随后只调用一次有界的 Schwab 原生账户号
+只读接口，并将结果与受保护运行目标中预先配置的身份精确比较。日报 report 自己携带的
+身份字段不能证明预期身份。
+
+`publish` 在读取日报报告及发送唯一一次 POST 之前执行同一原生身份核验。身份不匹配、
+多重匹配、响应无效或身份读取不可用时停止发布。遇到 `token_expired`，停止并通过既有
+获批的 Schwab token 负责人流程重新授权/轮换 token；本 workflow 不会自动刷新。遇到
+`token_unavailable`，由云端操作员通过受保护配置流程检查现有身份的 Secret payload 读取
+权限和启用版本；无需为此增加 metadata Viewer。修复后先单独运行一次
+`verify_native_identity`，只有核验通过才运行 `publish`。不要下载、打印或粘贴 token 内容。
 
 ## 未验证
 
