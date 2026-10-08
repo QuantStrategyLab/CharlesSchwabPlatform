@@ -23,6 +23,12 @@ GitHub默认条件语义：[官方表达式说明](https://docs.github.com/en/ac
 
 已受保护来源（沿用 `runtime-daily-sync.yml` 同名值）：
 
+- 日报步骤优先使用受保护 Secret `SCHWAB_RUNTIME_DAILY_TARGET_JSON`；未配置时回退到
+  原 `vars.RUNTIME_TARGET_JSON` 或 `secrets.RUNTIME_TARGET_JSON`。该 Secret 应为原私有
+  `RUNTIME_TARGET_JSON` 的精确副本，只将 `binding.account_hash` 更新为经原应用和用户确认的
+  native account hash。不要用历史 alias 或未经核实的报告字段生成它。手动日报 workflow 在
+  job 范围采用此优先级；计划心跳只在日报 publisher step 覆盖目标，其他心跳、报告与风险
+  步骤继续使用原 `RUNTIME_TARGET_JSON`。
 - job 级已有：`RUNTIME_TARGET_JSON`、`CLOUD_RUN_SERVICE_TARGETS_JSON`、
   `CLOUD_RUN_SERVICE(_S)`、`RUNTIME_HEARTBEAT_MARKET_*`、
   `RUNTIME_HEARTBEAT_PUBLICATION_GRACE_MINUTES`、

@@ -663,6 +663,10 @@ def test_new_workflow_is_manual_main_only_and_preparation_has_no_token():
     assert "default: false" in token_input
     assert "github.event_name == 'workflow_dispatch'" in workflow
     assert "github.ref == 'refs/heads/main'" in workflow
+    assert (
+        "RUNTIME_TARGET_JSON: ${{ secrets.SCHWAB_RUNTIME_DAILY_TARGET_JSON || "
+        "vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}"
+    ) in workflow
     assert "google-github-actions/auth@v3" in workflow
     assert "uv sync --frozen --no-dev" in workflow
     assert "!inputs.publish" in workflow and "inputs.publish" in workflow
@@ -692,6 +696,15 @@ def test_new_workflow_is_manual_main_only_and_preparation_has_no_token():
         "tests/test_run_runtime_daily_from_reports.py"
         in (ROOT / ".github/workflows/ci.yml").read_text()
     )
+
+
+def test_manual_daily_prefers_protected_runtime_binding_with_legacy_fallback():
+    workflow = (ROOT / ".github/workflows/runtime-daily-sync.yml").read_text()
+    assignment = (
+        "RUNTIME_TARGET_JSON: ${{ secrets.SCHWAB_RUNTIME_DAILY_TARGET_JSON || "
+        "vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}"
+    )
+    assert workflow.count(assignment) == 1
 
 
 @pytest.mark.parametrize(
