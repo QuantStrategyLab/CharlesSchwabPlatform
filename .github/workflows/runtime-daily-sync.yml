@@ -8,6 +8,11 @@ on:
         required: false
         type: boolean
         default: false
+      diagnose_source_access:
+        description: Check existing Schwab token Secret metadata and read permission only; never reads its payload.
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -43,6 +48,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+      - name: Reject conflicting operation inputs
+        env:
+          PUBLISH: ${{ inputs.publish }}
+          DIAGNOSE_SOURCE_ACCESS: ${{ inputs.diagnose_source_access }}
+        run: |
+          if [[ "$PUBLISH" == "true" && "$DIAGNOSE_SOURCE_ACCESS" == "true" ]]; then
+            echo "skipped:conflicting_operation_inputs"
+            exit 2
+          fi
+
       - name: Set up uv
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
 
@@ -56,11 +71,15 @@ jobs:
           service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
 
       - name: Prepare runtime daily
-        if: ${{ !inputs.publish }}
+        if: ${{ !inputs.publish && !inputs.diagnose_source_access }}
         run: uv run --no-sync python scripts/run_runtime_daily_from_reports.py
 
+      - name: Check Schwab token Secret metadata and read permission
+        if: ${{ inputs.diagnose_source_access && !inputs.publish }}
+        run: uv run --no-sync python scripts/inspect_schwab_token_secret_readiness.py --metadata-only
+
       - name: Publish runtime daily
-        if: ${{ inputs.publish }}
+        if: ${{ inputs.publish && !inputs.diagnose_source_access }}
         env:
           EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
         run: uv run --no-sync python scripts/run_runtime_daily_from_reports.py --publish

@@ -45,6 +45,21 @@ runner 状态为 `stored_acknowledged`、`account_attribution=receiver_reported_
 需登录会话）。页面读回仍由 Codex 通过正常登录会话另行验收。不把私有 `account_key`
 写入日志或 artifact；stdout 仅固定状态/布尔。
 
+## 既有 Schwab Secret 的只读前置诊断
+
+`runtime-daily-sync.yml` 另有默认关闭的 `diagnose_source_access` 手动输入，与
+`publish` 互斥。选择该项只用 workflow 原有 ADC 检查 QPK runtime 实际读取的
+`charlesschwabquant/schwab_token` Secret 元数据、`latest` 版本是否启用，以及
+对该 Secret 调用 `testIamPermissions`，观察响应是否列出
+`secretmanager.versions.access`；请求不读取 Secret payload，
+不访问 Schwab、不刷新 token，也不修改 IAM。固定输出不包含资源名、错误正文或凭据。
+
+权限字段名为 `permission_reported`，仅表示该 API 响应报告了该权限。Google 明确说明
+`testIamPermissions` 可能 fail-open，不能用来证明 payload 实际可访问。诊断只证明
+Secret 元数据和版本状态可读，并记录权限观察；不证明 token 新鲜、账户身份匹配或
+session 可安全使用。后续身份核验与日报发布仍须分开执行；本诊断不能修复私有账户绑定，
+也不会自动打开 publish。
+
 ## 未验证
 
 - 本改动只做本地合成/工作流静态验证；未执行任何真实 GCS/HTTP/QRS/Telegram/券商调用，
