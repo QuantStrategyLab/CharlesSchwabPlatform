@@ -107,9 +107,13 @@ def _project_account_facts_from_archive(
     target_id: str,
     cash_currency: str | None,
     observed_at: dt.datetime,
-) -> tuple[dict[str, Any] | None, str]:
-    """Read-only facts projection from archive entries. Never POSTs."""
-    last_reason = "account_facts_absent"
+) -> tuple[dict[str, Any] | None, str, dict[str, int]]:
+    """Read-only facts projection from archive entries. Never POSTs.
+
+    Returns (facts|None, source_or_reason, skip_reason_counts). Counts are
+    amount-free reason tallies for diagnosis when every entry is skipped.
+    """
+    skip_counts: dict[str, int] = {}
     entries: Sequence[Mapping[str, Any]] = batch.entries or ()
     for entry in entries:
         if not isinstance(entry, Mapping):
@@ -117,6 +121,7 @@ def _project_account_facts_from_archive(
         payload = entry.get("payload")
         uri = entry.get("object_uri")
         if not isinstance(payload, Mapping) or not isinstance(uri, str) or not uri:
+            skip_counts["entry_shape_invalid"] = skip_counts.get("entry_shape_invalid", 0) + 1
             continue
         projected = project_schwab_account_facts_history(
             payload,
@@ -129,11 +134,16 @@ def _project_account_facts_from_archive(
             now=observed_at,
         )
         if projected.get("status") == "skipped":
-            last_reason = str(projected.get("reason") or "account_facts_skipped")
+            reason = str(projected.get("reason") or "account_facts_skipped")
+            skip_counts[reason] = skip_counts.get(reason, 0) + 1
             continue
         # Success body has no status key; never call _publish_once.
-        return dict(projected), "archive_projection"
-    return None, last_reason
+        return dict(projected), "archive_projection", skip_counts
+    if not skip_counts:
+        return None, "account_facts_absent", skip_counts
+    # Prefer the most frequent skip reason (stable tie-break by name).
+    top_reason = sorted(skip_counts.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+    return None, top_reason, skip_counts
 
 
 def _resolve_account_facts(
@@ -172,7 +182,7 @@ def _resolve_account_facts(
     cash_raw = environ.get("SCHWAB_CASH_CURRENCY")
     cash_currency = cash_raw.strip() if isinstance(cash_raw, str) and cash_raw.strip() else None
 
-    facts, source = _project_account_facts_from_archive(
+    facts, source, skip_counts = _project_account_facts_from_archive(
         batch=batch,
         report_prefix=report_prefix,
         expected_runtime_revision=expected_runtime_revision,
@@ -182,6 +192,14 @@ def _resolve_account_facts(
         observed_at=observed_at,
     )
     if facts is None:
+        # Encode amount-free skip histogram into source tag for logs
+        # (e.g. observation_out_of_window:18+runtime_target_scope_mismatch:2).
+        if skip_counts:
+            hist = "+".join(
+                f"{name}:{count}"
+                for name, count in sorted(skip_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+            )
+            return None, f"{source}|{hist}", False
         return None, source, False
 
     out_raw = environ.get("SCHWAB_DIGEST_ACCOUNT_FACTS_OUTPUT_PATH")
