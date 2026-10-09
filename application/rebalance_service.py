@@ -11,6 +11,10 @@ from datetime import datetime, timezone
 from application.account_observation import build_account_observation
 from application.execution_service import execute_rebalance_cycle, ExecutionCycleResult
 from application.execution_claim import claim_execution_marker
+from application.execution_kernel_adapter import (
+    consult_t1_live_submit,
+    should_block_live_submit_for_t1,
+)
 from application.runtime_dependencies import SchwabRebalanceConfig, SchwabRebalanceRuntime
 from application.signal_snapshot import build_signal_snapshot
 from notifications.events import NotificationPublisher, RenderedNotification
@@ -32,6 +36,7 @@ from quant_platform_kit.strategy_lifecycle.performance_monitor import try_record
 
 _DETAIL_FIELD_SPLIT_RE = re.compile(r"\s+(?=[^\s=:：]+[=:：])")
 DRY_RUN_BYPASS_EXECUTION_MARKER_ENV = "DRY_RUN_BYPASS_EXECUTION_MARKER"
+EXECUTION_KERNEL_T1_ENFORCE_ENV = "SCHWAB_EXECUTION_KERNEL_T1_ENFORCE"
 
 
 def _heartbeat_account_snapshot(snapshot) -> dict:
@@ -63,6 +68,13 @@ def _dry_run_bypasses_execution_marker(config: SchwabRebalanceConfig) -> bool:
     return bool(getattr(config, "dry_run_only", False)) and _env_flag_enabled(
         DRY_RUN_BYPASS_EXECUTION_MARKER_ENV
     )
+
+
+def _execution_kernel_t1_enforce_enabled(config: SchwabRebalanceConfig) -> bool:
+    """ADR-B: T1 enforce flag; config or env; both default off. Composer must not auto-enable."""
+    if bool(getattr(config, "execution_kernel_t1_enforce", False)):
+        return True
+    return _env_flag_enabled(EXECUTION_KERNEL_T1_ENFORCE_ENV)
 
 
 def _record_platform_execution_telemetry(
@@ -649,7 +661,36 @@ def run_strategy_core(
             )
             execution_already_recorded = not execution_claim_acquired
 
-    if execution_already_recorded:
+    # N13 ADR-B: always consult T1 (shadow). Enforce only behind flag + dedup-on.
+    # Never forge identity_held=True for dedup-off.
+    t1_dry_run_only = bool(getattr(config, "dry_run_only", False))
+    t1_decision = consult_t1_live_submit(
+        identity_held=execution_claim_acquired,
+        dry_run_bypass=dry_run_bypass_marker,
+        dry_run_only=t1_dry_run_only,
+    )
+    t1_blocked = should_block_live_submit_for_t1(
+        enforce=_execution_kernel_t1_enforce_enabled(config),
+        execution_dedup_enabled=bool(getattr(config, "execution_dedup_enabled", False)),
+        identity_held=execution_claim_acquired,
+        dry_run_bypass=dry_run_bypass_marker,
+        dry_run_only=t1_dry_run_only,
+    )
+    if t1_blocked:
+        message = (
+            "execution_kernel T1 enforce denied live submit "
+            f"(reason={t1_decision.reason_code}; identity_held={execution_claim_acquired})"
+        )
+        print(message, flush=True)
+        notification_attention_reason_codes.append(str(t1_decision.reason_code))
+        execution_result = ExecutionCycleResult(
+            plan=plan,
+            portfolio=portfolio,
+            execution=execution,
+            allocation=allocation,
+            trade_logs=(),
+        )
+    elif execution_already_recorded:
         message = _execution_already_recorded_message(config=config, execution=execution)
         print(message, flush=True)
         execution_result = ExecutionCycleResult(

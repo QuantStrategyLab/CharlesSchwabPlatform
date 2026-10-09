@@ -28,6 +28,8 @@ class SchwabRebalanceConfig:
     notify_no_trade_cycles: bool = True
     strategy_plugin_signals: Sequence[Any] = ()
     execution_dedup_enabled: bool = False
+    # N13 ADR-B: T1 enforce behind flag; default off (Composer must not auto-enable).
+    execution_kernel_t1_enforce: bool = False
     execution_state_store: Any = None
     execution_state_account_scope: str = ""
     notification_attention_reason_codes: tuple[str, ...] = ()
