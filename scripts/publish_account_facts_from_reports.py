@@ -31,7 +31,11 @@ ACCOUNT_SELECTOR = ("live",)
 _MARKET_SCOPE_TOKENS = frozenset({"US", "HK", "CN", "SG"})
 
 
-def _runtime_account_scope_kind(value: object) -> str:
+def _runtime_account_scope_kind(
+    value: object,
+    *,
+    expected_target_id: str | None = None,
+) -> str:
     """Amount-free classification of runtime_target.account_scope (no raw value)."""
     if value is None:
         return "absent"
@@ -44,9 +48,17 @@ def _runtime_account_scope_kind(value: object) -> str:
         return "live"
     if text.upper() in _MARKET_SCOPE_TOKENS:
         return "market_code"
+    if (
+        isinstance(expected_target_id, str)
+        and expected_target_id.strip()
+        and text == expected_target_id.strip()
+    ):
+        return "looks_like_target_id"
     # Opaque account hashes used elsewhere are long case-sensitive tokens.
     if len(text) >= 32 and all(ch.isalnum() or ch in "-_" for ch in text):
         return "hash_shaped"
+    if text.lower() in {"paper", "dry_run", "dry-run", "prod", "production"}:
+        return "mode_token"
     return "other_token"
 
 PLATFORM = "charles_schwab"
@@ -190,7 +202,10 @@ def project_schwab_account_facts_history(
             raise _ProjectionError("runtime_target_profile_mismatch")
         # Archive reports may omit runtime_target.account_scope (null/absent).
         # Accept None / blank / case-insensitive "live"; reject any other token.
-        scope_kind = _runtime_account_scope_kind(runtime_target.get("account_scope"))
+        scope_kind = _runtime_account_scope_kind(
+            runtime_target.get("account_scope"),
+            expected_target_id=expected_target_id,
+        )
         if scope_kind not in {"absent", "blank", "live"}:
             raise _ProjectionError(f"runtime_target_scope_mismatch:{scope_kind}")
         diagnostics = report.get("diagnostics")
