@@ -17,6 +17,7 @@ from application.account_new_risk_gate_support import (
     set_cycle_snapshot,
 )
 from application.daily_loss_fact_producer import attach_daily_loss_fact_to_portfolio
+from application.execution_kernel_adapter import should_block_halted_resubmit
 from quant_platform_kit.common.order_status import compute_confirmed_sell_release_value
 
 try:
@@ -829,6 +830,10 @@ def execute_rebalance_cycle(
     def execute_fire_forget(symbol, action_type, quantity, price=None):
         nonlocal submission_halted, submission_outcome_unknown
         if submission_halted:
+            # N13: redundant T2/T3 consult; local halt always wins (no behavior change).
+            should_block_halted_resubmit(
+                submission_outcome_unknown=submission_outcome_unknown,
+            )
             return False
         if is_account_new_risk_gate_enabled() and action_type != "SELL":
             admission = evaluate_cycle_new_risk_admission()
