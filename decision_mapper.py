@@ -11,14 +11,17 @@ from us_equity_strategies.cash_only_equity import (
 from quant_platform_kit.common.strategy_contracts import (
     PositionTarget,
     StrategyDecision,
-    ValueTargetExecutionAnnotations,
 )
 from quant_platform_kit.common.execution_translation import (
     build_value_target_execution_runtime_plan,
     resolve_decision_target_mode,
     translate_decision_to_target_mode,
 )
-from quant_platform_kit.common.presentation import ValueTargetPlanPresentation
+from quant_platform_kit.common.presentation import (
+    ValueTargetDisplayAnnotations,
+    ValueTargetExecutionSemantics,
+    ValueTargetPlanPresentation,
+)
 
 
 _STRATEGY_RISK_REJECTION_STATUS = "blocked"
@@ -215,29 +218,11 @@ def map_strategy_decision_to_plan(
                 "investable_cash": portfolio_inputs.liquid_cash,
             },
         ),
-        annotations=ValueTargetExecutionAnnotations(
+        semantics=ValueTargetExecutionSemantics(
             trade_threshold_value=float(
                 execution_annotations.get("trade_threshold_value", diagnostics.get("threshold", 0.0)) or 0.0
             ),
             reserved_cash=reserved_cash,
-            signal_display=str(
-                execution_annotations.get("signal_display")
-                or diagnostics.get("signal_display")
-                or diagnostics.get("signal_description")
-                or ""
-            ),
-            status_display=str(
-                execution_annotations.get("status_display")
-                or diagnostics.get("status_display")
-                or diagnostics.get("status_description")
-                or diagnostics.get("canary_status")
-                or ""
-            ),
-            dashboard_text=str(
-                execution_annotations.get("dashboard_text")
-                or diagnostics.get("dashboard")
-                or ""
-            ),
             signal_date=str(execution_annotations.get("signal_date") or diagnostics.get("signal_date") or "") or None,
             effective_date=str(
                 execution_annotations.get("effective_date") or diagnostics.get("effective_date") or ""
@@ -266,17 +251,37 @@ def map_strategy_decision_to_plan(
                 is not None
                 else None
             ),
-            separator=str(execution_annotations.get("separator") or "━━━━━━━━━━━━━━━━━━"),
             benchmark_symbol=str(execution_annotations.get("benchmark_symbol") or "QQQ"),
             benchmark_price=float(execution_annotations.get("benchmark_price", diagnostics.get("qqq_price", 0.0)) or 0.0),
             long_trend_value=float(execution_annotations.get("long_trend_value", diagnostics.get("ma200", 0.0)) or 0.0),
             exit_line=float(execution_annotations.get("exit_line", diagnostics.get("exit_line", 0.0)) or 0.0),
-            deploy_ratio_text=str(execution_annotations.get("deploy_ratio_text") or ""),
-            income_ratio_text=str(execution_annotations.get("income_ratio_text") or ""),
-            income_locked_ratio_text=str(execution_annotations.get("income_locked_ratio_text") or ""),
             active_risk_asset=str(execution_annotations.get("active_risk_asset") or ""),
             current_min_trade=float(execution_annotations.get("current_min_trade", 0.0) or 0.0),
             investable_cash=float(execution_annotations.get("investable_cash", portfolio_inputs.liquid_cash) or 0.0),
+        ),
+        display=ValueTargetDisplayAnnotations(
+            signal_display=str(
+                execution_annotations.get("signal_display")
+                or diagnostics.get("signal_display")
+                or diagnostics.get("signal_description")
+                or ""
+            ),
+            status_display=str(
+                execution_annotations.get("status_display")
+                or diagnostics.get("status_display")
+                or diagnostics.get("status_description")
+                or diagnostics.get("canary_status")
+                or ""
+            ),
+            dashboard_text=str(
+                execution_annotations.get("dashboard_text")
+                or diagnostics.get("dashboard")
+                or ""
+            ),
+            separator=str(execution_annotations.get("separator") or "━━━━━━━━━━━━━━━━━━"),
+            deploy_ratio_text=str(execution_annotations.get("deploy_ratio_text") or ""),
+            income_ratio_text=str(execution_annotations.get("income_ratio_text") or ""),
+            income_locked_ratio_text=str(execution_annotations.get("income_locked_ratio_text") or ""),
         ),
     )
     plan["account_hash"] = snapshot.metadata["account_hash"]
