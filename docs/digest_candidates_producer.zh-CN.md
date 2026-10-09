@@ -102,6 +102,13 @@ python3 -m pytest tests/test_project_digest_candidates.py -q
 | `SCHWAB_CASH_CURRENCY` | 可选；`USD` 时 facts 可带 cash（digest 仍只取 net_assets） |
 | 既有 daily 所需 secrets/vars | 与 `runtime-daily-sync` 相同 |
 
+可选私有 artifact（默认关；仅授权灌 QRS 时开，保留 1 天）：
+
+```bash
+gh workflow run "Schwab Runtime Daily Manual" -R QuantStrategyLab/CharlesSchwabPlatform --ref main \
+  -f emit_digest_candidates=true -f capture_digest_candidates_artifact=true
+```
+
 Dry-run emit（不改 QRS Environment、不发 Telegram）：
 
 ```bash
