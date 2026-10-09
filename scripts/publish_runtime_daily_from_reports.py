@@ -56,6 +56,11 @@ SYNC_URL = (
     "https://qsl-strategy-switch-console.pigbibi.workers.dev/api/runtime-daily/sync"
 )
 MAX_ITEMS = 20
+# Prefer recent archives when filling the bounded batch. Matching the account-facts
+# observation window keeps digest/daily from latching onto ancient prefix objects
+# when the current NY session has not published yet (list_blobs end_offset alone
+# walks oldest-first under the prefix).
+ARCHIVE_LOOKBACK = dt.timedelta(hours=36)
 MAX_BODY_BYTES = 64 * 1024
 MAX_REPORT_BYTES = 1024 * 1024
 MAX_ACK_BYTES = 4096
@@ -248,10 +253,13 @@ def read_archive(
 ) -> ReadBatch:
     """Read at most 20 archived objects, with current-day objects considered first.
 
-    Two bounded prefix ranges cover current/later and earlier archives. Exhaustion
-    is observed, not assumed from an object count. It still does not prove report
-    retention or the complete earlier-unresolved history, so no complete flag is
-    emitted. No shared temporary reports or raw error logs are created.
+    Two bounded prefix ranges cover (1) the current NY session onward and (2) the
+    recent lookback window ending at that session boundary. The second range uses
+    start_offset+end_offset so list_blobs cannot walk the entire historical prefix
+    oldest-first when today has few or no objects. Exhaustion is observed, not
+    assumed from an object count. It still does not prove report retention or the
+    complete earlier-unresolved history, so no complete flag is emitted. No shared
+    temporary reports or raw error logs are created.
     """
     result = ReadBatch(entries=[])
     try:
@@ -264,12 +272,20 @@ def read_archive(
         boundary = prefix + start.astimezone(dt.timezone.utc).strftime(
             "%Y-%m/%Y%m%dT%H%M%SZ.json"
         )
+        lookback_at = now - ARCHIVE_LOOKBACK
+        lookback_boundary = prefix + lookback_at.astimezone(dt.timezone.utc).strftime(
+            "%Y-%m/%Y%m%dT%H%M%SZ.json"
+        )
         if client is None:
             from google.cloud import storage
 
             client = storage.Client(project=PROJECT_ID)
         attempted = 0
-        for offset in ({"start_offset": boundary}, {"end_offset": boundary}):
+        ranges = (
+            {"start_offset": boundary},
+            {"start_offset": lookback_boundary, "end_offset": boundary},
+        )
+        for offset in ranges:
             remaining = MAX_ITEMS - attempted
             objects = iter(
                 client.list_blobs(

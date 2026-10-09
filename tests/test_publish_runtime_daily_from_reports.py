@@ -506,6 +506,22 @@ def test_list_failure_or_partial_page_never_becomes_complete(capsys):
     assert capsys.readouterr().err == ""
 
 
+def test_reader_second_pass_uses_lookback_window_not_oldest_prefix_objects():
+    """When the NY session has no objects yet, fill from the recent lookback only."""
+    client = Mock()
+    client.list_blobs.side_effect = [iter(()), iter(())]
+    batch = caller.read_archive(report_prefix=PREFIX, observed_at=NOW, client=client)
+    assert not batch.entries and not batch.read_failed
+    assert client.list_blobs.call_count == 2
+    first, second = client.list_blobs.call_args_list
+    assert "end_offset" not in first.kwargs
+    assert first.kwargs["start_offset"].endswith("2026-10/20261006T040000Z.json")
+    # Second range is [now-36h, today boundary): recent earlier, not prefix start.
+    assert second.kwargs["end_offset"] == first.kwargs["start_offset"]
+    assert second.kwargs["start_offset"].endswith("2026-10/20261005T090000Z.json")
+    assert second.kwargs["start_offset"] < second.kwargs["end_offset"]
+
+
 def test_successful_empty_enumeration_does_not_prove_historical_retention():
     client = Mock()
     client.list_blobs.side_effect = [iter(()), iter(())]
