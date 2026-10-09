@@ -86,8 +86,10 @@ python3 -m pytest tests/test_project_digest_candidates.py -q
 
 - 复用同一 WIF / report prefix / runtime target
 - 写出到 `$RUNNER_TEMP/schwab-digest-candidates.json`（ephemeral）
+- 权益：对同一 archive **只读**调用 `project_schwab_account_facts_history`（**禁止** POST account-facts / broker）；成功则写 `$RUNNER_TEMP/schwab-digest-account-facts.json` 并注入候选 `equity`
+- 也可显式设 `SCHWAB_DIGEST_ACCOUNT_FACTS_PATH` 指向已有 facts JSON（优先于 archive 投影）
 - **不** `actions/upload-artifact`
-- stdout 仅安全摘要（`identity_*_present` 布尔，无具体 uid）
+- stdout / 摘要仅安全字段：`equity_present`、`runs`、`fill_count_null`、`account_facts_source`、`identity_*_present`（无 uid、无金额）
 
 所需受保护配置（不得写入公开仓）：
 
@@ -95,7 +97,18 @@ python3 -m pytest tests/test_project_digest_candidates.py -q
 | --- | --- |
 | `SCHWAB_DIGEST_OPAQUE_ACCOUNT_UID` | 可选；缺省回退 binding `account_hash` |
 | `SCHWAB_DIGEST_TARGET_ID` | 优先；否则 `SCHWAB_ACCOUNT_FACTS_TARGET_ID` |
+| `SCHWAB_ACCOUNT_FACTS_SERVICE_NAME` | archive 权益投影所需 service 名 |
+| `SCHWAB_NET_ASSETS_CURRENCY` | 必须为 `USD`（owner-confirmed）；否则省略 equity |
+| `SCHWAB_CASH_CURRENCY` | 可选；`USD` 时 facts 可带 cash（digest 仍只取 net_assets） |
 | 既有 daily 所需 secrets/vars | 与 `runtime-daily-sync` 相同 |
+
+Dry-run emit（不改 QRS Environment、不发 Telegram）：
+
+```bash
+gh workflow run "Schwab Runtime Daily Manual" -R QuantStrategyLab/CharlesSchwabPlatform --ref main \
+  -f emit_digest_candidates=true
+# 日志检查 equity_present / fill_count_null / runs；无公开 artifact
+```
 
 ## 如何注入 QRS（人工，不自动改生产 Environment）
 
@@ -117,11 +130,13 @@ python3 -m pytest tests/test_project_digest_candidates.py -q
 ## 与 quant / 其他平台边界
 
 - 不改 LB-HK、Firstrade sync、Cloud Run ingress、生产策略或风险预算。
-- 不刷新 Schwab token、不 POST account-facts / runtime-daily（emit 路径只 prepare + 本地写文件）。
+- 不刷新 Schwab token、不 POST account-facts / runtime-daily（emit 路径只 prepare + 只读 facts 投影 + 本地写 ephemeral）。
 - IBKR 若后续更易接线，另开平台 PR；本任务只做一个平台（Schwab）。
 
 ## 未知项（基线）
 
-- 生产 `SCHWAB_DIGEST_TARGET_ID` / opaque uid 是否已与控制台 binding 一致：未知（待维护者填）
-- 真实账户 equity 注入是否启用 account-facts 旁路：未知
+- 生产 `SCHWAB_DIGEST_TARGET_ID` / opaque uid 是否已与控制台 binding 一致：未知（待维护者填）；缺省回退 binding hash + `SCHWAB_ACCOUNT_FACTS_TARGET_ID`
+- archive 当日报告是否落在 account-facts `MAX_AGE`（36h）窗口内：未知；窗外则 `equity_present=false`，不编造
+- holdings 仍无源：省略
 - fills 何时从 `not_connected` 升级为可计数：未知；升级前禁止写 0
+- QRS `DIGEST_CANDIDATES_JSON` 仍须人工注入；emit **不会**自动改 Environment
