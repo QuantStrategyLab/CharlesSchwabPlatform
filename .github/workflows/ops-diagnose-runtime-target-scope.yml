@@ -171,9 +171,15 @@ jobs:
               )
               all_uris = [ln.strip() for ln in (listing.stdout or "").splitlines() if ln.strip().startswith("gs://") and ln.strip().endswith(".json")]
               # Order like read_archive: current/later first (uri >= boundary), then earlier
+              # Match google.cloud.storage list_blobs order:
+              # 1) start_offset=boundary -> ascending names >= boundary
+              # 2) end_offset=boundary -> ascending names < boundary (OLDEST first!)
               later = sorted([u for u in all_uris if u[len(f"gs://{bucket}/"):] >= boundary])
-              earlier = sorted([u for u in all_uris if u[len(f"gs://{bucket}/"):] < boundary], reverse=True)
-              ordered = later + earlier
+              earlier_asc = sorted([u for u in all_uris if u[len(f"gs://{bucket}/"):] < boundary])
+              ordered = later + earlier_asc
+              archive_meta_boundary = boundary
+              archive_meta_later_count = len(later)
+              archive_meta_earlier_count = len(earlier_asc)
               truncated = len(ordered) > 20
               selected = ordered[:20]
               kinds = {}
@@ -222,11 +228,19 @@ jobs:
                       if val is not None:
                           gk = kind(val, expected_target)
                           store[label + ":" + gk] = store.get(label + ":" + gk, 0) + 1
+              def uri_month(u):
+                  # .../YYYY-MM/YYYYMMDDT...json -> month token only
+                  parts = u.strip().rstrip("/").split("/")
+                  return parts[-2] if len(parts) >= 2 else "unknown"
+              months = [uri_month(u) for u in selected]
               archive.update({
                   "listed_json_objects": len(all_uris),
+                  "later_count": archive_meta_later_count,
+                  "earlier_count": archive_meta_earlier_count,
                   "selected": len(selected),
                   "truncated": truncated,
                   "scanned": scanned,
+                  "selected_month_histogram": {m: months.count(m) for m in sorted(set(months))},
                   "runtime_target_account_scope_kinds": kinds,
                   "top_level_account_scope_kinds": top_kinds,
                   "matcher_first_scope_kinds": matcher_scope_kinds,
