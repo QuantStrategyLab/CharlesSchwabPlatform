@@ -145,7 +145,8 @@ def _valid_report_payload(*, net_assets: str = "12345.67") -> dict:
         "runtime_target": {
             "strategy_profile": STRATEGY_PROFILE,
             "account_scope": "live",
-            "account_selector": ["live"],
+            # Native pinned identity (post PR #487): selector is observation hash.
+            "account_selector": ["SYNTHETIC-HASH-NOT-A-REAL-ACCOUNT"],
         },
         "diagnostics": {"runtime_revision": REVISION},
         "summary": {
@@ -298,3 +299,64 @@ def test_emit_requires_output_path():
 def test_emit_cli_rejects_args(capsys):
     assert emit.main(["--help"]) == 2
     assert "unsupported_arguments" in capsys.readouterr().out
+
+
+def test_emit_equity_without_covering_runs_from_native_archive(tmp_path, monkeypatch):
+    """Digest equity path must work when daily has zero covering runs."""
+    out = tmp_path / "candidates.json"
+    facts_out = tmp_path / "facts.json"
+    environ = _base_environ(out)
+    environ.update(
+        {
+            "SCHWAB_ACCOUNT_FACTS_SERVICE_NAME": SERVICE,
+            "SCHWAB_NET_ASSETS_CURRENCY": "USD",
+            "SCHWAB_DIGEST_ACCOUNT_FACTS_OUTPUT_PATH": str(facts_out),
+        }
+    )
+    # Prepared daily with zero covering runs.
+    empty = _prepared()
+    empty.projection["records"][0]["runs"] = []
+    # Re-seal digest after mutation.
+    binding = empty._source_binding_id
+    body = _canonical_body(empty.projection)
+    empty = PreparedDaily(
+        reason="prepared",
+        projection=json.loads(body),
+        _source_binding_id=binding,
+        _preparation_digest=_preparation_digest(body, binding),
+    )
+    monkeypatch.setattr(
+        emit.caller,
+        "_select_identity",
+        Mock(return_value=("SYNTHETIC-HASH-NOT-A-REAL-ACCOUNT", {"enabled": True})),
+    )
+    monkeypatch.setattr(emit.caller, "prepare_daily", Mock(return_value=empty))
+    uri = PREFIX + "2026-10/20261008T200100Z.json"
+    batch = ReadBatch(
+        entries=[{"payload": _valid_report_payload(), "object_uri": uri}],
+        read_failed=False,
+        truncated=False,
+    )
+    publish_spy = Mock(side_effect=AssertionError("must not POST"))
+    monkeypatch.setattr(
+        "scripts.publish_account_facts_from_reports._publish_once",
+        publish_spy,
+    )
+    result = emit.emit_digest_candidates(
+        environ,
+        observed_at=dt.datetime(2026, 10, 8, 21, tzinfo=UTC),
+        fact_reader=_fact_reader(),
+        archive_reader=Mock(return_value=batch),
+    )
+    assert result["status"] == "candidates_written"
+    assert result["equity_present"] is True
+    assert result["runs"] == 1
+    assert result["account_facts_source"] == "archive_projection"
+    assert result["account_facts_ephemeral_written"] is True
+    assert publish_spy.call_count == 0
+    data = json.loads(out.read_text(encoding="utf-8"))
+    row = data["runs"][0]
+    assert row["actually_ran"] is False
+    assert row["equity"] == 12345.67
+    assert row["fill_count"] is None
+    assert "holdings" not in row

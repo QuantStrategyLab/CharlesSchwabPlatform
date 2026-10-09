@@ -55,7 +55,7 @@
 | `actually_ran` | 有 covering run activity 才为 `true` | 无 activity → 不产出 run |
 | `fill_count` / `order_count` | daily `fills`；当前 `source=not_connected` | **必须** `null` + `counts_unknown`；禁止写成 0 |
 | `cycle_count` | covering run 数 | — |
-| `equity` | 可选 account-facts `broker_reported_balances[].net_assets` | 省略字段；不猜 |
+| `equity` | 可选 account-facts `broker_reported_balances[].net_assets`（archive 只读投影；selector 接受 legacy `["live"]` 或 native `[account_hash]`） | 省略字段；不猜。**不要求** covering runs：无 run 时仍可产出 `actually_ran=false` 权益行 |
 | `holdings` | 当前 daily / facts 投影**无**持仓明细 | 省略；不猜 |
 | `signal_summary` / `rebalance_*` | 由 run `activity` 映射 | 无 activity 则整行不产出 |
 
@@ -137,6 +137,7 @@ gh workflow run "Schwab Runtime Daily Manual" -R QuantStrategyLab/CharlesSchwabP
 
 - 生产 `SCHWAB_DIGEST_TARGET_ID` / opaque uid 是否已与控制台 binding 一致：未知（待维护者填）；缺省回退 binding hash + `SCHWAB_ACCOUNT_FACTS_TARGET_ID`
 - archive 当日报告是否落在 account-facts `MAX_AGE`（36h）窗口内：未知；窗外则 `equity_present=false`，不编造
+- daily `zero_run_scope_target_scope`（无 covering runs）与 digest 权益解耦：权益走 facts；日报 scope 另查
 - holdings 仍无源：省略
 - fills 何时从 `not_connected` 升级为可计数：未知；升级前禁止写 0
 - QRS `DIGEST_CANDIDATES_JSON` 仍须人工注入；emit **不会**自动改 Environment

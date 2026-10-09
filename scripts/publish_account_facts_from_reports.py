@@ -163,12 +163,12 @@ def project_schwab_account_facts_history(
         ):
             raise _ProjectionError("report_identity_mismatch")
         runtime_target = report.get("runtime_target")
-        if not isinstance(runtime_target, Mapping) or (
-            runtime_target.get("strategy_profile") != STRATEGY_PROFILE
-            or runtime_target.get("account_scope") != ACCOUNT_SCOPE
-            or runtime_target.get("account_selector") != list(ACCOUNT_SELECTOR)
-        ):
+        if not isinstance(runtime_target, Mapping):
             raise _ProjectionError("runtime_target_mismatch")
+        if runtime_target.get("strategy_profile") != STRATEGY_PROFILE:
+            raise _ProjectionError("runtime_target_profile_mismatch")
+        if runtime_target.get("account_scope") != ACCOUNT_SCOPE:
+            raise _ProjectionError("runtime_target_scope_mismatch")
         diagnostics = report.get("diagnostics")
         if not isinstance(diagnostics, Mapping) or (
             not expected_runtime_revision
@@ -186,6 +186,18 @@ def project_schwab_account_facts_history(
         account_hash = observation.get("account_hash")
         if not isinstance(account_hash, str) or not account_hash or account_hash != account_hash.strip():
             raise _ProjectionError("account_identity_invalid")
+        # Legacy ["live"] or native single-hash selector matching observation.
+        selector = runtime_target.get("account_selector")
+        if selector != list(ACCOUNT_SELECTOR):
+            if (
+                not isinstance(selector, list)
+                or len(selector) != 1
+                or not isinstance(selector[0], str)
+                or not selector[0]
+                or selector[0] != selector[0].strip()
+                or selector[0] != account_hash
+            ):
+                raise _ProjectionError("runtime_target_selector_mismatch")
         if (
             observation.get("currency") is not None
             or observation.get("net_assets_currency") != "USD"
