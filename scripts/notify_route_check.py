@@ -82,8 +82,14 @@ def _bot_identity(secret: str, project: str) -> dict:
     try:
         token = _gcloud("secrets", "versions", "access", "latest", f"--secret={secret}",
                         f"--project={project}").strip()
-    except subprocess.CalledProcessError:
-        return {"secret": secret, "status": "secret_inaccessible"}
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").upper()
+        reason = "unknown"
+        for marker in ("NOT_FOUND", "PERMISSION_DENIED", "FAILED_PRECONDITION", "UNAUTHENTICATED"):
+            if marker in stderr:
+                reason = marker.lower()
+                break
+        return {"secret": secret, "status": "secret_inaccessible", "reason": reason}
     if not token:
         return {"secret": secret, "status": "secret_empty"}
     print(f"::add-mask::{token}")
