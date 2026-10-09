@@ -151,45 +151,88 @@ jobs:
                   cloud["describe_error_class"] = "gcloud_describe_failed"
           rows.append(cloud)
 
-          # Sample recent archive report scope kinds (no amounts / no raw scope values)
+          # Mimic scripts/publish_runtime_daily_from_reports.read_archive: up to 20 blobs under prefix.
           prefix = (os.environ.get("REPORT_PREFIX") or "").strip()
-          archive = {"source": "gcs_archive_reports", "prefix_configured": bool(prefix)}
+          archive = {"source": "gcs_archive_reports_read_archive_mimic", "prefix_configured": bool(prefix)}
           if prefix and prefix.startswith("gs://"):
+              from urllib.parse import urlsplit
+              from zoneinfo import ZoneInfo
+              parts = urlsplit(prefix)
+              bucket = parts.netloc
+              blob_prefix = parts.path.lstrip("/")
+              zone = ZoneInfo("America/New_York")
               now = datetime.now(timezone.utc)
+              start = datetime.combine(now.astimezone(zone).date(), datetime.min.time(), zone)
+              boundary = blob_prefix + start.astimezone(timezone.utc).strftime("%Y-%m/%Y%m%dT%H%M%SZ.json")
+              # List via gcloud (no python storage client in this job)
+              listing = subprocess.run(
+                  ["gcloud", "storage", "ls", "--recursive", f"gs://{bucket}/{blob_prefix}"],
+                  text=True, capture_output=True, check=False,
+              )
+              all_uris = [ln.strip() for ln in (listing.stdout or "").splitlines() if ln.strip().startswith("gs://") and ln.strip().endswith(".json")]
+              # Order like read_archive: current/later first (uri >= boundary), then earlier
+              later = sorted([u for u in all_uris if u[len(f"gs://{bucket}/"):] >= boundary])
+              earlier = sorted([u for u in all_uris if u[len(f"gs://{bucket}/"):] < boundary], reverse=True)
+              ordered = later + earlier
+              truncated = len(ordered) > 20
+              selected = ordered[:20]
               kinds = {}
+              top_kinds = {}
+              group_kinds = {}
+              region_kinds = {}
+              matcher_scope_kinds = {}
               scanned = 0
-              for day in range(0, 3):
-                  cursor = now - timedelta(days=day)
-                  month = f"{cursor:%Y-%m}"
-                  glob = f"{prefix}{month}/{cursor:%Y%m%d}T*.json"
-                  listing = subprocess.run(
-                      ["gcloud", "storage", "ls", glob],
-                      text=True, capture_output=True, check=False,
-                  )
-                  uris = [line.strip() for line in (listing.stdout or "").splitlines() if line.strip().startswith("gs://")]
-                  # newest first, cap
-                  uris = sorted(uris, reverse=True)[:12]
-                  for uri in uris:
-                      cat = subprocess.run(["gcloud", "storage", "cat", uri], text=True, capture_output=True, check=False)
-                      if cat.returncode != 0:
-                          kinds["read_failed"] = kinds.get("read_failed", 0) + 1
-                          continue
-                      try:
-                          payload = json.loads(cat.stdout)
-                      except Exception:
-                          kinds["invalid_json"] = kinds.get("invalid_json", 0) + 1
-                          continue
-                      scanned += 1
-                      rt = payload.get("runtime_target") if isinstance(payload, dict) else None
-                      scope = rt.get("account_scope") if isinstance(rt, dict) else None
-                      k = kind(scope, expected_target)
-                      kinds[k] = kinds.get(k, 0) + 1
-                      # also top-level account_scope kind
-                      top_k = kind(payload.get("account_scope") if isinstance(payload, dict) else None, expected_target)
-                      kinds["top:" + top_k] = kinds.get("top:" + top_k, 0) + 1
-              archive["scanned"] = scanned
-              archive["runtime_target_account_scope_kinds"] = {k: v for k, v in kinds.items() if not k.startswith("top:")}
-              archive["top_level_account_scope_kinds"] = {k[4:]: v for k, v in kinds.items() if k.startswith("top:")}
+              for uri in selected:
+                  cat = subprocess.run(["gcloud", "storage", "cat", uri, f"--project={os.environ['GCP_PROJECT_ID']}"], text=True, capture_output=True, check=False)
+                  if cat.returncode != 0:
+                      kinds["read_failed"] = kinds.get("read_failed", 0) + 1
+                      continue
+                  try:
+                      payload = json.loads(cat.stdout)
+                  except Exception:
+                      kinds["invalid_json"] = kinds.get("invalid_json", 0) + 1
+                      continue
+                  if not isinstance(payload, dict):
+                      kinds["non_object"] = kinds.get("non_object", 0) + 1
+                      continue
+                  scanned += 1
+                  rt = payload.get("runtime_target") if isinstance(payload.get("runtime_target"), dict) else {}
+                  k = kind(rt.get("account_scope"), expected_target)
+                  kinds[k] = kinds.get(k, 0) + 1
+                  top_k = kind(payload.get("account_scope"), expected_target)
+                  top_kinds[top_k] = top_kinds.get(top_k, 0) + 1
+                  # matcher uses first of account_scope/account_group/account_region across top then runtime
+                  def first_scope(src):
+                      for key in ("account_scope", "account_group", "account_region"):
+                          if src.get(key) is not None:
+                              return src.get(key)
+                      return None
+                  matched = first_scope(payload)
+                  if matched is None:
+                      matched = first_scope(rt)
+                  mk = kind(matched, expected_target)
+                  matcher_scope_kinds[mk] = matcher_scope_kinds.get(mk, 0) + 1
+                  for label, store, src in (
+                      ("top_group", group_kinds, payload),
+                      ("rt_group", group_kinds, rt),
+                      ("top_region", region_kinds, payload),
+                      ("rt_region", region_kinds, rt),
+                  ):
+                      val = src.get("account_group") if "group" in label else src.get("account_region")
+                      if val is not None:
+                          gk = kind(val, expected_target)
+                          store[label + ":" + gk] = store.get(label + ":" + gk, 0) + 1
+              archive.update({
+                  "listed_json_objects": len(all_uris),
+                  "selected": len(selected),
+                  "truncated": truncated,
+                  "scanned": scanned,
+                  "runtime_target_account_scope_kinds": kinds,
+                  "top_level_account_scope_kinds": top_kinds,
+                  "matcher_first_scope_kinds": matcher_scope_kinds,
+                  "group_region_kinds": {**group_kinds, **region_kinds},
+                  "list_ok": listing.returncode == 0,
+              })
           rows.append(archive)
 
           print(json.dumps({"expected_target_id_present": bool(expected_target), "results": rows}, sort_keys=True))
