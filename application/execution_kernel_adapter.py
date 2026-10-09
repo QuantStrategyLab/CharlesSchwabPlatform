@@ -1,19 +1,78 @@
-"""Thin adapter: map Schwab halted-cycle facts onto QPK execution_kernel T2/T3.
+"""Thin adapter: map Schwab facts onto QPK execution_kernel T1–T3.
 
-N13: redundant fail-closed only. Does not own claims or change allow paths.
-T1 is intentionally not enforced here (dedup-off live paths may lack a claim).
+N13 / ADR-B (N13-schwab-t1-adr):
+- T2/T3: redundant consult on halted resubmit (#505); local halt still wins.
+- T1: always consultable; enforce only when ``execution_kernel_t1_enforce``
+  (or env SCHWAB_EXECUTION_KERNEL_T1_ENFORCE) is on **and** dedup is enabled.
+  Dedup-off live is never blocked by T1 under this ADR; never forge
+  ``identity_held=True`` for dedup-off.
 """
 
 from __future__ import annotations
 
 from quant_platform_kit.execution_kernel import (
     ExecutionGuardDecision,
+    ExecutionMode,
+    LiveSubmitSnapshot,
     SubmissionCertainty,
     SubmissionRetrySnapshot,
     SubmissionUnknownSnapshot,
     deny_blind_retry_after_uncertain_transport,
+    deny_live_submit_without_durable_identity,
     deny_new_cycle_when_submission_unknown,
 )
+
+
+def consult_t1_live_submit(
+    *,
+    identity_held: bool,
+    dry_run_bypass: bool = False,
+    dry_run_only: bool = False,
+    mode: ExecutionMode | None = None,
+) -> ExecutionGuardDecision:
+    """Consult T1 for a live-cycle submit attempt.
+
+    Pass ``identity_held`` honestly (claim acquired). Do **not** set it True
+    merely because ``execution_dedup_enabled`` is False.
+    """
+    resolved_mode = mode
+    if resolved_mode is None:
+        resolved_mode = ExecutionMode.DRY_RUN if dry_run_only else ExecutionMode.LIVE
+    return deny_live_submit_without_durable_identity(
+        LiveSubmitSnapshot(
+            mode=resolved_mode,
+            dry_run_bypass=bool(dry_run_bypass),
+            identity_held=bool(identity_held),
+        )
+    )
+
+
+def should_block_live_submit_for_t1(
+    *,
+    enforce: bool,
+    execution_dedup_enabled: bool,
+    identity_held: bool,
+    dry_run_bypass: bool = False,
+    dry_run_only: bool = False,
+    mode: ExecutionMode | None = None,
+) -> bool:
+    """Return True only when enforce is on, dedup gate applies, and T1 denies.
+
+    When ``execution_dedup_enabled`` is False the T1 enforce predicate is N/A
+    (ADR-B): never block and never pretend identity is held.
+    When ``enforce`` is False: consult is the caller's job; this returns False.
+    """
+    if not enforce:
+        return False
+    if not execution_dedup_enabled:
+        return False
+    decision = consult_t1_live_submit(
+        identity_held=identity_held,
+        dry_run_bypass=dry_run_bypass,
+        dry_run_only=dry_run_only,
+        mode=mode,
+    )
+    return not decision.allowed
 
 
 def evaluate_halted_resubmit_guards(
