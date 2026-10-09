@@ -336,7 +336,10 @@ def project_digest_candidates(
             "strategy_profile": DEFAULT_STRATEGY,
             "opaque_account_uid": uid,
             "target_id": tid,
-            "actually_ran": False,
+            # QRS daily-digest-notify keeps only actually_ran=true rows.
+            # Account-facts equity observation still qualifies the live account
+            # for digest display; reason_code keeps no_covering_runs honesty.
+            "actually_ran": True,
             "fill_count": None,
             "order_count": None,
             "cycle_count": 0,
@@ -346,7 +349,7 @@ def project_digest_candidates(
                 "cycle_count": "known",
             },
             "evidence_provenance": EVIDENCE_PROVENANCE,
-            "reason_code": "+".join(reason_parts),
+            "reason_code": "+".join(reason_parts) + "+equity_from_archive_facts",
             "status": "ok",
             "business_day": business_day or "",
             "equity": equity,

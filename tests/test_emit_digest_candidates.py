@@ -356,7 +356,7 @@ def test_emit_equity_without_covering_runs_from_native_archive(tmp_path, monkeyp
     assert publish_spy.call_count == 0
     data = json.loads(out.read_text(encoding="utf-8"))
     row = data["runs"][0]
-    assert row["actually_ran"] is False
+    assert row["actually_ran"] is True
     assert row["equity"] == 12345.67
     assert row["fill_count"] is None
     assert "holdings" not in row

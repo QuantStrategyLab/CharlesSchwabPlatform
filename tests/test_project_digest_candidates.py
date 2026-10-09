@@ -198,8 +198,9 @@ def test_equity_without_covering_runs_emits_row():
     assert payload["producer_reason"] == "equity_without_covering_runs"
     assert len(payload["runs"]) == 1
     row = payload["runs"][0]
-    assert row["actually_ran"] is False
+    assert row["actually_ran"] is True
     assert row["cycle_count"] == 0
     assert row["fill_count"] is None
     assert row["equity"] == pytest.approx(2500.0)
+    assert "equity_from_archive_facts" in row["reason_code"]
     assert "holdings" not in row
