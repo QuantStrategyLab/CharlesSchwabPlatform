@@ -323,6 +323,44 @@ def project_digest_candidates(
             row["note"] = f"target_key={target_key}"
         runs_out.append(row)
 
+    # Equity must not require covering runs / fills. When daily is empty but
+    # account-facts already carries owner-confirmed net_assets, emit one row.
+    if not runs_out and equity is not None:
+        reason_parts = ["schwab_fills_not_connected", "no_covering_runs"]
+        if not uid:
+            reason_parts.append("opaque_account_uid_absent")
+        if not tid:
+            reason_parts.append("target_id_absent")
+        row = {
+            "platform_id": PLATFORM_ID,
+            "strategy_profile": DEFAULT_STRATEGY,
+            "opaque_account_uid": uid,
+            "target_id": tid,
+            "actually_ran": False,
+            "fill_count": None,
+            "order_count": None,
+            "cycle_count": 0,
+            "field_status": {
+                "fill_count": "counts_unknown",
+                "order_count": "counts_unknown",
+                "cycle_count": "known",
+            },
+            "evidence_provenance": EVIDENCE_PROVENANCE,
+            "reason_code": "+".join(reason_parts),
+            "status": "ok",
+            "business_day": business_day or "",
+            "equity": equity,
+            "equity_currency": equity_currency,
+            "currency": equity_currency,
+        }
+        runs_out.append(row)
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "runs": runs_out,
+            "producer_status": "projected",
+            "producer_reason": "equity_without_covering_runs",
+        }
+
     return {
         "schema_version": SCHEMA_VERSION,
         "runs": runs_out,

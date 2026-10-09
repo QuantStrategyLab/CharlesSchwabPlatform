@@ -182,3 +182,24 @@ def test_business_day_filter():
     )
     assert payload["runs"] == []
     assert payload["producer_status"] == "empty"
+
+
+def test_equity_without_covering_runs_emits_row():
+    """Account-facts equity must not require daily covering runs."""
+    daily = _daily()
+    daily["records"][0]["runs"] = []  # no covering activity
+    payload = project_digest_candidates(
+        daily_projection=daily,
+        opaque_account_uid="acct_opaque_synthetic",
+        target_id="schwab-primary",
+        account_facts=_facts(net_assets="2500.00"),
+    )
+    assert payload["producer_status"] == "projected"
+    assert payload["producer_reason"] == "equity_without_covering_runs"
+    assert len(payload["runs"]) == 1
+    row = payload["runs"][0]
+    assert row["actually_ran"] is False
+    assert row["cycle_count"] == 0
+    assert row["fill_count"] is None
+    assert row["equity"] == pytest.approx(2500.0)
+    assert "holdings" not in row

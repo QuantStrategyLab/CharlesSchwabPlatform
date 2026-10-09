@@ -508,3 +508,41 @@ def test_main_treats_unchanged_as_success_without_relabeling_observation(capsys)
         assert publisher.main(["--report-uri", uri, "--expected-runtime-revision", "service-00007-abc"]) == 0
 
     assert capsys.readouterr().out == "unchanged:observation_unchanged\n"
+
+
+def test_native_account_selector_matching_observation_projects():
+    """Pinned native identity uses [account_hash], not legacy ["live"]."""
+    prefix = "gs://example-bucket/execution-reports/charles_schwab/soxl_soxx_trend_income/"
+    uri = prefix + "2026-09/20260930T222000Z.json"
+    report = _valid_report()
+    native_hash = report["summary"]["account_observation"]["account_hash"]
+    report["runtime_target"]["account_selector"] = [native_hash]
+    body = publisher.project_schwab_account_facts_history(
+        report,
+        source_report_uri=uri,
+        report_prefix=prefix,
+        expected_service_name="synthetic-service",
+        expected_runtime_revision="service-00007-abc",
+        expected_target_id="schwab-primary",
+        now=datetime(2026, 10, 1, 1, 20, tzinfo=timezone.utc),
+    )
+    assert body.get("status") != "skipped"
+    assert body["broker_reported_balances"][0]["net_assets"] == "123.45"
+    assert body["target_id"] == "schwab-primary"
+
+
+def test_native_account_selector_mismatch_skips():
+    prefix = "gs://example-bucket/execution-reports/charles_schwab/soxl_soxx_trend_income/"
+    uri = prefix + "2026-09/20260930T222000Z.json"
+    report = _valid_report()
+    report["runtime_target"]["account_selector"] = ["OTHER-NATIVE-HASH"]
+    body = publisher.project_schwab_account_facts_history(
+        report,
+        source_report_uri=uri,
+        report_prefix=prefix,
+        expected_service_name="synthetic-service",
+        expected_runtime_revision="service-00007-abc",
+        expected_target_id="schwab-primary",
+        now=datetime(2026, 10, 1, 1, 20, tzinfo=timezone.utc),
+    )
+    assert body == {"status": "skipped", "reason": "runtime_target_selector_mismatch"}
