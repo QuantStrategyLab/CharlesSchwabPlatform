@@ -144,7 +144,7 @@ def _valid_report_payload(*, net_assets: str = "12345.67") -> dict:
         "finished_at": "2026-10-08T20:05:00Z",
         "runtime_target": {
             "strategy_profile": STRATEGY_PROFILE,
-            "account_scope": "live",
+            # Production archive often omits account_scope; native selector binds live.
             # Native pinned identity (post PR #487): selector is observation hash.
             "account_selector": ["SYNTHETIC-HASH-NOT-A-REAL-ACCOUNT"],
         },
