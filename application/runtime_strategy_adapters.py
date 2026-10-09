@@ -82,6 +82,47 @@ class SchwabRuntimeStrategyAdapters:
             strategy_label=self.strategy_profile,
         )
 
+
+    def _nasdaq_dca_signal_symbols(self) -> tuple[str, ...]:
+        raw = self.strategy_runtime_config.get("signal_symbols") or ("QQQ", "SPY")
+        if isinstance(raw, str):
+            raw = raw.replace(";", ",").split(",")
+        symbols = tuple(
+            dict.fromkeys(
+                str(symbol).strip().upper().removesuffix(".US")
+                for symbol in raw
+                if str(symbol).strip()
+            )
+        )
+        if not symbols:
+            raise ValueError(
+                f"{self.strategy_profile} signal_symbols must contain at least one symbol for prefetch"
+            )
+        return symbols
+
+    def _build_prefetched_market_history(self, market_data_port) -> dict[str, object]:
+        """Materialize DCA signal-symbol history in the input builder (B07 Phase B)."""
+        loader = self.broker_adapters.build_market_history_loader(market_data_port)
+        prefetched: dict[str, object] = {}
+        for symbol in self._nasdaq_dca_signal_symbols():
+            history = loader(None, symbol)
+            if history is None:
+                raise RuntimeError(
+                    f"prefetched_market_history missing for signal symbol {symbol!r}"
+                )
+            try:
+                length = len(history)
+            except TypeError as exc:
+                raise RuntimeError(
+                    f"prefetched_market_history for {symbol!r} is not sized: {type(history).__name__}"
+                ) from exc
+            if length == 0:
+                raise RuntimeError(
+                    f"prefetched_market_history empty for signal symbol {symbol!r}"
+                )
+            prefetched[symbol] = history
+        return prefetched
+
     def fetch_reference_history(self, market_data_port):
         available_inputs = set(self.available_inputs)
         if "feature_snapshot" in available_inputs and not (
@@ -93,6 +134,13 @@ class SchwabRuntimeStrategyAdapters:
             market_inputs = {
                 "market_history": self.broker_adapters.build_market_history_loader(market_data_port),
             }
+            if self.strategy_profile == "nasdaq_sp500_smart_dca":
+                # B07 Phase B: prefetch signal history in the input builder; strategy
+                # prefers technical_indicator_snapshot, then prefetched_market_history,
+                # then the callable loader (kept for non-smart / compat).
+                market_inputs["prefetched_market_history"] = self._build_prefetched_market_history(
+                    market_data_port
+                )
             if "benchmark_history" in available_inputs:
                 market_inputs["benchmark_history"] = self.broker_adapters.build_price_history(
                     market_data_port,
