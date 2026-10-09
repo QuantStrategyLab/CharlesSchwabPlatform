@@ -118,14 +118,19 @@ jobs:
         if: ${{ inputs.emit_digest_candidates && !inputs.diagnose_source_access && !inputs.verify_native_identity && !inputs.check_token_load }}
         env:
           SCHWAB_DIGEST_CANDIDATES_OUTPUT_PATH: ${{ runner.temp }}/schwab-digest-candidates.json
+          SCHWAB_DIGEST_ACCOUNT_FACTS_OUTPUT_PATH: ${{ runner.temp }}/schwab-digest-account-facts.json
           SCHWAB_DIGEST_OPAQUE_ACCOUNT_UID: ${{ secrets.SCHWAB_DIGEST_OPAQUE_ACCOUNT_UID }}
           SCHWAB_DIGEST_TARGET_ID: ${{ secrets.SCHWAB_DIGEST_TARGET_ID }}
           SCHWAB_ACCOUNT_FACTS_TARGET_ID: ${{ secrets.SCHWAB_ACCOUNT_FACTS_TARGET_ID }}
+          SCHWAB_ACCOUNT_FACTS_SERVICE_NAME: ${{ secrets.SCHWAB_ACCOUNT_FACTS_SERVICE_NAME }}
+          SCHWAB_NET_ASSETS_CURRENCY: ${{ vars.SCHWAB_NET_ASSETS_CURRENCY }}
+          SCHWAB_CASH_CURRENCY: ${{ vars.SCHWAB_CASH_CURRENCY }}
           SCHWAB_RUNTIME_DAILY_TARGET_JSON: ${{ secrets.SCHWAB_RUNTIME_DAILY_TARGET_JSON }}
         run: |
           # Writes only to runner temp. Do not upload-artifact (may contain account equity).
+          # Equity: read-only project_schwab_account_facts_history from archive (no POST).
           # Injection into QRS DIGEST_CANDIDATES_JSON is manual — see docs/digest_candidates_producer.zh-CN.md
           uv run --no-sync python scripts/emit_digest_candidates.py
           test -f "$SCHWAB_DIGEST_CANDIDATES_OUTPUT_PATH"
-          python3 -c 'import json,os; p=os.environ["SCHWAB_DIGEST_CANDIDATES_OUTPUT_PATH"]; d=json.load(open(p,encoding="utf-8")); r=d.get("runs") or []; print(json.dumps({"ephemeral_path_present":True,"schema_version":d.get("schema_version"),"producer_status":d.get("producer_status"),"runs":len(r),"fill_count_null":all(x.get("fill_count") is None for x in r)},sort_keys=True))'
+          python3 -c 'import json,os; p=os.environ["SCHWAB_DIGEST_CANDIDATES_OUTPUT_PATH"]; d=json.load(open(p,encoding="utf-8")); r=d.get("runs") or []; print(json.dumps({"ephemeral_path_present":True,"schema_version":d.get("schema_version"),"producer_status":d.get("producer_status"),"runs":len(r),"fill_count_null":all(x.get("fill_count") is None for x in r),"equity_present":any(x.get("equity") is not None for x in r),"holdings_omitted":all("holdings" not in x for x in r)},sort_keys=True))'
 
