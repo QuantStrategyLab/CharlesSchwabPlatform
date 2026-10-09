@@ -167,7 +167,9 @@ def project_schwab_account_facts_history(
             raise _ProjectionError("runtime_target_mismatch")
         if runtime_target.get("strategy_profile") != STRATEGY_PROFILE:
             raise _ProjectionError("runtime_target_profile_mismatch")
-        if runtime_target.get("account_scope") != ACCOUNT_SCOPE:
+        # Archive reports may omit runtime_target.account_scope (null/absent).
+        # Accept None or "live"; reject any other explicit scope.
+        if runtime_target.get("account_scope") not in (None, ACCOUNT_SCOPE):
             raise _ProjectionError("runtime_target_scope_mismatch")
         diagnostics = report.get("diagnostics")
         if not isinstance(diagnostics, Mapping) or (
