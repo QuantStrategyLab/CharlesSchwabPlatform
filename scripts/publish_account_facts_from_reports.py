@@ -28,6 +28,27 @@ REGION = "us-central1"
 STRATEGY_PROFILE = "soxl_soxx_trend_income"
 ACCOUNT_SCOPE = "live"
 ACCOUNT_SELECTOR = ("live",)
+_MARKET_SCOPE_TOKENS = frozenset({"US", "HK", "CN", "SG"})
+
+
+def _runtime_account_scope_kind(value: object) -> str:
+    """Amount-free classification of runtime_target.account_scope (no raw value)."""
+    if value is None:
+        return "absent"
+    if not isinstance(value, str):
+        return "non_string"
+    text = value.strip()
+    if not text:
+        return "blank"
+    if text.lower() == ACCOUNT_SCOPE:
+        return "live"
+    if text.upper() in _MARKET_SCOPE_TOKENS:
+        return "market_code"
+    # Opaque account hashes used elsewhere are long case-sensitive tokens.
+    if len(text) >= 32 and all(ch.isalnum() or ch in "-_" for ch in text):
+        return "hash_shaped"
+    return "other_token"
+
 PLATFORM = "charles_schwab"
 MAX_AGE = timedelta(hours=36)
 FUTURE_SKEW = timedelta(minutes=5)
@@ -169,17 +190,9 @@ def project_schwab_account_facts_history(
             raise _ProjectionError("runtime_target_profile_mismatch")
         # Archive reports may omit runtime_target.account_scope (null/absent).
         # Accept None / blank / case-insensitive "live"; reject any other token.
-        raw_scope = runtime_target.get("account_scope")
-        if raw_scope is None:
-            scope_ok = True
-        elif isinstance(raw_scope, str) and (
-            not raw_scope.strip() or raw_scope.strip().lower() == ACCOUNT_SCOPE
-        ):
-            scope_ok = True
-        else:
-            scope_ok = False
-        if not scope_ok:
-            raise _ProjectionError("runtime_target_scope_mismatch")
+        scope_kind = _runtime_account_scope_kind(runtime_target.get("account_scope"))
+        if scope_kind not in {"absent", "blank", "live"}:
+            raise _ProjectionError(f"runtime_target_scope_mismatch:{scope_kind}")
         diagnostics = report.get("diagnostics")
         if not isinstance(diagnostics, Mapping) or (
             not expected_runtime_revision
