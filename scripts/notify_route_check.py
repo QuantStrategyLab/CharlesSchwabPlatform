@@ -64,6 +64,22 @@ def _telegram_binding(service: str, project: str, region: str) -> dict:
         "telegram_token_secret": None,
         "telegram_token_secret_version": None,
     }
+    out["template_service_account"] = (
+        spec.get("spec", {}).get("template", {}).get("spec", {}).get("serviceAccountName")
+    )
+    serving = []
+    for entry in out["traffic"]:
+        rev = entry.get("revision")
+        sa = None
+        if rev:
+            try:
+                rev_spec = json.loads(_gcloud("run", "revisions", "describe", rev, f"--project={project}",
+                                              f"--region={region}", "--format=json"))
+                sa = rev_spec.get("spec", {}).get("serviceAccountName")
+            except subprocess.CalledProcessError:
+                sa = "describe_failed"
+        serving.append({"revision": rev, "percent": entry.get("percent"), "runtime_service_account": sa})
+    out["serving_revisions"] = serving
     for container in containers:
         for env in container.get("env", []) or []:
             if env.get("name") != "TELEGRAM_TOKEN":
@@ -121,12 +137,15 @@ def main() -> int:
         secrets.add(gh_secret_name)
     report["github_variable_TELEGRAM_TOKEN_SECRET_NAME"] = gh_secret_name or None
     for index, service in enumerate(services, start=1):
-        print(f"::add-mask::{service}")
         try:
             binding = _telegram_binding(service, project, region)
         except subprocess.CalledProcessError:
             binding = {"telegram_token_source": "describe_failed"}
         binding["service_label"] = f"service#{index}"
+        # Service name / region are not secrets (owner needs them for gcloud).
+        # GitHub may still redact the name if it equals a repository secret value.
+        binding["service_name"] = service
+        binding["region"] = region
         if binding.get("telegram_token_secret"):
             secrets.add(binding["telegram_token_secret"])
         report["services"].append(binding)
