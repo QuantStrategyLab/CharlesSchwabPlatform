@@ -1,0 +1,169 @@
+name: Env Sync Drift Check
+
+# Read-only. Answers "what would a full Deploy Cloud Run env sync change?" by
+# re-running the exact "Sync Cloud Run environment" step script from
+# sync-cloud-run-env.yml with its single mutating gcloud call replaced by a
+# capture, then diffing against each serving (100%) revision.
+# Prints key names only (plus Secret Manager reference names for secret-backed
+# keys); never prints env values, tokens, or chat ids. Never updates Cloud Run,
+# secrets, IAM, Scheduler, or traffic.
+#
+# The job env below mirrors sync-cloud-run-env.yml (inputs blanked); the test
+# tests/test_env_sync_drift_check.py fails if the two drift apart.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GCP_PROJECT_ID: charlesschwabquant
+  GCP_WORKLOAD_IDENTITY_PROVIDER: projects/401309731911/locations/global/workloadIdentityPools/github-actions/providers/github-main
+  GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: schwab-platform-deploy@charlesschwabquant.iam.gserviceaccount.com
+  GCP_RUNTIME_SERVICE_ACCOUNT: schwab-platform-runtime@charlesschwabquant.iam.gserviceaccount.com
+  GCP_SCHEDULER_SERVICE_ACCOUNT: schwab-platform-scheduler@charlesschwabquant.iam.gserviceaccount.com
+  GCP_ARTIFACT_REGISTRY_REPOSITORY: cloud-run-source-deploy
+
+
+jobs:
+  env-sync-drift:
+    name: Env sync drift (read-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ENABLE_GITHUB_CLOUD_RUN_DEPLOY: ${{ vars.ENABLE_GITHUB_CLOUD_RUN_DEPLOY }}
+      ENABLE_GITHUB_ENV_SYNC: ${{ vars.ENABLE_GITHUB_ENV_SYNC }}
+      CLOUD_RUN_CLEANUP_ENABLED: ${{ vars.CLOUD_RUN_CLEANUP_ENABLED }}
+      APPROVED_REF: ''
+      EXPECTED_SHA: ''
+      APPROVE_IMAGE_DEPLOY: ''
+      APPROVE_ENV_SECRET_SYNC: ''
+      APPROVE_SCHEDULER_IAM_SYNC: ''
+      APPROVE_TRAFFIC_SHIFT: ''
+      APPROVE_CLEANUP: ''
+      ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION: ${{ vars.ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION }}
+      QSL_ENABLE_CLOUD_RUN_AUTOMATION: ${{ vars.QSL_ENABLE_CLOUD_RUN_AUTOMATION }}
+      GCP_ARTIFACT_REGISTRY_HOSTNAME: ${{ vars.GCP_ARTIFACT_REGISTRY_HOSTNAME }}
+      CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
+      CLOUD_RUN_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
+      # This is the validated non-secret service inventory maintained by the
+      # control plane; legacy Secret support is only a migration fallback.
+      CLOUD_RUN_SERVICE_TARGETS_JSON: ${{ vars.CLOUD_RUN_SERVICE_TARGETS_JSON || secrets.CLOUD_RUN_SERVICE_TARGETS_JSON }}
+      CLOUD_SCHEDULER_LOCATION: ${{ vars.CLOUD_SCHEDULER_LOCATION }}
+      CLOUD_SCHEDULER_MAIN_TIME: ${{ vars.CLOUD_SCHEDULER_MAIN_TIME }}
+      CLOUD_SCHEDULER_PROBE_TIME: ${{ vars.CLOUD_SCHEDULER_PROBE_TIME }}
+      CLOUD_SCHEDULER_PRECHECK_TIME: ${{ vars.CLOUD_SCHEDULER_PRECHECK_TIME }}
+      GOOGLE_CLOUD_PROJECT: ${{ vars.GOOGLE_CLOUD_PROJECT }}
+      TELEGRAM_TOKEN_SECRET_NAME: ${{ vars.TELEGRAM_TOKEN_SECRET_NAME }}
+      SCHWAB_API_KEY_SECRET_NAME: ${{ vars.SCHWAB_API_KEY_SECRET_NAME }}
+      SCHWAB_APP_SECRET_SECRET_NAME: ${{ vars.SCHWAB_APP_SECRET_SECRET_NAME }}
+      # This is validated deployment intent, not credential material. Prefer the
+      # control-plane variable while retaining a legacy-secret fallback during migration.
+      RUNTIME_TARGET_JSON: ${{ vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}
+      SCHWAB_DRY_RUN_ONLY: ${{ vars.SCHWAB_DRY_RUN_ONLY }}
+      SCHWAB_CASH_CURRENCY: ${{ vars.SCHWAB_CASH_CURRENCY }}
+      SCHWAB_FEATURE_SNAPSHOT_PATH: ${{ vars.SCHWAB_FEATURE_SNAPSHOT_PATH }}
+      SCHWAB_FEATURE_SNAPSHOT_MANIFEST_PATH: ${{ vars.SCHWAB_FEATURE_SNAPSHOT_MANIFEST_PATH }}
+      SCHWAB_FEATURE_SNAPSHOT_FALLBACK_MODE: ${{ vars.SCHWAB_FEATURE_SNAPSHOT_FALLBACK_MODE }}
+      SCHWAB_FEATURE_SNAPSHOT_FALLBACK_CACHE_DIR: ${{ vars.SCHWAB_FEATURE_SNAPSHOT_FALLBACK_CACHE_DIR }}
+      SCHWAB_FEATURE_SNAPSHOT_MAX_STALE_DAYS: ${{ vars.SCHWAB_FEATURE_SNAPSHOT_MAX_STALE_DAYS }}
+      SCHWAB_STRATEGY_CONFIG_PATH: ${{ vars.SCHWAB_STRATEGY_CONFIG_PATH }}
+      SCHWAB_STRATEGY_PLUGIN_MOUNTS_JSON: ${{ vars.SCHWAB_STRATEGY_PLUGIN_MOUNTS_JSON }}
+      SCHWAB_MIN_RESERVED_CASH_USD: ${{ vars.SCHWAB_MIN_RESERVED_CASH_USD }}
+      SCHWAB_RESERVED_CASH_RATIO: ${{ vars.SCHWAB_RESERVED_CASH_RATIO }}
+      SCHWAB_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD: ${{ vars.SCHWAB_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD }}
+      SCHWAB_MARKET_SIGNAL_HANDOFF_INDEX_URI: ${{ vars.SCHWAB_MARKET_SIGNAL_HANDOFF_INDEX_URI }}
+      SCHWAB_MARKET_SIGNAL_HANDOFF_MANIFEST_URI: ${{ vars.SCHWAB_MARKET_SIGNAL_HANDOFF_MANIFEST_URI }}
+      SCHWAB_MARKET_SIGNAL_CONSUMPTION_AUDIT_URI: ${{ vars.SCHWAB_MARKET_SIGNAL_CONSUMPTION_AUDIT_URI }}
+      SCHWAB_MARKET_SIGNAL_CACHE_DIR: ${{ vars.SCHWAB_MARKET_SIGNAL_CACHE_DIR }}
+      SCHWAB_MARKET_SIGNAL_REQUIRED: ${{ vars.SCHWAB_MARKET_SIGNAL_REQUIRED }}
+      SCHWAB_MARKET_SIGNAL_FALLBACK_MODE: ${{ vars.SCHWAB_MARKET_SIGNAL_FALLBACK_MODE }}
+      SCHWAB_MARKET_SIGNAL_MAX_STALE_DAYS: ${{ vars.SCHWAB_MARKET_SIGNAL_MAX_STALE_DAYS }}
+      STRATEGY_PLUGIN_ALERT_CHANNELS: ${{ vars.STRATEGY_PLUGIN_ALERT_CHANNELS }}
+      STRATEGY_PLUGIN_ALERT_EMAIL_RECIPIENTS: ${{ vars.STRATEGY_PLUGIN_ALERT_EMAIL_RECIPIENTS }}
+      STRATEGY_PLUGIN_ALERT_EMAIL_SENDER_EMAIL: ${{ vars.STRATEGY_PLUGIN_ALERT_EMAIL_SENDER_EMAIL }}
+      STRATEGY_PLUGIN_ALERT_EMAIL_SENDER_PASSWORD_SECRET_NAME: ${{ vars.STRATEGY_PLUGIN_ALERT_EMAIL_SENDER_PASSWORD_SECRET_NAME }}
+      STRATEGY_PLUGIN_ALERT_EMAIL_SMTP_HOST: ${{ vars.STRATEGY_PLUGIN_ALERT_EMAIL_SMTP_HOST }}
+      STRATEGY_PLUGIN_ALERT_EMAIL_SMTP_PORT: ${{ vars.STRATEGY_PLUGIN_ALERT_EMAIL_SMTP_PORT }}
+      STRATEGY_PLUGIN_ALERT_EMAIL_SMTP_SECURITY: ${{ vars.STRATEGY_PLUGIN_ALERT_EMAIL_SMTP_SECURITY }}
+      STRATEGY_PLUGIN_ALERT_SMS_RECIPIENTS: ${{ vars.STRATEGY_PLUGIN_ALERT_SMS_RECIPIENTS }}
+      STRATEGY_PLUGIN_ALERT_SMS_PROVIDER: ${{ vars.STRATEGY_PLUGIN_ALERT_SMS_PROVIDER }}
+      STRATEGY_PLUGIN_ALERT_SMS_ACCOUNT_ID: ${{ vars.STRATEGY_PLUGIN_ALERT_SMS_ACCOUNT_ID }}
+      STRATEGY_PLUGIN_ALERT_SMS_AUTH_TOKEN_SECRET_NAME: ${{ vars.STRATEGY_PLUGIN_ALERT_SMS_AUTH_TOKEN_SECRET_NAME }}
+      STRATEGY_PLUGIN_ALERT_SMS_SENDER: ${{ vars.STRATEGY_PLUGIN_ALERT_SMS_SENDER }}
+      STRATEGY_PLUGIN_ALERT_SMS_MESSAGING_SERVICE_ID: ${{ vars.STRATEGY_PLUGIN_ALERT_SMS_MESSAGING_SERVICE_ID }}
+      STRATEGY_PLUGIN_ALERT_SMS_API_BASE_URL: ${{ vars.STRATEGY_PLUGIN_ALERT_SMS_API_BASE_URL }}
+      STRATEGY_PLUGIN_ALERT_SMS_BODY_MAX_CHARS: ${{ vars.STRATEGY_PLUGIN_ALERT_SMS_BODY_MAX_CHARS }}
+      STRATEGY_PLUGIN_ALERT_PUSH_RECIPIENTS: ${{ vars.STRATEGY_PLUGIN_ALERT_PUSH_RECIPIENTS }}
+      STRATEGY_PLUGIN_ALERT_PUSH_PROVIDER: ${{ vars.STRATEGY_PLUGIN_ALERT_PUSH_PROVIDER }}
+      STRATEGY_PLUGIN_ALERT_PUSH_APP_TOKEN_SECRET_NAME: ${{ vars.STRATEGY_PLUGIN_ALERT_PUSH_APP_TOKEN_SECRET_NAME }}
+      STRATEGY_PLUGIN_ALERT_PUSH_ACCESS_TOKEN_SECRET_NAME: ${{ vars.STRATEGY_PLUGIN_ALERT_PUSH_ACCESS_TOKEN_SECRET_NAME }}
+      STRATEGY_PLUGIN_ALERT_PUSH_API_BASE_URL: ${{ vars.STRATEGY_PLUGIN_ALERT_PUSH_API_BASE_URL }}
+      STRATEGY_PLUGIN_ALERT_PUSH_DEVICE: ${{ vars.STRATEGY_PLUGIN_ALERT_PUSH_DEVICE }}
+      STRATEGY_PLUGIN_ALERT_PUSH_PRIORITY: ${{ vars.STRATEGY_PLUGIN_ALERT_PUSH_PRIORITY }}
+      STRATEGY_PLUGIN_ALERT_PUSH_TAGS: ${{ vars.STRATEGY_PLUGIN_ALERT_PUSH_TAGS }}
+      STRATEGY_PLUGIN_ALERT_PUSH_BODY_MAX_CHARS: ${{ vars.STRATEGY_PLUGIN_ALERT_PUSH_BODY_MAX_CHARS }}
+      STRATEGY_PLUGIN_ALERT_TELEGRAM_CHAT_IDS: ${{ vars.STRATEGY_PLUGIN_ALERT_TELEGRAM_CHAT_IDS }}
+      STRATEGY_PLUGIN_ALERT_TELEGRAM_BOT_TOKEN_SECRET_NAME: ${{ vars.STRATEGY_PLUGIN_ALERT_TELEGRAM_BOT_TOKEN_SECRET_NAME }}
+      STRATEGY_PLUGIN_ALERT_TELEGRAM_API_BASE_URL: ${{ vars.STRATEGY_PLUGIN_ALERT_TELEGRAM_API_BASE_URL }}
+      STRATEGY_PLUGIN_ALERT_TELEGRAM_PARSE_MODE: ${{ vars.STRATEGY_PLUGIN_ALERT_TELEGRAM_PARSE_MODE }}
+      STRATEGY_PLUGIN_ALERT_TELEGRAM_DISABLE_WEB_PAGE_PREVIEW: ${{ vars.STRATEGY_PLUGIN_ALERT_TELEGRAM_DISABLE_WEB_PAGE_PREVIEW }}
+      STRATEGY_PLUGIN_ALERT_TELEGRAM_BODY_MAX_CHARS: ${{ vars.STRATEGY_PLUGIN_ALERT_TELEGRAM_BODY_MAX_CHARS }}
+      # Optional strategy overrides; leave unset to inherit the UsEquityStrategies profile defaults.
+      INCOME_THRESHOLD_USD: ${{ vars.INCOME_THRESHOLD_USD }}
+      QQQI_INCOME_RATIO: ${{ vars.QQQI_INCOME_RATIO }}
+      INCOME_LAYER_ENABLED: ${{ vars.INCOME_LAYER_ENABLED }}
+      INCOME_LAYER_START_USD: ${{ vars.INCOME_LAYER_START_USD }}
+      INCOME_LAYER_MAX_RATIO: ${{ vars.INCOME_LAYER_MAX_RATIO }}
+      SCHWAB_CASH_ONLY_EXECUTION: ${{ vars.SCHWAB_CASH_ONLY_EXECUTION }}
+      CASH_ONLY_EXECUTION: ${{ vars.CASH_ONLY_EXECUTION }}
+      RUNTIME_TARGET_ENABLED: ${{ vars.RUNTIME_TARGET_ENABLED }}
+      DUAL_DRIVE_UNLEVERED_SYMBOL: ${{ vars.DUAL_DRIVE_UNLEVERED_SYMBOL }}
+      EXECUTION_REPORT_GCS_URI: ${{ vars.EXECUTION_REPORT_GCS_URI }}
+      LIFECYCLE_PERFORMANCE_BUCKET: ${{ vars.LIFECYCLE_PERFORMANCE_BUCKET }}
+      GLOBAL_TELEGRAM_CHAT_ID: ${{ secrets.GLOBAL_TELEGRAM_CHAT_ID }}
+      NOTIFY_LANG: ${{ vars.NOTIFY_LANG }}
+      TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+      SCHWAB_API_KEY: ${{ secrets.SCHWAB_API_KEY }}
+      SCHWAB_APP_SECRET: ${{ secrets.SCHWAB_APP_SECRET }}
+      STRATEGY_PLUGIN_ALERT_EMAIL_SENDER_PASSWORD: ${{ secrets.STRATEGY_PLUGIN_ALERT_EMAIL_SENDER_PASSWORD }}
+      STRATEGY_PLUGIN_ALERT_SMS_AUTH_TOKEN: ${{ secrets.STRATEGY_PLUGIN_ALERT_SMS_AUTH_TOKEN }}
+      STRATEGY_PLUGIN_ALERT_PUSH_APP_TOKEN: ${{ secrets.STRATEGY_PLUGIN_ALERT_PUSH_APP_TOKEN }}
+      STRATEGY_PLUGIN_ALERT_PUSH_ACCESS_TOKEN: ${{ secrets.STRATEGY_PLUGIN_ALERT_PUSH_ACCESS_TOKEN }}
+      STRATEGY_PLUGIN_ALERT_TELEGRAM_BOT_TOKEN: ${{ secrets.TG_TOKEN }}
+      DRIFT_PER_TARGET: "0"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install strategy status dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip uv
+          uv sync --frozen --no-dev
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Build sync plan and report drift (key names only)
+        run: |
+          set -euo pipefail
+          SYNC_PLAN_JSON="$(uv run --no-sync python scripts/build_cloud_run_env_sync_plan.py --json)"
+          export SYNC_PLAN_JSON
+          python3 scripts/env_sync_drift_check.py
