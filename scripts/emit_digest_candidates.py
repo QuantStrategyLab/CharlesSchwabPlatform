@@ -324,8 +324,10 @@ def emit_digest_candidates(
         "fill_count_null": fill_count_null,
         "account_facts_source": facts_source,
         "account_facts_ephemeral_written": facts_written,
-        # Holdings remain unsupported on daily/facts projection — omitted.
-        "holdings_omitted": True,
+        # Holdings come only from archive facts broker_reported_positions.
+        "holdings_omitted": not any(
+            isinstance(row, Mapping) and row.get("holdings") for row in runs
+        ),
     }
 
 
