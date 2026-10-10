@@ -66,6 +66,79 @@ def _cash_money_text(value: Any) -> str | None:
     return value
 
 
+def _position_decimal_text(value: Any) -> str | None:
+    """Finite decimal text bounded to 8 fractional / 15 total digits, else None."""
+    if isinstance(value, bool):
+        return None
+    text = _money_text(value)
+    if text is None:
+        return None
+    amount = Decimal(text).quantize(Decimal("0.00000001")).normalize()
+    if amount == 0:
+        amount = Decimal(0)
+    text = format(amount, "f")
+    whole, _, fraction = text.lstrip("-").partition(".")
+    if len(whole) + len(fraction) > 15:
+        return None
+    return text
+
+
+POSITIONS_SCOPE = "strategy_symbols_only"
+_POSITION_SYMBOL = re.compile(r"[A-Z0-9][A-Z0-9./ -]{0,31}\Z", re.ASCII)
+_MAX_POSITIONS = 64
+
+
+def build_broker_reported_positions(snapshot: Any) -> list[dict[str, object]] | None:
+    """Project positions the broker already returned; None means unknown/omit.
+
+    Schwab's snapshot only lists strategy symbols, so the scope label is
+    ``strategy_symbols_only``. An empty or malformed position set is treated as
+    unknown (``None``) rather than written as an empty list.
+    """
+
+    try:
+        positions = getattr(snapshot, "positions", None)
+        if not isinstance(positions, (tuple, list)) or not positions:
+            return None
+        if len(positions) > _MAX_POSITIONS:
+            return None
+        rows: list[dict[str, object]] = []
+        seen: set[str] = set()
+        for position in positions:
+            symbol = getattr(position, "symbol", None)
+            if not isinstance(symbol, str):
+                return None
+            symbol = symbol.strip().upper()
+            if _POSITION_SYMBOL.fullmatch(symbol) is None or symbol in seen:
+                return None
+            seen.add(symbol)
+            quantity = _position_decimal_text(getattr(position, "quantity", None))
+            market_value = _position_decimal_text(getattr(position, "market_value", None))
+            if quantity is None or market_value is None:
+                return None
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "quantity": quantity,
+                    "market_value": market_value,
+                    # Schwab position rows carry no currency; currency is only
+                    # declared downstream from the owner-confirmed account currency.
+                    "currency": None,
+                }
+            )
+        rows.sort(key=lambda row: str(row["symbol"]))
+        return rows
+    except Exception:
+        return None
+
+
+def _attach_positions(observation: dict[str, object], snapshot: Any) -> None:
+    positions = build_broker_reported_positions(snapshot)
+    if positions:
+        observation["broker_reported_positions"] = positions
+        observation["broker_reported_positions_scope"] = POSITIONS_SCOPE
+
+
 def build_account_observation(
     snapshot: Any,
     *,
@@ -134,6 +207,8 @@ def build_account_observation(
         ):
             observation["broker_account_type"] = raw_account_type
             observation["broker_account_type_source"] = "securitiesAccount.type"
+        # Optional, fail-soft: any problem omits the positions keys entirely.
+        _attach_positions(observation, snapshot)
         declared_observation = declare_net_assets_currency(
             observation,
             net_assets_currency=net_assets_currency,
@@ -194,7 +269,9 @@ def declare_cash_balance_currency(
 
 
 __all__ = [
+    "POSITIONS_SCOPE",
     "build_account_observation",
+    "build_broker_reported_positions",
     "declare_cash_balance_currency",
     "declare_net_assets_currency",
     "expected_account_hash_from_selector",

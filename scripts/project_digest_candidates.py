@@ -185,6 +185,56 @@ def _equity_from_account_facts(facts: Mapping[str, Any] | None) -> tuple[float |
     return None, "USD", "account_facts_equity_absent"
 
 
+_HOLDINGS_SCOPES = frozenset({"strategy_symbols_only"})
+
+
+def _holdings_from_account_facts(
+    facts: Mapping[str, Any] | None,
+) -> tuple[list[dict[str, Any]] | None, str]:
+    """Map facts ``broker_reported_positions`` to digest ``holdings``.
+
+    Returns (holdings, scope). ``None`` means omit: absent, skipped, malformed,
+    or values the digest contract cannot carry (negative). Never returns ``[]``.
+    """
+    if not isinstance(facts, Mapping) or facts.get("status") == "skipped":
+        return None, ""
+    scope = facts.get("broker_reported_positions_scope")
+    raw = facts.get("broker_reported_positions")
+    if scope not in _HOLDINGS_SCOPES or not isinstance(raw, list) or not raw:
+        return None, ""
+    holdings: list[dict[str, Any]] = []
+    for item in raw:
+        if not isinstance(item, Mapping):
+            return None, ""
+        symbol = _as_str(item.get("symbol"))
+        if not symbol or len(symbol) > 64:
+            return None, ""
+        quantity = _money_to_float(item.get("quantity"))
+        market_value = _money_to_float(item.get("market_value"))
+        if quantity is None or market_value is None or quantity < 0 or market_value < 0:
+            return None, ""
+        currency = item.get("currency")
+        if currency != "USD":
+            return None, ""
+        holdings.append(
+            {
+                "symbol": symbol,
+                "quantity": quantity,
+                "market_value": market_value,
+                "currency": "USD",
+            }
+        )
+    return holdings, str(scope)
+
+
+def _apply_holdings(
+    row: dict[str, Any], holdings: list[dict[str, Any]] | None, scope: str
+) -> None:
+    if holdings:
+        row["holdings"] = [dict(item) for item in holdings]
+        row["holdings_scope"] = scope
+
+
 def project_digest_candidates(
     *,
     daily_projection: Mapping[str, Any],
@@ -219,6 +269,7 @@ def project_digest_candidates(
     uid = _as_str(opaque_account_uid)
     tid = _as_str(target_id)
     equity, equity_currency, equity_reason = _equity_from_account_facts(account_facts)
+    holdings, holdings_scope = _holdings_from_account_facts(account_facts)
 
     runs_out: list[dict[str, Any]] = []
     for record in records:
@@ -316,8 +367,8 @@ def project_digest_candidates(
             row["equity"] = equity
             row["equity_currency"] = equity_currency
             row["currency"] = equity_currency
-        # Holdings are not present on the privacy-safe daily projection or the
-        # account-facts history body used today — omit rather than invent.
+        # Holdings only from archive facts broker_reported_positions; else omit.
+        _apply_holdings(row, holdings, holdings_scope)
         target_key = _as_str(mapping.get("target_key"))
         if target_key:
             row["note"] = f"target_key={target_key}"
@@ -356,6 +407,7 @@ def project_digest_candidates(
             "equity_currency": equity_currency,
             "currency": equity_currency,
         }
+        _apply_holdings(row, holdings, holdings_scope)
         runs_out.append(row)
         return {
             "schema_version": SCHEMA_VERSION,

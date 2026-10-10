@@ -70,6 +70,60 @@ _ACCOUNT_TYPE_TOKEN = re.compile(r"[A-Za-z_]{1,32}\Z", re.ASCII)
 _REVISION = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 
 
+POSITIONS_SCOPE = "strategy_symbols_only"
+# Archive-projection-only keys: the console /api/account-facts/sync contract is
+# exact-key, so these are carried for offline consumers (digest emit) and are
+# stripped before any publish.
+ARCHIVE_ONLY_KEYS = ("broker_reported_positions", "broker_reported_positions_scope")
+_POSITION_SYMBOL = re.compile(r"[A-Z0-9][A-Z0-9./ -]{0,31}\Z", re.ASCII)
+_MAX_POSITIONS = 64
+
+
+def _project_positions(observation: Mapping[str, Any]) -> list[dict[str, str]] | None:
+    """Validate runtime ``broker_reported_positions``; None (omit) on any doubt."""
+    raw = observation.get("broker_reported_positions")
+    if observation.get("broker_reported_positions_scope") != POSITIONS_SCOPE:
+        return None
+    if not isinstance(raw, list) or not raw or len(raw) > _MAX_POSITIONS:
+        return None
+    rows: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, Mapping):
+            return None
+        if set(item) - {"symbol", "quantity", "market_value", "currency"}:
+            return None
+        symbol = item.get("symbol")
+        if (
+            not isinstance(symbol, str)
+            or _POSITION_SYMBOL.fullmatch(symbol) is None
+            or symbol in seen
+        ):
+            return None
+        seen.add(symbol)
+        if item.get("currency") not in (None, "USD"):
+            return None
+        try:
+            quantity = _money_text(item.get("quantity"))
+            market_value = _money_text(item.get("market_value"))
+        except _ProjectionError:
+            return None
+        rows.append(
+            {
+                "symbol": symbol,
+                "quantity": quantity,
+                "market_value": market_value,
+                "currency": "USD",
+                "currency_source": "owner_confirmed",
+            }
+        )
+    return rows
+
+
+def strip_archive_only_keys(body: Mapping[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in body.items() if key not in ARCHIVE_ONLY_KEYS}
+
+
 class _ProjectionError(ValueError):
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
@@ -322,6 +376,10 @@ def project_schwab_account_facts_history(
         }
         if broker_account_type is not None:
             return_body["broker_account_type"] = broker_account_type
+        positions = _project_positions(observation)
+        if positions is not None:
+            return_body["broker_reported_positions"] = positions
+            return_body["broker_reported_positions_scope"] = POSITIONS_SCOPE
         return return_body
     except _ProjectionError as exc:
         return {"status": "skipped", "reason": exc.reason}
@@ -660,7 +718,9 @@ def main(argv: list[str] | None = None) -> int:
     if projected.get("status") == "skipped":
         print(_safe_result_text(projected))
         return 2
-    history = {key: value for key, value in projected.items() if key != "status"}
+    history = strip_archive_only_keys(
+        {key: value for key, value in projected.items() if key != "status"}
+    )
     result = _publish_once(
         history,
         sync_url=sync_url,
