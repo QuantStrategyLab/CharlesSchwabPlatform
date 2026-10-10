@@ -141,6 +141,7 @@ jobs:
           set -euo pipefail
           bash tests/test_safe_no_traffic_deploy_workflow.sh
           bash tests/test_sync_cloud_run_env_workflow.sh
+          uv run --no-sync pytest -q tests/test_env_sync_drift_check.py
 
       - name: Run ruff
         run: |
