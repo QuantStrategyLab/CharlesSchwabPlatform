@@ -23,7 +23,7 @@ SAFE_ENV_VALUES = {"STRATEGY_PROFILE", "NOTIFY_LANG", "CASH_ONLY_EXECUTION", "IB
                    "IBKR_DRY_RUN_ONLY", "RUNTIME_TARGET_ENABLED", "INCOME_LAYER_ENABLED",
                    "OPTION_OVERLAY_ENABLED", "OPTION_GROWTH_OVERLAY_ENABLED", "OPTION_INCOME_OVERLAY_ENABLED"}
 PRESENCE_PATTERN = re.compile(r"(STRATEGY_CONFIG|MARKET_SIGNAL|FEATURE_SNAPSHOT|RUNTIME_OVERRIDE|TREND|PLUGIN_MOUNTS)")
-SENSITIVE_PATTERN = re.compile(r"(TOKEN|SECRET|PASSWORD|KEY|CHAT|ACCOUNT|CREDENTIAL)", re.I)
+SENSITIVE_PATTERN = re.compile(r"(TOKEN|SECRET|PASSWORD|KEY|CHAT|ACCOUNT|CREDENTIAL)", re.IGNORECASE)
 
 PROBE = r'''
 import hashlib, inspect, json, pathlib
@@ -151,19 +151,19 @@ def env_report(containers: list) -> dict:
 
 def image_probe(image: str) -> dict:
     host = image.split("/")[0]
-    if host.endswith("pkg.dev") or host.endswith("gcr.io"):
-        subprocess.run(["gcloud", "auth", "configure-docker", host, "--quiet"], capture_output=True, text=True)
-    pull = subprocess.run(["docker", "pull", "-q", image], capture_output=True, text=True)
+    if host.endswith(("pkg.dev", "gcr.io")):
+        subprocess.run(["gcloud", "auth", "configure-docker", host, "--quiet"], capture_output=True, text=True, check=False)
+    pull = subprocess.run(["docker", "pull", "-q", image], capture_output=True, text=True, check=False)
     if pull.returncode != 0:
         return {"status": "PULL_FAILED", "reason": (pull.stderr.strip().splitlines() or ["?"])[-1][:200]}
     res: dict = {"status": "OK"}
     run = subprocess.run(["docker", "run", "--rm", "--network", "none", "--workdir", "/app", "--entrypoint", "python",
-                          image, "-c", PROBE], capture_output=True, text=True, timeout=300)
+                          image, "-c", PROBE], capture_output=True, text=True, timeout=300, check=False)
     line = next((x for x in run.stdout.splitlines() if x.startswith("PROBE_JSON ")), None)
     res["probe"] = json.loads(line[11:]) if line else {"error": (run.stderr.strip().splitlines() or ["?"])[-1][:200]}
     if os.environ.get("PARITY_YF_PROBE") == "1":
         yf = subprocess.run(["docker", "run", "--rm", "--workdir", "/app", "--entrypoint", "python", image, "-c",
-                             YF_PROBE], capture_output=True, text=True, timeout=300)
+                             YF_PROBE], capture_output=True, text=True, timeout=300, check=False)
         line = next((x for x in yf.stdout.splitlines() if x.startswith("YF_JSON ")), None)
         res["public_history_probe"] = json.loads(line[8:]) if line else {
             "error": (yf.stderr.strip().splitlines() or ["?"])[-1][:200]}
