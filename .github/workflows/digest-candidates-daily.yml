@@ -5,8 +5,10 @@ name: Digest Candidates Daily
 # (archive + metadata; no publish, no broker or QRS writes).
 #
 # Dry-run by default: without vars.DIGEST_CANDIDATES_GCS_URI the JSON stays in
-# runner temp and only a redacted summary is printed. With the variable set
-# (owner-provisioned private bucket/prefix + objectCreator for the deploy SA),
+# runner temp and only a redacted summary is printed. Production value:
+# DIGEST_CANDIDATES_GCS_URI=gs://qsl-runtime-logs-shared/digest-candidates
+# (shared bucket; deploy SA has prefix-conditioned objectUser on
+# digest-candidates/<platform>/ only). With the variable set,
 # the file is uploaded to <uri>/schwab/<business_day>/<target>.json for the
 # QuantRuntimeSettings daily digest. Never uploaded as an Actions artifact.
 #
