@@ -396,6 +396,8 @@ jobs:
       - name: Build, push, and deploy Cloud Run image
         id: deploy
         if: steps.config.outputs.deploy_enabled == 'true'
+        env:
+          SYNC_PLAN_JSON: ${{ steps.strategy_requirements.outputs.sync_plan_json }}
         run: |
           set -euo pipefail
 
@@ -405,6 +407,9 @@ jobs:
 
           gcloud auth configure-docker "${artifact_registry_hostname}" --quiet
           git archive HEAD | docker build --pull -t "${image}" -
+          # RS-08 guard: block the deploy if the image's installed UES revision differs from
+          # strategy_release / runtime-risk binding (live would reject every SOXL rebalance).
+          python3 scripts/verify_image_ues_release_binding.py --image "${image}" --lockfile uv.lock
           docker push "${image}"
           image_digest="$(gcloud artifacts docker images describe "${image}" --project="${GCP_PROJECT_ID}" --format='value(image_summary.digest)')"
           if [[ ! "${image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
