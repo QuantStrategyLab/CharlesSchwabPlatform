@@ -20,6 +20,11 @@ from quant_platform_kit.common.operational_notification_localization import (
     resolve_operational_notification_locale,
 )
 
+try:
+    from scripts import runtime_guard_alert_dedupe as alert_dedupe
+except ModuleNotFoundError:  # executed as `python scripts/cloud_run_runtime_guard.py`
+    import runtime_guard_alert_dedupe as alert_dedupe  # type: ignore[no-redef]
+
 
 ERROR_SEVERITIES = {"ERROR", "CRITICAL", "ALERT", "EMERGENCY"}
 FAILURE_WORDS = (
@@ -700,6 +705,7 @@ def main() -> int:
 
     issues: list[str] = []
     details: list[str] = []
+    alert_event_ids: list[str] = []
     success_count = 0
     success_count_by_service: dict[str, int] = {}
     queried_services: set[str] = set()
@@ -743,6 +749,7 @@ def main() -> int:
                 )
             )
             details.extend(_summarize(entry) for entry in failures[:5])
+            alert_event_ids.extend(alert_dedupe.event_id(entry) for entry in failures)
 
     if services and require_success:
         for service in _services_without_success(
@@ -791,6 +798,7 @@ def main() -> int:
                     )
                 )
                 details.extend(_summarize(entry) for entry in failures[:5])
+                alert_event_ids.extend(alert_dedupe.event_id(entry) for entry in failures)
         except RuntimeError as exc:
             issues.append(_notice("runtime_guard_scheduler_log_query_failed"))
             details.append(f"Cloud Scheduler log query failed: {exc}")
@@ -798,6 +806,7 @@ def main() -> int:
         print("Skipping Cloud Scheduler check because no scheduler job pattern could be derived.", file=sys.stderr)
 
     if not issues:
+        alert_dedupe.clear_issues()
         service_text = ", ".join(services) if services else "<none configured>"
         print(
             f"Runtime guard OK for {name}: services={service_text}, lookback={lookback_minutes}m, successes={success_count}"
@@ -820,6 +829,11 @@ def main() -> int:
         workflow_url=run_url,
     )
     print(message)
+    decision = alert_dedupe.decide(name=name, issues=issues, event_ids=alert_event_ids)
+    print(decision.log_line())
+    if not decision.send:
+        print(f"Runtime guard alert suppressed as a repeat for {name}; no new failure entries.")
+        return 1 if fail_workflow else 0
     _send_telegram(message[:3900])
     return 1 if fail_workflow else 0
 
