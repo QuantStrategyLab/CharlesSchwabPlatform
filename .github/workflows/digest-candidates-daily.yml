@@ -1,0 +1,103 @@
+name: Digest Candidates Daily
+
+# NOTIFY-04 B2: produce the Schwab daily-digest candidate row automatically after
+# the US close, from the same read-only prepare path as runtime-daily-sync
+# (archive + metadata; no publish, no broker or QRS writes).
+#
+# Dry-run by default: without vars.DIGEST_CANDIDATES_GCS_URI the JSON stays in
+# runner temp and only a redacted summary is printed. With the variable set
+# (owner-provisioned private bucket/prefix + objectCreator for the deploy SA),
+# the file is uploaded to <uri>/schwab/<business_day>/<target>.json for the
+# QuantRuntimeSettings daily digest. Never uploaded as an Actions artifact.
+#
+# Schedule: 21:15 UTC Mon–Fri = 05:15 Asia/Shanghai Tue–Sat, after the
+# 15:45 NY run and before the 06:00 Shanghai digest cut-off.
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: "15 21 * * 1-5"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: schwab-digest-candidates-daily
+  cancel-in-progress: false
+
+env:
+  GCP_PROJECT_ID: charlesschwabquant
+  GCP_REGION: us-central1
+  GCP_WORKLOAD_IDENTITY_PROVIDER: projects/401309731911/locations/global/workloadIdentityPools/github-actions/providers/github-main
+  GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: schwab-platform-deploy@charlesschwabquant.iam.gserviceaccount.com
+
+jobs:
+  candidates:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RUNTIME_TARGET_JSON: ${{ secrets.SCHWAB_RUNTIME_DAILY_TARGET_JSON || vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}
+      CLOUD_RUN_SERVICE_TARGETS_JSON: ${{ vars.CLOUD_RUN_SERVICE_TARGETS_JSON || secrets.CLOUD_RUN_SERVICE_TARGETS_JSON }}
+      CLOUD_RUN_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
+      CLOUD_RUN_SERVICES: ${{ secrets.CLOUD_RUN_SERVICES }}
+      SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX: ${{ secrets.SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX }}
+      RUNTIME_HEARTBEAT_MARKET_CALENDAR: ${{ vars.SCHWAB_MARKET_CALENDAR }}
+      RUNTIME_HEARTBEAT_MARKET_TIMEZONE: ${{ vars.SCHWAB_MARKET_TIMEZONE }}
+      RUNTIME_HEARTBEAT_PUBLICATION_GRACE_MINUTES: ${{ vars.RUNTIME_HEARTBEAT_PUBLICATION_GRACE_MINUTES || '30' }}
+      RUNTIME_HEARTBEAT_SCHEDULER_LOCATION: ${{ vars.RUNTIME_HEARTBEAT_SCHEDULER_LOCATION || vars.CLOUD_RUN_REGION || 'us-central1' }}
+      CLOUD_SCHEDULER_MAIN_TIME: ${{ vars.CLOUD_SCHEDULER_MAIN_TIME }}
+      DIGEST_CANDIDATES_GCS_URI: ${{ vars.DIGEST_CANDIDATES_GCS_URI || '' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+
+      - name: Install locked runtime dependencies
+        run: uv sync --frozen --no-dev
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Emit DIGEST_CANDIDATES (runner temp only)
+        env:
+          SCHWAB_DIGEST_CANDIDATES_OUTPUT_PATH: ${{ runner.temp }}/schwab-digest-candidates.json
+          SCHWAB_DIGEST_ACCOUNT_FACTS_OUTPUT_PATH: ${{ runner.temp }}/schwab-digest-account-facts.json
+          SCHWAB_DIGEST_OPAQUE_ACCOUNT_UID: ${{ secrets.SCHWAB_DIGEST_OPAQUE_ACCOUNT_UID }}
+          SCHWAB_DIGEST_TARGET_ID: ${{ secrets.SCHWAB_DIGEST_TARGET_ID }}
+          SCHWAB_ACCOUNT_FACTS_TARGET_ID: ${{ secrets.SCHWAB_ACCOUNT_FACTS_TARGET_ID }}
+          SCHWAB_ACCOUNT_FACTS_SERVICE_NAME: ${{ secrets.SCHWAB_ACCOUNT_FACTS_SERVICE_NAME }}
+          SCHWAB_NET_ASSETS_CURRENCY: ${{ vars.SCHWAB_NET_ASSETS_CURRENCY }}
+          SCHWAB_CASH_CURRENCY: ${{ vars.SCHWAB_CASH_CURRENCY }}
+          SCHWAB_RUNTIME_DAILY_TARGET_JSON: ${{ secrets.SCHWAB_RUNTIME_DAILY_TARGET_JSON }}
+        run: |
+          set -euo pipefail
+          uv run --no-sync python scripts/emit_digest_candidates.py
+          test -f "$SCHWAB_DIGEST_CANDIDATES_OUTPUT_PATH"
+          uv run --no-sync python scripts/digest_candidates_store.py summarize --path "$SCHWAB_DIGEST_CANDIDATES_OUTPUT_PATH"
+
+      - name: Upload to private digest store (only when configured)
+        env:
+          CANDIDATES_PATH: ${{ runner.temp }}/schwab-digest-candidates.json
+        run: |
+          set -euo pipefail
+          if [[ -z "${DIGEST_CANDIDATES_GCS_URI}" ]]; then
+            echo "dry_run: vars.DIGEST_CANDIDATES_GCS_URI is unset; candidates stay in runner temp (not uploaded)."
+            exit 0
+          fi
+          object="$(uv run --no-sync python scripts/digest_candidates_store.py object-uri --path "$CANDIDATES_PATH" --platform schwab --target live --uri "$DIGEST_CANDIDATES_GCS_URI")"
+          if [[ -z "$object" ]]; then
+            echo "No dated candidate rows; nothing uploaded."
+            exit 0
+          fi
+          gcloud storage cp "$CANDIDATES_PATH" "$object" --no-user-output-enabled
+          echo "Uploaded candidates for platform=schwab (object path withheld from logs)."
