@@ -26,6 +26,7 @@ from application.broker_reconciliation import (
     validate_reconciliation_candidate,
     validate_reconciliation_preconditions,
 )
+from application import signal_provenance
 from application.runtime_broker_adapters import build_runtime_broker_adapters
 from application.runtime_report_summary import summarize_execution_cycle_result
 from application.runtime_composer import build_runtime_composer
@@ -754,6 +755,20 @@ def _schwab_market_open_now():
     return market_open, None
 
 
+def attach_signal_data_provenance(report) -> None:
+    """Attach this run's non-sensitive signal data provenance; never raises."""
+    try:
+        provenance = signal_provenance.snapshot()
+        if provenance and isinstance(report, dict):
+            diagnostics = report.get("diagnostics")
+            if not isinstance(diagnostics, dict):
+                diagnostics = {}
+                report["diagnostics"] = diagnostics
+            diagnostics["signal_data_provenance"] = provenance
+    except Exception:
+        return
+
+
 def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_body: str = "OK"):
     if dry_run_only_override is None and not getattr(RUNTIME_SETTINGS, "runtime_target_enabled", True):
         return "Runtime Target Disabled", 200
@@ -761,6 +776,7 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
     reporting_adapters = composer.build_reporting_adapters()
     log_context = reporting_adapters.build_log_context()
     report = build_execution_report(log_context, dry_run_only_override=dry_run_only_override)
+    signal_provenance.reset()
     strategy_plugin_signals, strategy_plugin_error = load_strategy_plugin_signals()
     attach_strategy_plugin_report(
         report,
@@ -936,6 +952,7 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
         )
         return "Error", 500
     finally:
+        attach_signal_data_provenance(report)
         if "execution_receipt" not in report:
             try:
                 attach_terminal_fallback_execution_receipt(report)

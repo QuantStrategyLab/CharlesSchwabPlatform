@@ -18,7 +18,29 @@ from quant_platform_kit.common.port_adapters import (
     CallablePortfolioPort,
 )
 
+from application import signal_provenance
 from application.portfolio_nlv_align import align_cash_only_sleeve_to_broker_liquidation
+
+
+SCHWAB_HISTORY_SOURCE = "schwab_price_history"
+SCHWAB_HISTORY_NOTE = (
+    "Schwab daily price history (2Y); split-adjusted, no dividend adjustment per broker convention; "
+    "last point may be replaced by the live quote"
+)
+
+
+def _record_schwab_history_provenance(symbol, series) -> None:
+    """Best-effort, non-sensitive provenance (source/basis/rows/dates only)."""
+    try:
+        signal_provenance.record(
+            symbol,
+            source=SCHWAB_HISTORY_SOURCE,
+            price_basis=signal_provenance.SPLIT_ONLY,
+            dates=[point.as_of for point in tuple(getattr(series, "points", ()) or ())],
+            note=SCHWAB_HISTORY_NOTE,
+        )
+    except Exception:
+        return
 
 
 def _utcnow() -> datetime:
@@ -218,6 +240,7 @@ class SchwabRuntimeBrokerAdapters:
 
     def build_price_history(self, market_data_port, symbol: str):
         series = market_data_port.get_price_series(symbol)
+        _record_schwab_history_provenance(symbol, series)
         return [
             {
                 "datetime": int(point.as_of.timestamp() * 1000),
@@ -231,6 +254,7 @@ class SchwabRuntimeBrokerAdapters:
     def build_market_history_loader(self, market_data_port):
         def load_market_history(_broker_client, symbol, *_args, **_kwargs):
             series = market_data_port.get_price_series(str(symbol).strip().upper())
+            _record_schwab_history_provenance(symbol, series)
             if not series.points:
                 return pd.Series(dtype=float)
             closes = [float(point.close) for point in series.points]
