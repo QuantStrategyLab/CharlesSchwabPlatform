@@ -20,6 +20,24 @@ from us_equity_strategies.cash_only_equity import (
 )
 
 
+def required_trend_ma_window(config: Mapping[str, Any]) -> int:
+    """Return the manifest/merged ``trend_ma_window``; never guess a default.
+
+    strategy_runtime_config starts from ``manifest.default_config``, so the key
+    is always present for semiconductor-rotation profiles. A missing or invalid
+    value now fails closed instead of silently using 150 (RS-08 fix 2).
+    """
+    raw = config.get("trend_ma_window") if isinstance(config, Mapping) else None
+    if raw is None or isinstance(raw, bool) or str(raw).strip() == "":
+        raise ValueError("trend_ma_window missing from merged strategy config (manifest default_config)")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"trend_ma_window must be an integer, got {raw!r}") from exc
+    if value <= 0 or value != float(raw):
+        raise ValueError(f"trend_ma_window must be a positive integer, got {raw!r}")
+    return value
+
 @dataclass(frozen=True)
 class SchwabRuntimeStrategyAdapters:
     strategy_runtime: Any
@@ -157,7 +175,7 @@ class SchwabRuntimeStrategyAdapters:
         if "derived_indicators" in available_inputs or "indicators" in available_inputs:
             return self.build_semiconductor_indicators(
                 market_data_port,
-                trend_window=int(self.strategy_runtime_config.get("trend_ma_window", 150)),
+                trend_window=required_trend_ma_window(self.strategy_runtime_config),
             )
         raise ValueError(
             f"Unsupported Schwab runtime inputs for {self.strategy_profile}: {sorted(available_inputs)}"
