@@ -1,0 +1,44 @@
+name: Strategy Parity Check
+
+# Read-only (RS-08): reports what code/config the live SOXL/TQQQ services actually run
+# (serving revision, image digest, package commits stamped in the image, manifest trend
+# window, strategy_release identity, presence of config/signal env vars, recent log reason
+# codes, public market-data history length/basis). Prints no account values, positions,
+# tokens, chat ids or full configs. Never changes Cloud Run, secrets, traffic, or trading.
+# The image probe runs with --network none and no environment.
+on:
+  workflow_dispatch:
+
+env:
+  GCP_PROJECT_ID: charlesschwabquant
+  GCP_WORKLOAD_IDENTITY_PROVIDER: projects/401309731911/locations/global/workloadIdentityPools/github-actions/providers/github-main
+  GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: schwab-platform-deploy@charlesschwabquant.iam.gserviceaccount.com
+
+jobs:
+  parity-check:
+    name: Strategy parity check (read-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
+      PARITY_SERVICES: charles-schwab-quant-service
+      PARITY_LOG_DAYS: "21"
+      PARITY_YF_PROBE: "0"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Report live strategy identity (no sensitive values)
+        run: python3 scripts/strategy_parity_check.py
