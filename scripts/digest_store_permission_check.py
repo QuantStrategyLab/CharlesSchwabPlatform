@@ -8,7 +8,8 @@ calls read-only Cloud Storage APIs:
 * ``buckets.get`` (public-access-prevention / uniform access), if allowed;
 * ``buckets.getIamPolicy``, if allowed, to report whether ``allUsers`` /
   ``allAuthenticatedUsers`` appear (booleans only; no member list printed);
-* ``objects.list`` under the prefix with maxResults=1 (count only);
+* ``objects.list`` under the prefix (object names / sizes / timestamps only)
+  and a metadata-only ``objects.get`` on the first object (no content);
 * an anonymous ``objects.list`` (expect 401/403 for a private bucket).
 
 Prints a single JSON line of booleans / status codes. Never writes.
@@ -75,9 +76,23 @@ def main() -> int:
         result["policy_has_allUsers"] = "allUsers" in members
         result["policy_has_allAuthenticatedUsers"] = "allAuthenticatedUsers" in members
         result["policy_has_conditions"] = any(b.get("condition") for b in policy.get("bindings") or [])
-    code, listing = _get(f"{API}/o?" + urllib.parse.urlencode({"prefix": PREFIX, "maxResults": 1}), token)
+    code, listing = _get(
+        f"{API}/o?" + urllib.parse.urlencode({"prefix": PREFIX, "maxResults": 100, "fields": "items(name,size,updated)"}),
+        token,
+    )
     result["prefix_list_http"] = code
-    result["prefix_has_objects"] = bool(listing.get("items")) if code == 200 else None
+    items = listing.get("items") or [] if code == 200 else []
+    result["prefix_has_objects"] = bool(items) if code == 200 else None
+    # Object names/sizes/timestamps only (names carry platform/business_day/target, no values).
+    result["prefix_objects"] = [
+        {"name": item.get("name"), "size": int(item.get("size") or 0), "updated": item.get("updated")}
+        for item in items
+    ]
+    if items:
+        name = urllib.parse.quote(str(items[0].get("name")), safe="")
+        # Metadata-only GET (alt=json default): proves objects.get without reading content.
+        code, _meta = _get(f"{API}/o/{name}?fields=name,size", token)
+        result["object_metadata_get_http"] = code
     anon_code, _ = _get(f"{API}/o?maxResults=1", None)
     result["anonymous_list_http"] = anon_code
     print(json.dumps(result, sort_keys=True))
