@@ -391,3 +391,79 @@ def test_workflow_protects_existing_inputs_before_headers_and_keeps_manual_main_
     assert "SOURCE_SHA: ${{ github.sha }}" in protected
     assert "::add-mask::" not in protected
     assert "run: python3 scripts/notify_route_check.py" in protected
+
+
+@pytest.mark.parametrize("use_default", [False, True])
+def test_documented_zero_target_does_not_hide_positive_serving_revision(tmp_path, use_default):
+    cloud = FakeCloud()
+    zero = {"tag": "PRIVATE_ZERO_TAG", "url": "https://PRIVATE_ZERO_URL"}
+    if not use_default:
+        zero["percent"] = 0
+    cloud.service["status"]["traffic"].append(zero)
+    report, _, _ = observe(tmp_path, cloud)
+    row = report["services"][0]
+    assert row["traffic_status"] == "single"
+    assert row["same_bot_as_contract"] is False
+    assert row["traffic_issue"] == "none"
+    assert row["traffic_detail"] == ("percent_default_zero" if use_default else "none")
+    assert len(row["revisions"]) == 1
+    assert row["revisions"][0]["same_bot_as_contract"] is False
+    public = json.dumps(report) + (tmp_path / "summary").read_text()
+    assert "PRIVATE_ZERO_TAG" not in public and "PRIVATE_ZERO_URL" not in public
+
+
+@pytest.mark.parametrize("status,issue,detail", [
+    (None, "traffic_missing", "none"),
+    ({}, "traffic_missing", "none"),
+    ({"traffic": None}, "not_list", "none"),
+    ({"traffic": {}}, "not_list", "none"),
+    ({"traffic": "PRIVATE_BAD_TRAFFIC"}, "not_list", "none"),
+    ({"traffic": [None]}, "row_invalid", "none"),
+    ({"traffic": ["PRIVATE_BAD_ROW"]}, "row_invalid", "none"),
+    ({"traffic": [{"tag": "PRIVATE_ZERO_TAG"}]}, "no_positive", "percent_default_zero"),
+    ({"traffic": [{"revisionName": REVISION}]}, "no_positive", "percent_default_zero"),
+    ({"traffic": [{"percent": None}]}, "percent_type_invalid", "none"),
+    ({"traffic": [{"percent": True}]}, "percent_type_invalid", "none"),
+    ({"traffic": [{"percent": "100"}]}, "percent_type_invalid", "none"),
+    ({"traffic": [{"percent": 100.0}]}, "percent_type_invalid", "none"),
+    ({"traffic": [{"percent": -1}]}, "percent_out_of_range", "none"),
+    ({"traffic": [{"percent": 101}]}, "percent_out_of_range", "none"),
+    ({"traffic": [{"percent": 100}]}, "revision_missing", "none"),
+    ({"traffic": [{"percent": 100, "revisionName": None}]}, "revision_invalid", "none"),
+    ({"traffic": [{"percent": 100, "revisionName": ""}]}, "revision_invalid", "none"),
+    ({"traffic": [{"percent": 100, "revisionName": "PRIVATE_BAD_REVISION/path"}]}, "revision_invalid", "none"),
+    ({"traffic": [{"percent": 50, "revisionName": REVISION},
+                 {"percent": 50, "revisionName": REVISION}]}, "duplicate", "none"),
+    ({"traffic": [{"percent": 50, "revisionName": REVISION}]}, "incomplete", "none"),
+    ({"traffic": []}, "no_positive", "none"),
+    ({"traffic": [{"percent": 0}]}, "no_positive", "none"),
+    ({"traffic": [{"tag": "PRIVATE_ZERO_TAG"}, {"percent": False}]},
+     "percent_type_invalid", "percent_default_zero"),
+    ({"traffic": [{"percent": False}, {"tag": "PRIVATE_ZERO_TAG"}]}, "percent_type_invalid", "none"),
+])
+def test_traffic_shape_reason_is_fixed_and_never_turns_bad_metadata_into_match(tmp_path, status, issue, detail):
+    cloud = FakeCloud()
+    cloud.service["status"] = status
+    report, _, _ = observe(tmp_path, cloud)
+    row = report["services"][0]
+    assert row["traffic_issue"] == issue
+    assert row["traffic_detail"] == detail
+    assert row["same_bot_as_contract"] is None
+    assert row["bot_status"] == "unknown"
+    assert row["revisions"] == []
+    assert not any(args[:3] == ("run", "revisions", "describe") for args in cloud.calls)
+    summary = (tmp_path / "summary").read_text()
+    assert '"traffic_issue": "' + issue + '"' in summary
+    assert '"traffic_detail": "' + detail + '"' in summary
+    for private in ["PRIVATE_ZERO_TAG", "PRIVATE_ZERO_URL", "PRIVATE_BAD_TRAFFIC", "PRIVATE_BAD_ROW",
+                    "PRIVATE_BAD_REVISION", "PRIVATE_BAD_STATUS"]:
+        assert private not in json.dumps(report) + summary
+
+
+def test_unread_service_has_unavailable_shape_instead_of_inferred_default(tmp_path):
+    cloud = FakeCloud()
+    cloud.fail.add(("service", SERVICE))
+    report, _, _ = observe(tmp_path, cloud)
+    row = report["services"][0]
+    assert row["traffic_issue"] == row["traffic_detail"] == "unavailable"
+    assert row["same_bot_as_contract"] is None
