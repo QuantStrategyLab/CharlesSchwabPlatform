@@ -139,6 +139,18 @@ jobs:
             tests/test_runtime_monitor_workflows.py \
             tests/test_rebalance_service.py
 
+      - name: Verify notification results and delivery gates
+        run: |
+          set -euo pipefail
+          uv run --no-sync pytest -q \
+            tests/test_risk_gate_notification_result.py \
+            tests/test_runtime_notification_i18n.py \
+            tests/test_notifications.py \
+            tests/test_notification_quiet.py \
+            tests/test_notification_events.py \
+            tests/test_compact_notification_adapter.py \
+            tests/test_runtime_notification_adapters.py
+
       - name: Verify no-traffic deployment workflow
         run: |
           set -euo pipefail

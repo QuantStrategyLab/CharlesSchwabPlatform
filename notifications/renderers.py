@@ -80,7 +80,13 @@ def _format_benchmark_lines(execution, *, translator) -> list[str]:
 
 
 def _format_cycle_completion_line(execution, *, translator) -> str:
-    if str(execution.get("execution_status") or "").strip().lower() != "blocked":
+    status = str(execution.get("execution_status") or "").strip().lower()
+    if status != "blocked":
+        attention_reasons = execution.get("notification_attention_reason_codes") or ()
+        if isinstance(attention_reasons, (list, tuple)) and "account_new_risk_gate" in attention_reasons:
+            return translator("new_risk_prohibited_result")
+        if status not in {"", "no_op", "no_action", "completed", "executed", "dry_run", "dry_run_completed"}:
+            return translator("execution_result_unverified")
         return translator("no_trades")
     if str(execution.get("no_op_reason") or "").strip() == "rejected:too_many_positions":
         return translator("risk_rejected_too_many_positions")
