@@ -19,6 +19,8 @@ stdout 和 GitHub summary 使用 `qsl.notify_route_identity.v1`：固定 status/
 
 `status=ok` / exit 0 仅表示诊断形成结果，**不表示 route 已就绪**。看逐服务 `bot_status=match|mismatch|unknown`、`same_bot_as_contract=true|false|null` 与固定 reason。scope 始终 `project_contract_only`，`canonical_route_status=unknown`。
 
+附加 `traffic_issue` / `traffic_detail` 只给出固定结构原因；依据 [Cloud Run REST v1 TrafficTarget](https://cloud.google.com/run/docs/reference/rest/v1/TrafficTarget) 的“defaults to zero if unspecified”，仅字典行完全缺少 percent 键时沿用 zero skip 并记 `percent_default_zero`（显式 null/bool/string/float 或越界仍拒绝），缺省零本身不证明 positive traffic、批准身份或就绪，也不作宽泛 parser 迁移。
+
 ## 尚未验收的入口
 
 `same_chat_as_canonical` 和 `same_topic_as_canonical` 固定 null、对应 status unknown：当前没有批准的中央 private canonical reference，本批不创造新 secret、全局路由规则或 topic 值，也不额外读取 chat secret。既有 runtime chat 为 QSL_GLOBAL 优先 GLOBAL；heartbeat/guard 只遍历 GLOBAL 全列表；中央日报优先 QSL_GLOBAL/GLOBAL/plugin 且只取首 ID。它们需要按各自原 selector 在受保护比较边界取得三态证据，不能重新统一解析来使其匹配。

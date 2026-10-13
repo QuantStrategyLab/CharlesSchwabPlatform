@@ -163,7 +163,7 @@ def _traffic(service: dict) -> tuple[list[str], str, str]:
     serving = []
     total = 0
     for row in rows:
-        percent = row.get("percent") if isinstance(row, dict) else None
+        percent = row.get("percent", 0) if isinstance(row, dict) else None
         if type(percent) is not int or not 0 <= percent <= 100:
             return [], "unknown", "traffic_invalid"
         if percent == 0:
@@ -180,6 +180,42 @@ def _traffic(service: dict) -> tuple[list[str], str, str]:
     return serving, "single" if len(serving) == 1 else "split", "none"
 
 
+def _traffic_shape(service: dict, reason: str) -> tuple[str, str]:
+    """Project fixed structural reasons without changing the parser's decision."""
+    status = service.get("status")
+    if not isinstance(status, dict) or "traffic" not in status:
+        return "traffic_missing", "none"
+    rows = status["traffic"]
+    if not isinstance(rows, list):
+        return "not_list", "none"
+    detail = "none"
+    seen = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            return "row_invalid", detail
+        if "percent" not in row:
+            # REST v1 TrafficTarget: only an unspecified percent defaults to zero.
+            detail = "percent_default_zero"
+            continue
+        percent = row["percent"]
+        if type(percent) is not int:
+            return "percent_type_invalid", detail
+        if not 0 <= percent <= 100:
+            return "percent_out_of_range", detail
+        if percent == 0:
+            continue
+        if "revisionName" not in row:
+            return "revision_missing", detail
+        name = row["revisionName"]
+        if not isinstance(name, str) or not re.fullmatch(_SERVICE, name):
+            return "revision_invalid", detail
+        if name in seen:
+            return "duplicate", detail
+        seen.add(name)
+    issue = {"traffic_incomplete": "incomplete", "no_positive_traffic": "no_positive", "none": "none"}
+    return issue.get(reason, "unavailable"), detail
+
+
 def _unknown_comparison() -> dict:
     return {
         "bot_status": "unknown", "same_bot_as_contract": None,
@@ -190,6 +226,7 @@ def _unknown_comparison() -> dict:
 
 def _observe_service(service: str, ordinal: int, project: str, region: str, contract_id: int | None) -> dict:
     out = {"service_label": f"service#{ordinal}", "traffic_status": "unknown",
+           "traffic_issue": "unavailable", "traffic_detail": "unavailable",
            "reason_code": "service_describe_failed", **_unknown_comparison(), "revisions": []}
     try:
         spec = json.loads(_gcloud("run", "services", "describe", service, f"--project={project}",
@@ -200,7 +237,8 @@ def _observe_service(service: str, ordinal: int, project: str, region: str, cont
         out["reason_code"] = "service_metadata_invalid"
         return out
     serving, traffic_status, reason = _traffic(spec)
-    out.update(traffic_status=traffic_status, reason_code=reason)
+    issue, detail = _traffic_shape(spec, reason)
+    out.update(traffic_status=traffic_status, reason_code=reason, traffic_issue=issue, traffic_detail=detail)
     if not serving:
         return out
     for index, name in enumerate(serving, start=1):
