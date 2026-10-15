@@ -13,4 +13,3 @@
 验证：先补回归用例，旧检查出现 `DID NOT RAISE AdmissionError`；修改后 84 项相关 pytest 通过。改动文件 ruff、actionlint（关闭 shellcheck）、两个现有 workflow shell 检查和 `git diff --check` 通过。测试覆盖版本引用变化、保持 baseline 不变、合法 continuity 状态变化、HTTP/TCP 探针区别和失败候选不得调用 update-traffic。
 
 本次没有部署、切流、Scheduler 调用、Secret/IAM 变更、券商请求或真实订单核对。上述验证证明本地发布保护逻辑，不能代替云上候选 revision 的实际启动验收。当前 incident 的归因和完整时间线见本任务交付的 REPORT.md。
-

@@ -55,4 +55,3 @@ def verify_traffic_revision(
     if not isinstance(target, Mapping):
         raise ValueError("traffic candidate runtime target must be an object")
     verify_target_continuity(target)
-
