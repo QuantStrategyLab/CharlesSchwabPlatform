@@ -30,6 +30,21 @@ def test_admitted_shadow_target_passes():
     assert result["profile"] == "soxl_soxx_trend_income"
 
 
+def test_deployed_target_rejects_stale_continuity_after_version_change():
+    from quant_platform_kit.common.live_continuity import runtime_target_fingerprint
+
+    configured = target()
+    configured["strategy_release"] = {"strategy_revision": "a" * 40}
+    configured["live_continuity"] = {
+        "state": "ACTIVE_LKG", "baseline_kind": "legacy_authorized",
+        "baseline_id": "synthetic-baseline", "captured_at": "2026-10-01",
+        "baseline_target_sha256": runtime_target_fingerprint(configured),
+    }
+    configured["strategy_release"]["strategy_revision"] = "b" * 40
+    with pytest.raises(admission.AdmissionError, match="continuity"):
+        admission.verify_service(service="paper-service", service_json=payload(configured, "soxl_soxx_trend_income"))
+
+
 def test_paper_broker_submission_target_passes():
     configured = target(dry_run=False) | {"execution_mode": "paper"}
     assert admission.verify_service(service="paper-service", service_json=payload(configured, "soxl_soxx_trend_income", "false"))["dry_run_only"] is False

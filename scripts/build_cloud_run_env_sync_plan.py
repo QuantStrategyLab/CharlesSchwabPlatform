@@ -374,6 +374,9 @@ def _build_target_plan(
             env_values[name] = value
 
     env_values["STRATEGY_PROFILE"] = canonical_profile
+    from scripts.runtime_target_continuity import verify_target_continuity
+
+    verify_target_continuity(runtime_target)
     env_values["RUNTIME_TARGET_JSON"] = json.dumps(
         runtime_target,
         separators=(",", ":"),

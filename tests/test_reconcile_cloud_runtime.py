@@ -21,6 +21,20 @@ def _completed(
     return subprocess.CompletedProcess(command, returncode, stdout=stdout, stderr=stderr)
 
 
+def _http_candidate(name, commit):
+    return {
+        "metadata": {"name": name, "labels": {"commit-sha": commit}},
+        "spec": {"containers": [{
+            "startupProbe": {"httpGet": {"path": "/health", "port": 8080}},
+            "env": [{"name": "RUNTIME_TARGET_JSON", "value": "{}"}],
+        }]},
+        "status": {"conditions": [
+            {"type": "Ready", "status": "True"},
+            {"type": "ContainerHealthy", "status": "True"},
+        ]},
+    }
+
+
 class ReconcileCloudRuntimeTests(unittest.TestCase):
     def test_execution_concurrency_invariants_accept_serial_single_instance(self) -> None:
         runtime._assert_execution_concurrency_invariants(
@@ -266,6 +280,8 @@ class ReconcileCloudRuntimeTests(unittest.TestCase):
             if command[:4] == ["gcloud", "run", "services", "describe"]:
                 payload = service_describes.pop(0)
                 return _completed(command, stdout=json.dumps(payload))
+            if command[:4] == ["gcloud", "run", "revisions", "describe"]:
+                return _completed(command, stdout=json.dumps(_http_candidate(revision, target_sha)))
             if command[:4] == ["gcloud", "run", "services", "update-traffic"]:
                 return _completed(command)
             raise AssertionError(f"unexpected command: {command}")

@@ -218,7 +218,7 @@ auth_line="$(grep -n -F 'name: Authenticate to Google Cloud' "$workflow_file" | 
 test "${cash_validation_line}" -lt "${auth_line}"
 grep -Fq '"--workers", "1", "--threads", "1"' "$dockerfile"
 grep -Fxq 'threads = 1' "$gunicorn_config"
-grep -Fq 'python3 scripts/reconcile_cloud_runtime.py reconcile-traffic' "$workflow_file"
+grep -Fq 'uv run --no-sync python scripts/reconcile_cloud_runtime.py reconcile-traffic' "$workflow_file"
 grep -Fq 'Remove legacy Cloud Scheduler jobs' "$workflow_file"
 grep -Fq 'python3 scripts/reconcile_cloud_runtime.py cleanup-schedulers' "$workflow_file"
 if grep -Fq 'legacy_jobs=(' "$workflow_file"; then

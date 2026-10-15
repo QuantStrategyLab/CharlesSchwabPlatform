@@ -459,6 +459,8 @@ jobs:
             --timeout=300s \
             --labels="managed-by=github-actions,commit-sha=${GITHUB_SHA},github-run-id=${GITHUB_RUN_ID}" \
             --no-traffic \
+            --deploy-health-check \
+            --startup-probe="httpGet.path=/health,httpGet.port=8080,periodSeconds=10,timeoutSeconds=5,failureThreshold=24" \
             "${cash_deploy_env_args[@]}" \
             --quiet
 
@@ -831,6 +833,9 @@ jobs:
           gcloud_args=(
             run services update "${CLOUD_RUN_SERVICE}"
             --region "${CLOUD_RUN_REGION}"
+            --no-traffic
+            --deploy-health-check
+            --startup-probe="httpGet.path=/health,httpGet.port=8080,periodSeconds=10,timeoutSeconds=5,failureThreshold=24"
             --remove-env-vars "$(IFS=,; echo "${remove_env_vars[*]}")"
             --update-env-vars "^|^$(join_by_delimiter "|" "${env_pairs[@]}")"
           )
@@ -851,7 +856,7 @@ jobs:
           SYNC_PLAN_JSON: ${{ steps.strategy_requirements.outputs.sync_plan_json }}
         run: |
           set -euo pipefail
-          python3 scripts/reconcile_cloud_runtime.py reconcile-traffic
+          uv run --no-sync python scripts/reconcile_cloud_runtime.py reconcile-traffic
 
       - name: Verify strategy plugin mounts
         if: steps.config.outputs.env_sync_enabled == 'true'
