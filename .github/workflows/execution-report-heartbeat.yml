@@ -161,3 +161,18 @@ jobs:
 
       - name: Sync the latest in-window archived account observation
         run: python3 scripts/publish_account_facts_from_reports.py --latest-scheduled-report
+
+      - name: Publish existing reports as unified digest candidates
+        if: ${{ success() && vars.QSL_ROUTINE_NOTIFICATION_MODE == 'daily_digest' }}
+        env:
+          QSL_ROUTINE_NOTIFICATION_MODE: ${{ vars.QSL_ROUTINE_NOTIFICATION_MODE || 'immediate' }}
+          RUNTIME_TARGET_ENABLED: ${{ vars.RUNTIME_TARGET_ENABLED }}
+          RUNTIME_TARGET_JSON: ${{ vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}
+          EXECUTION_REPORT_GCS_URI: ${{ vars.EXECUTION_REPORT_GCS_URI || secrets.EXECUTION_REPORT_GCS_URI }}
+          DIGEST_CANDIDATES_GCS_URI: ${{ vars.DIGEST_CANDIDATES_GCS_URI || secrets.DIGEST_CANDIDATES_GCS_URI }}
+          DIGEST_STORE_TARGET: ${{ vars.DIGEST_STORE_TARGET }}
+          DIGEST_OPAQUE_ACCOUNT_UID: ${{ secrets.DIGEST_OPAQUE_ACCOUNT_UID }}
+          DIGEST_TARGET_ID: ${{ secrets.DIGEST_TARGET_ID }}
+          DIGEST_TARGET_BINDINGS_JSON: ${{ secrets.DIGEST_TARGET_BINDINGS_JSON }}
+          DIGEST_NOTIFICATION_SCHEDULE_JSON: ${{ vars.DIGEST_NOTIFICATION_SCHEDULE_JSON }}
+        run: uv run --no-sync python scripts/emit_unified_digest_candidates.py

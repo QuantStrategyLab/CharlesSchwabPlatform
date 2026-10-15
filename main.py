@@ -592,8 +592,9 @@ def build_strategy_plugin_alert_context_label() -> str:
 
 
 def publish_strategy_plugin_alerts(signals, *, report=None):
+    from notifications.digest_snapshot.digest_routing import immediate_plugin_signals
     result = dispatch_strategy_plugin_alerts(
-        signals,
+        immediate_plugin_signals(signals),
         notification_settings=RUNTIME_SETTINGS,
         translator=t,
         strategy_label=STRATEGY_PROFILE,
