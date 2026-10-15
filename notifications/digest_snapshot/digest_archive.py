@@ -27,10 +27,6 @@ def _read(args):
 def emit(env, *, now=None, read=_read, upload=None):
     if env.get("QSL_ROUTINE_NOTIFICATION_MODE", "immediate") != "daily_digest":
         return {"status": "disabled", "uploaded": False}
-    if env.get("RUNTIME_TARGET_ENABLED") == "false":
-        return {"status": "target_disabled", "uploaded": False}
-    if env.get("RUNTIME_TARGET_ENABLED") != "true":
-        raise ValueError("candidate_target_enablement_unknown")
     bindings = env.get("DIGEST_TARGET_BINDINGS_JSON", "").strip()
     if bindings:
         values = json.loads(bindings)
@@ -40,6 +36,10 @@ def emit(env, *, now=None, read=_read, upload=None):
         for value in values:
             results.append(emit({**env, **value, "DIGEST_TARGET_BINDINGS_JSON": ""}, now=now, read=read, upload=upload))
         return {"status": "projected", "uploaded": any(v["uploaded"] for v in results), "targets": len(results)}
+    if env.get("RUNTIME_TARGET_ENABLED") == "false":
+        return {"status": "target_disabled", "uploaded": False}
+    if env.get("RUNTIME_TARGET_ENABLED") != "true":
+        raise ValueError("candidate_target_enablement_unknown")
     target = json.loads(env.get("RUNTIME_TARGET_JSON", ""))
     platform = target.get("platform_id", "")
     slot = env.get("DIGEST_STORE_TARGET", "")

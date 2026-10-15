@@ -6,7 +6,7 @@ immediate confirmed order notices. Failed, pending, uncertain, risk, persistence
 and authentication outcomes retain immediate alerts. Healthy idle cycles and
 routine plugin observations do not produce individual pushes.
 
-QPK source reference: `b0d10862cfc0ffe9e1b868861b937a9cac6e7201` (notification modules only).
+QPK source reference: `783bcc464cef89abd05b63e765cad00490b012c5` (notification modules only).
 
 The notification-only QPK source snapshot in `notifications/digest_snapshot/` avoids an
 unrelated trading dependency upgrade. Keep these three modules byte-identical

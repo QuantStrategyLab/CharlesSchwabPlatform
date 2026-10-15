@@ -105,3 +105,13 @@ def test_configured_closed_session_proves_idle_without_inventing_runs(monkeypatc
     with pytest.raises(ValueError, match="candidate_due_source_absent"):
         emit(env, now=NOW, read=lambda args: [], upload=lambda *args: uploads.append(args))
     assert len(uploads) == 1
+
+
+def test_multi_target_bindings_use_each_explicit_enablement_without_a_global_target():
+    import json
+    from notifications.digest_snapshot.digest_archive import emit
+    result = emit({"QSL_ROUTINE_NOTIFICATION_MODE": "daily_digest",
+        "DIGEST_TARGET_BINDINGS_JSON": json.dumps([{"RUNTIME_TARGET_ENABLED": "false"}])},
+        read=lambda args: pytest.fail("disabled target must not be read"),
+        upload=lambda *args: pytest.fail("disabled target must not be uploaded"))
+    assert result == {"status": "projected", "uploaded": False, "targets": 1}
