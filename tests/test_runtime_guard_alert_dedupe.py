@@ -99,11 +99,11 @@ def test_dry_run_never_suppresses_but_reports_would_suppress(tmp_path):
 
 
 def test_state_holds_hashes_only(tmp_path):
-    entry = {"insertId": "abc123", "textPayload": "secret-ish log text U1234567"}
+    entry = {"insertId": "abc123", "textPayload": "secret-ish log text U00000001"}
     eid = dedupe.event_id(entry)
     _decide(tmp_path, "on", ids=(eid,))
     raw = (tmp_path / "state.json").read_text(encoding="utf-8")
-    assert "abc123" not in raw and "U1234567" not in raw and "svc" not in raw
+    assert "abc123" not in raw and "U00000001" not in raw and "svc" not in raw
     assert set(json.loads(raw)) == {"version", "events", "issues"}
 
 
