@@ -24,7 +24,7 @@ def test_all_cycles_aggregate_without_inventing_fills():
     source = [report(), report("cycle-2", [{"status": "filled"}])]
     original = deepcopy(source)
     row = project(source)[0]
-    assert (row["order_count"], row["fill_count"], row["cycle_count"], row["status"]) == (1, 1, 2, "ok")
+    assert (row["order_count"], row["fill_count"], row["cycle_count"], row["status"]) == (1, None, 2, "ok")
     assert source == original
     assert "account_scope" not in row
 
@@ -77,7 +77,7 @@ def test_archive_aggregates_window_and_uploads_once_without_private_output():
     assert result["runs"] == 2 and len(uploads) == 1
     assert "/2026-10-15/" in uploads[0][0]
     row = json.loads(uploads[0][1])["runs"][0]
-    assert (row["order_count"], row["fill_count"], row["cycle_count"]) == (1, 1, 2)
+    assert (row["order_count"], row["fill_count"], row["cycle_count"]) == (1, None, 2)
     calls = []
     def failed_upload(*args):
         calls.append(args)
@@ -115,3 +115,12 @@ def test_multi_target_bindings_use_each_explicit_enablement_without_a_global_tar
         read=lambda args: pytest.fail("disabled target must not be read"),
         upload=lambda *args: pytest.fail("disabled target must not be uploaded"))
     assert result == {"status": "projected", "uploaded": False, "targets": 1}
+
+
+def test_completed_order_count_is_not_used_as_execution_fill_count():
+    source = report(orders=[{"status": "filled"}])
+    row = project([source])[0]
+    assert row["order_count"] == 1 and row["fill_count"] is None and row["status"] == "ok"
+    fills = [{"execution_id": f"synthetic-fill-{i}"} for i in range(3)]
+    row = project([report(orders=[{"status": "filled", "fills": fills}])])[0]
+    assert row["order_count"] == 1 and row["fill_count"] == 3

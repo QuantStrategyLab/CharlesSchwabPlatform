@@ -15,12 +15,12 @@
 
 新增模块不调用券商。只有既有云监测器在 `daily_digest` 且目标明确启用时，才读已有私有报告并写候选；不启用账户、不修改订单或交易排程。关闭模式保持既有行为。失败、未决订单、风险、认证及持久化问题保留即时通知；已确认的普通订单可通过 `QSL_DIGEST_ROUTINE_ORDERS=false` 继续即时发送。
 
-通知代码取自 QPK `783bcc464cef89abd05b63e765cad00490b012c5`，有意不升级平台交易依赖。三个源文件逐字节相同：
+通知代码取自 QPK `4cc5e55251269923771f90cd661bb62a5cfdf0cd`，有意不升级平台交易依赖。三个源文件逐字节相同：
 
 | 文件 | SHA256 |
 |---|---|
 | `digest_routing.py` | `60c3f258c4d1a03bc49c7d03b392c02c316541726dfacb0b1d4fae6dbd2e5017` |
-| `digest_candidates.py` | `a6a0d10f90a17906c45393a84e819c8d71f430300e977fdb4fa1f824e26878f5` |
+| `digest_candidates.py` | `6272c0ca16ee63eecd9bcb25870df7f575d8fac3f487d3ab1ac69cc3831042a0` |
 | `digest_archive.py` | `b9a92299adfddff42c62f7d493845e0cbde91df7e475a5cb6bf2114446045b49` |
 
 合并条件：相关验证通过、PR 当前精确 head 的 CI 全绿、当前远端主线的 push / workflow_run / 可复用 workflow 调用链无自动部署。否则保留草稿。此审查不批准从旧生产 revision 升级到整个当前主线；生产到候选的完整差异、UES 指纹与 baseline 仍须按后续发布方案单独审查。

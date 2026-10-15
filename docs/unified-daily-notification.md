@@ -6,7 +6,7 @@ immediate confirmed order notices. Failed, pending, uncertain, risk, persistence
 and authentication outcomes retain immediate alerts. Healthy idle cycles and
 routine plugin observations do not produce individual pushes.
 
-QPK source reference: `783bcc464cef89abd05b63e765cad00490b012c5` (notification modules only).
+QPK source reference: `4cc5e55251269923771f90cd661bb62a5cfdf0cd` (notification modules only).
 
 The notification-only QPK source snapshot in `notifications/digest_snapshot/` avoids an
 unrelated trading dependency upgrade. Keep these three modules byte-identical
@@ -30,3 +30,7 @@ list of per-target environment mappings. `DIGEST_NOTIFICATION_SCHEDULE_JSON`
 can reuse the existing heartbeat scheduler/calendar declaration to prove a
 window was not due. Missing due reports stay errors; closed configured sessions
 produce an `actually_ran=false` marker without inventing zero trading counts.
+
+Fill counts require individual execution identifiers. A completed order response
+proves an order completed, not how many fills it received. Missing fill counts
+remain unknown; confirmed routine orders still appear without a false diagnostic.

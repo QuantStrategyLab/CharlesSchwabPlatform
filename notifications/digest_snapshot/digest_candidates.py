@@ -19,10 +19,24 @@ def cycle_evidence(execution: Mapping, orders: Sequence[Mapping], *, dry_run: bo
     confirmed = valid and all(str(order["status"]).lower() in {"filled", "completed", "executed"} for order in orders)
     healthy = defer_routine_cycle_to_digest(execution, submitted_order_count=count,
         submitted_orders=orders, mode="daily_digest", include_orders=True)
+    fill_ids = []
+    fills_known = confirmed and healthy
+    for order in orders:
+        records = order.get("fills") if isinstance(order, Mapping) else None
+        if not isinstance(records, (list, tuple)) or not records:
+            fills_known = False
+            break
+        for record in records:
+            identity = next((record.get(k) for k in ("execution_id", "execId", "tradeId") if record.get(k) is not None), None) if isinstance(record, Mapping) else None
+            if identity is None:
+                fills_known = False
+                break
+            fill_ids.append(str(identity))
+    fills_known = fills_known and len(fill_ids) == len(set(fill_ids))
     return {
         "schema_version": "qsl.notification_cycle.v1",
         "order_count": count if valid and not dry_run else None,
-        "fill_count": count if confirmed and not dry_run else None,
+        "fill_count": len(fill_ids) if fills_known and not dry_run else None,
         "routine": healthy and not dry_run,
         "dry_run": dry_run,
     }
@@ -65,8 +79,8 @@ def project_reports(reports: Sequence[Mapping], *, expected_target: Mapping,
         day = (stamp.astimezone(ZoneInfo("Asia/Singapore")) - timedelta(hours=6)).date().isoformat()
         facts = (report.get("summary") or {}).get("notification_digest") or {}
         known = (facts.get("schema_version") == "qsl.notification_cycle.v1" and facts.get("dry_run") is False
-                 and all(type(facts.get(k)) is int and facts[k] >= 0 for k in ("order_count", "fill_count"))
-                 and facts["fill_count"] <= facts["order_count"])
+                 and type(facts.get("order_count")) is int and facts["order_count"] >= 0
+                 and (facts.get("fill_count") is None or (type(facts["fill_count"]) is int and facts["fill_count"] >= 0)))
         error = report.get("status") in {"error", "failed", "aborted"} or bool((report.get("error_summary") or {}).get("errors"))
         alert = error or not known or facts.get("routine") is not True
         row = rows.setdefault(day, {
@@ -79,8 +93,10 @@ def project_reports(reports: Sequence[Mapping], *, expected_target: Mapping,
         row["cycle_count"] += 1
         row["as_of"] = max(row["as_of"], stamp.isoformat())
         for key in ("fill_count", "order_count"):
-            row[key] = row[key] + facts[key] if known and row[key] is not None else None
+            row[key] = row[key] + facts[key] if known and type(facts.get(key)) is int and row[key] is not None else None
             row["field_status"][key] = "known" if row[key] is not None else "counts_unknown"
+        if not alert and row["status"] == "ok":
+            row["execution_status"] = "executed" if row["order_count"] else "no_action"
         if alert:
             row.update(status="alert", reason_code="source_cycle_alert" if error else "execution_evidence_missing_or_attention",
                        execution_status="execution_alert" if error else "execution_unknown")
@@ -99,7 +115,7 @@ def summary_evidence(summary: Mapping, *, dry_run: bool = False) -> dict:
             and not summary.get("option_orders_pending") and not summary.get("orders_partially_filled")
             and not summary.get("option_orders_partially_filled")):
         # These collections are populated by the existing broker reconciliation.
-        facts = [{"status": "filled"} for _ in filled]
+        facts = [{**order, "status": "filled"} for order in filled] if all(isinstance(order, Mapping) for order in filled) else orders
     else:
         facts = orders
     return cycle_evidence(evidence, facts, dry_run=dry_run)
