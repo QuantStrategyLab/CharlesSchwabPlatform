@@ -34,8 +34,10 @@ def test_urgent_and_unknown_states_still_publish(monkeypatch, evidence):
     assert _publish(evidence)
 
 
-def test_real_order_activity_stays_immediate(monkeypatch):
+def test_confirmed_routine_orders_go_to_digest_unless_opted_out(monkeypatch):
     monkeypatch.setenv("QSL_ROUTINE_NOTIFICATION_MODE", "daily_digest")
+    assert not _publish({"execution_status": "completed"}, orders=({"status": "filled"},))
+    monkeypatch.setenv("QSL_DIGEST_ROUTINE_ORDERS", "false")
     assert _publish({"execution_status": "completed"}, orders=({"status": "filled"},))
 
 
