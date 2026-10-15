@@ -60,6 +60,10 @@ jobs:
       GLOBAL_TELEGRAM_CHAT_ID: ${{ secrets.GLOBAL_TELEGRAM_CHAT_ID }}
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
       TELEGRAM_TOKEN_SECRET_NAME: ${{ vars.TELEGRAM_TOKEN_SECRET_NAME }}
+      # NOTIFY-04 B5: default dry_run = log would_suppress only, never suppress.
+      RUNTIME_GUARD_ALERT_DEDUPE_MODE: ${{ vars.RUNTIME_GUARD_ALERT_DEDUPE_MODE || 'dry_run' }}
+      RUNTIME_GUARD_ALERT_DEDUPE_REMINDER_HOURS: ${{ vars.RUNTIME_GUARD_ALERT_DEDUPE_REMINDER_HOURS || '6' }}
+      RUNTIME_GUARD_DEDUPE_STATE_PATH: .runtime-guard-dedupe/state.json
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -94,5 +98,20 @@ jobs:
       - name: Set up gcloud
         uses: google-github-actions/setup-gcloud@v3
 
+      - name: Restore runtime-guard alert dedupe state
+        uses: actions/cache/restore@v4
+        with:
+          path: .runtime-guard-dedupe
+          key: runtime-guard-dedupe-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            runtime-guard-dedupe-
+
       - name: Check Cloud Scheduler and Cloud Run logs
         run: uv run --no-sync python scripts/cloud_run_runtime_guard.py
+
+      - name: Save runtime-guard alert dedupe state
+        if: ${{ always() && hashFiles('.runtime-guard-dedupe/state.json') != '' }}
+        uses: actions/cache/save@v4
+        with:
+          path: .runtime-guard-dedupe
+          key: runtime-guard-dedupe-${{ github.run_id }}-${{ github.run_attempt }}

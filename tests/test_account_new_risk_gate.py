@@ -573,7 +573,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
                 "production_drift_status": "critical",
             },
         }
-        plan = {"account_hash": "00682abc"}
+        plan = {"account_hash": "FAKE0002"}
         admission = evaluate_portfolio_new_risk_admission(portfolio)
         self.assertTrue(new_risk_buy_prohibited(admission))
         self.assertIn("PRODUCTION_DRIFT_CRITICAL", admission.reason_codes)
@@ -597,7 +597,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
         self.assertEqual(counts.get("sent"), 1)
         self.assertEqual(len(payloads), 1)
         text = payloads[0]
-        self.assertIn("00682abc", text)
+        self.assertIn("FAKE0002", text)
         self.assertIn("生产偏离严重", text)
         self.assertNotIn("原因：new_risk_prohibited", text)
         self.assertIn("打开管理站处理恢复", text)
