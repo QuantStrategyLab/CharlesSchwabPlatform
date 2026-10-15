@@ -55,7 +55,7 @@ runner 状态为 `stored_acknowledged`、`account_attribution=receiver_reported_
 
 `runtime-daily-sync.yml` 另有默认关闭的 `diagnose_source_access` 手动输入，与
 `publish` 互斥。选择该项只用 workflow 原有 ADC 检查 QPK runtime 实际读取的
-`charlesschwabquant/schwab_token` Secret 元数据、`latest` 版本是否启用，以及
+`<project-id>/schwab_token` Secret 元数据、`latest` 版本是否启用，以及
 对该 Secret 调用 `testIamPermissions`，观察响应是否列出
 `secretmanager.versions.access`；请求不读取 Secret payload，
 不访问 Schwab、不刷新 token，也不修改 IAM。固定输出不包含资源名、错误正文或凭据。
