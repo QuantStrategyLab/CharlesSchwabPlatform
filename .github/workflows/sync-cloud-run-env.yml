@@ -268,9 +268,29 @@ jobs:
       - name: Resolve Cloud Run sync targets
         id: strategy_requirements
         if: steps.config.outputs.env_sync_enabled == 'true' || steps.config.outputs.scheduler_iam_sync_enabled == 'true' || steps.config.outputs.traffic_shift_enabled == 'true'
+        env:
+          QSL_ROUTINE_NOTIFICATION_MODE: ${{ vars.QSL_ROUTINE_NOTIFICATION_MODE }}
         run: |
           set -euo pipefail
           sync_plan_json="$(uv run --no-sync python scripts/build_cloud_run_env_sync_plan.py --json)"
+          # Apply the platform notification setting after per-service admission.
+          # An unset variable leaves the existing plan and runtime default intact.
+          export SYNC_PLAN_JSON="${sync_plan_json}"
+          sync_plan_json="$(python - <<'PY'
+          import json
+          import os
+
+          plan = json.loads(os.environ["SYNC_PLAN_JSON"])
+          mode = os.environ.get("QSL_ROUTINE_NOTIFICATION_MODE", "").strip()
+          if mode:
+              if mode not in {"immediate", "daily_digest"}:
+                  raise SystemExit("QSL_ROUTINE_NOTIFICATION_MODE must be immediate or daily_digest")
+              for target in plan["targets"]:
+                  target["env"]["QSL_ROUTINE_NOTIFICATION_MODE"] = mode
+                  target["remove_env_vars"] = [key for key in target.get("remove_env_vars", []) if key != "QSL_ROUTINE_NOTIFICATION_MODE"]
+          print(json.dumps(plan))
+          PY
+          )"
           {
             echo "sync_plan_json<<__SYNC_PLAN_JSON__"
             printf '%s\n' "${sync_plan_json}"
