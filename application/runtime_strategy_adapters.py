@@ -20,6 +20,24 @@ from us_equity_strategies.cash_only_equity import (
 )
 
 
+def required_trend_ma_window(config: Mapping[str, Any]) -> int:
+    """Return the manifest/merged ``trend_ma_window``; never guess a default.
+
+    strategy_runtime_config starts from ``manifest.default_config``, so the key
+    is always present for semiconductor-rotation profiles. A missing or invalid
+    value now fails closed instead of silently using 150 (RS-08 fix 2).
+    """
+    raw = config.get("trend_ma_window") if isinstance(config, Mapping) else None
+    if raw is None or isinstance(raw, bool) or str(raw).strip() == "":
+        raise ValueError("trend_ma_window missing from merged strategy config (manifest default_config)")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"trend_ma_window must be an integer, got {raw!r}") from exc
+    if value <= 0 or value != float(raw):
+        raise ValueError(f"trend_ma_window must be a positive integer, got {raw!r}")
+    return value
+
 @dataclass(frozen=True)
 class SchwabRuntimeStrategyAdapters:
     strategy_runtime: Any
@@ -82,6 +100,47 @@ class SchwabRuntimeStrategyAdapters:
             strategy_label=self.strategy_profile,
         )
 
+
+    def _nasdaq_dca_signal_symbols(self) -> tuple[str, ...]:
+        raw = self.strategy_runtime_config.get("signal_symbols") or ("QQQ", "SPY")
+        if isinstance(raw, str):
+            raw = raw.replace(";", ",").split(",")
+        symbols = tuple(
+            dict.fromkeys(
+                str(symbol).strip().upper().removesuffix(".US")
+                for symbol in raw
+                if str(symbol).strip()
+            )
+        )
+        if not symbols:
+            raise ValueError(
+                f"{self.strategy_profile} signal_symbols must contain at least one symbol for prefetch"
+            )
+        return symbols
+
+    def _build_prefetched_market_history(self, market_data_port) -> dict[str, object]:
+        """Materialize DCA signal-symbol history in the input builder (B07 Phase B)."""
+        loader = self.broker_adapters.build_market_history_loader(market_data_port)
+        prefetched: dict[str, object] = {}
+        for symbol in self._nasdaq_dca_signal_symbols():
+            history = loader(None, symbol)
+            if history is None:
+                raise RuntimeError(
+                    f"prefetched_market_history missing for signal symbol {symbol!r}"
+                )
+            try:
+                length = len(history)
+            except TypeError as exc:
+                raise RuntimeError(
+                    f"prefetched_market_history for {symbol!r} is not sized: {type(history).__name__}"
+                ) from exc
+            if length == 0:
+                raise RuntimeError(
+                    f"prefetched_market_history empty for signal symbol {symbol!r}"
+                )
+            prefetched[symbol] = history
+        return prefetched
+
     def fetch_reference_history(self, market_data_port):
         available_inputs = set(self.available_inputs)
         if "feature_snapshot" in available_inputs and not (
@@ -93,6 +152,13 @@ class SchwabRuntimeStrategyAdapters:
             market_inputs = {
                 "market_history": self.broker_adapters.build_market_history_loader(market_data_port),
             }
+            if self.strategy_profile == "nasdaq_sp500_smart_dca":
+                # B07 Phase B: prefetch signal history in the input builder; strategy
+                # prefers technical_indicator_snapshot, then prefetched_market_history,
+                # then the callable loader (kept for non-smart / compat).
+                market_inputs["prefetched_market_history"] = self._build_prefetched_market_history(
+                    market_data_port
+                )
             if "benchmark_history" in available_inputs:
                 market_inputs["benchmark_history"] = self.broker_adapters.build_price_history(
                     market_data_port,
@@ -109,7 +175,7 @@ class SchwabRuntimeStrategyAdapters:
         if "derived_indicators" in available_inputs or "indicators" in available_inputs:
             return self.build_semiconductor_indicators(
                 market_data_port,
-                trend_window=int(self.strategy_runtime_config.get("trend_ma_window", 150)),
+                trend_window=required_trend_ma_window(self.strategy_runtime_config),
             )
         raise ValueError(
             f"Unsupported Schwab runtime inputs for {self.strategy_profile}: {sorted(available_inputs)}"

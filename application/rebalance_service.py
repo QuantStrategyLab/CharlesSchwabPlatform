@@ -5,10 +5,16 @@ from __future__ import annotations
 import os
 import re
 import json
+from dataclasses import replace
 from datetime import datetime, timezone
 
+from application.account_observation import build_account_observation
 from application.execution_service import execute_rebalance_cycle, ExecutionCycleResult
 from application.execution_claim import claim_execution_marker
+from application.execution_kernel_adapter import (
+    consult_t1_live_submit,
+    should_block_live_submit_for_t1,
+)
 from application.runtime_dependencies import SchwabRebalanceConfig, SchwabRebalanceRuntime
 from application.signal_snapshot import build_signal_snapshot
 from notifications.events import NotificationPublisher, RenderedNotification
@@ -30,6 +36,7 @@ from quant_platform_kit.strategy_lifecycle.performance_monitor import try_record
 
 _DETAIL_FIELD_SPLIT_RE = re.compile(r"\s+(?=[^\s=:：]+[=:：])")
 DRY_RUN_BYPASS_EXECUTION_MARKER_ENV = "DRY_RUN_BYPASS_EXECUTION_MARKER"
+EXECUTION_KERNEL_T1_ENFORCE_ENV = "SCHWAB_EXECUTION_KERNEL_T1_ENFORCE"
 
 
 def _heartbeat_account_snapshot(snapshot) -> dict:
@@ -61,6 +68,13 @@ def _dry_run_bypasses_execution_marker(config: SchwabRebalanceConfig) -> bool:
     return bool(getattr(config, "dry_run_only", False)) and _env_flag_enabled(
         DRY_RUN_BYPASS_EXECUTION_MARKER_ENV
     )
+
+
+def _execution_kernel_t1_enforce_enabled(config: SchwabRebalanceConfig) -> bool:
+    """ADR-B: T1 enforce flag; config or env; both default off. Composer must not auto-enable."""
+    if bool(getattr(config, "execution_kernel_t1_enforce", False)):
+        return True
+    return _env_flag_enabled(EXECUTION_KERNEL_T1_ENFORCE_ENV)
 
 
 def _record_platform_execution_telemetry(
@@ -359,6 +373,41 @@ def _has_submitted_orders(result: ExecutionCycleResult) -> bool:
     return bool(tuple(getattr(result, "submitted_orders", ()) or ()))
 
 
+
+def _should_publish_cycle_notification(result: ExecutionCycleResult, *, config) -> bool:
+    from quant_platform_kit.notifications.digest_routing import defer_routine_cycle_to_digest
+
+    if getattr(config, "notification_attention_reason_codes", ()):
+        return True
+    execution = getattr(result, "execution", {}) or {}
+    if not isinstance(execution, dict):
+        return True
+    metadata = execution.get("signal_metadata") or {}
+    for scope in (execution, metadata):
+        if not isinstance(scope, dict):
+            return True
+        if any(scope.get(key) for key in (
+            "error", "errors", "fail_reason", "execution_blocked_reason",
+            "plugin_error", "persistence_error", "report_persistence_error",
+            "notification_error", "pending_reconciliation", "reconciliation_required",
+            "market_data_retry_required", "notification_attention_reason_codes",
+        )):
+            return True
+        status = str(scope.get("execution_status") or "").strip().lower()
+        if status not in {"", "no_op", "no_action", "completed", "executed", "dry_run", "dry_run_completed"}:
+            return True
+    submitted_orders = tuple(getattr(result, "submitted_orders", ()) or ())
+    for order in submitted_orders:
+        status = str(order.get("status") or "").strip().lower() if isinstance(order, dict) else "unknown"
+        if status in {"rejected", "unknown", "failed", "error"}:
+            return True
+    if bool(getattr(config, "dry_run_only", False)):
+        return False
+    if defer_routine_cycle_to_digest(execution, submitted_order_count=len(submitted_orders)):
+        return False
+    return bool(submitted_orders) or bool(getattr(config, "notify_no_trade_cycles", False))
+
+
 def _record_execution_outcome(
     *,
     config: SchwabRebalanceConfig,
@@ -518,6 +567,7 @@ def run_strategy_core(
         return current_plan, current_portfolio, current_execution, current_allocation
 
     snapshot = runtime.portfolio_port.get_portfolio_snapshot()
+    account_observation = build_account_observation(snapshot)
     plan, portfolio, execution, allocation = load_plan(snapshot)
     execution_port = (
         runtime.execution_port_factory(plan["account_hash"])
@@ -532,6 +582,7 @@ def run_strategy_core(
     execution_marker_key = _build_execution_marker_key(config=config, execution=execution, plan=plan)
     execution_state_store = getattr(config, "execution_state_store", None)
     execution_already_recorded = False
+    notification_attention_reason_codes = []
     execution_claim_acquired = False
     dry_run_bypass_marker = _dry_run_bypasses_execution_marker(config)
     if dry_run_bypass_marker:
@@ -568,6 +619,7 @@ def run_strategy_core(
                     f"Account owner fence failed before broker submission: {type(exc).__name__}"
                 ) from exc
             if not owner_claim.allowed:
+                notification_attention_reason_codes.append("account_owner_contested")
                 print(
                     (
                         f"Account owner fence blocked submission for account={account_id}: "
@@ -613,7 +665,36 @@ def run_strategy_core(
             )
             execution_already_recorded = not execution_claim_acquired
 
-    if execution_already_recorded:
+    # N13 ADR-B: always consult T1 (shadow). Enforce only behind flag + dedup-on.
+    # Never forge identity_held=True for dedup-off.
+    t1_dry_run_only = bool(getattr(config, "dry_run_only", False))
+    t1_decision = consult_t1_live_submit(
+        identity_held=execution_claim_acquired,
+        dry_run_bypass=dry_run_bypass_marker,
+        dry_run_only=t1_dry_run_only,
+    )
+    t1_blocked = should_block_live_submit_for_t1(
+        enforce=_execution_kernel_t1_enforce_enabled(config),
+        execution_dedup_enabled=bool(getattr(config, "execution_dedup_enabled", False)),
+        identity_held=execution_claim_acquired,
+        dry_run_bypass=dry_run_bypass_marker,
+        dry_run_only=t1_dry_run_only,
+    )
+    if t1_blocked:
+        message = (
+            "execution_kernel T1 enforce denied live submit "
+            f"(reason={t1_decision.reason_code}; identity_held={execution_claim_acquired})"
+        )
+        print(message, flush=True)
+        notification_attention_reason_codes.append(str(t1_decision.reason_code))
+        execution_result = ExecutionCycleResult(
+            plan=plan,
+            portfolio=portfolio,
+            execution=execution,
+            allocation=allocation,
+            trade_logs=(),
+        )
+    elif execution_already_recorded:
         message = _execution_already_recorded_message(config=config, execution=execution)
         print(message, flush=True)
         execution_result = ExecutionCycleResult(
@@ -673,6 +754,8 @@ def run_strategy_core(
             )
     portfolio = execution_result.portfolio
     execution = execution_result.execution
+    if notification_attention_reason_codes:
+        execution["notification_attention_reason_codes"] = tuple(notification_attention_reason_codes)
     signal_metadata = dict(execution.get("signal_metadata") or {})
     signal_metadata["cash_only_execution"] = bool(getattr(config, "cash_only_execution", True))
     execution["cash_only_execution"] = signal_metadata["cash_only_execution"]
@@ -688,7 +771,8 @@ def run_strategy_core(
     )
     trade_logs = list(execution_result.trade_logs)
 
-    if _has_submitted_orders(execution_result):
+    publish_cycle_notification = _should_publish_cycle_notification(execution_result, config=config)
+    if _has_submitted_orders(execution_result) and publish_cycle_notification:
         try:
             notification_publisher.publish(
                 notification_renderers.render_trade_notification(
@@ -703,7 +787,7 @@ def run_strategy_core(
             )
         except Exception:
             print("pending_order_notification_failed", flush=True)
-    elif getattr(config, "notify_no_trade_cycles", True):
+    elif publish_cycle_notification:
         notification_publisher.publish(
             notification_renderers.render_heartbeat_notification(
                 translator=config.translator,
@@ -728,4 +812,6 @@ def run_strategy_core(
     if notification_delivery_summary:
         execution["notification_delivery_summary"] = notification_delivery_summary
     _record_platform_execution_telemetry(config, execution_result)
-    return execution_result
+    if account_observation is None:
+        return execution_result
+    return replace(execution_result, account_observation=account_observation)

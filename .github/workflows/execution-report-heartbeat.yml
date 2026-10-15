@@ -8,6 +8,11 @@ on:
         required: false
         type: string
         default: "36"
+      notify_on_success:
+        description: "Opt in to normal healthy-check notifications for this manual run."
+        required: false
+        type: boolean
+        default: false
       fail_workflow_on_alert:
         description: "Fail this workflow when an alert is emitted."
         required: false
@@ -46,7 +51,7 @@ jobs:
       RUNTIME_HEARTBEAT_ACCEPT_STATUSES: ${{ vars.RUNTIME_HEARTBEAT_ACCEPT_STATUSES }}
       RUNTIME_HEARTBEAT_REJECT_STATUSES: ${{ vars.RUNTIME_HEARTBEAT_REJECT_STATUSES }}
       RUNTIME_HEARTBEAT_MARKET_AWARE: ${{ vars.RUNTIME_HEARTBEAT_MARKET_AWARE || 'true' }}
-      RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS: ${{ vars.RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS || 'false' }}
+      RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS: ${{ github.event_name == 'workflow_dispatch' && inputs.notify_on_success && 'true' || 'false' }}
       RUNTIME_HEARTBEAT_MARKET_CALENDAR: ${{ vars.SCHWAB_MARKET_CALENDAR }}
       RUNTIME_HEARTBEAT_MARKET_TIMEZONE: ${{ vars.SCHWAB_MARKET_TIMEZONE }}
       RUNTIME_HEARTBEAT_PUBLICATION_GRACE_MINUTES: ${{ vars.RUNTIME_HEARTBEAT_PUBLICATION_GRACE_MINUTES || '30' }}
@@ -80,6 +85,7 @@ jobs:
         run: sleep 10
 
       - name: Retry Google Cloud authentication
+        id: gcp_auth_retry
         if: ${{ steps.gcp_auth_primary.outcome == 'failure' }}
         uses: google-github-actions/auth@v3
         with:
@@ -93,6 +99,7 @@ jobs:
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
 
       - name: Install locked runtime dependencies
+        id: install_runtime_deps
         run: |
           set -euo pipefail
           uv sync --frozen --no-dev
@@ -101,7 +108,7 @@ jobs:
         run: uv run --no-sync python scripts/execution_report_heartbeat.py
 
       - name: Publish read-only runtime execution evidence
-        uses: QuantStrategyLab/QuantRuntimeSettings/actions/publish-runtime-execution-evidence@bbacba04baccbca91e4ba59c4dcaf460847e29f7
+        uses: QuantStrategyLab/QuantRuntimeSettings/actions/publish-runtime-execution-evidence@251e3510efe369e9f4071ef5aa82e9538d63264a
         with:
           source-id: runtime-reports-schwab
           report-platform: charles_schwab
@@ -109,3 +116,48 @@ jobs:
           sync-url: ${{ vars.EXECUTION_EVIDENCE_SYNC_URL }}
         env:
           EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
+
+      - name: Publish daily runtime projection
+        if: ${{ !cancelled() && steps.install_runtime_deps.outcome == 'success' && vars.RUNTIME_DAILY_SYNC_ENABLED == 'true' && (steps.gcp_auth_primary.outcome == 'success' || steps.gcp_auth_retry.outcome == 'success') }}
+        env:
+          EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
+          SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX: ${{ secrets.SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX }}
+          GCP_REGION: us-central1
+          SCHWAB_RUNTIME_DAILY_TARGET_JSON: ${{ secrets.SCHWAB_RUNTIME_DAILY_TARGET_JSON }}
+          RUNTIME_TARGET_JSON: ${{ secrets.SCHWAB_RUNTIME_DAILY_TARGET_JSON || vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}
+        run: uv run --no-sync python scripts/run_runtime_daily_from_reports.py --publish
+
+
+  account_facts:
+    name: Sync Schwab account facts from the scheduled report
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ACCOUNT_FACTS_SYNC_URL: ${{ vars.ACCOUNT_FACTS_SYNC_URL }}
+      SCHWAB_NET_ASSETS_CURRENCY: ${{ vars.SCHWAB_NET_ASSETS_CURRENCY }}
+      SCHWAB_CASH_CURRENCY: ${{ vars.SCHWAB_CASH_CURRENCY }}
+      SCHWAB_ACCOUNT_FACTS_TARGET_ID: ${{ secrets.SCHWAB_ACCOUNT_FACTS_TARGET_ID }}
+      SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX: ${{ secrets.SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX }}
+      SCHWAB_ACCOUNT_FACTS_SERVICE_NAME: ${{ secrets.SCHWAB_ACCOUNT_FACTS_SERVICE_NAME }}
+      SCHWAB_ACCOUNT_FACTS_SYNC_TOKEN: ${{ secrets.SCHWAB_ACCOUNT_FACTS_SYNC_TOKEN }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+
+      - name: Sync the latest in-window archived account observation
+        run: python3 scripts/publish_account_facts_from_reports.py --latest-scheduled-report

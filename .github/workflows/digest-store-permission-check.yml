@@ -1,0 +1,38 @@
+name: Digest Store Permission Check
+
+# NOTIFY-04 B2 (read-only): probe whether this repo's GitHub identity can write /
+# read the shared digest-candidate prefix in gs://qsl-runtime-logs-shared, and
+# whether the bucket is private. Uses testIamPermissions / metadata reads only;
+# never creates, overwrites or deletes objects. Prints booleans and HTTP codes.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GCP_PROJECT_ID: charlesschwabquant
+      GCP_WORKLOAD_IDENTITY_PROVIDER: projects/401309731911/locations/global/workloadIdentityPools/github-actions/providers/github-main
+      GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: schwab-platform-deploy@charlesschwabquant.iam.gserviceaccount.com
+      DIGEST_STORE_BUCKET: qsl-runtime-logs-shared
+      DIGEST_STORE_PREFIX: digest-candidates/
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Probe digest store permissions (read-only)
+        run: python3 scripts/digest_store_permission_check.py

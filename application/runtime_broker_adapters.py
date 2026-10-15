@@ -18,7 +18,29 @@ from quant_platform_kit.common.port_adapters import (
     CallablePortfolioPort,
 )
 
+from application import signal_provenance
 from application.portfolio_nlv_align import align_cash_only_sleeve_to_broker_liquidation
+
+
+SCHWAB_HISTORY_SOURCE = "schwab_price_history"
+SCHWAB_HISTORY_NOTE = (
+    "Schwab daily price history (2Y); split-adjusted, no dividend adjustment per broker convention; "
+    "last point may be replaced by the live quote"
+)
+
+
+def _record_schwab_history_provenance(symbol, series) -> None:
+    """Best-effort, non-sensitive provenance (source/basis/rows/dates only)."""
+    try:
+        signal_provenance.record(
+            symbol,
+            source=SCHWAB_HISTORY_SOURCE,
+            price_basis=signal_provenance.SPLIT_ONLY,
+            dates=[point.as_of for point in tuple(getattr(series, "points", ()) or ())],
+            note=SCHWAB_HISTORY_NOTE,
+        )
+    except Exception:
+        return
 
 
 def _utcnow() -> datetime:
@@ -67,15 +89,16 @@ class SchwabRuntimeBrokerAdapters:
     submit_equity_order_fn: Any
     fetch_order_status_fn: Any | None = None
     cash_only_execution: bool = True
+    expected_account_hash: str | None = None
     clock: Any = _utcnow
 
     def fetch_managed_snapshot(self, client):
         for attempt in range(_ACCOUNT_TRANSIENT_MAX_ATTEMPTS):
             try:
-                snapshot = self.fetch_account_snapshot_fn(
-                    client,
-                    strategy_symbols=list(self.managed_symbols),
-                )
+                snapshot_kwargs = {"strategy_symbols": list(self.managed_symbols)}
+                if self.expected_account_hash is not None:
+                    snapshot_kwargs["expected_account_hash"] = self.expected_account_hash
+                snapshot = self.fetch_account_snapshot_fn(client, **snapshot_kwargs)
                 return align_cash_only_sleeve_to_broker_liquidation(
                     snapshot,
                     cash_only_execution=bool(self.cash_only_execution),
@@ -217,6 +240,7 @@ class SchwabRuntimeBrokerAdapters:
 
     def build_price_history(self, market_data_port, symbol: str):
         series = market_data_port.get_price_series(symbol)
+        _record_schwab_history_provenance(symbol, series)
         return [
             {
                 "datetime": int(point.as_of.timestamp() * 1000),
@@ -230,6 +254,7 @@ class SchwabRuntimeBrokerAdapters:
     def build_market_history_loader(self, market_data_port):
         def load_market_history(_broker_client, symbol, *_args, **_kwargs):
             series = market_data_port.get_price_series(str(symbol).strip().upper())
+            _record_schwab_history_provenance(symbol, series)
             if not series.points:
                 return pd.Series(dtype=float)
             closes = [float(point.close) for point in series.points]
@@ -265,6 +290,7 @@ def build_runtime_broker_adapters(
     submit_equity_order_fn,
     fetch_order_status_fn=None,
     cash_only_execution: bool = True,
+    expected_account_hash: str | None = None,
     clock=_utcnow,
 ) -> SchwabRuntimeBrokerAdapters:
     return SchwabRuntimeBrokerAdapters(
@@ -275,5 +301,6 @@ def build_runtime_broker_adapters(
         submit_equity_order_fn=submit_equity_order_fn,
         fetch_order_status_fn=fetch_order_status_fn,
         cash_only_execution=bool(cash_only_execution),
+        expected_account_hash=expected_account_hash,
         clock=clock,
     )
