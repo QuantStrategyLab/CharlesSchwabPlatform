@@ -40,12 +40,12 @@ class FakeResponse:
 
 
 class NotificationTests(unittest.TestCase):
-    def test_heartbeat_displays_broker_cash_and_equity_with_i18n(self):
+    def test_heartbeat_compact_copy_keeps_only_broker_equity_with_i18n(self):
         from datetime import datetime, timezone
 
-        for lang, cash, equity in (
-            ("zh", "可用现金: USD 40.00", "账户总权益: USD 472.00"),
-            ("en", "Available cash: USD 40.00", "Total account equity: USD 472.00"),
+        for lang, cash, equity, observed_label in (
+            ("zh", "可用现金: USD 40.00", "账户总权益: USD 472.00", "账户观察时间"),
+            ("en", "Available cash: USD 40.00", "Total account equity: USD 472.00", "Account observed"),
         ):
             rendered = render_heartbeat_notification(
                 translator=build_translator(lang), strategy_display_name="Example",
@@ -57,8 +57,53 @@ class NotificationTests(unittest.TestCase):
                     "observed_at": datetime(2026, 9, 25, tzinfo=timezone.utc),
                 },
             )
-            self.assertIn(cash, rendered.compact_text)
+            self.assertNotIn(cash, rendered.compact_text)
             self.assertIn(equity, rendered.compact_text)
+            self.assertNotIn(observed_label, rendered.compact_text)
+
+    def test_compact_heartbeat_keeps_nonzero_holdings_and_omits_noise(self):
+        from datetime import datetime, timezone
+
+        rendered = render_heartbeat_notification(
+            translator=build_translator("zh"),
+            strategy_display_name="半导体趋势收益",
+            dry_run_only=False,
+            extra_notification_lines=(
+                "🧩 插件：市场状态控制 | 启用：是 | 状态：观察 | 提醒：仅通知",
+                "🧩 插件本次影响：仅通知复核；当前状态未触发自动仓位改写",
+            ),
+            execution={
+                "dashboard_text": (
+                    "📌 策略账户概览\n"
+                    "- 总资产（策略标的+现金，不含融资额度）: $581.59\n"
+                    "- 可用现金: $429.79\n"
+                    "💼 策略持仓\n- SOXL: $151.80 / 1股"
+                ),
+                "separator": "━━━━━━━━━━━━━━━━━━",
+                "signal_display": "SOXX 站上 140 日门槛线，持有 SOXL 70.0% + SOXX 20.0%",
+            },
+            portfolio={
+                "total_equity": 581.59,
+                "portfolio_rows": (("SOXL",),),
+                "market_values": {"SOXL": 151.8},
+            },
+            account_label="已隐藏",
+            account_snapshot={
+                "available_cash": 429.79,
+                "net_assets": 581.59,
+                "observed_at": datetime(2026, 9, 25, 19, 45, tzinfo=timezone.utc),
+            },
+        )
+
+        self.assertEqual(
+            rendered.compact_text,
+            "💓 【心跳检测】\n"
+            "🧭 策略: 半导体趋势收益\n"
+            "💰 账户总权益: USD 581.59\n"
+            "💼 持仓\n"
+            "- SOXL: $151.80 / 1股\n"
+            "✅ 无需调仓",
+        )
 
     def test_build_translator_supports_chinese(self):
         translate = build_translator("zh")
@@ -346,9 +391,9 @@ class NotificationTests(unittest.TestCase):
             account_label="demo",
         )
 
-        self.assertIn("总资产（策略净值）: $50,000.00", rendered.compact_text)
-        self.assertIn("购买力: $75,000.00", rendered.compact_text)
-        self.assertNotIn("不含融资额度", rendered.compact_text)
+        self.assertIn("总资产（策略净值）: $50,000.00", rendered.detailed_text)
+        self.assertIn("购买力: $75,000.00", rendered.detailed_text)
+        self.assertNotIn("不含融资额度", rendered.detailed_text)
 
     def test_dashboard_relabels_buying_power_for_cash_only_execution(self):
         execution = {
@@ -369,8 +414,45 @@ class NotificationTests(unittest.TestCase):
             execution=execution,
             trade_logs=(),
         )
-        self.assertIn("可用现金: $83.79", rendered.compact_text)
-        self.assertNotIn("购买力: $83.79", rendered.compact_text)
+        self.assertIn("可用现金: $83.79", rendered.detailed_text)
+        self.assertNotIn("购买力: $83.79", rendered.detailed_text)
+
+    def test_compact_trade_keeps_nonzero_holdings_and_order_result(self):
+        rendered = render_trade_notification(
+            translator=build_translator("zh"),
+            strategy_display_name="半导体趋势收益",
+            dry_run_only=False,
+            extra_notification_lines=("🧩 插件：市场状态控制",),
+            execution={
+                "dashboard_text": (
+                    "📌 策略账户概览\n"
+                    "- 总资产（策略净值）: $581.59\n"
+                    "- 可用现金: $429.79\n"
+                    "💼 策略持仓\n- SOXL: $151.80 / 1股"
+                ),
+                "separator": "━━━━━━━━━━━━━━━━━━",
+                "signal_display": "hold",
+                "status_display": "hold",
+                "compact_supplemental_lines": ("⚠️ 订单仍待券商确认",),
+            },
+            trade_logs=(
+                "调仓变化: SOXL +10.0%",
+                "ℹ️ [买入说明] 小账户整数股限制",
+                "📈 [限价买入] SOXL: 1股 @ $151.80 ✅ 已下发（状态: PendingSubmit）",
+            ),
+            account_label="已隐藏",
+        )
+
+        self.assertEqual(
+            rendered.compact_text,
+            "🔔 【调仓指令】\n"
+            "🧭 策略: 半导体趋势收益\n"
+            "💰 总资产（策略标的+现金，不含融资额度）: $581.59\n"
+            "💼 持仓\n"
+            "- SOXL: $151.80 / 1股\n"
+            "⚠️ 订单仍待券商确认\n"
+            "📈 [限价买入] SOXL: 1股 @ $151.80 ✅ 已下发（状态: PendingSubmit）",
+        )
 
     def test_dashboard_keeps_margin_buying_power_label_when_cash_only_disabled(self):
         execution = {
@@ -388,8 +470,8 @@ class NotificationTests(unittest.TestCase):
             execution=execution,
             trade_logs=(),
         )
-        self.assertIn("Buying power: $83.79", rendered.compact_text)
-        self.assertNotIn("Available cash: $83.79", rendered.compact_text)
+        self.assertIn("Buying power: $83.79", rendered.detailed_text)
+        self.assertNotIn("Available cash: $83.79", rendered.detailed_text)
 
     def test_build_signal_text_formats_icon_and_label(self):
         signal_text = build_signal_text(build_translator("en"))

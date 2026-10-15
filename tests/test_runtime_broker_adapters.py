@@ -16,7 +16,7 @@ def _candle(ts: datetime, close: float) -> dict[str, float]:
     return {"datetime": int(ts.timestamp() * 1000), "close": close}
 
 
-def _balance_adapters(balances):
+def _balance_adapters(balances, *, account_type=None, cash_balance=None):
     calls = []
     submitted = []
 
@@ -29,7 +29,13 @@ def _balance_adapters(balances):
 
     def account(_account_hash, *, fields):
         calls.append("account")
-        return response({"securitiesAccount": {"currentBalances": balances, "positions": []}})
+        account_balances = dict(balances)
+        if cash_balance is not None:
+            account_balances["cashBalance"] = cash_balance
+        account_payload = {"currentBalances": account_balances, "positions": []}
+        if account_type is not None:
+            account_payload["type"] = account_type
+        return response({"securitiesAccount": account_payload})
 
     client = SimpleNamespace(get_account_numbers=account_numbers, get_account=account)
     adapters = build_runtime_broker_adapters(
@@ -40,6 +46,30 @@ def _balance_adapters(balances):
         submit_equity_order_fn=lambda *args: submitted.append(args),
     )
     return adapters, client, calls, submitted
+
+
+def test_locked_qpk_preserves_native_schwab_facts_from_one_account_response():
+    adapters, client, calls, submitted = _balance_adapters(
+        {
+            "cashAvailableForTrading": 1000.0,
+            "buyingPower": 5000.0,
+            "liquidationValue": 12000.0,
+        },
+        account_type="PROVIDER_UNKNOWN",
+        cash_balance="1234.5600",
+    )
+
+    snapshot = adapters.fetch_managed_snapshot(client)
+
+    assert calls == ["account_numbers", "account"]
+    assert submitted == []
+    assert snapshot.metadata["broker_account_type"] == "PROVIDER_UNKNOWN"
+    assert snapshot.metadata["broker_account_type_source"] == "securitiesAccount.type"
+    assert snapshot.metadata["broker_cash_balance"] == "1234.5600"
+    assert snapshot.metadata["broker_cash_balance_source"] == "cashBalance"
+    assert snapshot.cash_balance == 1000.0
+    assert snapshot.buying_power == 5000.0
+    assert snapshot.total_equity == 12000.0
 
 
 @pytest.mark.parametrize("field", ["cashAvailableForTrading", "cashAvailableForWithdrawal", "liquidationValue"])

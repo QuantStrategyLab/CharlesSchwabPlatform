@@ -662,6 +662,7 @@ def maybe_publish_attention_for_admission(
         platform=_ATTENTION_PLATFORM,
         account_alias=_resolve_attention_account_alias(portfolio, execution, plan),
         strategy_profile=profile,
+        guard_reason_codes=reasons,
         previous_level=None,
         already_sent_keys=list(_attention_sent_keys),
         record_sent_key=_attention_sent_keys.add,

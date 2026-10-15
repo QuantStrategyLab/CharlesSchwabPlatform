@@ -78,6 +78,12 @@ def verify_service(*, service: str, service_json: Mapping[str, Any]) -> dict[str
         raise AdmissionError(f"{service}: RUNTIME_TARGET_JSON is invalid JSON") from exc
     if not isinstance(target, Mapping):
         raise AdmissionError(f"{service}: RUNTIME_TARGET_JSON must be an object")
+    from scripts.runtime_target_continuity import verify_target_continuity
+
+    try:
+        verify_target_continuity(target)
+    except ValueError as exc:
+        raise AdmissionError(f"{service}: runtime target continuity validation failed") from exc
     target_service = str(target.get("service_name") or "").strip()
     if target_service and target_service != service:
         raise AdmissionError(f"{service}: runtime target service_name does not match the deployed service")

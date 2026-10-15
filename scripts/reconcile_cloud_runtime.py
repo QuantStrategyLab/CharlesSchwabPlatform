@@ -386,6 +386,14 @@ def reconcile_traffic(env: Mapping[str, str] = os.environ) -> None:
             )
         time.sleep(10)
 
+    from scripts.runtime_target_continuity import verify_traffic_revision
+
+    candidate = _gcloud_json([
+        "run", "revisions", "describe", target_revision,
+        f"--project={project}", f"--region={region}", "--format=json",
+    ])
+    verify_traffic_revision(candidate, expected_revision=target_revision, expected_commit=target_sha)
+
     payload = _service_status(project=project, region=region, service=service)
     if not _traffic_on_revision(payload, target_revision):
         _gcloud(

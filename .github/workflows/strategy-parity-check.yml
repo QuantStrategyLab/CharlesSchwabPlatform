@@ -1,0 +1,58 @@
+name: Strategy Parity Check
+
+# Read-only (RS-08): reports what code/config the live SOXL/TQQQ services actually run
+# (serving revision, image digest, package commits stamped in the image, manifest trend
+# window, strategy_release identity, presence of config/signal env vars, recent log reason
+# codes, public market-data history length/basis). Prints no account values, positions,
+# tokens, chat ids or full configs. Never changes Cloud Run, secrets, traffic, or trading.
+# The image probe runs with --network none and no environment.
+on:
+  workflow_dispatch:
+
+env:
+  GCP_PROJECT_ID: charlesschwabquant
+  GCP_WORKLOAD_IDENTITY_PROVIDER: projects/401309731911/locations/global/workloadIdentityPools/github-actions/providers/github-main
+  GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: schwab-platform-deploy@charlesschwabquant.iam.gserviceaccount.com
+
+jobs:
+  parity-check:
+    name: Strategy parity check (read-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
+      PARITY_SERVICES: charles-schwab-quant-service
+      PARITY_LOG_DAYS: "21"
+      PARITY_EVIDENCE_BUCKET: qsl-runtime-logs-shared
+      PARITY_RELEASES_JSON: '[{"release_id":"soxl-schwab-runtime-risk-recovery-20260917","config_sha256":"945c852a5fe66a239d81f563372c39da07cfd0a278f9b2519f55d3ef791f632a","evidence_sha256":"9659ca359aaaa1f1ecb931f710c0bacea3ae2c1bd60d87c0ead54288bc3b117d"},{"release_id":"soxl-ibkr-runtime-risk-20260917","config_sha256":"0fbd7b3ba20f3c85fac0c1cbc8325f905a5870639f24898f9d51ac1137a48642","evidence_sha256":"2aa17dce1aec34bdbfd8285ce506400949abf25fa75c89511711448dbe2b328f"},{"release_id":"tqqq-ibkr-lkg-restore-20260917","config_sha256":"90e8ded53a2e4389f6060d88cfd232046d90e6775dda47379e8d06415b2cbf42","evidence_sha256":"de86f233357a78e6aaff123a34447d3d9f28e6f72532b23aea56daa7b959db65"}]'
+      PARITY_SCHWAB_REPORTS: "1"
+      PARITY_REPORT_PLATFORM_HINT: schwab
+      PARITY_REPORT_PROFILE: soxl_soxx_trend_income
+      PARITY_TREND_WINDOW: "140"
+      PARITY_REPORT_SESSIONS: "10"
+      PARITY_YF_PROBE: "0"
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Report live strategy identity (no sensitive values)
+        run: python3 scripts/strategy_parity_check.py
+
+      - name: Install public market-data client (read-only)
+        if: env.PARITY_SCHWAB_REPORTS == '1'
+        run: python3 -m pip install --quiet yfinance pandas
+
+      - name: Release evidence and signal price-basis check (read-only, no sensitive values)
+        run: python3 scripts/release_evidence_parity_check.py
