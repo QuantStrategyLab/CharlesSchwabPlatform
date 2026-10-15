@@ -158,6 +158,12 @@ jobs:
           bash tests/test_sync_cloud_run_env_workflow.sh
           uv run --no-sync pytest -q tests/test_env_sync_drift_check.py
 
+      - name: Verify daily digest evidence and full offline regression suite
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+          PYTHONPATH: .
+        run: uv run --no-sync python -m pytest -q tests
+
       - name: Run ruff
         run: |
           set -euo pipefail
