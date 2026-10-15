@@ -30,6 +30,9 @@ test = [
     "ruff",
 ]
 
+[project.scripts]
+schwab-d1-no-order-acceptance = "scripts.run_d1_no_order_acceptance:main"
+
 [tool.coverage.run]
 branch = true
 source = ["src"]
