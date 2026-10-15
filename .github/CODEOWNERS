@@ -1,1 +1,4 @@
-* @Pigbibi
+# Blanket personal review assignment is intentionally disabled.
+# Do not automatically request a personal review for every pull request:
+# withdrawing a request after creation cannot prevent its notification.
+# Required CI and investment/runtime authorization remain independently enforced.

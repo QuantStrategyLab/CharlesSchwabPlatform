@@ -1,0 +1,25 @@
+name: Notify Route Check
+
+# Read-only, equality-only serving binding diagnosis. Private inputs cross the
+# reusable-workflow secret boundary before any runner step header.
+on:
+  workflow_dispatch:
+
+jobs:
+  route-check:
+    name: Telegram route identity (read-only)
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/notify-route-check-protected.yml
+    secrets:
+      GCP_PROJECT_ID: ${{ 'charlesschwabquant' }}
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ 'projects/401309731911/locations/global/workloadIdentityPools/github-actions/providers/github-main' }}
+      GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ 'schwab-platform-deploy@charlesschwabquant.iam.gserviceaccount.com' }}
+      RUNTIME_GUARD_CLOUD_RUN_SERVICES: ${{ vars.RUNTIME_GUARD_CLOUD_RUN_SERVICES }}
+      CLOUD_RUN_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
+      CLOUD_RUN_SERVICES: ${{ secrets.CLOUD_RUN_SERVICES }}
+      CLOUD_RUN_SERVICE_TARGETS_JSON: ${{ vars.CLOUD_RUN_SERVICE_TARGETS_JSON || secrets.CLOUD_RUN_SERVICE_TARGETS_JSON }}
+      CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
+      TELEGRAM_TOKEN_SECRET_NAME: ${{ vars.TELEGRAM_TOKEN_SECRET_NAME }}

@@ -118,12 +118,51 @@ jobs:
             tests/test_request_handling.py::RequestHandlingTests::test_handle_schwab_dry_run_uses_dry_run_override \
             tests/test_request_handling.py::RequestHandlingTests::test_handle_schwab_dry_run_stays_silent_when_market_closed \
             tests/test_runtime_broker_adapters.py \
+            tests/test_signal_provenance.py \
+            tests/test_trend_ma_window_required.py \
+            tests/test_verify_image_ues_release_binding.py \
             tests/test_broker_reconciliation.py \
             tests/test_execution_uncertainty.py \
             tests/test_deployed_runtime_target_admission.py
 
+      - name: Verify account facts publisher
+        run: |
+          set -euo pipefail
+          uv run --no-sync pytest -q \
+            tests/test_runtime_daily_report_projection.py \
+            tests/test_publish_runtime_daily_from_reports.py \
+            tests/test_run_runtime_daily_from_reports.py \
+            tests/test_schwab_native_identity.py \
+            tests/test_schwab_token_secret_readiness.py \
+            tests/test_publish_account_facts_from_reports.py \
+            tests/test_account_observation.py \
+            tests/test_runtime_monitor_workflows.py \
+            tests/test_rebalance_service.py
+
+      - name: Verify notification results and delivery gates
+        run: |
+          set -euo pipefail
+          uv run --no-sync pytest -q \
+            tests/test_risk_gate_notification_result.py \
+            tests/test_runtime_notification_i18n.py \
+            tests/test_notifications.py \
+            tests/test_notification_quiet.py \
+            tests/test_notification_events.py \
+            tests/test_compact_notification_adapter.py \
+            tests/test_runtime_notification_adapters.py
+
       - name: Verify no-traffic deployment workflow
-        run: bash tests/test_safe_no_traffic_deploy_workflow.sh
+        run: |
+          set -euo pipefail
+          bash tests/test_safe_no_traffic_deploy_workflow.sh
+          bash tests/test_sync_cloud_run_env_workflow.sh
+          uv run --no-sync pytest -q tests/test_env_sync_drift_check.py
+
+      - name: Verify daily digest evidence and full offline regression suite
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+          PYTHONPATH: .
+        run: uv run --no-sync python -m pytest -q tests
 
       - name: Run ruff
         run: |

@@ -285,6 +285,8 @@ class RebalanceServiceTests(unittest.TestCase):
                 "market_values": {"BOXX": 0.0},
                 "quantities": {"BOXX": 0},
                 "liquid_cash": 750.0,
+                "total_equity": 750.0,
+                "account_new_risk_snapshot": HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT,
                 "cash_sweep_symbol": "BOXX",
             },
             "execution": {
@@ -319,7 +321,7 @@ class RebalanceServiceTests(unittest.TestCase):
 
         self.assertEqual(submitted_orders, [])
         self.assertEqual(result.allocation["targets"]["BOXX"], 0.0)
-        self.assertFalse(result.trade_logs)
+        self.assertFalse(any("Buy" in log or "Sell" in log for log in result.trade_logs))
 
     def test_small_account_whole_share_layer_sells_unbuyable_soxx_sleeve(self):
         plan = {
@@ -336,6 +338,8 @@ class RebalanceServiceTests(unittest.TestCase):
                 "market_values": {"SOXL": 0.0, "SOXX": 536.88, "BOXX": 0.0},
                 "quantities": {"SOXL": 0, "SOXX": 1, "BOXX": 0},
                 "liquid_cash": 236.81,
+                "total_equity": 773.69,
+                "account_new_risk_snapshot": HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT,
                 "cash_sweep_symbol": "BOXX",
             },
             "execution": {
@@ -397,6 +401,8 @@ class RebalanceServiceTests(unittest.TestCase):
                 "market_values": {"SOXL": 0.0, "SOXX": 605.17, "BOXX": 0.0},
                 "quantities": {"SOXL": 0, "SOXX": 1, "BOXX": 0},
                 "liquid_cash": 519.54,
+                "total_equity": 1124.71,
+                "account_new_risk_snapshot": HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT,
                 "cash_sweep_symbol": "BOXX",
             },
             "execution": {
@@ -455,6 +461,8 @@ class RebalanceServiceTests(unittest.TestCase):
                 "market_values": {"SOXL": 0.0, "SOXX": 0.0, "BOXX": 0.0},
                 "quantities": {"SOXL": 0, "SOXX": 0, "BOXX": 0},
                 "liquid_cash": 623.39,
+                "total_equity": 623.39,
+                "account_new_risk_snapshot": HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT,
                 "cash_sweep_symbol": "BOXX",
             },
             "execution": {
@@ -516,6 +524,8 @@ class RebalanceServiceTests(unittest.TestCase):
                 "market_values": {"SOXL": 0.0},
                 "quantities": {"SOXL": 0},
                 "liquid_cash": 1000.0,
+                "total_equity": 1000.0,
+                "account_new_risk_snapshot": HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT,
                 "cash_sweep_symbol": None,
             },
             "execution": {
@@ -636,6 +646,8 @@ class RebalanceServiceTests(unittest.TestCase):
                 "market_values": {"SOXL": 120.0, "SOXX": 200.0},
                 "quantities": {"SOXL": 3, "SOXX": 2},
                 "liquid_cash": 10.0,
+                "total_equity": 330.0,
+                "account_new_risk_snapshot": HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT,
                 "cash_sweep_symbol": "",
             },
             "execution": {
@@ -764,7 +776,9 @@ class RebalanceServiceTests(unittest.TestCase):
             "portfolio": {
                 "market_values": {"SOXX": 0.0, "BOXX": 0.0},
                 "quantities": {"SOXX": 0, "BOXX": 0},
-                "liquid_cash": 50000.0,
+                "liquid_cash": 49999.0,
+                "total_equity": 49999.0,
+                "account_new_risk_snapshot": HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT,
                 "cash_sweep_symbol": "BOXX",
             },
             "execution": {
@@ -829,6 +843,8 @@ class RebalanceServiceTests(unittest.TestCase):
                 "market_values": {"QQQM": 0.0},
                 "quantities": {"QQQM": 0},
                 "liquid_cash": 50.0,
+                "total_equity": 50.0,
+                "account_new_risk_snapshot": HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT,
                 "cash_sweep_symbol": "",
             },
             "execution": {
@@ -973,8 +989,8 @@ class RebalanceServiceTests(unittest.TestCase):
         self.assertEqual(observed_orders[0].order_type, "limit")
         self.assertTrue(sent_messages)
         self.assertIn("qqqi", sent_messages[0].lower())
-        self.assertIn("🆔 Account: demo", sent_messages[0])
-        self.assertIn("dashboard", sent_messages[0])
+        self.assertIn("Account risk check passed", sent_messages[0])
+        self.assertIn("Limit Buy QQQI", sent_messages[0])
 
     def test_localize_notification_text_for_snapshot_guard_in_zh(self):
         localized = rebalance_service._localize_notification_text(
@@ -1233,7 +1249,7 @@ class RebalanceServiceTests(unittest.TestCase):
 
         self.assertTrue(sent_messages)
         self.assertIn("strategy=TQQQ Growth Income", sent_messages[0])
-        self.assertIn("dashboard", sent_messages[0])
+        self.assertIn("Account risk check passed", sent_messages[0])
 
     def test_run_strategy_core_suppresses_no_trade_plugin_heartbeat_when_configured(self):
         sent_messages = []
@@ -1608,7 +1624,7 @@ class RebalanceServiceTests(unittest.TestCase):
         def fail_submit(*_args, **_kwargs):
             raise AssertionError("submit_equity_order should not be called in dry-run mode")
 
-        run_strategy_core(
+        result = run_strategy_core(
             object(),
             None,
             fetch_reference_history=lambda client: [{"close": 1.0, "high": 1.0, "low": 1.0}],
@@ -1626,10 +1642,18 @@ class RebalanceServiceTests(unittest.TestCase):
             dry_run_only=True,
         )
 
-        self.assertTrue(sent_messages)
-        self.assertIn("模拟下单: sell BOXX: 5shares", sent_messages[0])
-        self.assertIn("模拟下单: limit buy QQQM ($264.00): 1shares", sent_messages[0])
-        self.assertNotIn("buy BOXX", sent_messages[0])
+        preview_orders = result.submitted_orders
+        self.assertIn(
+            ("sell", "BOXX", 5),
+            [(order["side"], order["symbol"], order["quantity"]) for order in preview_orders],
+        )
+        self.assertIn(
+            ("buy", "QQQM", 1, 264.0),
+            [(order["side"], order["symbol"], order["quantity"], order.get("limit_price")) for order in preview_orders],
+        )
+        self.assertFalse(any(order["side"] == "buy" and order["symbol"] == "BOXX" for order in preview_orders))
+        self.assertTrue(all(order["status"] == "dry_run" for order in preview_orders))
+        self.assertEqual(sent_messages, [])
 
     def test_run_strategy_core_does_not_sweep_back_into_cash_symbol_after_selling_it(self):
         sent_messages = []
@@ -1699,7 +1723,7 @@ class RebalanceServiceTests(unittest.TestCase):
         def fail_submit(*_args, **_kwargs):
             raise AssertionError("submit_equity_order should not be called in dry-run mode")
 
-        run_strategy_core(
+        result = run_strategy_core(
             object(),
             None,
             fetch_reference_history=lambda client: [{"close": 1.0, "high": 1.0, "low": 1.0}],
@@ -1717,10 +1741,18 @@ class RebalanceServiceTests(unittest.TestCase):
             dry_run_only=True,
         )
 
-        self.assertTrue(sent_messages)
-        self.assertIn("模拟下单: sell BOXX: 10shares", sent_messages[0])
-        self.assertIn("模拟下单: limit buy QQQM ($50.00): 11shares", sent_messages[0])
-        self.assertNotIn("buy BOXX", sent_messages[0])
+        preview_orders = result.submitted_orders
+        self.assertIn(
+            ("sell", "BOXX", 10),
+            [(order["side"], order["symbol"], order["quantity"]) for order in preview_orders],
+        )
+        self.assertIn(
+            ("buy", "QQQM", 11, 50.0),
+            [(order["side"], order["symbol"], order["quantity"], order.get("limit_price")) for order in preview_orders],
+        )
+        self.assertFalse(any(order["side"] == "buy" and order["symbol"] == "BOXX" for order in preview_orders))
+        self.assertTrue(all(order["status"] == "dry_run" for order in preview_orders))
+        self.assertEqual(sent_messages, [])
 
     def test_run_strategy_core_retries_refresh_until_sold_cash_is_available(self):
         sent_messages = []
@@ -2122,9 +2154,7 @@ class RebalanceServiceTests(unittest.TestCase):
             dry_run_only=True,
         )
 
-        self.assertTrue(sent_messages)
-        self.assertIn("模拟运行", sent_messages[0])
-        self.assertIn("模拟下单", sent_messages[0])
+        self.assertEqual(sent_messages, [])
 
     def test_run_strategy_skips_when_execution_marker_already_exists(self):
         sent_messages = []
@@ -2222,9 +2252,7 @@ class RebalanceServiceTests(unittest.TestCase):
         self.assertEqual(len(checked_keys), 1)
         self.assertIn("paper", checked_keys[0])
         self.assertEqual(observed_orders, [])
-        self.assertEqual(len(sent_messages), 1)
-        self.assertIn("Heartbeat", sent_messages[0])
-        self.assertIn("No rebalance needed", sent_messages[0])
+        self.assertEqual(sent_messages, [])
 
     def test_dry_run_bypass_execution_marker_continues_rebalance(self):
         import os
@@ -2331,3 +2359,38 @@ class RebalanceServiceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+def test_cycle_notification_keeps_structured_attention_without_free_text_inference():
+    from types import SimpleNamespace
+    from application.rebalance_service import _should_publish_cycle_notification
+
+    config = SimpleNamespace(dry_run_only=False, notify_no_trade_cycles=False, notification_attention_reason_codes=())
+    def result(execution=None, orders=()):
+        return SimpleNamespace(execution=execution or {}, submitted_orders=orders, trade_logs=("risk-looking localized free text",))
+    assert not _should_publish_cycle_notification(result(), config=config)
+    for reason in ("negative_cash", "pending_sell_release", "account_new_risk_gate", "account_owner_contested"):
+        assert _should_publish_cycle_notification(result({"notification_attention_reason_codes": (reason,)}), config=config)
+    for status in ("blocked", "pending_reconciliation", "deferred_market_data", "unknown"):
+        assert _should_publish_cycle_notification(result({"execution_status": status}), config=config)
+    for field in ("fail_reason", "persistence_error", "notification_error", "reconciliation_required"):
+        assert _should_publish_cycle_notification(result({field: "synthetic_error"}), config=config)
+    config.notification_attention_reason_codes = ("strategy_plugin_error",)
+    assert _should_publish_cycle_notification(result(), config=config)
+
+
+def test_cycle_notification_quiets_successful_preview_but_keeps_real_and_rejected_orders():
+    from types import SimpleNamespace
+    from application.rebalance_service import _should_publish_cycle_notification
+
+    config = SimpleNamespace(dry_run_only=False, notify_no_trade_cycles=False, notification_attention_reason_codes=())
+    for status in ("submitted", "filled", "partiallyfilled"):
+        result = SimpleNamespace(execution={}, submitted_orders=({"status": status},))
+        assert _should_publish_cycle_notification(result, config=config)
+    config.dry_run_only = True
+    result = SimpleNamespace(execution={"execution_status": "dry_run"}, submitted_orders=({"status": "dry_run"},))
+    assert not _should_publish_cycle_notification(result, config=config)
+    for status in ("rejected", "unknown"):
+        result = SimpleNamespace(execution={}, submitted_orders=({"status": status},))
+        assert _should_publish_cycle_notification(result, config=config)

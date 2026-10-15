@@ -159,7 +159,7 @@ def test_build_cloud_run_env_sync_plan_requires_target_snapshot_in_per_service_m
                     runtime_target_json(
                         "russell_top50_leader_rotation",
                         deployment_selector="live-u7654-mega",
-                        account_selector=["U7654321"],
+                        account_selector=["U00000002"],
                         account_scope="live-u7654-mega",
                         service_name="charles-schwab-live-u7654-mega-service",
                     )
@@ -201,7 +201,7 @@ def test_build_cloud_run_env_sync_plan_skips_snapshot_requirements_for_disabled_
                     runtime_target_json(
                         "russell_top50_leader_rotation",
                         deployment_selector="live-u7654-mega",
-                        account_selector=["U7654321"],
+                        account_selector=["U00000002"],
                         account_scope="live-u7654-mega",
                         service_name="charles-schwab-live-u7654-mega-service",
                     )

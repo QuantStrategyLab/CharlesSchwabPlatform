@@ -200,7 +200,10 @@ class SchwabRuntimeComposer:
             safe_haven_cash_substitute_threshold_usd=self.safe_haven_cash_substitute_threshold_usd,
             sleeper=self.sleeper,
             extra_notification_lines=(*plugin_lines, *plugin_error_lines),
-            notify_no_trade_cycles=True,
+            notify_no_trade_cycles=False,
+            notification_attention_reason_codes=(
+                ("strategy_plugin_error",) if strategy_plugin_error else ()
+            ),
             strategy_plugin_signals=tuple(strategy_plugin_signals or ()),
             cash_only_execution=bool(cash_only_execution),
             notional_buy_execution=notional_buy_execution_enabled(self.strategy_profile),

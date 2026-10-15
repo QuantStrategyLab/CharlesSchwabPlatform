@@ -1,0 +1,253 @@
+name: Ops Diagnose RUNTIME_TARGET Scope
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: ops-diagnose-runtime-target-scope
+  cancel-in-progress: true
+
+env:
+  GCP_PROJECT_ID: charlesschwabquant
+  GCP_WORKLOAD_IDENTITY_PROVIDER: projects/401309731911/locations/global/workloadIdentityPools/github-actions/providers/github-main
+  GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: schwab-platform-deploy@charlesschwabquant.iam.gserviceaccount.com
+
+jobs:
+  diagnose:
+    if: github.ref == 'refs/heads/ops/schwab-rt-scope-diagnose' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      VAR_RUNTIME_TARGET_JSON: ${{ vars.RUNTIME_TARGET_JSON }}
+      SECRET_RUNTIME_TARGET_JSON: ${{ secrets.RUNTIME_TARGET_JSON }}
+      DAILY_RUNTIME_TARGET_JSON: ${{ secrets.SCHWAB_RUNTIME_DAILY_TARGET_JSON }}
+      CLOUD_RUN_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
+      CLOUD_RUN_REGION: ${{ vars.CLOUD_RUN_REGION }}
+      REPORT_PREFIX: ${{ secrets.SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX }}
+      EXPECTED_TARGET_ID: ${{ secrets.SCHWAB_ACCOUNT_FACTS_TARGET_ID || vars.SCHWAB_ACCOUNT_FACTS_TARGET_ID }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+        with:
+          project_id: ${{ env.GCP_PROJECT_ID }}
+          version: ">= 416.0.0"
+
+      - name: Diagnose account_scope kinds only
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import json, os, re, subprocess, hashlib
+          from datetime import datetime, timedelta, timezone
+          from urllib.parse import urlsplit
+
+          ACCOUNT_SCOPE = "live"
+          MARKET = frozenset({"US", "HK", "CN", "SG"})
+          MODE = {"paper", "dry_run", "dry-run", "prod", "production"}
+
+          def kind(value, expected_target_id=None):
+              if value is None:
+                  return "absent"
+              if not isinstance(value, str):
+                  return "non_string"
+              text = value.strip()
+              if not text:
+                  return "blank"
+              if text.lower() == ACCOUNT_SCOPE:
+                  return "live"
+              if text.upper() in MARKET:
+                  return "market_code"
+              if isinstance(expected_target_id, str) and expected_target_id.strip() and text == expected_target_id.strip():
+                  return "looks_like_target_id"
+              if len(text) >= 32 and all(ch.isalnum() or ch in "-_" for ch in text):
+                  return "hash_shaped"
+              if text.lower() in MODE:
+                  return "mode_token"
+              return "other_token"
+
+          def summarize(raw, label, expected_target_id=None):
+              out = {"source": label, "present": bool(raw and str(raw).strip())}
+              if not out["present"]:
+                  out["account_scope_kind"] = "absent_source"
+                  return out
+              try:
+                  payload = json.loads(raw)
+              except Exception:
+                  out["account_scope_kind"] = "invalid_json"
+                  return out
+              if not isinstance(payload, dict):
+                  out["account_scope_kind"] = "non_object"
+                  return out
+              scope = payload.get("account_scope")
+              out["account_scope_kind"] = kind(scope, expected_target_id)
+              sel = payload.get("account_selector")
+              if isinstance(sel, list):
+                  out["account_selector_kinds"] = [kind(x, expected_target_id) for x in sel[:3]]
+                  out["account_selector_len"] = len(sel)
+              else:
+                  out["account_selector_kinds"] = ["absent_or_non_list"]
+              for key in ("service_name", "strategy_profile", "platform_id", "deployment_selector", "execution_mode"):
+                  val = payload.get(key)
+                  out[key + "_present"] = isinstance(val, str) and bool(val.strip())
+                  if isinstance(val, str) and key in {"service_name", "strategy_profile", "platform_id", "deployment_selector", "execution_mode"}:
+                      # Safe public expected tokens only
+                      expected = {
+                          "service_name": "charles-schwab-quant-service",
+                          "strategy_profile": "soxl_soxx_trend_income",
+                          "platform_id": "schwab",
+                          "deployment_selector": "live",
+                          "execution_mode": "live",
+                      }.get(key)
+                      out[key + "_matches_expected"] = (val.strip() == expected) if expected else None
+              binding = ((payload.get("runtime_risk_limits") or {}) if isinstance(payload.get("runtime_risk_limits"), dict) else {}).get("binding") or {}
+              if isinstance(binding, dict):
+                  ah = binding.get("account_hash")
+                  out["binding_account_scope_kind"] = kind(binding.get("account_scope"), expected_target_id)
+                  out["binding_hash_suffix"] = (ah[-6:] if isinstance(ah, str) and len(ah) >= 6 else None)
+                  out["binding_hash_len"] = len(ah) if isinstance(ah, str) else 0
+              out["payload_sha12"] = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:12]
+              return out
+
+          expected_target = (os.environ.get("EXPECTED_TARGET_ID") or "").strip() or None
+          rows = [
+              summarize(os.environ.get("VAR_RUNTIME_TARGET_JSON"), "vars.RUNTIME_TARGET_JSON", expected_target),
+              summarize(os.environ.get("SECRET_RUNTIME_TARGET_JSON"), "secrets.RUNTIME_TARGET_JSON", expected_target),
+              summarize(os.environ.get("DAILY_RUNTIME_TARGET_JSON"), "secrets.SCHWAB_RUNTIME_DAILY_TARGET_JSON", expected_target),
+          ]
+
+          service = (os.environ.get("CLOUD_RUN_SERVICE") or "").strip()
+          region = (os.environ.get("CLOUD_RUN_REGION") or "us-central1").strip()
+          project = os.environ["GCP_PROJECT_ID"]
+          cloud = {"source": "cloud_run.env.RUNTIME_TARGET_JSON", "service_configured": bool(service)}
+          if service:
+              proc = subprocess.run(
+                  ["gcloud", "run", "services", "describe", service, f"--project={project}", f"--region={region}", "--format=json"],
+                  text=True, capture_output=True, check=False,
+              )
+              cloud["describe_ok"] = proc.returncode == 0
+              if proc.returncode == 0:
+                  svc = json.loads(proc.stdout)
+                  containers = (((svc.get("spec") or {}).get("template") or {}).get("spec") or {}).get("containers") or []
+                  env_list = (containers[0].get("env") if containers else []) or []
+                  env = {e.get("name"): e.get("value") for e in env_list if isinstance(e, dict) and "value" in e}
+                  cloud.update(summarize(env.get("RUNTIME_TARGET_JSON"), "cloud_run.env.RUNTIME_TARGET_JSON", expected_target))
+                  cloud["revision"] = ((svc.get("status") or {}).get("latestReadyRevisionName"))
+                  # Never print raw env; only presence of RUNTIME_TARGET_ENABLED
+                  enabled = env.get("RUNTIME_TARGET_ENABLED")
+                  cloud["RUNTIME_TARGET_ENABLED_kind"] = kind(str(enabled).lower() if enabled is not None else None)
+              else:
+                  cloud["describe_error_class"] = "gcloud_describe_failed"
+          rows.append(cloud)
+
+          # Mimic scripts/publish_runtime_daily_from_reports.read_archive: up to 20 blobs under prefix.
+          prefix = (os.environ.get("REPORT_PREFIX") or "").strip()
+          archive = {"source": "gcs_archive_reports_read_archive_mimic", "prefix_configured": bool(prefix)}
+          if prefix and prefix.startswith("gs://"):
+              from urllib.parse import urlsplit
+              from zoneinfo import ZoneInfo
+              parts = urlsplit(prefix)
+              bucket = parts.netloc
+              blob_prefix = parts.path.lstrip("/")
+              zone = ZoneInfo("America/New_York")
+              now = datetime.now(timezone.utc)
+              start = datetime.combine(now.astimezone(zone).date(), datetime.min.time(), zone)
+              boundary = blob_prefix + start.astimezone(timezone.utc).strftime("%Y-%m/%Y%m%dT%H%M%SZ.json")
+              # List via gcloud (no python storage client in this job)
+              listing = subprocess.run(
+                  ["gcloud", "storage", "ls", "--recursive", f"gs://{bucket}/{blob_prefix}"],
+                  text=True, capture_output=True, check=False,
+              )
+              all_uris = [ln.strip() for ln in (listing.stdout or "").splitlines() if ln.strip().startswith("gs://") and ln.strip().endswith(".json")]
+              # Order like read_archive: current/later first (uri >= boundary), then earlier
+              # Match google.cloud.storage list_blobs order:
+              # 1) start_offset=boundary -> ascending names >= boundary
+              # 2) end_offset=boundary -> ascending names < boundary (OLDEST first!)
+              later = sorted([u for u in all_uris if u[len(f"gs://{bucket}/"):] >= boundary])
+              earlier_asc = sorted([u for u in all_uris if u[len(f"gs://{bucket}/"):] < boundary])
+              ordered = later + earlier_asc
+              archive_meta_boundary = boundary
+              archive_meta_later_count = len(later)
+              archive_meta_earlier_count = len(earlier_asc)
+              truncated = len(ordered) > 20
+              selected = ordered[:20]
+              kinds = {}
+              top_kinds = {}
+              group_kinds = {}
+              region_kinds = {}
+              matcher_scope_kinds = {}
+              scanned = 0
+              for uri in selected:
+                  cat = subprocess.run(["gcloud", "storage", "cat", uri, f"--project={os.environ['GCP_PROJECT_ID']}"], text=True, capture_output=True, check=False)
+                  if cat.returncode != 0:
+                      kinds["read_failed"] = kinds.get("read_failed", 0) + 1
+                      continue
+                  try:
+                      payload = json.loads(cat.stdout)
+                  except Exception:
+                      kinds["invalid_json"] = kinds.get("invalid_json", 0) + 1
+                      continue
+                  if not isinstance(payload, dict):
+                      kinds["non_object"] = kinds.get("non_object", 0) + 1
+                      continue
+                  scanned += 1
+                  rt = payload.get("runtime_target") if isinstance(payload.get("runtime_target"), dict) else {}
+                  k = kind(rt.get("account_scope"), expected_target)
+                  kinds[k] = kinds.get(k, 0) + 1
+                  top_k = kind(payload.get("account_scope"), expected_target)
+                  top_kinds[top_k] = top_kinds.get(top_k, 0) + 1
+                  # matcher uses first of account_scope/account_group/account_region across top then runtime
+                  def first_scope(src):
+                      for key in ("account_scope", "account_group", "account_region"):
+                          if src.get(key) is not None:
+                              return src.get(key)
+                      return None
+                  matched = first_scope(payload)
+                  if matched is None:
+                      matched = first_scope(rt)
+                  mk = kind(matched, expected_target)
+                  matcher_scope_kinds[mk] = matcher_scope_kinds.get(mk, 0) + 1
+                  for label, store, src in (
+                      ("top_group", group_kinds, payload),
+                      ("rt_group", group_kinds, rt),
+                      ("top_region", region_kinds, payload),
+                      ("rt_region", region_kinds, rt),
+                  ):
+                      val = src.get("account_group") if "group" in label else src.get("account_region")
+                      if val is not None:
+                          gk = kind(val, expected_target)
+                          store[label + ":" + gk] = store.get(label + ":" + gk, 0) + 1
+              def uri_month(u):
+                  # .../YYYY-MM/YYYYMMDDT...json -> month token only
+                  parts = u.strip().rstrip("/").split("/")
+                  return parts[-2] if len(parts) >= 2 else "unknown"
+              months = [uri_month(u) for u in selected]
+              archive.update({
+                  "listed_json_objects": len(all_uris),
+                  "later_count": archive_meta_later_count,
+                  "earlier_count": archive_meta_earlier_count,
+                  "selected": len(selected),
+                  "truncated": truncated,
+                  "scanned": scanned,
+                  "selected_month_histogram": {m: months.count(m) for m in sorted(set(months))},
+                  "runtime_target_account_scope_kinds": kinds,
+                  "top_level_account_scope_kinds": top_kinds,
+                  "matcher_first_scope_kinds": matcher_scope_kinds,
+                  "group_region_kinds": {**group_kinds, **region_kinds},
+                  "list_ok": listing.returncode == 0,
+              })
+          rows.append(archive)
+
+          print(json.dumps({"expected_target_id_present": bool(expected_target), "results": rows}, sort_keys=True))
+          PY
