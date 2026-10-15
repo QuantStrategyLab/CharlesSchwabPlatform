@@ -110,6 +110,40 @@ def _unknown_counts(*, reason_code: str) -> dict[str, Any]:
     }
 
 
+def _verified_no_submission(daily: Mapping[str, Any], record: Mapping[str, Any]) -> bool:
+    """Only complete, validated run evidence proves zero; labels do not.
+
+    Missing completeness/evidence defaults to unknown for older projections.
+    The unconnected fills.records=[] placeholder is deliberately ignored.
+    """
+    if (
+        daily.get("completeness") != "complete" or daily.get("read_errors") != []
+        or record.get("completeness") != "complete" or record.get("conflicts") != []
+    ):
+        return False
+    runs = record.get("runs")
+    if not isinstance(runs, list) or not runs:
+        return False
+    for run in runs:
+        if not isinstance(run, Mapping) or run.get("activity") not in {"no_signal", "no_rebalance", "no_submission", "blocked"}:
+            return False
+        evidence = _as_mapping(run.get("evidence")) or {}
+        pending = evidence.get("orders_pending_count")
+        if (
+            run.get("execution_lane") != "live"
+            or evidence.get("receipt_state") != "valid"
+            or evidence.get("receipt_outcome") not in {"no_signal", "no_rebalance", "no_action", "risk_blocked"}
+            or (run.get("activity") == "blocked" and evidence.get("receipt_outcome") != "risk_blocked")
+            or evidence.get("receipt_broker_confirmation") != "not_applicable"
+            or evidence.get("broker_submission_done") is not False
+            or evidence.get("action_done") is True
+            or evidence.get("errors_present") is not False
+            or type(pending) is not int or pending != 0
+        ):
+            return False
+    return True
+
+
 def _activities(runs: Sequence[Mapping[str, Any]]) -> list[str]:
     out: list[str] = []
     for run in runs:
@@ -314,6 +348,16 @@ def project_digest_candidates(
             }
         else:
             counts = _unknown_counts(reason_code="schwab_fills_not_connected")
+
+        if _verified_no_submission(daily_projection, mapping) and (
+            counts["fill_count"] == 0
+            or fills_source == "not_connected" and fill_count_raw is None
+        ):
+            counts = {
+                "fill_count": 0, "order_count": 0,
+                "field_status": {"fill_count": "known", "order_count": "known"},
+                "reason_code": "schwab_no_submission_verified",
+            }
 
         signal, rebalance_kind, rebalance_conclusion = _pick_signal_and_rebalance(
             activities
