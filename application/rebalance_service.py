@@ -375,6 +375,8 @@ def _has_submitted_orders(result: ExecutionCycleResult) -> bool:
 
 
 def _should_publish_cycle_notification(result: ExecutionCycleResult, *, config) -> bool:
+    from quant_platform_kit.notifications.digest_routing import defer_routine_cycle_to_digest
+
     if getattr(config, "notification_attention_reason_codes", ()):
         return True
     execution = getattr(result, "execution", {}) or {}
@@ -400,6 +402,8 @@ def _should_publish_cycle_notification(result: ExecutionCycleResult, *, config) 
         if status in {"rejected", "unknown", "failed", "error"}:
             return True
     if bool(getattr(config, "dry_run_only", False)):
+        return False
+    if defer_routine_cycle_to_digest(execution, submitted_order_count=len(submitted_orders)):
         return False
     return bool(submitted_orders) or bool(getattr(config, "notify_no_trade_cycles", False))
 
