@@ -17,6 +17,12 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
+# Preserve direct offline CLI use without requiring an installed package.
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from notifications.block_reason import latest_block_reason
+
 PLATFORM_ID = "schwab"
 SCHEMA_VERSION = "qsl.digest_candidates.v1"
 DEFAULT_STRATEGY = "soxl_soxx_trend_income"
@@ -276,6 +282,7 @@ def project_digest_candidates(
     target_id: str = "",
     account_facts: Mapping[str, Any] | None = None,
     business_day: str | None = None,
+    notification_reports: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     """Build ``{"schema_version", "runs": [...]}`` from a daily projection.
 
@@ -407,6 +414,9 @@ def project_digest_candidates(
             row["rebalance_kind"] = rebalance_kind
         if rebalance_conclusion:
             row["rebalance_conclusion"] = rebalance_conclusion
+        block_reason = latest_block_reason(mapping, notification_reports)
+        if block_reason:
+            row["block_reason"] = block_reason
         if equity is not None:
             row["equity"] = equity
             row["equity_currency"] = equity_currency

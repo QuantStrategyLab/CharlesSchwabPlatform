@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable, Mapping
 
+from notifications.block_reason import clean_block_reason
+
 
 def _as_mapping(value: object) -> dict[str, object]:
     if isinstance(value, Mapping):
@@ -56,6 +58,9 @@ def summarize_execution_cycle_result(result: object, *, dry_run: bool) -> dict[s
         "submitted_order_side_counts": _counter_by_key(submitted_orders, "side"),
         "submitted_order_type_counts": _counter_by_key(submitted_orders, "order_type"),
     }
+    reason = clean_block_reason(execution.get("notification_block_reason"))
+    if reason:
+        summary["notification_block_reason"] = reason
     for field_name in ("signal_date", "effective_date", "execution_timing_contract"):
         value = execution.get(field_name)
         if value is not None and value != "":
