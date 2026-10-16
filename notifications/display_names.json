@@ -1,0 +1,241 @@
+{
+  "account_aliases": {
+    "hk": {
+      "en": "HK",
+      "zh": "香港"
+    },
+    "live": {
+      "en": "live",
+      "zh": "实盘"
+    },
+    "paper": {
+      "en": "paper",
+      "zh": "模拟"
+    },
+    "sg": {
+      "en": "SG",
+      "zh": "新加坡"
+    },
+    "soxl": {
+      "en": "SOXL",
+      "zh": "SOXL"
+    },
+    "tqqq": {
+      "en": "TQQQ",
+      "zh": "TQQQ"
+    }
+  },
+  "accounts": {
+    "binance": {
+      "Binance": {
+        "en": "live",
+        "zh": "实盘"
+      },
+      "binance": {
+        "en": "live",
+        "zh": "实盘"
+      },
+      "crypto_combo": {
+        "en": "live",
+        "zh": "实盘"
+      },
+      "default": {
+        "en": "live",
+        "zh": "实盘"
+      }
+    }
+  },
+  "domains": {
+    "cn_equity": {
+      "en": "CN A-share",
+      "zh": "A股"
+    },
+    "crypto": {
+      "en": "Crypto",
+      "zh": "加密"
+    },
+    "hk_equity": {
+      "en": "HK Equity",
+      "zh": "港股"
+    },
+    "us_equity": {
+      "en": "US Equity",
+      "zh": "美股"
+    }
+  },
+  "lanes": {
+    "dry_run": {
+      "en": "dry run",
+      "zh": "演练"
+    },
+    "live": {
+      "en": "live",
+      "zh": "实盘"
+    },
+    "paper": {
+      "en": "paper",
+      "zh": "模拟"
+    },
+    "research": {
+      "en": "research",
+      "zh": "研究"
+    },
+    "shadow": {
+      "en": "shadow",
+      "zh": "影子"
+    }
+  },
+  "platforms": {
+    "binance": "Binance",
+    "firstrade": "Firstrade",
+    "ibkr": "IBKR",
+    "longbridge": "LongBridge",
+    "qmt": "QMT",
+    "schwab": "Schwab"
+  },
+  "senders": {
+    "quant_sentinel": {
+      "en": "QuantSentinel",
+      "zh": "量化哨兵"
+    }
+  },
+  "strategies": {
+    "cn_chinext_growth_momentum_quality": {
+      "en": "CN ChiNext Growth Momentum Quality",
+      "zh": "创业板成长动量质量"
+    },
+    "cn_chinext_growth_momentum_quality_snapshot": {
+      "en": "CN ChiNext Growth Quality Snapshot",
+      "zh": "创业板成长质量快照"
+    },
+    "cn_chinext_tactical_rotation": {
+      "en": "CN ChiNext Tactical Rotation",
+      "zh": "创业板战术轮动"
+    },
+    "cn_csi500_multi_factor_snapshot": {
+      "en": "CN CSI 500 Multi-Factor Snapshot",
+      "zh": "A股中证500多因子"
+    },
+    "cn_dividend_quality_snapshot": {
+      "en": "CN Dividend Quality",
+      "zh": "A股红利质量"
+    },
+    "cn_equity_combo": {
+      "en": "CN Alpha Combo",
+      "zh": "A股进取组合"
+    },
+    "cn_index_etf_tactical_rotation": {
+      "en": "CN Index ETF Tactical Rotation",
+      "zh": "A股宽基ETF战术轮动"
+    },
+    "cn_industry_etf_rotation": {
+      "en": "CN Industry ETF Rotation",
+      "zh": "A股行业ETF轮动"
+    },
+    "cn_industry_etf_rotation_aggressive": {
+      "en": "CN ETF Rotation",
+      "zh": "A股ETF轮动"
+    },
+    "cn_star_growth_momentum_quality": {
+      "en": "CN STAR Growth Momentum Quality",
+      "zh": "科创板成长动量质量"
+    },
+    "cn_stock_momentum_rotation": {
+      "en": "CN Stock Momentum Rotation",
+      "zh": "A股股票动量轮动"
+    },
+    "crypto_btc_dca": {
+      "en": "BTC DCA",
+      "zh": "BTC定投"
+    },
+    "crypto_equity_combo": {
+      "en": "Crypto Core Combo",
+      "zh": "加密动量组合"
+    },
+    "crypto_leader_rotation": {
+      "en": "Crypto Leader Rotation",
+      "zh": "加密领涨轮动"
+    },
+    "crypto_live_pool_rotation": {
+      "en": "Crypto Pool Rotation",
+      "zh": "加密池轮动"
+    },
+    "crypto_trend_rotation": {
+      "en": "Altcoin Trend",
+      "zh": "山寨趋势轮动"
+    },
+    "global_etf_confidence_vol_gate": {
+      "en": "Global ETF Confidence Vol Gate",
+      "zh": "全球 ETF 置信波动门控"
+    },
+    "global_etf_rotation": {
+      "en": "Global ETF Rotation",
+      "zh": "全球ETF轮动"
+    },
+    "hk_equity_combo": {
+      "en": "HK Core Combo",
+      "zh": "港股恒生组合"
+    },
+    "hk_global_etf_tactical_rotation": {
+      "en": "HK ETF Tactical Rotation",
+      "zh": "港股ETF战术轮动"
+    },
+    "hk_low_vol_dividend_quality_snapshot": {
+      "en": "HK Dividend Quality",
+      "zh": "港股红利质量"
+    },
+    "ibit_smart_dca": {
+      "en": "IBIT Bitcoin DCA",
+      "zh": "IBIT比特币定投"
+    },
+    "nasdaq_sp500_smart_dca": {
+      "en": "NASDAQ/S&P 500 DCA",
+      "zh": "纳指标普定投"
+    },
+    "qqq_tech_enhancement": {
+      "en": "Tech/Communication Pullback Enhancement",
+      "zh": "科技通信回调增强"
+    },
+    "russell_top50_leader_rotation": {
+      "en": "Russell Top50 Leaders",
+      "zh": "罗素Top50领涨"
+    },
+    "soxl_soxx_core_only_p2_v7_longterm_compounding_cash_reserve": {
+      "en": "SOXL/SOXX Core Compounding (Cash Reserve)",
+      "zh": "SOXL/SOXX 核心复利（现金保留）"
+    },
+    "soxl_soxx_trend_income": {
+      "en": "Semiconductor Trend Income",
+      "zh": "半导体趋势收益"
+    },
+    "tech_communication_pullback_enhancement": {
+      "en": "Tech/Communication Pullback Enhancement",
+      "zh": "科技通信回调增强"
+    },
+    "tecl_xlk_trend_income": {
+      "en": "TECL/XLK Trend Income",
+      "zh": "TECL/XLK趋势收益"
+    },
+    "tqqq_growth_income": {
+      "en": "NASDAQ Growth Income",
+      "zh": "纳斯达克增长收益"
+    },
+    "us_equity_combo": {
+      "en": "US Core Income Combo",
+      "zh": "美股核心收益组合"
+    },
+    "us_equity_combo_core": {
+      "en": "US Core Combo",
+      "zh": "美股核心组合"
+    },
+    "us_equity_combo_leveraged": {
+      "en": "US Alpha Combo",
+      "zh": "美股加速组合"
+    }
+  },
+  "strategy_aliases": {
+    "bitcoin_etf_smart_dca": "ibit_smart_dca",
+    "global_etf_confidence_vol_gate": "global_etf_rotation",
+    "global_macro_etf_rotation": "global_etf_rotation"
+  }
+}

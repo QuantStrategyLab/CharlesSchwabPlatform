@@ -1,0 +1,11 @@
+# Configurable display names
+
+QRS `platform-config.json` owns public strategy/platform labels. `display-names.config.json` owns display-only account aliases, lanes, legacy labels and aliases. `python/scripts/build_display_names.py` combines them into one fixed mapping; it never changes trading catalog metadata or runtime configuration hashes.
+
+Run `python3 python/scripts/build_display_names.py --repos-root /path/to/source/checkouts` from QRS, then `--check` with the same arguments. Review and commit each repository separately. Consumer `display_names.py/json` files are generated snapshots, not independently maintained maps. They avoid upgrading pinned trading dependencies just for labels. No runtime fetch is performed. Refresh the snapshots together when labels change.
+
+Python: optional `QSL_DISPLAY_NAMES_JSON` JSON object. Console: optional `VITE_QSL_DISPLAY_NAMES_JSON` at build time. Example (synthetic): `{"strategies":{"custom_profile":{"zh":"ETF-轮动-202610","en":"ETF-Rotation-202610"}},"accounts":{"binance":{"crypto_combo":"live"}}}`. Invalid JSON falls back to defaults; unknown labels retain the supplied fallback. Set private aliases only in the existing protected configuration, never in public source or PR bodies.
+
+Precedence: explicit override, generated map, caller fallback, unchanged technical key. Locale falls back to English. New strategy/variant display names use `<instrument>-<what it does>-<YYYYMM>` when the actual origin month is established. Existing reviewed names stay until an explicit dated name is provided; do not invent a month or rename a technical ID to fit the pattern. Keep legacy aliases/descriptions. `crypto_combo` is displayed as `live` only under Binance; `paper` remains `paper`. Binance notifications can explicitly select another display alias with `QSL_NOTIFICATION_ACCOUNT_ALIAS` (for example `paper` in an isolated preview).
+
+Resolved names are for display only. Never pass them to trading selection, account selection, target IDs, fingerprints, release/continuity bindings, Secret names, storage/object keys, claim keys or notification deduplication. Workflow/environment IDs and report profile IDs retain their operational meaning. CI and source merges do not establish production adoption. Trading runtime changes require their separate reviewed deployment; this naming work deploys no trading service.

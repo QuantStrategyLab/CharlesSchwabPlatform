@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from .display_names import display_name
+
 from quant_platform_kit.common.operational_notification_localization import resolve_operational_notification_locale
 
 import re
@@ -38,7 +40,7 @@ SIGNAL_ICONS = {
 
 I18N = {
     "zh": {
-        "runtime_failure_title": "⚠️ Schwab 策略运行失败",
+        "runtime_failure_title": "⚠️ {platform} 策略运行失败",
         "runtime_failure_context": "运行目标：{context}",
         "runtime_failure_result": "本次运行未正常结束，请查看最新执行报告。",
         "runtime_failure_action": "下一步：检查账户授权及最新执行报告。",
@@ -204,20 +206,9 @@ I18N = {
         "strategy_plugin_guidance_market_regime_control_opportunity_watch_notify_manual_review": "仅作人工复核：市场状态允许有限机会观察，但插件本身不会下单或直接改仓位。",
         "strategy_plugin_guidance_market_regime_control_blocked_blocked": "市场状态控制被数据质量或新鲜度保护阻断；先核对数据源和产物，再决定是否人工处理。",
         "strategy_plugin_guidance_taco_rebound_shadow_taco_rebound_notify_manual_review": "TACO 仅提示可能的反弹窗口；可考虑小仓位、分批、预设止损/失效条件的人工博弈，不建议一次性满仓。",
-        "strategy_name_tqqq_growth_income": "TQQQ 增长收益",
-        "strategy_name_soxl_soxx_trend_income": "SOXL/SOXX 半导体趋势收益",
-        "strategy_name_global_etf_rotation": "全球 ETF 轮动",
-        "strategy_name_global_etf_confidence_vol_gate": "全球 ETF 置信波动门控",
-        "strategy_name_tech_communication_pullback_enhancement": "科技通信回调增强",
-        "strategy_name_qqq_tech_enhancement": "科技通信回调增强",
-        "strategy_name_russell_top50_leader_rotation": "罗素 Top50 领涨轮动",
-        "strategy_name_nasdaq_sp500_smart_dca": "纳指100 / 标普500 智能定投",
-        "strategy_name_ibit_smart_dca": "IBIT 比特币 ETF 智能定投",
-        "strategy_name_us_equity_combo": "美股核心组合",
-        "strategy_name_us_equity_combo_leveraged": "美股Alpha组合",
     },
     "en": {
-        "runtime_failure_title": "⚠️ Schwab strategy run failed",
+        "runtime_failure_title": "⚠️ {platform} strategy run failed",
         "runtime_failure_context": "Target: {context}",
         "runtime_failure_result": "The run did not finish successfully; check the latest execution report.",
         "runtime_failure_action": "Next: Check account authorization and the latest execution report.",
@@ -383,17 +374,6 @@ I18N = {
         "strategy_plugin_guidance_market_regime_control_opportunity_watch_notify_manual_review": "Manual review only: the market regime allows bounded opportunity watch, but the plugin does not place orders or directly change allocations.",
         "strategy_plugin_guidance_market_regime_control_blocked_blocked": "Market regime control was blocked by data-quality or freshness guards; verify source data and artifacts before manual action.",
         "strategy_plugin_guidance_taco_rebound_shadow_taco_rebound_notify_manual_review": "TACO only flags a possible rebound window; consider a small staged manual probe with a predefined invalidation level instead of full-size exposure.",
-        "strategy_name_tqqq_growth_income": "TQQQ Growth Income",
-        "strategy_name_soxl_soxx_trend_income": "SOXL/SOXX Semiconductor Trend Income",
-        "strategy_name_global_etf_rotation": "Global ETF Rotation",
-        "strategy_name_global_etf_confidence_vol_gate": "Global ETF Confidence Vol Gate",
-        "strategy_name_tech_communication_pullback_enhancement": "Tech/Communication Pullback Enhancement",
-        "strategy_name_qqq_tech_enhancement": "Tech/Communication Pullback Enhancement",
-        "strategy_name_russell_top50_leader_rotation": "Russell Top50 Leader Rotation",
-        "strategy_name_nasdaq_sp500_smart_dca": "Nasdaq 100 / S&P 500 Smart DCA",
-        "strategy_name_ibit_smart_dca": "IBIT Smart DCA",
-        "strategy_name_us_equity_combo": "US Equity Combo",
-        "strategy_name_us_equity_combo_leveraged": "US Equity Combo Leveraged",
     },
 }
 
@@ -410,9 +390,14 @@ if _merge_strategy_plugin_i18n is not None:
 def build_translator(lang):
     active_lang = resolve_operational_notification_locale(lang)
     def translate(key, **kwargs):
+        if key.startswith("strategy_name_"):
+            profile = key.removeprefix("strategy_name_")
+            return display_name("strategies", profile, active_lang, fallback=key)
         template = I18N[active_lang].get(key, key)
+        template = template.replace("{platform}", display_name("platforms", "schwab", active_lang))
         return template.format(**kwargs) if kwargs else template
 
+    translate.notification_locale = active_lang
     return translate
 
 
@@ -427,11 +412,14 @@ def build_signal_text(translate_fn):
 
 def build_strategy_display_name(translate_fn):
     def strategy_display_name(profile: str, *, fallback_name: str | None = None, metadata=None) -> str:
+        configured = display_name("strategies", profile, getattr(translate_fn, "notification_locale", "zh" if translator_uses_zh(translate_fn) else "en"))
+        if configured != profile:
+            return configured
         if metadata is not None:
             from quant_platform_kit.common.notification_localization import resolve_strategy_display_name
 
             return resolve_strategy_display_name(
-                "zh" if translator_uses_zh(translate_fn) else "en",
+                getattr(translate_fn, "notification_locale", "zh" if translator_uses_zh(translate_fn) else "en"),
                 metadata,
                 translator=translate_fn,
             )
