@@ -232,6 +232,7 @@ def project_schwab_account_facts_history(
     expected_runtime_revision: str,
     expected_target_id: str,
     expected_cash_currency: str | None = None,
+    external_flow_enabled: bool = False,
     now: datetime,
 ) -> dict[str, Any]:
     """Return the strict Schwab history body or an amount-free skip reason."""
@@ -380,6 +381,14 @@ def project_schwab_account_facts_history(
         if positions is not None:
             return_body["broker_reported_positions"] = positions
             return_body["broker_reported_positions_scope"] = POSITIONS_SCOPE
+        if external_flow_enabled:
+            from application.external_flow_snapshot import attach_external_flow_snapshot
+            try:
+                return_body = attach_external_flow_snapshot(
+                    return_body, report.get("account_external_flows"), enabled=True,
+                )
+            except (ValueError, TypeError, AttributeError):
+                raise _ProjectionError("external_flow_invalid") from None
         return return_body
     except _ProjectionError as exc:
         return {"status": "skipped", "reason": exc.reason}
@@ -713,6 +722,7 @@ def main(argv: list[str] | None = None) -> int:
         expected_runtime_revision=expected_revision,
         expected_target_id=target_id,
         expected_cash_currency=cash_currency,
+        external_flow_enabled=os.environ.get("SCHWAB_EXTERNAL_FLOW_EXPORT_ENABLED") == "true",
         now=now,
     )
     if projected.get("status") == "skipped":
