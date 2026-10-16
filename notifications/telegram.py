@@ -40,7 +40,7 @@ SIGNAL_ICONS = {
 
 I18N = {
     "zh": {
-        "runtime_failure_title": "⚠️ Schwab 策略运行失败",
+        "runtime_failure_title": "⚠️ {platform} 策略运行失败",
         "runtime_failure_context": "运行目标：{context}",
         "runtime_failure_result": "本次运行未正常结束，请查看最新执行报告。",
         "runtime_failure_action": "下一步：检查账户授权及最新执行报告。",
@@ -208,7 +208,7 @@ I18N = {
         "strategy_plugin_guidance_taco_rebound_shadow_taco_rebound_notify_manual_review": "TACO 仅提示可能的反弹窗口；可考虑小仓位、分批、预设止损/失效条件的人工博弈，不建议一次性满仓。",
     },
     "en": {
-        "runtime_failure_title": "⚠️ Schwab strategy run failed",
+        "runtime_failure_title": "⚠️ {platform} strategy run failed",
         "runtime_failure_context": "Target: {context}",
         "runtime_failure_result": "The run did not finish successfully; check the latest execution report.",
         "runtime_failure_action": "Next: Check account authorization and the latest execution report.",
@@ -394,6 +394,7 @@ def build_translator(lang):
             profile = key.removeprefix("strategy_name_")
             return display_name("strategies", profile, active_lang, fallback=key)
         template = I18N[active_lang].get(key, key)
+        template = template.replace("{platform}", display_name("platforms", "schwab", active_lang))
         return template.format(**kwargs) if kwargs else template
 
     translate.notification_locale = active_lang
