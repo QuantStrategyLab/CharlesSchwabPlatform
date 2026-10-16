@@ -83,8 +83,9 @@ def project_external_flow_snapshot(
             continue
         items = tx.get("transferItems")
         if (tx.get("status") != "VALID" or not isinstance(items, list) or not items
+                or any(tx.get(field) not in (None, 0, "0", []) for field in ("fees", "commission", "transactionFee"))
                 or any(not isinstance(i, Mapping) or not isinstance(i.get("instrument"), Mapping)
-                       or i["instrument"].get("assetType") != "CURRENCY" for i in items)):
+                       or i["instrument"].get("assetType") != "CURRENCY" or i.get("feeType") is not None for i in items)):
             complete = False
             continue
         native_id = tx.get("activityId")

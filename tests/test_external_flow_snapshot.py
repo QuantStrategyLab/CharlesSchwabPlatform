@@ -64,6 +64,8 @@ def test_projection_preserves_signed_native_money_hashes_refs_and_dedupes():
     {"netAmount": "NaN"}, {"netAmount": True}, {"netAmount": "-100"}, {"netAmount": "0"},
     {"activityId": None}, {"transferItems": []}, {"settlementDate": "2026-02-30"},
     {"transferItems": [{"instrument": {"assetType": "EQUITY"}}]},
+    {"fees": [{"amount": "1"}]}, {"commission": "1"},
+    {"transferItems": [{"instrument": {"assetType": "CURRENCY"}, "feeType": "synthetic-fee"}]},
 ])
 def test_unknown_or_unverified_sources_never_become_zero_flow(patch):
     assert project([TX | patch])["windows"][0]["coverage"] == "incomplete"
