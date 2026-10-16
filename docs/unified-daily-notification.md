@@ -9,8 +9,10 @@ routine plugin observations do not produce individual pushes.
 QPK source reference: `4cc5e55251269923771f90cd661bb62a5cfdf0cd` (notification modules only).
 
 The notification-only QPK source snapshot in `notifications/digest_snapshot/` avoids an
-unrelated trading dependency upgrade. Keep these three modules byte-identical
-to the reviewed QPK notification modules. Existing QPK/strategy pins, order
+unrelated trading dependency upgrade. `digest_routing.py` and `digest_archive.py`
+remain byte-identical to that reference. `digest_candidates.py` additionally
+appends Schwab-only `block_reason` facts through `notifications.block_reason`.
+Existing QPK/strategy pins, order
 execution, funding, risk, account enablement and durable report writes are unchanged.
 
 Before enabling routing, validate the exact active target's private archived
@@ -34,3 +36,13 @@ produce an `actually_ran=false` marker without inventing zero trading counts.
 Fill counts require individual execution identifiers. A completed order response
 proves an order completed, not how many fills it received. Missing fill counts
 remain unknown; confirmed routine orders still appear without a false diagnostic.
+
+The optional `block_reason` object carries `reason_code`, `observed_value`, `limit`
+and `order_submitted_this_run`. Counts and limits come from the completed gate's
+diagnostics, including its emitted limit; this projection has no separate risk
+threshold or private account configuration. Unrecognized or inconsistent reasons
+are omitted. Only the latest real run's validated risk-blocked receipt, with no
+submission, pending orders or errors, permits `order_submitted_this_run=false`.
+It never establishes daily zero counts. Older reports retain the generic blocked
+wording, with a run fact only when the existing receipt proves it. The runtime
+daily receiver projection is unchanged; the new object goes only to notifications.

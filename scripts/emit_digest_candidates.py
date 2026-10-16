@@ -292,11 +292,25 @@ def emit_digest_candidates(
     if facts_source == "account_facts_unreadable":
         return {"status": "skipped", "reason": "account_facts_unreadable"}
 
+    notification_reports = []
+    for entry in batch.entries[:caller.MAX_ITEMS]:
+        try:
+            source = entry["payload"]
+            if (caller._report_provenance_passes(source,
+                    object_uri=entry["object_uri"], report_prefix=prefix,
+                    expected_runtime_revision=facts.runtime_revision, observed_at=now)
+                    and caller._account_identity_problem(source, account_hash) is None):
+                notification_reports.append(source)
+        except (KeyError, TypeError, ValueError, AttributeError):
+            # A malformed archive already excluded by prepare stays excluded.
+            continue
     payload = project_digest_candidates(
         daily_projection=sealed,
         opaque_account_uid=uid,
         target_id=tid,
         account_facts=account_facts,
+        # Use the existing archive admission; raw reports never enter candidates.
+        notification_reports=notification_reports,
     )
     try:
         _write_json(output_path, payload)

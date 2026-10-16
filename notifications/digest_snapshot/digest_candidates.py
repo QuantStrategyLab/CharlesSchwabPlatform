@@ -55,7 +55,7 @@ def project_reports(reports: Sequence[Mapping], *, expected_target: Mapping,
             or not isinstance(expected_target["account_selector"], list) or not expected_target["account_selector"]
             or any(not isinstance(v, str) or not v.strip() for v in expected_target["account_selector"])):
         raise ValueError("candidate_target_invalid")
-    rows, seen = {}, set()
+    rows, seen, block_reports = {}, set(), {}
     for report in reports:
         target = report.get("runtime_target") or {}
         if not isinstance(target, Mapping) or any(target.get(k) != expected_target[k] for k in required):
@@ -77,6 +77,8 @@ def project_reports(reports: Sequence[Mapping], *, expected_target: Mapping,
             raise ValueError("candidate_duplicate_run")
         seen.add(run_id)
         day = (stamp.astimezone(ZoneInfo("Asia/Singapore")) - timedelta(hours=6)).date().isoformat()
+        if expected_target["platform_id"] == "schwab":
+            block_reports.setdefault(day, []).append(report)
         facts = (report.get("summary") or {}).get("notification_digest") or {}
         known = (facts.get("schema_version") == "qsl.notification_cycle.v1" and facts.get("dry_run") is False
                  and type(facts.get("order_count")) is int and facts["order_count"] >= 0
@@ -100,6 +102,13 @@ def project_reports(reports: Sequence[Mapping], *, expected_target: Mapping,
         if alert:
             row.update(status="alert", reason_code="source_cycle_alert" if error else "execution_evidence_missing_or_attention",
                        execution_status="execution_alert" if error else "execution_unknown")
+    if block_reports:
+        from notifications.block_reason import latest_block_reason
+        from scripts.runtime_daily_report_projection import _run
+        for day, sources in block_reports.items():
+            reason = latest_block_reason({"conflicts": [], "runs": [_run(report, now) for report in sources]}, sources)
+            if reason:
+                rows[day]["block_reason"] = reason
     return {"schema_version": "qsl.digest_candidates.v1", "producer_status": "projected", "runs": list(rows.values())}
 
 
