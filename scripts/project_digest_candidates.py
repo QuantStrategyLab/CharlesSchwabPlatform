@@ -17,6 +17,10 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
+# Preserve direct offline CLI use without requiring an installed package.
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from notifications.block_reason import latest_block_reason
 
 PLATFORM_ID = "schwab"

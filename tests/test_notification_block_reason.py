@@ -162,3 +162,20 @@ def test_unified_notification_projector_carries_same_run_facts():
     assert row["block_reason"]["order_submitted_this_run"] is False
     assert row["block_reason"]["observed_value"] == 6
     assert row["fill_count"] is None and row["order_count"] is None
+
+
+def test_candidate_cli_works_outside_repo_without_pythonpath_or_install(tmp_path):
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    source = tmp_path / "daily.json"
+    output = tmp_path / "candidate.json"
+    source.write_text(json.dumps(project([blocked_report()])))
+    command = Path(__file__).resolve().parents[1] / "scripts/project_digest_candidates.py"
+    result = subprocess.run([sys.executable, "-I", str(command), "--daily-projection", str(source),
+                             "--output", str(output)], cwd=tmp_path, env={}, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    row = json.loads(output.read_text())["runs"][0]
+    assert row["order_count"] is None and row["fill_count"] is None
