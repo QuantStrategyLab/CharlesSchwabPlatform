@@ -93,3 +93,42 @@ if names != {"Dockerfile", "tracked.txt"}:
         raise SystemExit("FAIL: generated authentication file is not excluded by the build boundary")
 print("PASS: tracked-source container build excludes generated authentication files")
 PY
+
+# Execute the actual mode selector with no connected services. Mixed-operation
+# approvals must stop before checkout/auth; default HTTP remains available.
+python3 - "$workflow" <<'PY'
+import json, os, subprocess, sys, tempfile
+from pathlib import Path
+text = Path(sys.argv[1]).read_text()
+# Ruby is already required by this test. Use JSON to avoid a new Python package.
+wf = json.loads(subprocess.check_output(["ruby", "-rjson", "-ryaml", "-e", "puts JSON.generate(YAML.load_file(ARGV[0]))", sys.argv[1]]))
+steps = wf['jobs']['sync-cloud-run-env']['steps']
+config = next(x['run'] for x in steps if x.get('id') == 'config')
+for conflicting in [None, 'APPROVE_ENV_SECRET_SYNC', 'APPROVE_SCHEDULER_IAM_SYNC', 'APPROVE_TRAFFIC_SHIFT', 'APPROVE_CLEANUP']:
+    with tempfile.TemporaryDirectory() as directory:
+        output = Path(directory) / 'output'
+        env = dict(os.environ, GITHUB_OUTPUT=str(output), NOTIFICATION_ONLY='true',
+                   NOTIFICATION_CANDIDATE_REVISION='charles-schwab-quant-service-notification-test',
+                   GITHUB_EVENT_NAME='workflow_dispatch', ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION='false', ENABLE_GITHUB_CLOUD_RUN_DEPLOY='true',
+                   APPROVE_IMAGE_DEPLOY='true', ENABLE_GITHUB_ENV_SYNC='true', CLOUD_RUN_CLEANUP_ENABLED='true')
+        for key in ['APPROVE_ENV_SECRET_SYNC', 'APPROVE_SCHEDULER_IAM_SYNC', 'APPROVE_TRAFFIC_SHIFT', 'APPROVE_CLEANUP']:
+            env[key] = str(key == conflicting).lower()
+        result = subprocess.run(['bash', '-c', config], env=env, capture_output=True)
+        assert (result.returncode == 0) == (conflicting is None)
+        if conflicting is None:
+            values = dict(line.split('=', 1) for line in output.read_text().splitlines())
+            assert values['notification_only'] == values['deploy_enabled'] == 'true'
+            assert all(values[k] == 'false' for k in ['env_sync_enabled','scheduler_iam_sync_enabled','traffic_shift_enabled','cleanup_enabled'])
+source = next(x for x in steps if x.get('name') == 'Checkout reviewed notification source')
+assert source['with']['ref'] == 'e159e6cc07f9a9eea417b810674f934eb5291e6f'
+assert source['with']['path'] == 'notification-source'
+build = next(x['run'] for x in steps if x.get('id') == 'notification_image')
+assert 'prepare-overlay' in build and '--lockfile", "notification-source/uv.lock"' in build
+assert 'git archive HEAD' not in build and 'uv sync' not in build and 'pip install' not in build
+publish = next(x['run'] for x in steps if x.get('name','').startswith('Publish one native'))
+assert 'native-publish' in publish and '--baseline-revision=charles-schwab-quant-service-00781-lel' in publish
+assert all(term not in publish for term in ['gcloud run deploy', 'services replace', '/probe', '/run', 'curl '])
+for name in ['Install strategy status dependencies', 'Capture no-traffic deployment baseline', 'Build, push, and deploy Cloud Run image', 'Verify no-traffic deployment readback']:
+    assert 'inputs.notification_only != true' in next(x['if'] for x in steps if x.get('name') == name)
+print('PASS: native selector rejects four mixed approvals; exact source and separate HTTP/native paths verified')
+PY

@@ -347,8 +347,253 @@ class _Parser(argparse.ArgumentParser):
     def error(self, message: str) -> None:
         _stop("INVALID_ARGUMENTS")
 
+# Native publishing is separate from the closed synthetic review model above.
+# It never imports business code, changes a runtime target, or sends an app probe.
+NOTIFICATION_SOURCE = "e159e6cc07f9a9eea417b810674f934eb5291e6f"
+OLD_UES_PIN = "4a3943883cd6b5bbfe32a559e56a91b40a81b7ce"
+_DEPENDENCY_HASHES = {
+    "uv.lock": "5bead5ad0b79876f74dd6b02ab29538e5cc5ace2420c15f6222e77c7f458a66f",
+    "pyproject.toml": "2a943c7217b46912e6da0ac1bc382e4a2c9fff644aadf0da5077ba1d911fe780",
+    "qsl.toml": "979b31053ff222a496e6b39718b0f1b412fa317ad2db009807deb4efedaf0807",
+}
+_OVERLAY_EXISTING = frozenset({
+    "application/account_new_risk_gate_support.py", "application/execution_service.py",
+    "application/rebalance_service.py", "application/runtime_report_summary.py",
+    "application/runtime_strategy_adapters.py", "main.py",
+})
+_OVERLAY_REQUIRED = _OVERLAY_EXISTING | {
+    "notifications/display_names.json", "notifications/digest_snapshot/provenance.json",
+    "scripts/execution_report_heartbeat.py", "scripts/emit_unified_digest_candidates.py",
+}
+_OUTPUT_LABELS = frozenset({"serving.knative.dev/service", "serving.knative.dev/configuration",
+    "serving.knative.dev/configurationGeneration", "serving.knative.dev/route",
+    "cloud.googleapis.com/location", "run.googleapis.com/startupProbeType"})
+_OUTPUT_ANNOTATIONS = frozenset({"serving.knative.dev/creator", "serving.knative.dev/lastModifier",
+    "run.googleapis.com/operation-id", "run.googleapis.com/urls", "run.googleapis.com/ingress-status",
+    "run.googleapis.com/client-name", "run.googleapis.com/client-version"})
+
+
+def build_native_plan(before: dict, current: dict, expected: dict) -> tuple[dict, dict]:
+    """Construct one native v1 Service guarded by its ORIGINAL resourceVersion.
+
+    A supported native snapshot is required; a closed-model projection or a
+    desired template is never a source for the new revision's configuration.
+    """
+    try:
+        a.native_snapshot_inventory(before)
+        a.native_snapshot_inventory(current)
+        _required(expected, _EXPECTED | {"candidate_sha": str, "candidate_run": str})
+        _expected({k: expected[k] for k in _EXPECTED}, TCP_00781_STARTUP_POLICY)
+        if expected["candidate_sha"] != NOTIFICATION_SOURCE or not re.fullmatch(r"[0-9]+", expected["candidate_run"]):
+            _stop("NATIVE_SOURCE_OR_RUN_MISMATCH")
+        for snap in (before, current):
+            for part, name in (("service", expected["service"]), ("revision", expected["baseline_revision"])):
+                meta = snap[part]["metadata"]
+                if (meta["name"] != name or not (meta["namespace"] == expected["project"] or re.fullmatch(r"[1-9][0-9]*", meta["namespace"]))
+                        or not _nonempty(meta["uid"]) or not _nonempty(meta["resourceVersion"])):
+                    _stop("NATIVE_IDENTITY_MISMATCH")
+            if snap["service"]["metadata"]["namespace"] != snap["revision"]["metadata"]["namespace"]:
+                _stop("NATIVE_NAMESPACE_MISMATCH")
+            if snap["service"]["metadata"]["resourceVersion"] != expected["resource_version"]:
+                _stop("RESOURCE_VERSION_MISMATCH")
+            revision = snap["revision"]
+            main_container = revision["spec"]["containers"][0]
+            if (main_container["image"] != _TCP_00781_IMAGE
+                    or revision["metadata"].get("labels", {}).get("commit-sha") != _TCP_00781_SOURCE):
+                _stop("NATIVE_BASELINE_PROVENANCE_MISMATCH")
+            if main_container["startupProbe"] != _TCP_00781_PROBE:
+                _stop("TCP_BASELINE_PROBE_MISMATCH")
+            # Absence is a capability/decision gap, not permission to enable it.
+            if revision["metadata"].get("annotations", {}).get("run.googleapis.com/health-check-disabled") != "false":
+                _stop("NATIVE_STARTUP_CHECK_NOT_EXPLICITLY_ENABLED")
+            _traffic(a.native_routes(snap["service"]["spec"]["traffic"]), expected)
+            if a.native_routes(snap["service"]["status"]["traffic"], status=True) != a.native_routes(snap["service"]["spec"]["traffic"]):
+                _stop("NATIVE_TRAFFIC_NOT_OBSERVED")
+            if sum(row["percent"] for row in a.native_routes(snap["service"]["spec"]["traffic"])
+                   if row["revisionName"] == expected["baseline_revision"]) != 100:
+                _stop("NATIVE_BASELINE_NOT_100_PERCENT")
+            targets = [entry["value"] for entry in main_container["env"]
+                       if entry["name"] in {"RUNTIME_TARGET_JSON", "QSL_RUNTIME_TARGET_JSON"} and "value" in entry]
+            if len(targets) != 1:
+                _stop("NATIVE_TARGET_BINDING_UNAVAILABLE")
+            target = json.loads(targets[0], object_pairs_hook=_pairs, parse_constant=_invalid_constant)
+            if (target.get("strategy_release", {}).get("strategy_revision") != OLD_UES_PIN
+                    or target.get("runtime_risk_limits", {}).get("binding", {}).get("ues_revision") != OLD_UES_PIN):
+                _stop("NATIVE_OLD_UES_BINDING_MISMATCH")
+            for container in revision["spec"]["containers"]:
+                if not _image(container["image"]): _stop("INVALID_IMMUTABLE_IMAGE")
+                if container.get("command") or container.get("args"): _stop("NATIVE_COMMAND_OVERRIDE_UNSUPPORTED")
+                for entry in container.get("env", []):
+                    if "value" in entry and type(entry["value"]) is not str: _stop("INVALID_ENV_LITERAL")
+        if before is current: _stop("INDEPENDENT_SNAPSHOTS_REQUIRED")
+        if before != current: _stop("CONCURRENT_SNAPSHOT_CHANGED")
+        revision_meta = current["revision"]["metadata"]
+        labels = {k: v for k, v in revision_meta.get("labels", {}).items() if k not in _OUTPUT_LABELS}
+        labels.update({"commit-sha": NOTIFICATION_SOURCE, "github-run-id": expected["candidate_run"]})
+        if "run-id" in labels: labels["run-id"] = expected["candidate_run"]
+        # Old build provenance describes the base, not this overlay source.
+        annotations = {k: v for k, v in revision_meta.get("annotations", {}).items()
+                       if k not in _OUTPUT_ANNOTATIONS and not k.startswith("run.googleapis.com/build-")}
+        spec = copy.deepcopy(current["revision"]["spec"])
+        spec["containers"][0]["image"] = expected["candidate_image"]
+        if expected["candidate_image"] == _TCP_00781_IMAGE: _stop("IMAGE_UNCHANGED")
+        service_meta = current["service"]["metadata"]
+        metadata = {k: copy.deepcopy(service_meta[k]) for k in ("name", "namespace", "resourceVersion", "labels", "annotations") if k in service_meta}
+        request = {"apiVersion": "serving.knative.dev/v1", "kind": "Service", "metadata": metadata,
+                   "spec": {"template": {"metadata": {"name": expected["candidate_revision"], "labels": labels,
+                                                         "annotations": annotations}, "spec": spec},
+                            "traffic": copy.deepcopy(current["service"]["spec"]["traffic"])}}
+        return request, {"mode": "native_original_rv", "deployment_ready": False,
+            "source": NOTIFICATION_SOURCE, "source_is_tool_main": False,
+            "protected_baseline_sha256": _hash(current), "request_sha256": _hash(request),
+            "allowed_changes": ["template.name", "template.spec.containers[0].image", "template.source_provenance"],
+            "service_desired_template": "REPLACED_FROM_EXPLICIT_BASELINE_NOT_FROM_DESIRED",
+            "traffic_and_all_tags": "PRESERVED", "effective_notification_flags": "UNVERIFIED",
+            "runtime_marker_CAS": "UNVERIFIED", "startup": "NOT_EXECUTED_TCP_ONLY"}
+    except PlanError:
+        raise
+    except a.PreflightError as exc:
+        raise PlanError(str(exc)) from None
+    except (ValueError, TypeError, KeyError, AttributeError, RecursionError):
+        _stop("INVALID_NATIVE_INPUT")
+
+
+def replace_native_service(request: dict, expected: dict, *, session=None) -> None:
+    """One native PUT. No gcloud replace, automatic retry, response dump or rebase."""
+    owned = session is None
+    if request.get("metadata", {}).get("resourceVersion") != expected["resource_version"]:
+        _stop("RESOURCE_VERSION_MISMATCH")
+    _expected({k: expected[k] for k in _EXPECTED}, TCP_00781_STARTUP_POLICY)
+    response = None
+    try:
+        if owned:
+            import google.auth
+            from google.auth.transport.requests import AuthorizedSession
+            credentials, _project = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+            session = AuthorizedSession(credentials, max_refresh_attempts=0)
+        url = (f"https://{expected['region']}-run.googleapis.com/apis/serving.knative.dev/v1/"
+               f"namespaces/{expected['project']}/services/{expected['service']}")
+        response = session.request("PUT", url, json=request, timeout=60, allow_redirects=False, stream=True)
+        status = response.status_code
+    except Exception:
+        _stop("NATIVE_WRITE_UNCERTAIN_DO_NOT_RETRY")
+    finally:
+        if response is not None: response.close()
+        if owned and session is not None: session.close()
+    if status in {409, 412}: _stop("NATIVE_RESOURCE_VERSION_CONFLICT")
+    if status != 200: _stop("NATIVE_WRITE_UNCERTAIN_DO_NOT_RETRY")
+
+
+def publish_native(before: dict, expected: dict, *, read=None, capture=None, replace=None, pause=None, attempts: int = 24) -> dict:
+    """Read fresh, write once, then wait only on exact candidate control-plane GETs."""
+    import time
+    read = read or a._run_json
+    capture = capture or a.capture_native_snapshot
+    replace = replace or replace_native_service
+    pause = pause or time.sleep
+    if type(attempts) is not int or not 1 <= attempts <= 24: _stop("INVALID_POLL_BOUND")
+    current = capture(expected, read=read)
+    request, review = build_native_plan(before, current, expected)
+    candidates = read(["gcloud", "run", "revisions", "list", f"--project={expected['project']}",
+                       f"--region={expected['region']}", f"--filter=metadata.name={expected['candidate_revision']}",
+                       "--format=json(metadata.name)"])
+    if candidates != []: _stop("NATIVE_CANDIDATE_ALREADY_EXISTS_OR_AMBIGUOUS")
+    replace(request, expected)
+    candidate_identity = dict(expected, baseline_revision=expected["candidate_revision"])
+    for index in range(attempts):
+        after = capture(candidate_identity, read=read)
+        try:
+            a.verify_native_readback(before, request, after["service"], after["revision"])
+        except a.PreflightError as exc:
+            if str(exc) != "NATIVE_STARTUP_PENDING": raise PlanError(str(exc)) from None
+            if index == attempts - 1: _stop("NATIVE_STARTUP_NOT_OBSERVED_DO_NOT_REDEPLOY")
+            pause(15)
+        else:
+            return review | {"startup": "CONTROL_PLANE_TCP_READY_ONLY", "application_delivery": "NOT_VERIFIED"}
+    _stop("NATIVE_STARTUP_NOT_OBSERVED_DO_NOT_REDEPLOY")
+
+
+def _git_bytes(repository: Path, *args: str) -> bytes:
+    import subprocess
+    result = subprocess.run(["git", "-C", str(repository), *args], capture_output=True, check=False)
+    if result.returncode: _stop("NATIVE_SOURCE_GIT_UNAVAILABLE")
+    return result.stdout
+
+
+def prepare_notification_overlay(repository: Path, destination: Path, *, git=None) -> dict:
+    """Only exact reviewed Git blobs enter the context; no workspace/auth files."""
+    git = git or (lambda *args: _git_bytes(repository, *args))
+    if destination.exists(): _stop("OVERLAY_DESTINATION_EXISTS")
+    if git("rev-parse", "HEAD").decode().strip() != NOTIFICATION_SOURCE: _stop("OVERLAY_SOURCE_MISMATCH")
+    if git("merge-base", _TCP_00781_SOURCE, NOTIFICATION_SOURCE).decode().strip() != _TCP_00781_SOURCE: _stop("OVERLAY_BASE_MISMATCH")
+    for name, digest in _DEPENDENCY_HASHES.items():
+        blob = git("show", NOTIFICATION_SOURCE + ":" + name)
+        if hashlib.sha256(blob).hexdigest() != digest or blob != git("show", _TCP_00781_SOURCE + ":" + name):
+            _stop("OVERLAY_DEPENDENCY_CHANGED")
+    rows = git("diff", "--name-status", "--no-renames", _TCP_00781_SOURCE, NOTIFICATION_SOURCE).decode().splitlines()
+    paths = []
+    for row in rows:
+        status, name = row.split("\t")
+        runtime = (name in _OVERLAY_EXISTING or name in _OVERLAY_REQUIRED
+                   or re.fullmatch(r"notifications/(?:[a-z_]+/)*[a-z_]+\.py", name))
+        documentation = re.fullmatch(r"(?:tests|docs)/[A-Za-z0-9_./-]+", name) or name in {"README.md", "CHANGELOG.md", "MANIFEST.in", ".github/workflows/execution-report-heartbeat.yml"}
+        if not runtime:
+            if documentation: continue
+            _stop("OVERLAY_UNREVIEWED_PATH")
+        if status not in {"A", "M"}: _stop("OVERLAY_DELETE_OR_RENAME")
+        if ".." in Path(name).parts: _stop("OVERLAY_INVALID_PATH")
+        record = git("ls-tree", NOTIFICATION_SOURCE, "--", name).decode().split()
+        if len(record) != 4 or record[0] not in {"100644", "100755"} or record[1] != "blob":
+            _stop("OVERLAY_NOT_REGULAR_FILE")
+        paths.append(name)
+    if not _OVERLAY_REQUIRED <= set(paths): _stop("OVERLAY_REQUIRED_ASSET_MISSING")
+    blobs = {name: git("show", NOTIFICATION_SOURCE + ":" + name) for name in paths}
+    destination.mkdir(parents=True, mode=0o700)
+    for name, blob in blobs.items():
+        output = destination / name
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(blob)
+    # Docker's JSON COPY form: no shell expansion, no RUN, no dependency install.
+    recipe = "FROM " + _TCP_00781_IMAGE + "\n" + "".join(
+        "COPY " + json.dumps([name, "/app/" + name]) + "\n" for name in sorted(blobs))
+    (destination / "Dockerfile").write_text(recipe, encoding="utf-8")
+    return {"source": NOTIFICATION_SOURCE, "base": _TCP_00781_SOURCE, "files_sha256": {
+        name: hashlib.sha256(blob).hexdigest() for name, blob in sorted(blobs.items())},
+        "build": "NOT_EXECUTED", "installed_dependencies": "PRESERVED_BY_BASE_IMAGE_NOT_RUNTIME_VERIFIED"}
+
+
+def _native_main(argv: list[str]) -> int:
+    parser = _Parser()
+    modes = parser.add_subparsers(dest="mode", required=True)
+    prepare = modes.add_parser("prepare-overlay")
+    prepare.add_argument("--repository", required=True, type=Path)
+    prepare.add_argument("--output", required=True, type=Path)
+    publish = modes.add_parser("native-publish")
+    publish.add_argument("--before", required=True, type=Path)
+    for flag in ("project", "region", "service", "baseline-revision", "candidate-revision", "candidate-image", "candidate-run"):
+        publish.add_argument("--" + flag, required=True)
+    try:
+        args = parser.parse_args(argv)
+        if args.mode == "prepare-overlay":
+            result = prepare_notification_overlay(args.repository, args.output)
+        else:
+            before = load_request(args.before)
+            expected = {k: getattr(args, k) for k in _EXPECTED if k != "resource_version"}
+            expected["resource_version"] = before["service"]["metadata"]["resourceVersion"]
+            expected.update(candidate_sha=NOTIFICATION_SOURCE, candidate_run=args.candidate_run)
+            result = publish_native(before, expected)
+        print(_canonical(result))
+    except (PlanError, a.PreflightError) as exc:
+        print("Native operation stopped: " + str(exc), file=sys.stderr); return 1
+    except (ValueError, TypeError, KeyError, OSError, AttributeError):
+        print("Native operation stopped: INVALID_INPUT", file=sys.stderr); return 1
+    return 0
+
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] in {"prepare-overlay", "native-publish"}:
+        return _native_main(argv)
     parser = _Parser(description="Review a closed local synthetic snapshot; emits hashes only.")
     parser.add_argument("--input", required=True, type=Path)
     try:

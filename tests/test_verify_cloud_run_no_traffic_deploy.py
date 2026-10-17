@@ -791,3 +791,113 @@ def test_default_http_failure_keeps_original_precedence_over_volume_semantics(ca
     trap_all_literals(case)
     with pytest.raises(check.PreflightError, match="^HTTP_STARTUP_GUARD_REQUIRED$"):
         check._preflight_local(*case)
+
+
+def native_snapshot():
+    traffic = [{"revisionName": BASE_REV, "percent": 100, "tag": "stable"},
+               {"revisionName": "demo-service-old", "tag": "keep-zero"}]
+    meta = dict(name="demo-service", namespace="demo-project", uid="service-uid", resourceVersion="service-rv", generation=1)
+    spec = dict(serviceAccountName="demo@example.invalid", containers=[{
+        "image": BASE_IMAGE, "env": [{"name": "SCHWAB_CASH_CURRENCY", "value": "USD"}],
+        "ports": [{"containerPort": 8080}], "startupProbe": {"tcpSocket": {"port": 8080}},
+    }])
+    return {"service": {"metadata": meta, "spec": {"traffic": traffic},
+                        "status": {"traffic": copy.deepcopy(traffic), "observedGeneration": 1}},
+            "revision": {"metadata": dict(meta, name=BASE_REV, uid="revision-uid", resourceVersion="revision-rv"),
+                         "spec": spec, "status": {"imageDigest": BASE_IMAGE, "observedGeneration": 1,
+                         "conditions": [{"type": k, "status": "True"} for k in ("Ready", "ContainerHealthy")]}}}
+
+
+def test_native_readback_keeps_zero_tags_and_exact_revision():
+    before = native_snapshot(); after = copy.deepcopy(before)
+    template = {"metadata": {"name": CANDIDATE_REV, "labels": {"commit-sha": CANDIDATE_COMMIT}},
+                "spec": copy.deepcopy(before["revision"]["spec"])}
+    template["spec"]["containers"][0]["image"] = CANDIDATE_IMAGE
+    after["revision"]["metadata"].update(template["metadata"])
+    after["revision"]["spec"] = template["spec"]
+    after["revision"]["status"]["imageDigest"] = CANDIDATE_IMAGE
+    check.verify_native_readback(before, {"spec": {"template": template}}, **after)
+    after["service"]["status"]["traffic"][1]["tag"] = "different"
+    with pytest.raises(check.PreflightError, match="NATIVE_TRAFFIC_CHANGED"):
+        check.verify_native_readback(before, {"spec": {"template": template}}, **after)
+
+
+@pytest.mark.parametrize("condition", ["pending", "false", "generation", "wrong-image", "wrong-candidate", "sidecar-drift"])
+def test_native_startup_needs_exact_candidate_observed_generation_and_conditions(condition):
+    before = native_snapshot(); after = copy.deepcopy(before)
+    request = {"spec": {"template": {"metadata": {"name": BASE_REV}, "spec": copy.deepcopy(before["revision"]["spec"])}}}
+    if condition == "pending": after["revision"]["status"]["conditions"] = []
+    elif condition == "false": after["revision"]["status"]["conditions"][0]["status"] = "False"
+    elif condition == "generation": after["service"]["status"]["observedGeneration"] = 0
+    elif condition == "wrong-image": after["revision"]["status"]["imageDigest"] = CANDIDATE_IMAGE
+    elif condition == "wrong-candidate": after["revision"]["metadata"]["name"] = CANDIDATE_REV
+    else: after["revision"]["spec"]["containers"][0]["resources"] = {"limits": {"cpu": "2"}}
+    with pytest.raises(check.PreflightError): check.verify_native_readback(before, request, **after)
+
+
+def test_native_capture_unknown_literal_stops_before_any_value_projection():
+    commands = []
+    def read(command):
+        commands.append(command)
+        fmt = command[-1]
+        if "env[].name" in fmt:
+            return {"metadata": {"uid": "u", "resourceVersion": "r"},
+                    "spec": {"containers": [{"env": [{"name": "PRIVATE_UNKNOWN"}]}]}}
+        return {}
+    identity = dict(project="demo-project", region="demo-region", service="demo-service", baseline_revision=BASE_REV)
+    with pytest.raises(check.PreflightError, match="UNKNOWN_ENV_LITERAL"):
+        check.capture_native_snapshot(identity, read=read)
+    assert not any("extract(value)" in cmd[-1] or "json(metadata," in cmd[-1] for cmd in commands)
+    assert not any("template.spec" in cmd[-1] for cmd in commands)
+
+
+def test_native_capture_unknown_annotation_stops_before_metadata_values():
+    commands = []
+    def read(command):
+        commands.append(command)
+        if "annotations.list(show=keys)" in command[-1]:
+            return {"metadata": {"annotations": "kubectl.kubernetes.io/last-applied-configuration"}}
+        return {}
+    identity = dict(project="demo-project", region="demo-region", service="demo-service", baseline_revision=BASE_REV)
+    with pytest.raises(check.PreflightError, match="NATIVE_UNSUPPORTED_ANNOTATION"):
+        check.capture_native_snapshot(identity, read=read)
+    assert not any("json(metadata," in cmd[-1] for cmd in commands)
+
+
+def test_native_capture_unknown_config_field_stops_name_inventory():
+    def read(command):
+        return {"spec": "containers,unsupported"} if command[-1] == "--format=json(spec.list(show=keys))" else {}
+    identity = dict(project="demo-project", region="demo-region", service="demo-service", baseline_revision=BASE_REV)
+    with pytest.raises(check.PreflightError, match="NATIVE_UNSUPPORTED_CONFIGURATION_FIELD"):
+        check.capture_native_snapshot(identity, read=read)
+
+
+@pytest.mark.parametrize("drift", [None, "revision", "service"])
+def test_native_capture_value_projection_is_allowlisted_and_uid_rv_bracketed(drift):
+    expected = native_snapshot(); commands = []
+    def read(command):
+        commands.append(command)
+        fmt = command[-1]
+        revision = command[2] == "revisions"
+        obj = expected["revision" if revision else "service"]
+        if fmt == "--format=json(metadata.uid,metadata.resourceVersion)":
+            meta = {k: obj["metadata"][k] for k in ("uid", "resourceVersion")}
+            if drift == ("revision" if revision else "service"): meta["resourceVersion"] += "changed"
+            return {"metadata": meta}
+        if "json(metadata," in fmt:
+            result = copy.deepcopy(obj)
+            if revision: del result["spec"]["containers"][0]["env"][0]["value"]
+            return result
+        if "env[].name" in fmt:
+            return {"metadata": {k: obj["metadata"][k] for k in ("uid", "resourceVersion")},
+                    "spec": {"containers": [{"env": [{"name": "SCHWAB_CASH_CURRENCY"}]}]}}
+        if "extract(value)" in fmt:
+            assert 'filter("name=SCHWAB_CASH_CURRENCY")' in fmt
+            return {"spec": {"containers": [{"env": [["USD"]]}]}}
+        return {}
+    identity = dict(project="demo-project", region="demo-region", service="demo-service", baseline_revision=BASE_REV)
+    if drift:
+        with pytest.raises(check.PreflightError, match="NATIVE_OBJECT_CHANGED_DURING_CAPTURE"):
+            check.capture_native_snapshot(identity, read=read)
+    else: assert check.capture_native_snapshot(identity, read=read) == expected
+    assert not any("template.spec" in c[-1] or "env[].value," in c[-1] for c in commands)
