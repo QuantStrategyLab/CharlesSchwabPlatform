@@ -160,7 +160,8 @@ def test_same_env_names_and_secret_references_do_not_hide_target_drift(case):
     assert [entry["name"] for entry in env(baseline)] == [entry["name"] for entry in env(candidate)]
     assert env(baseline)[-1] == env(candidate)[-1]
     # Demonstrate the old names/reference-only projection misses this drift.
-    old = lambda p: [{key: value for key, value in entry.items() if key != "value"} for entry in env(p)]
+    def old(p):
+        return [{key: value for key, value in entry.items() if key != "value"} for entry in env(p)]
     assert check._digest(old(baseline)) == check._digest(old(candidate))
     stop(case, "RUNTIME_CONFIGURATION_CHANGED")
 
