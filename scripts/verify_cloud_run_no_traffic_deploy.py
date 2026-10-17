@@ -391,7 +391,7 @@ def _probe_inventory(probe: Mapping) -> None:
             _stop("INVALID_PROBE")
 
 
-def _inventory(projection: object) -> None:
+def _inventory_core(projection: object) -> None:
     _shape(projection, _PROJECTION)
     _keys(projection, _PROJECTION, _PROJECTION)
     _keys(projection["identity"], _PROJECTION["identity"], _PROJECTION["identity"])
@@ -443,10 +443,9 @@ def _inventory(projection: object) -> None:
             _stop("REQUIRED_LITERAL_MISSING")
     if any(entry["name"] in targets for container in containers[1:] for entry in container["env"]):
         _stop("AMBIGUOUS_OR_MISSING_TARGET")
-    startup = containers[0].get("startupProbe", {})
-    if (startup.get("httpGet") != {"path": "/health", "port": 8080}
-            or "tcpSocket" in startup or "grpc" in startup):
-        _stop("HTTP_STARTUP_GUARD_REQUIRED")
+
+
+def _volume_inventory(runtime: Mapping) -> None:
     volumes = runtime["volumes"]
     volume_names = []
     for volume in volumes:
@@ -467,11 +466,31 @@ def _inventory(projection: object) -> None:
                 _stop("AMBIGUOUS_VOLUME")
     if len(volume_names) != len(set(volume_names)):
         _stop("AMBIGUOUS_VOLUME")
-    for container in containers:
+    for container in runtime["containers"]:
         for mount in container["volumeMounts"]:
             _keys(mount, _CONTAINER["volumeMounts"][0], {"name", "mountPath"})
             if mount["name"] not in volume_names or not mount["mountPath"].startswith("/"):
                 _stop("INVALID_VOLUME_MOUNT")
+
+
+def _structure_inventory(projection: object) -> None:
+    """Inventory the closed local schema without choosing a startup policy."""
+    _inventory_core(projection)
+    _volume_inventory(projection["runtime"])
+
+
+def _http_startup_guard(projection: Mapping) -> None:
+    startup = projection["runtime"]["containers"][0].get("startupProbe", {})
+    if (startup.get("httpGet") != {"path": "/health", "port": 8080}
+            or "tcpSocket" in startup or "grpc" in startup):
+        _stop("HTTP_STARTUP_GUARD_REQUIRED")
+
+
+def _inventory(projection: object) -> None:
+    """Keep the original API and CLI strictly on HTTP /health:8080."""
+    _inventory_core(projection)
+    _http_startup_guard(projection)
+    _volume_inventory(projection["runtime"])
 
 
 def _identity(projection: dict, args: argparse.Namespace, *, candidate: bool) -> None:
