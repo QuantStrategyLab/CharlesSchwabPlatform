@@ -75,6 +75,11 @@ def summarize_execution_cycle_result(result: object, *, dry_run: bool) -> dict[s
         summary["notification_digest"] = cycle_evidence(
             dict(getattr(result, "execution", {}) or {}),
             tuple(getattr(result, "submitted_orders", ()) or ()), dry_run=dry_run)
+    if unified_enabled() and execution.get("notification_approved_gates"):
+        from notifications.approved_gates import clean_gate_reasons
+        summary["notification_approved_gates"] = clean_gate_reasons(execution["notification_approved_gates"])
+        if execution.get("notification_attention_reason_codes"):
+            summary["notification_attention_reason_codes"] = list(execution["notification_attention_reason_codes"])
     if unified_enabled() and execution.get("notification_events"):
         summary["notification_events"] = execution["notification_events"]
     return summary

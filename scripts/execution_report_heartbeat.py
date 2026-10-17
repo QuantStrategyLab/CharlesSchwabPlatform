@@ -19,7 +19,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from notifications.receipt_alerts import render_receipt_alert
-from notifications.unified import enabled as unified_enabled, publish_receipt
+from notifications.unified import enabled as unified_enabled, publish_receipt, publish_approved_receipts
+from notifications.approved_gates import report_gate_reasons
 from quant_platform_kit.common.execution_receipts import validate_execution_receipt
 from quant_platform_kit.common.operational_notification_localization import (
     format_operational_alert,
@@ -946,6 +947,7 @@ def main(now: dt.datetime | None = None) -> int:
     recovery_times = []
     notification_attention = []
     latest_block_reason = ""
+    approved_latest = {}
     source_reports = []
     for uri, updated in sorted_objects[:max_reports]:
         payload = _cat_gcs_json(uri, project=project)
@@ -993,6 +995,8 @@ def main(now: dt.datetime | None = None) -> int:
         if is_latest_report:
             latest_report_seen.add(service_name)
             if not ok:
+                if unified_enabled() and reason == "rejected inner execution status" and report_gate_reasons(payload, observed_at=now):
+                    approved_latest[service_name] = payload
                 latest_report_issues.append(f"{service_name or name}: {reason}")
                 if _report_execution_status(payload).lower() in {"blocked", "risk_blocked"}:
                     summary = payload.get("summary") or {}
@@ -1112,9 +1116,17 @@ def main(now: dt.datetime | None = None) -> int:
         workflow_url=run_url, list_failed=bool(list_errors), missing=True,
         due_at=max(required_due_at.values()) if required_due_at else None,
     )[:3900]
-    publish_receipt(lambda: _send_telegram(delivered_message),
-        kind="receipt_unacceptable" if sorted_objects else "receipt_missing",
-        reason=latest_block_reason or "execution_receipt_unacceptable")
+    # A verified approved block is still rejected by the execution heartbeat.
+    # Only its notification is deferred, after durable candidate publication.
+    approved_only = (unified_enabled() and approved_latest and not list_errors and not read_incomplete
+        and len(latest_report_issues) == len(approved_latest) and not notification_attention
+        and (set(required_keys) <= set(approved_latest) | set(accepted_by_service) if required_keys
+             else len(approved_latest) + len(accepted) == len(latest_report_seen))
+        and (all(quiet_by_service.values()) if required_keys else all(quiet_reports)))
+    if not approved_only or not publish_approved_receipts(list(approved_latest.values())):
+        publish_receipt(lambda: _send_telegram(delivered_message),
+            kind="receipt_unacceptable" if sorted_objects else "receipt_missing",
+            reason=latest_block_reason or "execution_receipt_unacceptable")
     return 1 if fail_workflow else 0
 
 

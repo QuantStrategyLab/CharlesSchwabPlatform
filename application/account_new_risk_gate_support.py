@@ -657,7 +657,19 @@ def maybe_publish_attention_for_admission(
             mandate_dd_budget=resolve_mandate_dd_budget(profile),
         )
     )
+    notification_kwargs = {}
+    from notifications.unified import enabled
+    if enabled():
+        from notifications.approved_gates import daily_gate_reasons
+        approved = daily_gate_reasons(admission, snapshot, resolve_max_daily_loss_resolution(portfolio),
+            (_runtime_risk_limits_policy() or {}).get("max_daily_loss_equity_formula"))
+        if (approved and isinstance(execution, dict) and decision.level.value == "action"
+                and set(decision.reason_codes) <= {"new_risk_prohibited"}):
+            previous = execution.get("notification_approved_gates") or []
+            execution["notification_approved_gates"] = previous if approved[0] in previous else [*previous, *approved]
+            notification_kwargs["approved_gate_reasons"] = approved
     return publish_attention_telegram_transition(
+        **notification_kwargs,
         decision=decision,
         platform=_ATTENTION_PLATFORM,
         account_alias=_resolve_attention_account_alias(portfolio, execution, plan),

@@ -209,7 +209,7 @@ def _incident(event, *, stream, state, severity, recovered, sender, store):
 
 
 def route(event, *, legacy, immediate=None, stream="cycle", state="alert", severity=1,
-          recovered=False, projection=None, store=None, env=None):
+          recovered=False, projection=None, store=None, env=None, candidate_details=None):
     env = os.environ if env is None else env
     if not enabled(env):
         return legacy()
@@ -220,7 +220,7 @@ def route(event, *, legacy, immediate=None, stream="cycle", state="alert", sever
 
         def persist(fact):
             nonlocal persisted
-            persisted = store.persist(fact, projection) is True
+            persisted = store.persist({**fact, **(candidate_details or {})}, projection) is True
             return persisted
 
         def deliver():
@@ -274,6 +274,10 @@ def publish_cycle(result, *, config, legacy):
     if not enabled():
         return legacy()
     execution, orders = result.execution, tuple(result.submitted_orders or ())
+    from .approved_gates import approved_block_reasons, render_gate_reasons
+    approved = approved_block_reasons(execution, order_count=len(orders), dry_run=config.dry_run_only)
+    if set(getattr(config, "notification_attention_reason_codes", ()) or ()) - {"account_new_risk_gate"}:
+        approved = []
     healthy = defer_routine_cycle_to_digest(execution, submitted_order_count=len(orders),
         submitted_orders=orders, mode="daily_digest", include_orders=True)
     metadata = execution.get("signal_metadata") or {}
@@ -289,7 +293,7 @@ def publish_cycle(result, *, config, legacy):
         {**execution, "execution_status": "no_action"}, submitted_order_count=0, mode="daily_digest", include_orders=True)
     if orders and not config.dry_run_only and all(isinstance(order, dict) and str(order.get("status") or "").lower() in {"filled", "completed", "executed"} for order in orders):
         kind = "order_submitted"
-    elif dry_run_healthy:
+    elif dry_run_healthy or approved:
         kind = "routine_cycle"
     elif status == "blocked" or status.endswith("_blocked"):
         kind = "blocked_run"
@@ -311,6 +315,9 @@ def publish_cycle(result, *, config, legacy):
         order_count=None if config.dry_run_only else len(orders),
         fill_count=cycle_evidence(execution, orders, dry_run=config.dry_run_only)["fill_count"], order_digest=digest)
     fact = event.to_candidate()
+    if approved:
+        fact.update(approved_gate_reasons=approved,
+            reason_text_zh=render_gate_reasons(approved, "zh"), reason_text_en=render_gate_reasons(approved, "en"))
     execution.setdefault("notification_events", []).append(fact)
     try:
         projection = _cycle_projection(result, fact, config)
@@ -333,7 +340,8 @@ def publish_cycle(result, *, config, legacy):
         except Exception:
             _log_failure("order_candidate_or_recovery_unconfirmed")
         return legacy()
-    return route(event, legacy=legacy, projection=projection, state=status, recovered=healthy)
+    return route(event, legacy=legacy, projection=projection, state=status, recovered=healthy,
+        candidate_details={k: fact[k] for k in ("approved_gate_reasons", "reason_text_zh", "reason_text_en") if k in fact})
 
 
 def publish_incident(legacy, *, reason, profile=None, kind="real_error"):
@@ -358,6 +366,11 @@ def _project_runs(reports, **kwargs):
             row["source_run_id"] = run_id
             row["field_status"] = {name: "known" if row.get(name) is not None else "unknown"
                 for name in ("order_count", "fill_count", "cycle_count")}
+            from .approved_gates import report_gate_reasons, render_gate_reasons
+            approved = report_gate_reasons(report)
+            if approved:
+                row.update(approved_gate_reasons=approved,
+                    reason_text_zh=render_gate_reasons(approved, "zh"), reason_text_en=render_gate_reasons(approved, "en"))
             rows.append(row)
     return {"schema_version": "qsl.digest_candidates.v1", "producer_status": "projected", "runs": rows}
 
@@ -447,6 +460,25 @@ def _receipt_event(report, kind, reason):
         raise ValueError("notification_receipt_binding_unknown")
     return event_for(kind, profile=report.get("strategy_profile"), reason=reason, env=matches[0],
         occurred_at=_stamp(report["started_at"]), source_run_id=report["run_id"])
+
+
+def publish_approved_receipts(reports):
+    from .approved_gates import report_gate_reasons, render_gate_reasons
+    try:
+        store = GCSNotificationStore()
+        for report in reports:
+            reasons = report_gate_reasons(report)
+            if not reasons:
+                return False
+            fact = _receipt_event(report, "routine_cycle", "approved_gate_block").to_candidate()
+            fact.update(approved_gate_reasons=reasons,
+                reason_text_zh=render_gate_reasons(reasons, "zh"), reason_text_en=render_gate_reasons(reasons, "en"))
+            if store.persist(fact) is not True:
+                raise CandidatePersistenceError("notification_receipt_fact_unconfirmed")
+        return emit_completed_candidates(os.environ).get("uploaded") is True
+    except Exception:
+        _log_failure("approved_receipt_candidate_unconfirmed")
+        return False
 
 
 def publish_receipt(legacy, *, kind, reason, recovered=False, observed_at=None, source_report=None):

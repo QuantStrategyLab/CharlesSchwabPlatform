@@ -58,6 +58,7 @@ def publish_attention_telegram_transition(**kwargs):
     from quant_platform_kit.risk import attention_notify
     from .unified import enabled, event_for, route
 
+    approved = kwargs.pop("approved_gate_reasons", [])
     sender = kwargs.get("telegram_sender") or attention_notify._default_telegram_sender
     text = render_attention(**{key: kwargs[key] for key in (
         "decision", "platform", "account_alias", "strategy_profile", "guard_reason_codes", "locale",
@@ -69,7 +70,11 @@ def publish_attention_telegram_transition(**kwargs):
     if not enabled():
         return attention_notify.publish_attention_telegram_transition(**{**kwargs, "telegram_sender": send_rendered})
     decision = kwargs["decision"]
-    urgent = decision.level.value in {"action", "halt"}
+    from .approved_gates import clean_gate_reasons
+    approved = clean_gate_reasons(approved)
+    approved_only = (approved and set(kwargs.get("guard_reason_codes") or ()) == {"DAILY_LOSS_LIMIT_EXCEEDED"}
+        and set(decision.reason_codes) <= {"new_risk_prohibited"} and decision.level.value == "action")
+    urgent = decision.level.value in {"action", "halt"} and not approved_only
     reasons = tuple(sorted(set(kwargs.get("guard_reason_codes") or decision.reason_codes)))
     event = event_for("risk_escalation" if urgent else "routine_cycle", profile=kwargs["strategy_profile"],
         reason="attention:" + ",".join(reasons))
