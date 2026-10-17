@@ -125,7 +125,7 @@ def _project_positions(observation: Mapping[str, Any]) -> list[dict[str, str]] |
 
 
 def prepare_sync_payload(
-    body: Mapping[str, Any], *, include_positions: bool = False,
+    body: Mapping[str, Any], *, include_positions: bool = False, include_external_flow: bool = False,
 ) -> dict[str, Any]:
     """Keep only receiver fields from an already validated archive projection."""
     allowed = {
@@ -136,6 +136,8 @@ def prepare_sync_payload(
     }
     if include_positions is True:
         allowed.update(POSITIONS_KEYS)
+    if include_external_flow is True:
+        allowed.add("externalFlow")
     return {key: value for key, value in body.items() if key in allowed}
 
 
@@ -247,6 +249,7 @@ def project_schwab_account_facts_history(
     expected_runtime_revision: str,
     expected_target_id: str,
     expected_cash_currency: str | None = None,
+    external_flow_enabled: bool = False,
     now: datetime,
 ) -> dict[str, Any]:
     """Return the strict Schwab history body or an amount-free skip reason."""
@@ -395,6 +398,14 @@ def project_schwab_account_facts_history(
         if positions is not None:
             return_body["broker_reported_positions"] = positions
             return_body["broker_reported_positions_scope"] = POSITIONS_SCOPE
+        if external_flow_enabled is True:
+            from application.external_flow_snapshot import attach_external_flow_snapshot
+            try:
+                return_body = attach_external_flow_snapshot(
+                    return_body, report.get("account_external_flows"), enabled=True,
+                )
+            except (TypeError, ValueError, AttributeError):
+                raise _ProjectionError("external_flow_invalid") from None
         return return_body
     except _ProjectionError as exc:
         return {"status": "skipped", "reason": exc.reason}
@@ -720,6 +731,7 @@ def main(argv: list[str] | None = None) -> int:
     if report is None:
         print("skipped:report_unavailable")
         return 2
+    include_external_flow = os.environ.get("SCHWAB_EXTERNAL_FLOW_EXPORT_ENABLED") == "true"
     projected = project_schwab_account_facts_history(
         report,
         source_report_uri=report_uri,
@@ -728,6 +740,7 @@ def main(argv: list[str] | None = None) -> int:
         expected_runtime_revision=expected_revision,
         expected_target_id=target_id,
         expected_cash_currency=cash_currency,
+        external_flow_enabled=include_external_flow,
         now=now,
     )
     if projected.get("status") == "skipped":
@@ -736,6 +749,7 @@ def main(argv: list[str] | None = None) -> int:
     history = prepare_sync_payload(
         projected,
         include_positions=os.environ.get("SCHWAB_ACCOUNT_FACTS_INCLUDE_POSITIONS", "").strip().lower() == "true",
+        include_external_flow=include_external_flow,
     )
     result = _publish_once(
         history,
