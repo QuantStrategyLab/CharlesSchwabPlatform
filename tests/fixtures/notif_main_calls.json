@@ -1,0 +1,2048 @@
+{
+  "healthy:zh": {
+    "calls": [
+      [
+        "history",
+        null
+      ],
+      [
+        "portfolio",
+        null
+      ],
+      [
+        "plan",
+        null
+      ],
+      [
+        "execution_port",
+        "synthetic"
+      ],
+      [
+        "claim",
+        [
+          "v1/account-owner/schwab/synthetic",
+          {
+            "metadata": {
+              "platform": "schwab",
+              "strategy_profile": "synthetic_profile",
+              "dry_run_only": false,
+              "owner_id": "synthetic_profile"
+            }
+          }
+        ]
+      ],
+      [
+        "marker_read",
+        "v1/schwab/synthetic/synthetic_profile/live/2026-10-16/2026-10-17/no-contract"
+      ],
+      [
+        "claim",
+        [
+          "v1/schwab/synthetic/synthetic_profile/live/2026-10-16/2026-10-17/no-contract",
+          {
+            "metadata": {
+              "strategy_profile": "synthetic_profile",
+              "account_scope": "synthetic",
+              "dry_run_only": false,
+              "signal_date": "2026-10-16",
+              "effective_date": "2026-10-17"
+            }
+          }
+        ]
+      ],
+      [
+        "quote",
+        "SPY"
+      ],
+      [
+        "outcome",
+        [
+          "v1/schwab/synthetic/synthetic_profile/live/2026-10-16/2026-10-17/no-contract",
+          {
+            "metadata": {
+              "strategy_profile": "synthetic_profile",
+              "account_scope": "synthetic",
+              "dry_run_only": false,
+              "trade_logs_count": 0,
+              "execution_status": "no_action",
+              "broker_submission_done": false,
+              "orders_pending_count": 0,
+              "submitted_orders": [],
+              "signal_date": "2026-10-16",
+              "effective_date": "2026-10-17"
+            }
+          }
+        ]
+      ],
+      [
+        "send",
+        "💓 【心跳检测】\n🧭 策略: Synthetic strategy\n💰 净值: $1,000.00\n✅ 无需调仓"
+      ]
+    ],
+    "result": {
+      "plan": {
+        "strategy_profile": "synthetic_profile",
+        "account_hash": "synthetic",
+        "allocation": {
+          "target_mode": "value",
+          "strategy_symbols": [
+            "SPY"
+          ],
+          "risk_symbols": [
+            "SPY"
+          ],
+          "income_symbols": [],
+          "safe_haven_symbols": [],
+          "targets": {
+            "SPY": 0.0
+          }
+        },
+        "portfolio": {
+          "strategy_symbols": [
+            "SPY"
+          ],
+          "portfolio_rows": [
+            [
+              "SPY"
+            ]
+          ],
+          "market_values": {
+            "SPY": 0.0
+          },
+          "quantities": {
+            "SPY": 0
+          },
+          "total_equity": 1000.0,
+          "liquid_cash": 1000.0,
+          "cash_sweep_symbol": "",
+          "account_new_risk_snapshot": {
+            "observation_status": "COMPLETE",
+            "reconciliation_status": "VERIFIED",
+            "circuit_breaker_state": "CLOSED"
+          }
+        },
+        "execution": {
+          "trade_threshold_value": 10.0,
+          "reserved_cash": 0.0,
+          "signal_display": "",
+          "dashboard_text": "",
+          "separator": "---",
+          "benchmark_symbol": "SPY",
+          "benchmark_price": 100.0,
+          "long_trend_value": 90.0,
+          "exit_line": 80.0,
+          "signal_date": "2026-10-16",
+          "effective_date": "2026-10-17",
+          "execution_status": "no_action"
+        }
+      },
+      "portfolio": {
+        "strategy_symbols": [
+          "SPY"
+        ],
+        "portfolio_rows": [
+          [
+            "SPY"
+          ]
+        ],
+        "market_values": {
+          "SPY": 0.0
+        },
+        "quantities": {
+          "SPY": 0
+        },
+        "total_equity": 1000.0,
+        "liquid_cash": 1000.0,
+        "cash_sweep_symbol": "",
+        "account_new_risk_snapshot": {
+          "observation_status": "COMPLETE",
+          "reconciliation_status": "VERIFIED",
+          "circuit_breaker_state": "CLOSED"
+        }
+      },
+      "execution": {
+        "trade_threshold_value": 10.0,
+        "reserved_cash": 0.0,
+        "signal_display": "",
+        "dashboard_text": "",
+        "separator": "---",
+        "benchmark_symbol": "SPY",
+        "benchmark_price": 100.0,
+        "long_trend_value": 90.0,
+        "exit_line": 80.0,
+        "signal_date": "2026-10-16",
+        "effective_date": "2026-10-17",
+        "execution_status": "no_action",
+        "cash_only_execution": true,
+        "signal_snapshot": {
+          "schema_version": "signal_snapshot.v1",
+          "platform": "schwab",
+          "strategy_profile": "synthetic_profile",
+          "strategy_version": null,
+          "generated_at": "2026-10-16T19:45:00+00:00",
+          "signal_as_of": "2026-10-16",
+          "market_date": "2026-10-16",
+          "effective_date": "2026-10-17",
+          "latest_price_source": "schwab_daily_history_with_live_quote_overlay",
+          "quote_overlay_used": null,
+          "data_freshness_warning": null,
+          "signal": null,
+          "status": null,
+          "target_mode": "value",
+          "target_weights": {},
+          "target_values": {
+            "SPY": 0.0
+          },
+          "indicators": {
+            "benchmark_symbol": "SPY",
+            "benchmark_price": 100.0,
+            "long_trend_value": 90.0,
+            "exit_line": 80.0
+          }
+        }
+      },
+      "allocation": {
+        "target_mode": "value",
+        "strategy_symbols": [
+          "SPY"
+        ],
+        "risk_symbols": [
+          "SPY"
+        ],
+        "income_symbols": [],
+        "safe_haven_symbols": [],
+        "targets": {
+          "SPY": 0.0
+        }
+      },
+      "trade_logs": [],
+      "submitted_orders": [],
+      "account_observation": {
+        "account_hash": "synthetic",
+        "currency": null,
+        "observed_at": "2026-10-16T19:45:00Z",
+        "net_assets": null,
+        "net_assets_source": null,
+        "available_for_trading": null,
+        "available_for_trading_source": null,
+        "available_for_withdrawal": null,
+        "available_for_withdrawal_source": null,
+        "broker_reported_positions": [
+          {
+            "symbol": "SPY",
+            "quantity": "0",
+            "market_value": "0",
+            "currency": null
+          }
+        ],
+        "broker_reported_positions_scope": "strategy_symbols_only",
+        "net_assets_currency": null,
+        "net_assets_currency_source": null,
+        "cash_currency": null,
+        "cash_currency_source": null
+      }
+    }
+  },
+  "healthy:en": {
+    "calls": [
+      [
+        "history",
+        null
+      ],
+      [
+        "portfolio",
+        null
+      ],
+      [
+        "plan",
+        null
+      ],
+      [
+        "execution_port",
+        "synthetic"
+      ],
+      [
+        "claim",
+        [
+          "v1/account-owner/schwab/synthetic",
+          {
+            "metadata": {
+              "platform": "schwab",
+              "strategy_profile": "synthetic_profile",
+              "dry_run_only": false,
+              "owner_id": "synthetic_profile"
+            }
+          }
+        ]
+      ],
+      [
+        "marker_read",
+        "v1/schwab/synthetic/synthetic_profile/live/2026-10-16/2026-10-17/no-contract"
+      ],
+      [
+        "claim",
+        [
+          "v1/schwab/synthetic/synthetic_profile/live/2026-10-16/2026-10-17/no-contract",
+          {
+            "metadata": {
+              "strategy_profile": "synthetic_profile",
+              "account_scope": "synthetic",
+              "dry_run_only": false,
+              "signal_date": "2026-10-16",
+              "effective_date": "2026-10-17"
+            }
+          }
+        ]
+      ],
+      [
+        "quote",
+        "SPY"
+      ],
+      [
+        "outcome",
+        [
+          "v1/schwab/synthetic/synthetic_profile/live/2026-10-16/2026-10-17/no-contract",
+          {
+            "metadata": {
+              "strategy_profile": "synthetic_profile",
+              "account_scope": "synthetic",
+              "dry_run_only": false,
+              "trade_logs_count": 0,
+              "execution_status": "no_action",
+              "broker_submission_done": false,
+              "orders_pending_count": 0,
+              "submitted_orders": [],
+              "signal_date": "2026-10-16",
+              "effective_date": "2026-10-17"
+            }
+          }
+        ]
+      ],
+      [
+        "send",
+        "💓 【Heartbeat】\n🧭 Strategy: Synthetic strategy\n💰 Equity: $1,000.00\n✅ No rebalance needed"
+      ]
+    ],
+    "result": {
+      "plan": {
+        "strategy_profile": "synthetic_profile",
+        "account_hash": "synthetic",
+        "allocation": {
+          "target_mode": "value",
+          "strategy_symbols": [
+            "SPY"
+          ],
+          "risk_symbols": [
+            "SPY"
+          ],
+          "income_symbols": [],
+          "safe_haven_symbols": [],
+          "targets": {
+            "SPY": 0.0
+          }
+        },
+        "portfolio": {
+          "strategy_symbols": [
+            "SPY"
+          ],
+          "portfolio_rows": [
+            [
+              "SPY"
+            ]
+          ],
+          "market_values": {
+            "SPY": 0.0
+          },
+          "quantities": {
+            "SPY": 0
+          },
+          "total_equity": 1000.0,
+          "liquid_cash": 1000.0,
+          "cash_sweep_symbol": "",
+          "account_new_risk_snapshot": {
+            "observation_status": "COMPLETE",
+            "reconciliation_status": "VERIFIED",
+            "circuit_breaker_state": "CLOSED"
+          }
+        },
+        "execution": {
+          "trade_threshold_value": 10.0,
+          "reserved_cash": 0.0,
+          "signal_display": "",
+          "dashboard_text": "",
+          "separator": "---",
+          "benchmark_symbol": "SPY",
+          "benchmark_price": 100.0,
+          "long_trend_value": 90.0,
+          "exit_line": 80.0,
+          "signal_date": "2026-10-16",
+          "effective_date": "2026-10-17",
+          "execution_status": "no_action"
+        }
+      },
+      "portfolio": {
+        "strategy_symbols": [
+          "SPY"
+        ],
+        "portfolio_rows": [
+          [
+            "SPY"
+          ]
+        ],
+        "market_values": {
+          "SPY": 0.0
+        },
+        "quantities": {
+          "SPY": 0
+        },
+        "total_equity": 1000.0,
+        "liquid_cash": 1000.0,
+        "cash_sweep_symbol": "",
+        "account_new_risk_snapshot": {
+          "observation_status": "COMPLETE",
+          "reconciliation_status": "VERIFIED",
+          "circuit_breaker_state": "CLOSED"
+        }
+      },
+      "execution": {
+        "trade_threshold_value": 10.0,
+        "reserved_cash": 0.0,
+        "signal_display": "",
+        "dashboard_text": "",
+        "separator": "---",
+        "benchmark_symbol": "SPY",
+        "benchmark_price": 100.0,
+        "long_trend_value": 90.0,
+        "exit_line": 80.0,
+        "signal_date": "2026-10-16",
+        "effective_date": "2026-10-17",
+        "execution_status": "no_action",
+        "cash_only_execution": true,
+        "signal_snapshot": {
+          "schema_version": "signal_snapshot.v1",
+          "platform": "schwab",
+          "strategy_profile": "synthetic_profile",
+          "strategy_version": null,
+          "generated_at": "2026-10-16T19:45:00+00:00",
+          "signal_as_of": "2026-10-16",
+          "market_date": "2026-10-16",
+          "effective_date": "2026-10-17",
+          "latest_price_source": "schwab_daily_history_with_live_quote_overlay",
+          "quote_overlay_used": null,
+          "data_freshness_warning": null,
+          "signal": null,
+          "status": null,
+          "target_mode": "value",
+          "target_weights": {},
+          "target_values": {
+            "SPY": 0.0
+          },
+          "indicators": {
+            "benchmark_symbol": "SPY",
+            "benchmark_price": 100.0,
+            "long_trend_value": 90.0,
+            "exit_line": 80.0
+          }
+        }
+      },
+      "allocation": {
+        "target_mode": "value",
+        "strategy_symbols": [
+          "SPY"
+        ],
+        "risk_symbols": [
+          "SPY"
+        ],
+        "income_symbols": [],
+        "safe_haven_symbols": [],
+        "targets": {
+          "SPY": 0.0
+        }
+      },
+      "trade_logs": [],
+      "submitted_orders": [],
+      "account_observation": {
+        "account_hash": "synthetic",
+        "currency": null,
+        "observed_at": "2026-10-16T19:45:00Z",
+        "net_assets": null,
+        "net_assets_source": null,
+        "available_for_trading": null,
+        "available_for_trading_source": null,
+        "available_for_withdrawal": null,
+        "available_for_withdrawal_source": null,
+        "broker_reported_positions": [
+          {
+            "symbol": "SPY",
+            "quantity": "0",
+            "market_value": "0",
+            "currency": null
+          }
+        ],
+        "broker_reported_positions_scope": "strategy_symbols_only",
+        "net_assets_currency": null,
+        "net_assets_currency_source": null,
+        "cash_currency": null,
+        "cash_currency_source": null
+      }
+    }
+  },
+  "blocked:zh": {
+    "calls": [
+      [
+        "history",
+        null
+      ],
+      [
+        "portfolio",
+        null
+      ],
+      [
+        "plan",
+        null
+      ],
+      [
+        "execution_port",
+        "synthetic"
+      ],
+      [
+        "claim",
+        [
+          "v1/account-owner/schwab/synthetic",
+          {
+            "metadata": {
+              "platform": "schwab",
+              "strategy_profile": "synthetic_profile",
+              "dry_run_only": false,
+              "owner_id": "synthetic_profile"
+            }
+          }
+        ]
+      ],
+      [
+        "marker_read",
+        "v1/schwab/synthetic/synthetic_profile/live/2026-10-16/2026-10-17/no-contract"
+      ],
+      [
+        "claim",
+        [
+          "v1/schwab/synthetic/synthetic_profile/live/2026-10-16/2026-10-17/no-contract",
+          {
+            "metadata": {
+              "strategy_profile": "synthetic_profile",
+              "account_scope": "synthetic",
+              "dry_run_only": false,
+              "signal_date": "2026-10-16",
+              "effective_date": "2026-10-17"
+            }
+          }
+        ]
+      ],
+      [
+        "quote",
+        "SPY"
+      ],
+      [
+        "outcome",
+        [
+          "v1/schwab/synthetic/synthetic_profile/live/2026-10-16/2026-10-17/no-contract",
+          {
+            "metadata": {
+              "strategy_profile": "synthetic_profile",
+              "account_scope": "synthetic",
+              "dry_run_only": false,
+              "trade_logs_count": 0,
+              "execution_status": "blocked",
+              "broker_submission_done": false,
+              "orders_pending_count": 0,
+              "submitted_orders": [],
+              "signal_date": "2026-10-16",
+              "effective_date": "2026-10-17"
+            }
+          }
+        ]
+      ],
+      [
+        "send",
+        "💓 【心跳检测】\n🧭 策略: Synthetic strategy\n💰 净值: $1,000.00\n⚠️ 策略风控拒绝：未提交订单"
+      ]
+    ],
+    "result": {
+      "plan": {
+        "strategy_profile": "synthetic_profile",
+        "account_hash": "synthetic",
+        "allocation": {
+          "target_mode": "value",
+          "strategy_symbols": [
+            "SPY"
+          ],
+          "risk_symbols": [
+            "SPY"
+          ],
+          "income_symbols": [],
+          "safe_haven_symbols": [],
+          "targets": {
+            "SPY": 0.0
+          }
+        },
+        "portfolio": {
+          "strategy_symbols": [
+            "SPY"
+          ],
+          "portfolio_rows": [
+            [
+              "SPY"
+            ]
+          ],
+          "market_values": {
+            "SPY": 0.0
+          },
+          "quantities": {
+            "SPY": 0
+          },
+          "total_equity": 1000.0,
+          "liquid_cash": 1000.0,
+          "cash_sweep_symbol": "",
+          "account_new_risk_snapshot": {
+            "observation_status": "COMPLETE",
+            "reconciliation_status": "VERIFIED",
+            "circuit_breaker_state": "CLOSED"
+          }
+        },
+        "execution": {
+          "trade_threshold_value": 10.0,
+          "reserved_cash": 0.0,
+          "signal_display": "",
+          "dashboard_text": "",
+          "separator": "---",
+          "benchmark_symbol": "SPY",
+          "benchmark_price": 100.0,
+          "long_trend_value": 90.0,
+          "exit_line": 80.0,
+          "signal_date": "2026-10-16",
+          "effective_date": "2026-10-17",
+          "execution_status": "blocked",
+          "no_op_reason": "strategy_risk_rejected"
+        }
+      },
+      "portfolio": {
+        "strategy_symbols": [
+          "SPY"
+        ],
+        "portfolio_rows": [
+          [
+            "SPY"
+          ]
+        ],
+        "market_values": {
+          "SPY": 0.0
+        },
+        "quantities": {
+          "SPY": 0
+        },
+        "total_equity": 1000.0,
+        "liquid_cash": 1000.0,
+        "cash_sweep_symbol": "",
+        "account_new_risk_snapshot": {
+          "observation_status": "COMPLETE",
+          "reconciliation_status": "VERIFIED",
+          "circuit_breaker_state": "CLOSED"
+        }
+      },
+      "execution": {
+        "trade_threshold_value": 10.0,
+        "reserved_cash": 0.0,
+        "signal_display": "",
+        "dashboard_text": "",
+        "separator": "---",
+        "benchmark_symbol": "SPY",
+        "benchmark_price": 100.0,
+        "long_trend_value": 90.0,
+        "exit_line": 80.0,
+        "signal_date": "2026-10-16",
+        "effective_date": "2026-10-17",
+        "execution_status": "blocked",
+        "no_op_reason": "strategy_risk_rejected",
+        "cash_only_execution": true,
+        "signal_snapshot": {
+          "schema_version": "signal_snapshot.v1",
+          "platform": "schwab",
+          "strategy_profile": "synthetic_profile",
+          "strategy_version": null,
+          "generated_at": "2026-10-16T19:45:00+00:00",
+          "signal_as_of": "2026-10-16",
+          "market_date": "2026-10-16",
+          "effective_date": "2026-10-17",
+          "latest_price_source": "schwab_daily_history_with_live_quote_overlay",
+          "quote_overlay_used": null,
+          "data_freshness_warning": null,
+          "signal": null,
+          "status": null,
+          "target_mode": "value",
+          "target_weights": {},
+          "target_values": {
+            "SPY": 0.0
+          },
+          "indicators": {
+            "benchmark_symbol": "SPY",
+            "benchmark_price": 100.0,
+            "long_trend_value": 90.0,
+            "exit_line": 80.0
+          }
+        }
+      },
+      "allocation": {
+        "target_mode": "value",
+        "strategy_symbols": [
+          "SPY"
+        ],
+        "risk_symbols": [
+          "SPY"
+        ],
+        "income_symbols": [],
+        "safe_haven_symbols": [],
+        "targets": {
+          "SPY": 0.0
+        }
+      },
+      "trade_logs": [],
+      "submitted_orders": [],
+      "account_observation": {
+        "account_hash": "synthetic",
+        "currency": null,
+        "observed_at": "2026-10-16T19:45:00Z",
+        "net_assets": null,
+        "net_assets_source": null,
+        "available_for_trading": null,
+        "available_for_trading_source": null,
+        "available_for_withdrawal": null,
+        "available_for_withdrawal_source": null,
+        "broker_reported_positions": [
+          {
+            "symbol": "SPY",
+            "quantity": "0",
+            "market_value": "0",
+            "currency": null
+          }
+        ],
+        "broker_reported_positions_scope": "strategy_symbols_only",
+        "net_assets_currency": null,
+        "net_assets_currency_source": null,
+        "cash_currency": null,
+        "cash_currency_source": null
+      }
+    }
+  },
+  "blocked:en": {
+    "calls": [
+      [
+        "history",
+        null
+      ],
+      [
+        "portfolio",
+        null
+      ],
+      [
+        "plan",
+        null
+      ],
+      [
+        "execution_port",
+        "synthetic"
+      ],
+      [
+        "claim",
+        [
+          "v1/account-owner/schwab/synthetic",
+          {
+            "metadata": {
+              "platform": "schwab",
+              "strategy_profile": "synthetic_profile",
+              "dry_run_only": false,
+              "owner_id": "synthetic_profile"
+            }
+          }
+        ]
+      ],
+      [
+        "marker_read",
+        "v1/schwab/synthetic/synthetic_profile/live/2026-10-16/2026-10-17/no-contract"
+      ],
+      [
+        "claim",
+        [
+          "v1/schwab/synthetic/synthetic_profile/live/2026-10-16/2026-10-17/no-contract",
+          {
+            "metadata": {
+              "strategy_profile": "synthetic_profile",
+              "account_scope": "synthetic",
+              "dry_run_only": false,
+              "signal_date": "2026-10-16",
+              "effective_date": "2026-10-17"
+            }
+          }
+        ]
+      ],
+      [
+        "quote",
+        "SPY"
+      ],
+      [
+        "outcome",
+        [
+          "v1/schwab/synthetic/synthetic_profile/live/2026-10-16/2026-10-17/no-contract",
+          {
+            "metadata": {
+              "strategy_profile": "synthetic_profile",
+              "account_scope": "synthetic",
+              "dry_run_only": false,
+              "trade_logs_count": 0,
+              "execution_status": "blocked",
+              "broker_submission_done": false,
+              "orders_pending_count": 0,
+              "submitted_orders": [],
+              "signal_date": "2026-10-16",
+              "effective_date": "2026-10-17"
+            }
+          }
+        ]
+      ],
+      [
+        "send",
+        "💓 【Heartbeat】\n🧭 Strategy: Synthetic strategy\n💰 Equity: $1,000.00\n⚠️ Strategy risk rejected: no orders submitted"
+      ]
+    ],
+    "result": {
+      "plan": {
+        "strategy_profile": "synthetic_profile",
+        "account_hash": "synthetic",
+        "allocation": {
+          "target_mode": "value",
+          "strategy_symbols": [
+            "SPY"
+          ],
+          "risk_symbols": [
+            "SPY"
+          ],
+          "income_symbols": [],
+          "safe_haven_symbols": [],
+          "targets": {
+            "SPY": 0.0
+          }
+        },
+        "portfolio": {
+          "strategy_symbols": [
+            "SPY"
+          ],
+          "portfolio_rows": [
+            [
+              "SPY"
+            ]
+          ],
+          "market_values": {
+            "SPY": 0.0
+          },
+          "quantities": {
+            "SPY": 0
+          },
+          "total_equity": 1000.0,
+          "liquid_cash": 1000.0,
+          "cash_sweep_symbol": "",
+          "account_new_risk_snapshot": {
+            "observation_status": "COMPLETE",
+            "reconciliation_status": "VERIFIED",
+            "circuit_breaker_state": "CLOSED"
+          }
+        },
+        "execution": {
+          "trade_threshold_value": 10.0,
+          "reserved_cash": 0.0,
+          "signal_display": "",
+          "dashboard_text": "",
+          "separator": "---",
+          "benchmark_symbol": "SPY",
+          "benchmark_price": 100.0,
+          "long_trend_value": 90.0,
+          "exit_line": 80.0,
+          "signal_date": "2026-10-16",
+          "effective_date": "2026-10-17",
+          "execution_status": "blocked",
+          "no_op_reason": "strategy_risk_rejected"
+        }
+      },
+      "portfolio": {
+        "strategy_symbols": [
+          "SPY"
+        ],
+        "portfolio_rows": [
+          [
+            "SPY"
+          ]
+        ],
+        "market_values": {
+          "SPY": 0.0
+        },
+        "quantities": {
+          "SPY": 0
+        },
+        "total_equity": 1000.0,
+        "liquid_cash": 1000.0,
+        "cash_sweep_symbol": "",
+        "account_new_risk_snapshot": {
+          "observation_status": "COMPLETE",
+          "reconciliation_status": "VERIFIED",
+          "circuit_breaker_state": "CLOSED"
+        }
+      },
+      "execution": {
+        "trade_threshold_value": 10.0,
+        "reserved_cash": 0.0,
+        "signal_display": "",
+        "dashboard_text": "",
+        "separator": "---",
+        "benchmark_symbol": "SPY",
+        "benchmark_price": 100.0,
+        "long_trend_value": 90.0,
+        "exit_line": 80.0,
+        "signal_date": "2026-10-16",
+        "effective_date": "2026-10-17",
+        "execution_status": "blocked",
+        "no_op_reason": "strategy_risk_rejected",
+        "cash_only_execution": true,
+        "signal_snapshot": {
+          "schema_version": "signal_snapshot.v1",
+          "platform": "schwab",
+          "strategy_profile": "synthetic_profile",
+          "strategy_version": null,
+          "generated_at": "2026-10-16T19:45:00+00:00",
+          "signal_as_of": "2026-10-16",
+          "market_date": "2026-10-16",
+          "effective_date": "2026-10-17",
+          "latest_price_source": "schwab_daily_history_with_live_quote_overlay",
+          "quote_overlay_used": null,
+          "data_freshness_warning": null,
+          "signal": null,
+          "status": null,
+          "target_mode": "value",
+          "target_weights": {},
+          "target_values": {
+            "SPY": 0.0
+          },
+          "indicators": {
+            "benchmark_symbol": "SPY",
+            "benchmark_price": 100.0,
+            "long_trend_value": 90.0,
+            "exit_line": 80.0
+          }
+        }
+      },
+      "allocation": {
+        "target_mode": "value",
+        "strategy_symbols": [
+          "SPY"
+        ],
+        "risk_symbols": [
+          "SPY"
+        ],
+        "income_symbols": [],
+        "safe_haven_symbols": [],
+        "targets": {
+          "SPY": 0.0
+        }
+      },
+      "trade_logs": [],
+      "submitted_orders": [],
+      "account_observation": {
+        "account_hash": "synthetic",
+        "currency": null,
+        "observed_at": "2026-10-16T19:45:00Z",
+        "net_assets": null,
+        "net_assets_source": null,
+        "available_for_trading": null,
+        "available_for_trading_source": null,
+        "available_for_withdrawal": null,
+        "available_for_withdrawal_source": null,
+        "broker_reported_positions": [
+          {
+            "symbol": "SPY",
+            "quantity": "0",
+            "market_value": "0",
+            "currency": null
+          }
+        ],
+        "broker_reported_positions_scope": "strategy_symbols_only",
+        "net_assets_currency": null,
+        "net_assets_currency_source": null,
+        "cash_currency": null,
+        "cash_currency_source": null
+      }
+    }
+  },
+  "order:zh": {
+    "calls": [
+      [
+        "history",
+        null
+      ],
+      [
+        "portfolio",
+        null
+      ],
+      [
+        "plan",
+        null
+      ],
+      [
+        "execution_port",
+        "synthetic"
+      ],
+      [
+        "claim",
+        [
+          "v1/account-owner/schwab/synthetic",
+          {
+            "metadata": {
+              "platform": "schwab",
+              "strategy_profile": "synthetic_profile",
+              "dry_run_only": false,
+              "owner_id": "synthetic_profile"
+            }
+          }
+        ]
+      ],
+      [
+        "marker_read",
+        "v1/schwab/synthetic/synthetic_profile/live/2026-10-16/2026-10-17/no-contract"
+      ],
+      [
+        "claim",
+        [
+          "v1/schwab/synthetic/synthetic_profile/live/2026-10-16/2026-10-17/no-contract",
+          {
+            "metadata": {
+              "strategy_profile": "synthetic_profile",
+              "account_scope": "synthetic",
+              "dry_run_only": false,
+              "signal_date": "2026-10-16",
+              "effective_date": "2026-10-17"
+            }
+          }
+        ]
+      ],
+      [
+        "quote",
+        "SPY"
+      ],
+      [
+        "broker",
+        {
+          "symbol": "SPY",
+          "side": "buy",
+          "quantity": 5,
+          "order_type": "limit",
+          "limit_price": 100.0,
+          "time_in_force": null,
+          "account_id": null,
+          "metadata": {}
+        }
+      ],
+      [
+        "send",
+        "Order cycle stopped; reconciliation required."
+      ],
+      [
+        "outcome",
+        [
+          "v1/schwab/synthetic/synthetic_profile/live/2026-10-16/2026-10-17/no-contract",
+          {
+            "metadata": {
+              "strategy_profile": "synthetic_profile",
+              "account_scope": "synthetic",
+              "dry_run_only": false,
+              "trade_logs_count": 1,
+              "execution_status": "pending_reconciliation",
+              "broker_submission_done": false,
+              "orders_pending_count": 1,
+              "submitted_orders": [
+                {
+                  "symbol": "SPY",
+                  "side": "buy",
+                  "quantity": 5,
+                  "order_type": "limit",
+                  "status": "unknown",
+                  "price": 100.0,
+                  "limit_price": 100.0,
+                  "broker_order_id": "synthetic-order"
+                }
+              ],
+              "signal_date": "2026-10-16",
+              "effective_date": "2026-10-17"
+            }
+          }
+        ]
+      ],
+      [
+        "send",
+        "🔔 【调仓指令】\n🧭 策略: Synthetic strategy\nOrder cycle stopped; reconciliation required."
+      ]
+    ],
+    "result": {
+      "plan": {
+        "strategy_profile": "synthetic_profile",
+        "account_hash": "synthetic",
+        "allocation": {
+          "target_mode": "value",
+          "strategy_symbols": [
+            "SPY"
+          ],
+          "risk_symbols": [
+            "SPY"
+          ],
+          "income_symbols": [],
+          "safe_haven_symbols": [],
+          "targets": {
+            "SPY": 500.0
+          }
+        },
+        "portfolio": {
+          "strategy_symbols": [
+            "SPY"
+          ],
+          "portfolio_rows": [
+            [
+              "SPY"
+            ]
+          ],
+          "market_values": {
+            "SPY": 0.0
+          },
+          "quantities": {
+            "SPY": 0
+          },
+          "total_equity": 1000.0,
+          "liquid_cash": 1000.0,
+          "cash_sweep_symbol": "",
+          "account_new_risk_snapshot": {
+            "observation_status": "COMPLETE",
+            "reconciliation_status": "VERIFIED",
+            "circuit_breaker_state": "CLOSED"
+          }
+        },
+        "execution": {
+          "trade_threshold_value": 10.0,
+          "reserved_cash": 0.0,
+          "signal_display": "",
+          "dashboard_text": "",
+          "separator": "---",
+          "benchmark_symbol": "SPY",
+          "benchmark_price": 100.0,
+          "long_trend_value": 90.0,
+          "exit_line": 80.0,
+          "signal_date": "2026-10-16",
+          "effective_date": "2026-10-17"
+        }
+      },
+      "portfolio": {
+        "strategy_symbols": [
+          "SPY"
+        ],
+        "portfolio_rows": [
+          [
+            "SPY"
+          ]
+        ],
+        "market_values": {
+          "SPY": 0.0
+        },
+        "quantities": {
+          "SPY": 0
+        },
+        "total_equity": 1000.0,
+        "liquid_cash": 1000.0,
+        "cash_sweep_symbol": "",
+        "account_new_risk_snapshot": {
+          "observation_status": "COMPLETE",
+          "reconciliation_status": "VERIFIED",
+          "circuit_breaker_state": "CLOSED"
+        }
+      },
+      "execution": {
+        "trade_threshold_value": 10.0,
+        "reserved_cash": 0.0,
+        "signal_display": "",
+        "dashboard_text": "",
+        "separator": "---",
+        "benchmark_symbol": "SPY",
+        "benchmark_price": 100.0,
+        "long_trend_value": 90.0,
+        "exit_line": 80.0,
+        "signal_date": "2026-10-16",
+        "effective_date": "2026-10-17",
+        "execution_status": "pending_reconciliation",
+        "broker_submission_done": false,
+        "orders_pending_count": 1,
+        "cash_only_execution": true,
+        "signal_snapshot": {
+          "schema_version": "signal_snapshot.v1",
+          "platform": "schwab",
+          "strategy_profile": "synthetic_profile",
+          "strategy_version": null,
+          "generated_at": "2026-10-16T19:45:00+00:00",
+          "signal_as_of": "2026-10-16",
+          "market_date": "2026-10-16",
+          "effective_date": "2026-10-17",
+          "latest_price_source": "schwab_daily_history_with_live_quote_overlay",
+          "quote_overlay_used": null,
+          "data_freshness_warning": null,
+          "signal": null,
+          "status": null,
+          "target_mode": "value",
+          "target_weights": {},
+          "target_values": {
+            "SPY": 500.0
+          },
+          "indicators": {
+            "benchmark_symbol": "SPY",
+            "benchmark_price": 100.0,
+            "long_trend_value": 90.0,
+            "exit_line": 80.0
+          }
+        }
+      },
+      "allocation": {
+        "target_mode": "value",
+        "strategy_symbols": [
+          "SPY"
+        ],
+        "risk_symbols": [
+          "SPY"
+        ],
+        "income_symbols": [],
+        "safe_haven_symbols": [],
+        "targets": {
+          "SPY": 500.0
+        }
+      },
+      "trade_logs": [
+        "Order cycle stopped; reconciliation required."
+      ],
+      "submitted_orders": [
+        {
+          "symbol": "SPY",
+          "side": "buy",
+          "quantity": 5,
+          "order_type": "limit",
+          "status": "unknown",
+          "price": 100.0,
+          "limit_price": 100.0,
+          "broker_order_id": "synthetic-order"
+        }
+      ],
+      "account_observation": {
+        "account_hash": "synthetic",
+        "currency": null,
+        "observed_at": "2026-10-16T19:45:00Z",
+        "net_assets": null,
+        "net_assets_source": null,
+        "available_for_trading": null,
+        "available_for_trading_source": null,
+        "available_for_withdrawal": null,
+        "available_for_withdrawal_source": null,
+        "broker_reported_positions": [
+          {
+            "symbol": "SPY",
+            "quantity": "0",
+            "market_value": "0",
+            "currency": null
+          }
+        ],
+        "broker_reported_positions_scope": "strategy_symbols_only",
+        "net_assets_currency": null,
+        "net_assets_currency_source": null,
+        "cash_currency": null,
+        "cash_currency_source": null
+      }
+    }
+  },
+  "order:en": {
+    "calls": [
+      [
+        "history",
+        null
+      ],
+      [
+        "portfolio",
+        null
+      ],
+      [
+        "plan",
+        null
+      ],
+      [
+        "execution_port",
+        "synthetic"
+      ],
+      [
+        "claim",
+        [
+          "v1/account-owner/schwab/synthetic",
+          {
+            "metadata": {
+              "platform": "schwab",
+              "strategy_profile": "synthetic_profile",
+              "dry_run_only": false,
+              "owner_id": "synthetic_profile"
+            }
+          }
+        ]
+      ],
+      [
+        "marker_read",
+        "v1/schwab/synthetic/synthetic_profile/live/2026-10-16/2026-10-17/no-contract"
+      ],
+      [
+        "claim",
+        [
+          "v1/schwab/synthetic/synthetic_profile/live/2026-10-16/2026-10-17/no-contract",
+          {
+            "metadata": {
+              "strategy_profile": "synthetic_profile",
+              "account_scope": "synthetic",
+              "dry_run_only": false,
+              "signal_date": "2026-10-16",
+              "effective_date": "2026-10-17"
+            }
+          }
+        ]
+      ],
+      [
+        "quote",
+        "SPY"
+      ],
+      [
+        "broker",
+        {
+          "symbol": "SPY",
+          "side": "buy",
+          "quantity": 5,
+          "order_type": "limit",
+          "limit_price": 100.0,
+          "time_in_force": null,
+          "account_id": null,
+          "metadata": {}
+        }
+      ],
+      [
+        "send",
+        "Order cycle stopped; reconciliation required."
+      ],
+      [
+        "outcome",
+        [
+          "v1/schwab/synthetic/synthetic_profile/live/2026-10-16/2026-10-17/no-contract",
+          {
+            "metadata": {
+              "strategy_profile": "synthetic_profile",
+              "account_scope": "synthetic",
+              "dry_run_only": false,
+              "trade_logs_count": 1,
+              "execution_status": "pending_reconciliation",
+              "broker_submission_done": false,
+              "orders_pending_count": 1,
+              "submitted_orders": [
+                {
+                  "symbol": "SPY",
+                  "side": "buy",
+                  "quantity": 5,
+                  "order_type": "limit",
+                  "status": "unknown",
+                  "price": 100.0,
+                  "limit_price": 100.0,
+                  "broker_order_id": "synthetic-order"
+                }
+              ],
+              "signal_date": "2026-10-16",
+              "effective_date": "2026-10-17"
+            }
+          }
+        ]
+      ],
+      [
+        "send",
+        "🔔 【Trade Execution Report】\n🧭 Strategy: Synthetic strategy\nOrder cycle stopped; reconciliation required."
+      ]
+    ],
+    "result": {
+      "plan": {
+        "strategy_profile": "synthetic_profile",
+        "account_hash": "synthetic",
+        "allocation": {
+          "target_mode": "value",
+          "strategy_symbols": [
+            "SPY"
+          ],
+          "risk_symbols": [
+            "SPY"
+          ],
+          "income_symbols": [],
+          "safe_haven_symbols": [],
+          "targets": {
+            "SPY": 500.0
+          }
+        },
+        "portfolio": {
+          "strategy_symbols": [
+            "SPY"
+          ],
+          "portfolio_rows": [
+            [
+              "SPY"
+            ]
+          ],
+          "market_values": {
+            "SPY": 0.0
+          },
+          "quantities": {
+            "SPY": 0
+          },
+          "total_equity": 1000.0,
+          "liquid_cash": 1000.0,
+          "cash_sweep_symbol": "",
+          "account_new_risk_snapshot": {
+            "observation_status": "COMPLETE",
+            "reconciliation_status": "VERIFIED",
+            "circuit_breaker_state": "CLOSED"
+          }
+        },
+        "execution": {
+          "trade_threshold_value": 10.0,
+          "reserved_cash": 0.0,
+          "signal_display": "",
+          "dashboard_text": "",
+          "separator": "---",
+          "benchmark_symbol": "SPY",
+          "benchmark_price": 100.0,
+          "long_trend_value": 90.0,
+          "exit_line": 80.0,
+          "signal_date": "2026-10-16",
+          "effective_date": "2026-10-17"
+        }
+      },
+      "portfolio": {
+        "strategy_symbols": [
+          "SPY"
+        ],
+        "portfolio_rows": [
+          [
+            "SPY"
+          ]
+        ],
+        "market_values": {
+          "SPY": 0.0
+        },
+        "quantities": {
+          "SPY": 0
+        },
+        "total_equity": 1000.0,
+        "liquid_cash": 1000.0,
+        "cash_sweep_symbol": "",
+        "account_new_risk_snapshot": {
+          "observation_status": "COMPLETE",
+          "reconciliation_status": "VERIFIED",
+          "circuit_breaker_state": "CLOSED"
+        }
+      },
+      "execution": {
+        "trade_threshold_value": 10.0,
+        "reserved_cash": 0.0,
+        "signal_display": "",
+        "dashboard_text": "",
+        "separator": "---",
+        "benchmark_symbol": "SPY",
+        "benchmark_price": 100.0,
+        "long_trend_value": 90.0,
+        "exit_line": 80.0,
+        "signal_date": "2026-10-16",
+        "effective_date": "2026-10-17",
+        "execution_status": "pending_reconciliation",
+        "broker_submission_done": false,
+        "orders_pending_count": 1,
+        "cash_only_execution": true,
+        "signal_snapshot": {
+          "schema_version": "signal_snapshot.v1",
+          "platform": "schwab",
+          "strategy_profile": "synthetic_profile",
+          "strategy_version": null,
+          "generated_at": "2026-10-16T19:45:00+00:00",
+          "signal_as_of": "2026-10-16",
+          "market_date": "2026-10-16",
+          "effective_date": "2026-10-17",
+          "latest_price_source": "schwab_daily_history_with_live_quote_overlay",
+          "quote_overlay_used": null,
+          "data_freshness_warning": null,
+          "signal": null,
+          "status": null,
+          "target_mode": "value",
+          "target_weights": {},
+          "target_values": {
+            "SPY": 500.0
+          },
+          "indicators": {
+            "benchmark_symbol": "SPY",
+            "benchmark_price": 100.0,
+            "long_trend_value": 90.0,
+            "exit_line": 80.0
+          }
+        }
+      },
+      "allocation": {
+        "target_mode": "value",
+        "strategy_symbols": [
+          "SPY"
+        ],
+        "risk_symbols": [
+          "SPY"
+        ],
+        "income_symbols": [],
+        "safe_haven_symbols": [],
+        "targets": {
+          "SPY": 500.0
+        }
+      },
+      "trade_logs": [
+        "Order cycle stopped; reconciliation required."
+      ],
+      "submitted_orders": [
+        {
+          "symbol": "SPY",
+          "side": "buy",
+          "quantity": 5,
+          "order_type": "limit",
+          "status": "unknown",
+          "price": 100.0,
+          "limit_price": 100.0,
+          "broker_order_id": "synthetic-order"
+        }
+      ],
+      "account_observation": {
+        "account_hash": "synthetic",
+        "currency": null,
+        "observed_at": "2026-10-16T19:45:00Z",
+        "net_assets": null,
+        "net_assets_source": null,
+        "available_for_trading": null,
+        "available_for_trading_source": null,
+        "available_for_withdrawal": null,
+        "available_for_withdrawal_source": null,
+        "broker_reported_positions": [
+          {
+            "symbol": "SPY",
+            "quantity": "0",
+            "market_value": "0",
+            "currency": null
+          }
+        ],
+        "broker_reported_positions_scope": "strategy_symbols_only",
+        "net_assets_currency": null,
+        "net_assets_currency_source": null,
+        "cash_currency": null,
+        "cash_currency_source": null
+      }
+    }
+  },
+  "dry_run:zh": {
+    "calls": [
+      [
+        "history",
+        null
+      ],
+      [
+        "portfolio",
+        null
+      ],
+      [
+        "plan",
+        null
+      ],
+      [
+        "execution_port",
+        "synthetic"
+      ],
+      [
+        "marker_read",
+        "v1/schwab/synthetic/synthetic_profile/paper/2026-10-16/2026-10-17/no-contract"
+      ],
+      [
+        "claim",
+        [
+          "v1/schwab/synthetic/synthetic_profile/paper/2026-10-16/2026-10-17/no-contract",
+          {
+            "metadata": {
+              "strategy_profile": "synthetic_profile",
+              "account_scope": "synthetic",
+              "dry_run_only": true,
+              "signal_date": "2026-10-16",
+              "effective_date": "2026-10-17"
+            }
+          }
+        ]
+      ],
+      [
+        "quote",
+        "SPY"
+      ],
+      [
+        "outcome",
+        [
+          "v1/schwab/synthetic/synthetic_profile/paper/2026-10-16/2026-10-17/no-contract",
+          {
+            "metadata": {
+              "strategy_profile": "synthetic_profile",
+              "account_scope": "synthetic",
+              "dry_run_only": true,
+              "trade_logs_count": 1,
+              "execution_status": "dry_run",
+              "broker_submission_done": false,
+              "orders_pending_count": 0,
+              "submitted_orders": [
+                {
+                  "symbol": "SPY",
+                  "side": "buy",
+                  "quantity": 5,
+                  "order_type": "limit",
+                  "status": "dry_run",
+                  "price": 100.0,
+                  "limit_price": 100.0
+                }
+              ],
+              "signal_date": "2026-10-16",
+              "effective_date": "2026-10-17"
+            }
+          }
+        ]
+      ]
+    ],
+    "result": {
+      "plan": {
+        "strategy_profile": "synthetic_profile",
+        "account_hash": "synthetic",
+        "allocation": {
+          "target_mode": "value",
+          "strategy_symbols": [
+            "SPY"
+          ],
+          "risk_symbols": [
+            "SPY"
+          ],
+          "income_symbols": [],
+          "safe_haven_symbols": [],
+          "targets": {
+            "SPY": 500.0
+          }
+        },
+        "portfolio": {
+          "strategy_symbols": [
+            "SPY"
+          ],
+          "portfolio_rows": [
+            [
+              "SPY"
+            ]
+          ],
+          "market_values": {
+            "SPY": 0.0
+          },
+          "quantities": {
+            "SPY": 0
+          },
+          "total_equity": 1000.0,
+          "liquid_cash": 1000.0,
+          "cash_sweep_symbol": "",
+          "account_new_risk_snapshot": {
+            "observation_status": "COMPLETE",
+            "reconciliation_status": "VERIFIED",
+            "circuit_breaker_state": "CLOSED"
+          }
+        },
+        "execution": {
+          "trade_threshold_value": 10.0,
+          "reserved_cash": 0.0,
+          "signal_display": "",
+          "dashboard_text": "",
+          "separator": "---",
+          "benchmark_symbol": "SPY",
+          "benchmark_price": 100.0,
+          "long_trend_value": 90.0,
+          "exit_line": 80.0,
+          "signal_date": "2026-10-16",
+          "effective_date": "2026-10-17"
+        }
+      },
+      "portfolio": {
+        "strategy_symbols": [
+          "SPY"
+        ],
+        "portfolio_rows": [
+          [
+            "SPY"
+          ]
+        ],
+        "market_values": {
+          "SPY": 0.0
+        },
+        "quantities": {
+          "SPY": 0
+        },
+        "total_equity": 1000.0,
+        "liquid_cash": 1000.0,
+        "cash_sweep_symbol": "",
+        "account_new_risk_snapshot": {
+          "observation_status": "COMPLETE",
+          "reconciliation_status": "VERIFIED",
+          "circuit_breaker_state": "CLOSED"
+        }
+      },
+      "execution": {
+        "trade_threshold_value": 10.0,
+        "reserved_cash": 0.0,
+        "signal_display": "",
+        "dashboard_text": "",
+        "separator": "---",
+        "benchmark_symbol": "SPY",
+        "benchmark_price": 100.0,
+        "long_trend_value": 90.0,
+        "exit_line": 80.0,
+        "signal_date": "2026-10-16",
+        "effective_date": "2026-10-17",
+        "execution_status": "dry_run",
+        "cash_only_execution": true,
+        "signal_snapshot": {
+          "schema_version": "signal_snapshot.v1",
+          "platform": "schwab",
+          "strategy_profile": "synthetic_profile",
+          "strategy_version": null,
+          "generated_at": "2026-10-16T19:45:00+00:00",
+          "signal_as_of": "2026-10-16",
+          "market_date": "2026-10-16",
+          "effective_date": "2026-10-17",
+          "latest_price_source": "schwab_daily_history_with_live_quote_overlay",
+          "quote_overlay_used": null,
+          "data_freshness_warning": null,
+          "signal": null,
+          "status": null,
+          "target_mode": "value",
+          "target_weights": {},
+          "target_values": {
+            "SPY": 500.0
+          },
+          "indicators": {
+            "benchmark_symbol": "SPY",
+            "benchmark_price": 100.0,
+            "long_trend_value": 90.0,
+            "exit_line": 80.0
+          }
+        }
+      },
+      "allocation": {
+        "target_mode": "value",
+        "strategy_symbols": [
+          "SPY"
+        ],
+        "risk_symbols": [
+          "SPY"
+        ],
+        "income_symbols": [],
+        "safe_haven_symbols": [],
+        "targets": {
+          "SPY": 500.0
+        }
+      },
+      "trade_logs": [
+        "🧪 模拟下单：限价买入指令 SPY ($100.00): 5股"
+      ],
+      "submitted_orders": [
+        {
+          "symbol": "SPY",
+          "side": "buy",
+          "quantity": 5,
+          "order_type": "limit",
+          "status": "dry_run",
+          "price": 100.0,
+          "limit_price": 100.0
+        }
+      ],
+      "account_observation": {
+        "account_hash": "synthetic",
+        "currency": null,
+        "observed_at": "2026-10-16T19:45:00Z",
+        "net_assets": null,
+        "net_assets_source": null,
+        "available_for_trading": null,
+        "available_for_trading_source": null,
+        "available_for_withdrawal": null,
+        "available_for_withdrawal_source": null,
+        "broker_reported_positions": [
+          {
+            "symbol": "SPY",
+            "quantity": "0",
+            "market_value": "0",
+            "currency": null
+          }
+        ],
+        "broker_reported_positions_scope": "strategy_symbols_only",
+        "net_assets_currency": null,
+        "net_assets_currency_source": null,
+        "cash_currency": null,
+        "cash_currency_source": null
+      }
+    }
+  },
+  "dry_run:en": {
+    "calls": [
+      [
+        "history",
+        null
+      ],
+      [
+        "portfolio",
+        null
+      ],
+      [
+        "plan",
+        null
+      ],
+      [
+        "execution_port",
+        "synthetic"
+      ],
+      [
+        "marker_read",
+        "v1/schwab/synthetic/synthetic_profile/paper/2026-10-16/2026-10-17/no-contract"
+      ],
+      [
+        "claim",
+        [
+          "v1/schwab/synthetic/synthetic_profile/paper/2026-10-16/2026-10-17/no-contract",
+          {
+            "metadata": {
+              "strategy_profile": "synthetic_profile",
+              "account_scope": "synthetic",
+              "dry_run_only": true,
+              "signal_date": "2026-10-16",
+              "effective_date": "2026-10-17"
+            }
+          }
+        ]
+      ],
+      [
+        "quote",
+        "SPY"
+      ],
+      [
+        "outcome",
+        [
+          "v1/schwab/synthetic/synthetic_profile/paper/2026-10-16/2026-10-17/no-contract",
+          {
+            "metadata": {
+              "strategy_profile": "synthetic_profile",
+              "account_scope": "synthetic",
+              "dry_run_only": true,
+              "trade_logs_count": 1,
+              "execution_status": "dry_run",
+              "broker_submission_done": false,
+              "orders_pending_count": 0,
+              "submitted_orders": [
+                {
+                  "symbol": "SPY",
+                  "side": "buy",
+                  "quantity": 5,
+                  "order_type": "limit",
+                  "status": "dry_run",
+                  "price": 100.0,
+                  "limit_price": 100.0
+                }
+              ],
+              "signal_date": "2026-10-16",
+              "effective_date": "2026-10-17"
+            }
+          }
+        ]
+      ]
+    ],
+    "result": {
+      "plan": {
+        "strategy_profile": "synthetic_profile",
+        "account_hash": "synthetic",
+        "allocation": {
+          "target_mode": "value",
+          "strategy_symbols": [
+            "SPY"
+          ],
+          "risk_symbols": [
+            "SPY"
+          ],
+          "income_symbols": [],
+          "safe_haven_symbols": [],
+          "targets": {
+            "SPY": 500.0
+          }
+        },
+        "portfolio": {
+          "strategy_symbols": [
+            "SPY"
+          ],
+          "portfolio_rows": [
+            [
+              "SPY"
+            ]
+          ],
+          "market_values": {
+            "SPY": 0.0
+          },
+          "quantities": {
+            "SPY": 0
+          },
+          "total_equity": 1000.0,
+          "liquid_cash": 1000.0,
+          "cash_sweep_symbol": "",
+          "account_new_risk_snapshot": {
+            "observation_status": "COMPLETE",
+            "reconciliation_status": "VERIFIED",
+            "circuit_breaker_state": "CLOSED"
+          }
+        },
+        "execution": {
+          "trade_threshold_value": 10.0,
+          "reserved_cash": 0.0,
+          "signal_display": "",
+          "dashboard_text": "",
+          "separator": "---",
+          "benchmark_symbol": "SPY",
+          "benchmark_price": 100.0,
+          "long_trend_value": 90.0,
+          "exit_line": 80.0,
+          "signal_date": "2026-10-16",
+          "effective_date": "2026-10-17"
+        }
+      },
+      "portfolio": {
+        "strategy_symbols": [
+          "SPY"
+        ],
+        "portfolio_rows": [
+          [
+            "SPY"
+          ]
+        ],
+        "market_values": {
+          "SPY": 0.0
+        },
+        "quantities": {
+          "SPY": 0
+        },
+        "total_equity": 1000.0,
+        "liquid_cash": 1000.0,
+        "cash_sweep_symbol": "",
+        "account_new_risk_snapshot": {
+          "observation_status": "COMPLETE",
+          "reconciliation_status": "VERIFIED",
+          "circuit_breaker_state": "CLOSED"
+        }
+      },
+      "execution": {
+        "trade_threshold_value": 10.0,
+        "reserved_cash": 0.0,
+        "signal_display": "",
+        "dashboard_text": "",
+        "separator": "---",
+        "benchmark_symbol": "SPY",
+        "benchmark_price": 100.0,
+        "long_trend_value": 90.0,
+        "exit_line": 80.0,
+        "signal_date": "2026-10-16",
+        "effective_date": "2026-10-17",
+        "execution_status": "dry_run",
+        "cash_only_execution": true,
+        "signal_snapshot": {
+          "schema_version": "signal_snapshot.v1",
+          "platform": "schwab",
+          "strategy_profile": "synthetic_profile",
+          "strategy_version": null,
+          "generated_at": "2026-10-16T19:45:00+00:00",
+          "signal_as_of": "2026-10-16",
+          "market_date": "2026-10-16",
+          "effective_date": "2026-10-17",
+          "latest_price_source": "schwab_daily_history_with_live_quote_overlay",
+          "quote_overlay_used": null,
+          "data_freshness_warning": null,
+          "signal": null,
+          "status": null,
+          "target_mode": "value",
+          "target_weights": {},
+          "target_values": {
+            "SPY": 500.0
+          },
+          "indicators": {
+            "benchmark_symbol": "SPY",
+            "benchmark_price": 100.0,
+            "long_trend_value": 90.0,
+            "exit_line": 80.0
+          }
+        }
+      },
+      "allocation": {
+        "target_mode": "value",
+        "strategy_symbols": [
+          "SPY"
+        ],
+        "risk_symbols": [
+          "SPY"
+        ],
+        "income_symbols": [],
+        "safe_haven_symbols": [],
+        "targets": {
+          "SPY": 500.0
+        }
+      },
+      "trade_logs": [
+        "🧪 DRY_RUN Limit Buy SPY ($100.00): 5 shares"
+      ],
+      "submitted_orders": [
+        {
+          "symbol": "SPY",
+          "side": "buy",
+          "quantity": 5,
+          "order_type": "limit",
+          "status": "dry_run",
+          "price": 100.0,
+          "limit_price": 100.0
+        }
+      ],
+      "account_observation": {
+        "account_hash": "synthetic",
+        "currency": null,
+        "observed_at": "2026-10-16T19:45:00Z",
+        "net_assets": null,
+        "net_assets_source": null,
+        "available_for_trading": null,
+        "available_for_trading_source": null,
+        "available_for_withdrawal": null,
+        "available_for_withdrawal_source": null,
+        "broker_reported_positions": [
+          {
+            "symbol": "SPY",
+            "quantity": "0",
+            "market_value": "0",
+            "currency": null
+          }
+        ],
+        "broker_reported_positions_scope": "strategy_symbols_only",
+        "net_assets_currency": null,
+        "net_assets_currency_source": null,
+        "cash_currency": null,
+        "cash_currency_source": null
+      }
+    }
+  }
+}

@@ -69,9 +69,12 @@ def summarize_execution_cycle_result(result: object, *, dry_run: bool) -> dict[s
     if notification_delivery_summary:
         summary["notification_delivery_summary"] = notification_delivery_summary
     from notifications.digest_snapshot.digest_routing import daily_digest_enabled
-    if daily_digest_enabled():
+    from notifications.unified import enabled as unified_enabled
+    if daily_digest_enabled() or unified_enabled():
         from notifications.digest_snapshot.digest_candidates import cycle_evidence
         summary["notification_digest"] = cycle_evidence(
             dict(getattr(result, "execution", {}) or {}),
             tuple(getattr(result, "submitted_orders", ()) or ()), dry_run=dry_run)
+    if unified_enabled() and execution.get("notification_events"):
+        summary["notification_events"] = execution["notification_events"]
     return summary

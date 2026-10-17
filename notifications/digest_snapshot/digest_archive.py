@@ -24,7 +24,7 @@ def _read(args):
     return json.loads(result.stdout)
 
 
-def emit(env, *, now=None, read=_read, upload=None):
+def emit(env, *, now=None, read=_read, upload=None, projector=project_reports):
     if env.get("QSL_ROUTINE_NOTIFICATION_MODE", "immediate") != "daily_digest":
         return {"status": "disabled", "uploaded": False}
     bindings = env.get("DIGEST_TARGET_BINDINGS_JSON", "").strip()
@@ -34,7 +34,7 @@ def emit(env, *, now=None, read=_read, upload=None):
             raise ValueError("candidate_bindings_invalid")
         results = []
         for value in values:
-            results.append(emit({**env, **value, "DIGEST_TARGET_BINDINGS_JSON": ""}, now=now, read=read, upload=upload))
+            results.append(emit({**env, **value, "DIGEST_TARGET_BINDINGS_JSON": ""}, now=now, read=read, upload=upload, projector=projector))
         return {"status": "projected", "uploaded": any(v["uploaded"] for v in results), "targets": len(results)}
     if env.get("RUNTIME_TARGET_ENABLED") == "false":
         return {"status": "target_disabled", "uploaded": False}
@@ -107,7 +107,7 @@ def emit(env, *, now=None, read=_read, upload=None):
             "evidence_provenance": "candidates",
         }]}
     else:
-        payload = project_reports(reports, expected_target=target, opaque_account_uid=uid, target_id=tid, now=current)
+        payload = projector(reports, expected_target=target, opaque_account_uid=uid, target_id=tid, now=current)
     if upload is None:
         from google.cloud import storage
         def upload(uri, body):

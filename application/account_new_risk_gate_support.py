@@ -632,7 +632,7 @@ def maybe_publish_attention_for_admission(
             evaluate_attention,
             resolve_mandate_dd_budget,
         )
-        from quant_platform_kit.risk.attention_notify import publish_attention_telegram_transition
+        from notifications.attention import publish_attention_telegram_transition
     except ImportError:
         try:
             log_message("attention_telegram_skipped reason=attention_api_unavailable")
