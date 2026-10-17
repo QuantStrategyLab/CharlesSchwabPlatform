@@ -116,6 +116,10 @@ def build_broker_reported_positions(snapshot: Any) -> list[dict[str, object]] | 
             market_value = _position_decimal_text(getattr(position, "market_value", None))
             if quantity is None or market_value is None:
                 return None
+            try:
+                average_cost = _position_decimal_text(getattr(position, "average_cost", None))
+            except (InvalidOperation, OverflowError):
+                average_cost = None
             rows.append(
                 {
                     "symbol": symbol,
@@ -124,6 +128,7 @@ def build_broker_reported_positions(snapshot: Any) -> list[dict[str, object]] | 
                     # Schwab position rows carry no currency; currency is only
                     # declared downstream from the owner-confirmed account currency.
                     "currency": None,
+                    "avg_cost": average_cost,
                 }
             )
         rows.sort(key=lambda row: str(row["symbol"]))
