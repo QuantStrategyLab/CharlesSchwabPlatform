@@ -365,12 +365,8 @@ _OVERLAY_REQUIRED = _OVERLAY_EXISTING | {
     "notifications/display_names.json", "notifications/digest_snapshot/provenance.json",
     "scripts/execution_report_heartbeat.py", "scripts/emit_unified_digest_candidates.py",
 }
-_OUTPUT_LABELS = frozenset({"serving.knative.dev/service", "serving.knative.dev/configuration",
-    "serving.knative.dev/configurationGeneration", "serving.knative.dev/route",
-    "cloud.googleapis.com/location", "run.googleapis.com/startupProbeType"})
-_OUTPUT_ANNOTATIONS = frozenset({"serving.knative.dev/creator", "serving.knative.dev/lastModifier",
-    "run.googleapis.com/operation-id", "run.googleapis.com/urls", "run.googleapis.com/ingress-status",
-    "run.googleapis.com/client-name", "run.googleapis.com/client-version"})
+_OUTPUT_LABELS = a.NATIVE_OUTPUT_LABELS
+_OUTPUT_ANNOTATIONS = a.NATIVE_OUTPUT_ANNOTATIONS
 
 
 def build_native_plan(before: dict, current: dict, expected: dict) -> tuple[dict, dict]:

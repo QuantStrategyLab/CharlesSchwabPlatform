@@ -1242,6 +1242,7 @@ def ready_native(before, request):
     after["revision"]["status"] = {"imageDigest": NEW_IMAGE, "observedGeneration": 1,
                                      "conditions": [{"type": k, "status": "True"} for k in ("Ready", "ContainerHealthy")]}
     after["service"]["metadata"]["resourceVersion"] = "after-write-rv"
+    after["service"]["status"]["latestCreatedRevisionName"] = request["spec"]["template"]["metadata"]["name"]
     return after
 
 

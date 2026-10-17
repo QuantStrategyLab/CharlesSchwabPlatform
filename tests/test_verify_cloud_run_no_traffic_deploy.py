@@ -802,7 +802,7 @@ def native_snapshot():
         "ports": [{"containerPort": 8080}], "startupProbe": {"tcpSocket": {"port": 8080}},
     }])
     return {"service": {"metadata": meta, "spec": {"traffic": traffic},
-                        "status": {"traffic": copy.deepcopy(traffic), "observedGeneration": 1}},
+                        "status": {"traffic": copy.deepcopy(traffic), "observedGeneration": 1, "latestCreatedRevisionName": BASE_REV}},
             "revision": {"metadata": dict(meta, name=BASE_REV, uid="revision-uid", resourceVersion="revision-rv"),
                          "spec": spec, "status": {"imageDigest": BASE_IMAGE, "observedGeneration": 1,
                          "conditions": [{"type": k, "status": "True"} for k in ("Ready", "ContainerHealthy")]}}}
@@ -814,18 +814,19 @@ def test_native_readback_keeps_zero_tags_and_exact_revision():
                 "spec": copy.deepcopy(before["revision"]["spec"])}
     template["spec"]["containers"][0]["image"] = CANDIDATE_IMAGE
     after["revision"]["metadata"].update(template["metadata"])
+    after["service"]["status"]["latestCreatedRevisionName"] = CANDIDATE_REV
     after["revision"]["spec"] = template["spec"]
     after["revision"]["status"]["imageDigest"] = CANDIDATE_IMAGE
-    check.verify_native_readback(before, {"spec": {"template": template}}, **after)
+    check.verify_native_readback(before, {"metadata": copy.deepcopy(before["service"]["metadata"]), "spec": {"template": template}}, **after)
     after["service"]["status"]["traffic"][1]["tag"] = "different"
     with pytest.raises(check.PreflightError, match="NATIVE_TRAFFIC_CHANGED"):
-        check.verify_native_readback(before, {"spec": {"template": template}}, **after)
+        check.verify_native_readback(before, {"metadata": copy.deepcopy(before["service"]["metadata"]), "spec": {"template": template}}, **after)
 
 
 @pytest.mark.parametrize("condition", ["pending", "false", "generation", "wrong-image", "wrong-candidate", "sidecar-drift"])
 def test_native_startup_needs_exact_candidate_observed_generation_and_conditions(condition):
     before = native_snapshot(); after = copy.deepcopy(before)
-    request = {"spec": {"template": {"metadata": {"name": BASE_REV}, "spec": copy.deepcopy(before["revision"]["spec"])}}}
+    request = {"metadata": copy.deepcopy(before["service"]["metadata"]), "spec": {"template": {"metadata": {"name": BASE_REV}, "spec": copy.deepcopy(before["revision"]["spec"])}}}
     if condition == "pending": after["revision"]["status"]["conditions"] = []
     elif condition == "false": after["revision"]["status"]["conditions"][0]["status"] = "False"
     elif condition == "generation": after["service"]["status"]["observedGeneration"] = 0
@@ -840,6 +841,8 @@ def test_native_capture_unknown_literal_stops_before_any_value_projection():
     def read(command):
         commands.append(command)
         fmt = command[-1]
+        if fmt == "--format=json(metadata.uid,metadata.resourceVersion)":
+            return {"metadata": {"uid": "u", "resourceVersion": "r"}}
         if "env[].name" in fmt:
             return {"metadata": {"uid": "u", "resourceVersion": "r"},
                     "spec": {"containers": [{"env": [{"name": "PRIVATE_UNKNOWN"}]}]}}
@@ -855,6 +858,8 @@ def test_native_capture_unknown_annotation_stops_before_metadata_values():
     commands = []
     def read(command):
         commands.append(command)
+        if command[-1] == "--format=json(metadata.uid,metadata.resourceVersion)":
+            return {"metadata": {"uid": "u", "resourceVersion": "r"}}
         if "annotations.list(show=keys)" in command[-1]:
             return {"metadata": {"annotations": "kubectl.kubernetes.io/last-applied-configuration"}}
         return {}
@@ -866,6 +871,8 @@ def test_native_capture_unknown_annotation_stops_before_metadata_values():
 
 def test_native_capture_unknown_config_field_stops_name_inventory():
     def read(command):
+        if command[-1] == "--format=json(metadata.uid,metadata.resourceVersion)":
+            return {"metadata": {"uid": "u", "resourceVersion": "r"}}
         return {"spec": "containers,unsupported"} if command[-1] == "--format=json(spec.list(show=keys))" else {}
     identity = dict(project="demo-project", region="demo-region", service="demo-service", baseline_revision=BASE_REV)
     with pytest.raises(check.PreflightError, match="NATIVE_UNSUPPORTED_CONFIGURATION_FIELD"):
@@ -874,7 +881,7 @@ def test_native_capture_unknown_config_field_stops_name_inventory():
 
 @pytest.mark.parametrize("drift", [None, "revision", "service"])
 def test_native_capture_value_projection_is_allowlisted_and_uid_rv_bracketed(drift):
-    expected = native_snapshot(); commands = []
+    expected = native_snapshot(); commands = []; stamp_calls = {"service": 0, "revision": 0}
     def read(command):
         commands.append(command)
         fmt = command[-1]
@@ -882,9 +889,11 @@ def test_native_capture_value_projection_is_allowlisted_and_uid_rv_bracketed(dri
         obj = expected["revision" if revision else "service"]
         if fmt == "--format=json(metadata.uid,metadata.resourceVersion)":
             meta = {k: obj["metadata"][k] for k in ("uid", "resourceVersion")}
-            if drift == ("revision" if revision else "service"): meta["resourceVersion"] += "changed"
+            part = "revision" if revision else "service"
+            stamp_calls[part] += 1
+            if drift == part and stamp_calls[part] > 1: meta["resourceVersion"] += "changed"
             return {"metadata": meta}
-        if "json(metadata," in fmt:
+        if "status.observedGeneration" in fmt:
             result = copy.deepcopy(obj)
             if revision: del result["spec"]["containers"][0]["env"][0]["value"]
             return result
@@ -901,3 +910,58 @@ def test_native_capture_value_projection_is_allowlisted_and_uid_rv_bracketed(dri
             check.capture_native_snapshot(identity, read=read)
     else: assert check.capture_native_snapshot(identity, read=read) == expected
     assert not any("template.spec" in c[-1] or "env[].value," in c[-1] for c in commands)
+
+
+@pytest.mark.parametrize("part", ["service", "revision"])
+def test_native_annotation_race_is_bound_to_earliest_stamp(part):
+    source = native_snapshot(); commands = []
+    def read(command):
+        commands.append(command); kind = "revision" if command[2] == "revisions" else "service"
+        obj = source[kind]; fmt = command[-1]
+        if fmt == "--format=json(metadata.uid,metadata.resourceVersion)":
+            return {"metadata": {k: obj["metadata"][k] for k in ("uid", "resourceVersion")}}
+        if "env[].name" in fmt and "status.observedGeneration" not in fmt:
+            stamp = {k: obj["metadata"][k] for k in ("uid", "resourceVersion")}
+            if part == "revision": stamp["resourceVersion"] += "changed"
+            return {"metadata": stamp, "spec": {"containers": [{"env": [{"name": "SCHWAB_CASH_CURRENCY"}]}]}}
+        if "status.observedGeneration" in fmt:
+            assert "json(metadata," not in fmt and "metadata.annotations," not in fmt
+            result = copy.deepcopy(obj)
+            if kind == part: result["metadata"]["resourceVersion"] += "changed"
+            if kind == "revision": del result["spec"]["containers"][0]["env"][0]["value"]
+            return result
+        return {}
+    identity = dict(project="demo-project", region="demo-region", service="demo-service", baseline_revision=BASE_REV)
+    with pytest.raises(check.PreflightError, match="NATIVE_OBJECT_CHANGED_DURING_CAPTURE"):
+        check.capture_native_snapshot(identity, read=read)
+
+
+@pytest.mark.parametrize("drift", ["service-ingress", "extra-runtime-annotation", "other-latest-candidate"])
+def test_native_readback_complete_metadata_and_observed_service_candidate(drift):
+    before = native_snapshot(); after = copy.deepcopy(before)
+    request = {"metadata": copy.deepcopy(before["service"]["metadata"]), "spec": {"template": {
+        "metadata": {"name": BASE_REV}, "spec": copy.deepcopy(before["revision"]["spec"])}}}
+    if drift == "service-ingress": after["service"]["metadata"]["annotations"] = {"run.googleapis.com/ingress": "all"}
+    elif drift == "extra-runtime-annotation": after["revision"]["metadata"]["annotations"] = {"run.googleapis.com/vpc-access-egress": "all-traffic"}
+    else:
+        after["service"]["metadata"].update(generation=2, resourceVersion="later-rv")
+        after["service"]["status"].update(observedGeneration=2, latestCreatedRevisionName="demo-service-other-writer")
+    with pytest.raises(check.PreflightError): check.verify_native_readback(before, request, **after)
+
+
+def test_native_capture_output_created_private_and_never_overwritten(monkeypatch, tmp_path):
+    out = tmp_path / "before.json"
+    monkeypatch.setattr(check, "capture_native_snapshot", lambda _: {"synthetic": True})
+    monkeypatch.setattr(sys, "argv", [str(SCRIPT), "capture-native", "--project=demo", "--region=demo", "--service=demo",
+                                    "--baseline-revision=demo-base", "--output=" + str(out)])
+    assert check.main() == 0
+    assert out.stat().st_mode & 0o777 == 0o600
+    original = out.read_bytes()
+    assert check.main() == 1 and out.read_bytes() == original
+
+
+def test_native_observed_generation_boolean_is_not_an_integer():
+    before = native_snapshot()
+    before["service"]["status"]["observedGeneration"] = True
+    with pytest.raises(check.PreflightError, match="INVALID_STRUCTURE"):
+        check.native_snapshot_inventory(before)

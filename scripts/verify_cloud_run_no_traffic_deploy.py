@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -687,6 +688,12 @@ _NATIVE_ANNOTATIONS = frozenset({
     "autoscaling.knative.dev/minScale", "autoscaling.knative.dev/maxScale",
     "serving.knative.dev/creator", "serving.knative.dev/lastModifier",
 })
+NATIVE_OUTPUT_LABELS = frozenset({"serving.knative.dev/service", "serving.knative.dev/configuration",
+    "serving.knative.dev/configurationGeneration", "serving.knative.dev/route",
+    "cloud.googleapis.com/location", "run.googleapis.com/startupProbeType"})
+NATIVE_OUTPUT_ANNOTATIONS = frozenset({"serving.knative.dev/creator", "serving.knative.dev/lastModifier",
+    "run.googleapis.com/operation-id", "run.googleapis.com/urls", "run.googleapis.com/ingress-status",
+    "run.googleapis.com/client-name", "run.googleapis.com/client-version"})
 _NATIVE_CONDITIONS = [{"type": str, "status": str, "reason": str, "lastTransitionTime": str}]
 
 
@@ -734,6 +741,8 @@ def _native_metadata(value: object) -> None:
     _keys(value, _NATIVE_METADATA, {"name", "namespace", "uid", "resourceVersion"})
     for key, child in value.items():
         if key in {"labels", "annotations"}:
+            if key == "annotations" and isinstance(child, dict) and child.keys() - _NATIVE_ANNOTATIONS:
+                _stop("NATIVE_UNSUPPORTED_ANNOTATION")
             if not isinstance(child, dict) or any(type(k) is not str or type(v) is not str for k, v in child.items()):
                 _stop("NATIVE_INVALID_METADATA")
         else:
@@ -768,7 +777,11 @@ def native_snapshot_inventory(snapshot: object) -> None:
         _native_metadata(obj["metadata"])
     _keys(snapshot["service"]["spec"], {"traffic"}, {"traffic"})
     native_routes(snapshot["service"]["spec"]["traffic"])
-    _keys(snapshot["service"]["status"], {"traffic", "observedGeneration"}, {"traffic"})
+    _keys(snapshot["service"]["status"], {"traffic", "observedGeneration", "latestCreatedRevisionName"}, {"traffic"})
+    if "observedGeneration" in snapshot["service"]["status"]:
+        _shape(snapshot["service"]["status"]["observedGeneration"], int)
+    if "latestCreatedRevisionName" in snapshot["service"]["status"]:
+        _shape(snapshot["service"]["status"]["latestCreatedRevisionName"], str)
     native_routes(snapshot["service"]["status"]["traffic"], status=True)
     _shape(snapshot["revision"]["status"], {"imageDigest": str, "observedGeneration": int, "conditions": _NATIVE_CONDITIONS})
     _shape(snapshot["revision"]["spec"], _NATIVE_SPEC)
@@ -798,9 +811,20 @@ def capture_native_snapshot(identity: dict, *, read=None) -> dict:
     shared = [f"--project={identity['project']}", f"--region={identity['region']}"]
     service_cmd = ["gcloud", "run", "services", "describe", identity["service"], *shared]
     revision_cmd = ["gcloud", "run", "revisions", "describe", identity["baseline_revision"], *shared]
+    commands = {"service": service_cmd, "revision": revision_cmd}
+    stamps, annotation_names = {}, {}
+    # The earliest UID/RV covers every name inventory, not only later values.
+    for kind, cmd in commands.items():
+        stamp = read(cmd + ["--format=json(metadata.uid,metadata.resourceVersion)"])
+        meta = stamp.get("metadata") if isinstance(stamp, dict) else None
+        _keys(meta, {"uid", "resourceVersion"}, {"uid", "resourceVersion"})
+        if any(type(meta[k]) is not str or not meta[k] for k in meta):
+            _stop("NATIVE_INVALID_INITIAL_STAMP")
+        stamps[kind] = meta
     _native_inventory(read, service_cmd, {"template": _NATIVE_MAP, "traffic": _NATIVE_MAP}, "spec")
     _native_inventory(read, revision_cmd, _NATIVE_SPEC, "spec")
-    for cmd in (service_cmd, revision_cmd):
+    for kind, cmd in commands.items():
+        annotation_names[kind] = set()
         _native_inventory(read, cmd, _NATIVE_METADATA, "metadata")
         # A last-applied blob or arbitrary annotation can embed secret env
         # values. Reject its NAME before requesting any metadata values.
@@ -808,8 +832,11 @@ def capture_native_snapshot(identity: dict, *, read=None) -> dict:
         for names in _native_at(keys, "metadata.annotations"):
             if not isinstance(names, str) or set(filter(None, names.split(","))) - _NATIVE_ANNOTATIONS:
                 _stop("NATIVE_UNSUPPORTED_ANNOTATION")
+            annotation_names[kind].update(filter(None, names.split(",")))
     # A literal name without a secret reference must be explicitly allowlisted.
     names = read(revision_cmd + ["--format=json(metadata.uid,metadata.resourceVersion,spec.containers[].env[].name,spec.containers[].env[].valueFrom.secretKeyRef)"])
+    if names.get("metadata") != stamps["revision"]:
+        _stop("NATIVE_OBJECT_CHANGED_DURING_CAPTURE")
     literal_names = []
     for env in _native_at(names, "spec.containers[].env[]"):
         _keys(env, {"name", "valueFrom"}, {"name"})
@@ -829,13 +856,21 @@ def capture_native_snapshot(identity: dict, *, read=None) -> dict:
     for path in ("spec.traffic", "status.traffic"):
         _native_inventory(read, service_cmd, [{"revisionName": str, "percent": int, "tag": str, "latestRevision": bool, **({"url": str} if path.startswith("status") else {})}], path)
     spec_fields = _native_fields(_NATIVE_SPEC, "spec")
-    service = read(service_cmd + ["--format=json(metadata,spec.traffic,status.traffic,status.observedGeneration)"])
+    def metadata_fields(kind):
+        fields = [field for key, schema in _NATIVE_METADATA.items() if key != "annotations"
+                  for field in _native_fields(schema, "metadata." + key)]
+        return fields + ["metadata.annotations." + json.dumps(key) for key in sorted(annotation_names[kind])]
+    service = read(service_cmd + ["--format=json(" + ",".join([
+        *metadata_fields("service"), "spec.traffic", "status.traffic", "status.observedGeneration",
+        "status.latestCreatedRevisionName",
+    ]) + ")"])
     revision = read(revision_cmd + ["--format=json(" + ",".join([
-        "metadata", *spec_fields, "status.imageDigest", "status.observedGeneration",
+        *metadata_fields("revision"), *spec_fields, "status.imageDigest", "status.observedGeneration",
         *_native_fields(_NATIVE_CONDITIONS, "status.conditions"),
     ]) + ")"])
-    if revision.get("metadata", {}).get("uid") != names.get("metadata", {}).get("uid") or revision.get("metadata", {}).get("resourceVersion") != names.get("metadata", {}).get("resourceVersion"):
-        _stop("NATIVE_REVISION_CHANGED_DURING_CAPTURE")
+    for kind, obj in (("service", service), ("revision", revision)):
+        if not isinstance(obj, dict) or {k: obj.get("metadata", {}).get(k) for k in ("uid", "resourceVersion")} != stamps[kind]:
+            _stop("NATIVE_OBJECT_CHANGED_DURING_CAPTURE")
     for name in literal_names:
         fmt = 'json(spec.containers[].env.always().filter("name=' + name + '").map().extract(value))'
         values = _cash_values(read(revision_cmd + ["--format=" + fmt]))
@@ -844,9 +879,9 @@ def capture_native_snapshot(identity: dict, *, read=None) -> dict:
         for env in _native_at(revision, "spec.containers[].env[]"):
             if env["name"] == name:
                 env["value"] = values[0]
-    for cmd, obj in ((service_cmd, service), (revision_cmd, revision)):
+    for kind, cmd in commands.items():
         stamp = read(cmd + ["--format=json(metadata.uid,metadata.resourceVersion)"])
-        if stamp.get("metadata") != {k: obj["metadata"][k] for k in ("uid", "resourceVersion")}:
+        if not isinstance(stamp, dict) or stamp.get("metadata") != stamps[kind]:
             _stop("NATIVE_OBJECT_CHANGED_DURING_CAPTURE")
     snapshot = {"service": service, "revision": revision}
     native_snapshot_inventory(snapshot)
@@ -868,16 +903,26 @@ def verify_native_readback(before: dict, request: dict, service: dict, revision:
         _stop("NATIVE_WRONG_CANDIDATE")
     if revision["spec"] != template["spec"]:
         _stop("NATIVE_CANDIDATE_CONFIGURATION_CHANGED")
-    for field in ("labels", "annotations"):
-        wanted = template["metadata"].get(field, {})
-        if any(revision["metadata"].get(field, {}).get(k) != v for k, v in wanted.items()):
-            _stop("NATIVE_CANDIDATE_PROVENANCE_CHANGED")
+    # Compare complete protected metadata; only closed server-output sets differ.
+    for obj, wanted_meta in ((service, request["metadata"]), (revision, template["metadata"])):
+        for field, output in (("labels", NATIVE_OUTPUT_LABELS), ("annotations", NATIVE_OUTPUT_ANNOTATIONS)):
+            actual = {k: v for k, v in obj["metadata"].get(field, {}).items() if k not in output}
+            wanted = {k: v for k, v in wanted_meta.get(field, {}).items() if k not in output}
+            if actual != wanted:
+                _stop("NATIVE_PROTECTED_METADATA_CHANGED")
     if revision["status"].get("imageDigest") != template["spec"]["containers"][0]["image"]:
         _stop("NATIVE_CANDIDATE_IMAGE_CHANGED")
     for obj in (service, revision):
         generation = obj["metadata"].get("generation")
         if type(generation) is not int or obj["status"].get("observedGeneration") != generation:
             _stop("NATIVE_STARTUP_PENDING")
+    latest = service["status"].get("latestCreatedRevisionName")
+    if latest != template["metadata"]["name"]:
+        old_generation = old_meta.get("generation")
+        if (latest and type(old_generation) is int
+                and service["metadata"]["generation"] > old_generation):
+            _stop("NATIVE_OTHER_CANDIDATE_OBSERVED")
+        _stop("NATIVE_STARTUP_PENDING")
     conditions = {x["type"]: x["status"] for x in revision["status"].get("conditions", [])}
     if any(conditions.get(k) == "False" for k in ("Ready", "ContainerHealthy")):
         _stop("NATIVE_STARTUP_FAILED")
@@ -914,8 +959,12 @@ def main() -> int:
     try:
         if args.command == "capture-native":
             snapshot = capture_native_snapshot(vars(args))
-            args.output.write_text(_canonical(snapshot), encoding="utf-8")
-            args.output.chmod(0o600)
+            try:
+                descriptor = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+                    output.write(_canonical(snapshot))
+            except OSError:
+                _stop("NATIVE_CAPTURE_OUTPUT_UNAVAILABLE")
             print("Captured selected native configuration; no application health or notification delivery verified.")
         elif args.command == "capture":
             args.output.write_text(_canonical(_snapshot(args)), encoding="utf-8")
