@@ -63,4 +63,6 @@ def summarize_execution_cycle_result(result: object, *, dry_run: bool) -> dict[s
     notification_delivery_summary = _as_mapping(execution.get("notification_delivery_summary"))
     if notification_delivery_summary:
         summary["notification_delivery_summary"] = notification_delivery_summary
+    from notifications.boundary import annotate_summary
+    annotate_summary(summary, result, dry_run=dry_run)
     return summary

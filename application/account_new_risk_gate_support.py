@@ -632,7 +632,7 @@ def maybe_publish_attention_for_admission(
             evaluate_attention,
             resolve_mandate_dd_budget,
         )
-        from quant_platform_kit.risk.attention_notify import publish_attention_telegram_transition
+        from notifications.attention import publish_attention_telegram_transition
     except ImportError:
         try:
             log_message("attention_telegram_skipped reason=attention_api_unavailable")
@@ -657,7 +657,14 @@ def maybe_publish_attention_for_admission(
             mandate_dd_budget=resolve_mandate_dd_budget(profile),
         )
     )
+    from notifications.boundary import annotate_daily_gate
+    notification_kwargs = annotate_daily_gate(
+        execution, admission, snapshot, portfolio, decision,
+        resolution=lambda: resolve_max_daily_loss_resolution(portfolio),
+        formula=lambda: (_runtime_risk_limits_policy() or {}).get("max_daily_loss_equity_formula"),
+    )
     return publish_attention_telegram_transition(
+        **notification_kwargs,
         decision=decision,
         platform=_ATTENTION_PLATFORM,
         account_alias=_resolve_attention_account_alias(portfolio, execution, plan),

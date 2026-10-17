@@ -63,6 +63,15 @@ jobs:
       GLOBAL_TELEGRAM_CHAT_ID: ${{ secrets.GLOBAL_TELEGRAM_CHAT_ID }}
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
       TELEGRAM_TOKEN_SECRET_NAME: ${{ vars.TELEGRAM_TOKEN_SECRET_NAME }}
+      SCHWAB_UNIFIED_NOTIFICATION_ENABLED: ${{ vars.SCHWAB_UNIFIED_NOTIFICATION_ENABLED || 'false' }}
+      QSL_ROUTINE_NOTIFICATION_MODE: ${{ vars.QSL_ROUTINE_NOTIFICATION_MODE || 'immediate' }}
+      DIGEST_CANDIDATES_GCS_URI: ${{ vars.DIGEST_CANDIDATES_GCS_URI || secrets.DIGEST_CANDIDATES_GCS_URI }}
+      EXECUTION_REPORT_GCS_URI: ${{ vars.EXECUTION_REPORT_GCS_URI || secrets.EXECUTION_REPORT_GCS_URI }}
+      DIGEST_STORE_TARGET: ${{ vars.DIGEST_STORE_TARGET }}
+      DIGEST_OPAQUE_ACCOUNT_UID: ${{ secrets.DIGEST_OPAQUE_ACCOUNT_UID }}
+      DIGEST_TARGET_ID: ${{ secrets.DIGEST_TARGET_ID }}
+      DIGEST_TARGET_BINDINGS_JSON: ${{ secrets.DIGEST_TARGET_BINDINGS_JSON }}
+      DIGEST_NOTIFICATION_SCHEDULE_JSON: ${{ vars.DIGEST_NOTIFICATION_SCHEDULE_JSON }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -93,12 +102,24 @@ jobs:
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
 
       - name: Install locked runtime dependencies
+        id: install_runtime_deps
         run: |
           set -euo pipefail
           uv sync --frozen --no-dev
 
       - name: Check recent execution report
         run: uv run --no-sync python scripts/execution_report_heartbeat.py
+
+      - name: Publish completed-window candidates when unified notifications are enabled
+        if: ${{ !cancelled() && steps.install_runtime_deps.outcome == 'success' }}
+        run: |
+          uv run --no-sync python - <<'PYCODE'
+          import os
+          from notifications.unified import enabled
+          from scripts.emit_unified_digest_candidates import main
+          if enabled(os.environ):
+              raise SystemExit(main())
+          PYCODE
 
       - name: Publish read-only runtime execution evidence
         uses: QuantStrategyLab/QuantRuntimeSettings/actions/publish-runtime-execution-evidence@b26858b6d7049d960e226c8922556854f24139b5

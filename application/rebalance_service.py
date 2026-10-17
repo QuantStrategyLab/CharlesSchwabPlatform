@@ -495,6 +495,8 @@ def run_strategy_core(
             extra_notification_lines=tuple(extra_notification_lines),
             notify_no_trade_cycles=bool(notify_no_trade_cycles),
         )
+    from notifications.boundary import publish_incident
+
     sleeper_fn = config.sleeper or _noop_sleep
     notification_publisher = NotificationPublisher(
         log_message=lambda message: print(message, flush=True),
@@ -654,12 +656,12 @@ def run_strategy_core(
             safe_haven_cash_substitute_threshold_usd=config.safe_haven_cash_substitute_threshold_usd,
             cash_only_execution=getattr(config, "cash_only_execution", True),
             notional_buy_execution=getattr(config, "notional_buy_execution", False),
-            publish_order_issue=lambda message: notification_publisher.publish(
+            publish_order_issue=lambda message: publish_incident(lambda: notification_publisher.publish(
                 RenderedNotification(
                     detailed_text=message,
                     compact_text=message,
                 )
-            ),
+            ), reason="order_integrity_issue", profile=config.strategy_profile),
         )
         if execution_claim_acquired:
             _record_execution_outcome(
@@ -667,12 +669,12 @@ def run_strategy_core(
                 marker_key=execution_marker_key,
                 result=execution_result,
                 plan=plan,
-                notify_issue=lambda title, detail: notification_publisher.publish(
+                notify_issue=lambda title, detail: publish_incident(lambda: notification_publisher.publish(
                     RenderedNotification(
                         detailed_text=f"{title}\n{detail}",
                         compact_text=f"{title}\n{detail}",
                     )
-                ),
+                ), reason="execution_outcome_persistence_failed", profile=config.strategy_profile),
             )
     portfolio = execution_result.portfolio
     execution = execution_result.execution
@@ -691,40 +693,44 @@ def run_strategy_core(
     )
     trade_logs = list(execution_result.trade_logs)
 
-    if _has_submitted_orders(execution_result):
-        try:
+    def publish_existing_cycle():
+        if _has_submitted_orders(execution_result):
+            try:
+                notification_publisher.publish(
+                    notification_renderers.render_trade_notification(
+                        translator=config.translator,
+                        strategy_display_name=config.strategy_display_name,
+                        dry_run_only=config.dry_run_only,
+                        extra_notification_lines=config.extra_notification_lines,
+                        execution=execution,
+                        trade_logs=trade_logs,
+                        account_label=plan.get("account_hash", ""),
+                    )
+                )
+            except Exception:
+                print("pending_order_notification_failed", flush=True)
+        elif getattr(config, "notify_no_trade_cycles", True):
             notification_publisher.publish(
-                notification_renderers.render_trade_notification(
+                notification_renderers.render_heartbeat_notification(
                     translator=config.translator,
                     strategy_display_name=config.strategy_display_name,
                     dry_run_only=config.dry_run_only,
                     extra_notification_lines=config.extra_notification_lines,
                     execution=execution,
-                    trade_logs=trade_logs,
+                    portfolio=portfolio,
                     account_label=plan.get("account_hash", ""),
+                    account_snapshot=_heartbeat_account_snapshot(snapshot),
                 )
             )
-        except Exception:
-            print("pending_order_notification_failed", flush=True)
-    elif getattr(config, "notify_no_trade_cycles", True):
-        notification_publisher.publish(
-            notification_renderers.render_heartbeat_notification(
-                translator=config.translator,
-                strategy_display_name=config.strategy_display_name,
-                dry_run_only=config.dry_run_only,
-                extra_notification_lines=config.extra_notification_lines,
-                execution=execution,
-                portfolio=portfolio,
-                account_label=plan.get("account_hash", ""),
-                account_snapshot=_heartbeat_account_snapshot(snapshot),
+        else:
+            print(
+                "notification_suppressed "
+                + json.dumps({"reason": "no_trade_or_error", "trade_logs_count": len(trade_logs)}, ensure_ascii=False),
+                flush=True,
             )
-        )
-    else:
-        print(
-            "notification_suppressed "
-            + json.dumps({"reason": "no_trade_or_error", "trade_logs_count": len(trade_logs)}, ensure_ascii=False),
-            flush=True,
-        )
+
+    from notifications.boundary import publish_cycle_safely
+    publish_cycle_safely(execution_result, config=config, legacy=publish_existing_cycle)
     notification_delivery_summary = _build_notification_delivery_summary(
         getattr(runtime, "notification_delivery_events", []) or []
     )

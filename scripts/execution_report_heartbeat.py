@@ -12,6 +12,9 @@ import sys
 import urllib.parse
 import urllib.request
 from typing import Any
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from notifications.monitor import publish_alert, publish_health
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from quant_platform_kit.common.operational_notification_localization import (
@@ -635,7 +638,7 @@ def _send_telegram(message: str) -> bool:
     return ok
 
 
-def _send_normal_heartbeat(name: str, detail: str) -> int:
+def _send_normal_heartbeat_legacy(name: str, detail: str) -> int:
     if not _env_bool("RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS", False):
         return 0
     message = format_operational_heartbeat_status(
@@ -643,6 +646,10 @@ def _send_normal_heartbeat(name: str, detail: str) -> int:
     )
     print(message)
     return 0 if _send_telegram(message[:3900]) else 1
+
+
+def _send_normal_heartbeat(name: str, detail: str, *, source_reports=()) -> int:
+    return publish_health(lambda: _send_normal_heartbeat_legacy(name, detail), source_reports)
 
 
 def main(now: dt.datetime | None = None) -> int:
@@ -691,7 +698,7 @@ def main(now: dt.datetime | None = None) -> int:
             technical_details=[str(exc)],
         )
         print(message)
-        _send_telegram(message)
+        publish_alert(lambda: _send_telegram(message), sender=_send_telegram, locale=_notification_locale(), scheduler_error=True)
         return 1 if fail_workflow else 0
     publication_grace_minutes = float(
         os.environ.get("RUNTIME_HEARTBEAT_PUBLICATION_GRACE_MINUTES") or "30"
@@ -774,9 +781,15 @@ def main(now: dt.datetime | None = None) -> int:
     accepted = []
     accepted_by_service: dict[str, tuple[str, dt.datetime, str]] = {}
     inspected = []
+    observations = []
+    source_reports = []
+    latest_reports = {}
+    unreadable = False
     for uri, updated in sorted_objects[:max_reports]:
         payload = _cat_gcs_json(uri, project=project)
         if payload is None:
+            unreadable = True
+            observations.append({"category": "unreadable", "updated": updated})
             inspected.append(f"- {updated.isoformat()} {uri} unreadable")
             continue
         matches, service_name, filter_reason = _payload_matches(
@@ -785,21 +798,29 @@ def main(now: dt.datetime | None = None) -> int:
             required_targets=required_targets,
         )
         if not matches:
+            observations.append({"category": "identity_skipped", "updated": updated})
             inspected.append(f"- {updated.isoformat()} {uri} skipped {filter_reason}")
             continue
         if updated < due_since:
+            observations.append({"category": "time_skipped", "updated": updated})
             inspected.append(f"- {updated.isoformat()} {uri} skipped predates current heartbeat window")
             continue
         latest_due_at = required_due_at.get(service_name)
         if latest_due_at is not None and updated < latest_due_at:
+            observations.append({"category": "time_skipped", "updated": updated})
             inspected.append(
                 f"- {updated.isoformat()} {uri} skipped "
                 f"predates latest due schedule {latest_due_at.isoformat()}"
             )
             continue
+        latest_reports.setdefault(service_name, payload)
         ok, reason = _is_accepted_report(payload)
+        status = str((payload.get("summary") or {}).get("execution_status") or "")
+        observations.append({"category": "blocked" if status in {"blocked", "risk_blocked", "strategy_risk_rejected"}
+            else "accepted" if ok else "rejected", "updated": updated})
         inspected.append(f"- {updated.isoformat()} {uri} {reason}")
         if ok:
+            source_reports.append(payload)
             if required_keys:
                 accepted_by_service[service_name] = (uri, updated, reason)
             else:
@@ -815,6 +836,7 @@ def main(now: dt.datetime | None = None) -> int:
             print(f"Execution report heartbeat OK for {name}: {details}")
             return _send_normal_heartbeat(
                 name, _notice("heartbeat_accepted_report", detail=details),
+                source_reports=list(latest_reports.values()),
             )
     if accepted and not list_errors:
         uri, updated, reason = accepted[0]
@@ -824,6 +846,7 @@ def main(now: dt.datetime | None = None) -> int:
         return _send_normal_heartbeat(
             name,
             _notice("heartbeat_accepted_report", detail=f"{reason}, {updated.isoformat()}"),
+            source_reports=list(latest_reports.values()),
         )
 
     issues = []
@@ -866,7 +889,13 @@ def main(now: dt.datetime | None = None) -> int:
         workflow_url=run_url,
     )
     print(message)
-    _send_telegram(message[:3900])
+    publish_alert(lambda: _send_telegram(message[:3900]), sender=_send_telegram,
+        locale=_notification_locale(), observations=observations, workflow_url=run_url,
+        reports=list(latest_reports.values()),
+        complete=not list_errors and not unreadable and len(sorted_objects) <= max_reports
+            and (set(required_keys) <= set(latest_reports) if required_keys else bool(latest_reports)),
+        list_failed=bool(list_errors), missing=True,
+        due_at=max(required_due_at.values()) if required_due_at else None)
     return 1 if fail_workflow else 0
 
 

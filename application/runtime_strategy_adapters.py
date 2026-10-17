@@ -177,12 +177,15 @@ class SchwabRuntimeStrategyAdapters:
             "reserved_cash_ratio": float(self.reserved_cash_ratio or 0.0),
             "cash_only_execution": bool(self.cash_only_execution),
         }
-        return self.map_strategy_decision_to_plan_fn(
+        plan = self.map_strategy_decision_to_plan_fn(
             evaluation.decision,
             snapshot=snapshot,
             strategy_profile=self.strategy_profile,
             runtime_metadata=runtime_metadata,
         )
+        from notifications.boundary import annotate_decision
+        annotate_decision(plan, evaluation.decision)
+        return plan
 
 
 def build_runtime_strategy_adapters(
