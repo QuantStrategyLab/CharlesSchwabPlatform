@@ -24,3 +24,25 @@ def test_flags_off_real_rebalance_entrypoint_matches_main_calls_and_output(monke
     # persistence position, every send byte, and all result fields.
     actual = json.loads(json.dumps(record_cycle(scenario, locale), default=str))
     assert actual == expected[f"{scenario}:{locale}"]
+
+
+@pytest.mark.parametrize("cost", [None, "80.00"])
+def test_optional_main_cost_fact_normalizes_only_unknown_and_preserves_known_values(monkeypatch, cost):
+    from application import rebalance_service
+
+    monkeypatch.setenv("ACCOUNT_NEW_RISK_GATE", "0")
+    monkeypatch.delenv("SCHWAB_UNIFIED_NOTIFICATION_ENABLED", raising=False)
+    original = rebalance_service.build_account_observation
+
+    def observation(snapshot):
+        result = original(snapshot)
+        result["broker_reported_positions"][0]["avg_cost"] = cost
+        return result
+
+    monkeypatch.setattr(rebalance_service, "build_account_observation", observation)
+    result = record_cycle("healthy")
+    position = result["result"]["account_observation"]["broker_reported_positions"][0]
+    if cost is None:
+        assert "avg_cost" not in position
+    else:
+        assert position["avg_cost"] == cost

@@ -76,4 +76,11 @@ def record_cycle(scenario, locale="en"):
             dry_run_only=scenario == "dry_run", execution_state_store=Store(), execution_dedup_enabled=True,
             execution_state_account_scope="synthetic", notify_no_trade_cycles=True),
         )
-    return {"calls": calls, "result": asdict(result)}
+    recorded_result = asdict(result)
+    # The merge test can include a newer main adding optional account facts.
+    # Absent and explicit unknown average cost are equivalent for this fixture;
+    # known values, every trading field, call argument and send byte stay exact.
+    for position in (recorded_result.get("account_observation") or {}).get("broker_reported_positions") or ():
+        if "avg_cost" in position and position["avg_cost"] is None:
+            del position["avg_cost"]
+    return {"calls": calls, "result": recorded_result}
