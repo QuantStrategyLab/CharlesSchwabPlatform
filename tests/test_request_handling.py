@@ -1311,3 +1311,87 @@ class RequestHandlingTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _run_external_flow_probe(*, enabled="true", rows=None, status_code=200, currency="USD", persist=None, finalizer=None):
+    from datetime import datetime, timezone
+    from unittest.mock import Mock
+    from test_external_flow_snapshot import TX, END
+    from test_publish_account_facts_from_reports import _valid_report
+
+    module = load_module()
+    client = Mock()
+    client.get_transactions.return_value = types.SimpleNamespace(
+        status_code=status_code, json=lambda: [TX] if rows is None else rows,
+    )
+    snapshot = types.SimpleNamespace(
+        buying_power=100, total_equity=123.45, positions=(),
+        as_of=datetime.fromisoformat(END.replace("Z", "+00:00")),
+        metadata={"account_hash": "synthetic-account-hash", "total_equity_source": "broker_liquidation_value"},
+    )
+    report = _valid_report()
+    observed = {}
+    module.build_execution_report = lambda *_args, **_kwargs: report
+    if finalizer is not None:
+        module.finalize_runtime_report = finalizer
+    module.build_broker_adapters = lambda: types.SimpleNamespace(fetch_managed_snapshot=lambda c: snapshot)
+    module.emit_runtime_log = lambda *_args, **_kwargs: None
+    def save(value, **_kwargs):
+        observed["report"] = value
+        return persist(value) if persist else "synthetic-local-report.json"
+    module.persist_execution_report = save
+    module.build_composer = lambda **_kwargs: types.SimpleNamespace(
+        build_reporting_adapters=lambda: types.SimpleNamespace(build_log_context=lambda: types.SimpleNamespace(run_id=report["run_id"]), log_event=lambda *_args, **_kwargs: None),
+        build_client=lambda: client,
+        build_notification_adapters=lambda: (_ for _ in ()).throw(AssertionError("optional capture must not notify")),
+    )
+    with patch.dict(os.environ, {"SCHWAB_EXTERNAL_FLOW_EXPORT_ENABLED": enabled, "SCHWAB_NET_ASSETS_CURRENCY": currency}):
+        result = module._handle_schwab_probe()
+    return result, client, observed["report"]
+
+
+def test_probe_external_flow_report_hook_uses_bound_collector():
+    from application.external_flow_snapshot import attach_external_flow_snapshot
+    from test_external_flow_snapshot import END, TX, project
+    result, client, report = _run_external_flow_probe()
+    assert result == ("Probe OK", 200)
+    client.get_transactions.assert_called_once()
+    assert client.get_transactions.call_args.args == ("synthetic-account-hash",)
+    raw = report["account_external_flows"]
+    assert raw["transactions"] == [TX]
+    assert raw["source_complete"] is False
+    assert attach_external_flow_snapshot(
+        {"account_hash": "synthetic-account-hash", "observed_finished_at": END}, raw, enabled=True,
+    )["externalFlow"] == project([TX], source_complete=False)
+
+
+def test_probe_external_flow_off_and_no_currency_keep_legacy():
+    for enabled, currency in [("false", "USD"), ("TRUE", "USD"), ("", "USD"), ("true", ""), ("true", "USDT")]:
+        result, client, report = _run_external_flow_probe(enabled=enabled, currency=currency)
+        assert result == ("Probe OK", 200)
+        client.get_transactions.assert_not_called()
+        assert "account_external_flows" not in report
+
+
+def test_probe_external_flow_failed_source_omits_slot_and_preserves_probe_result():
+    for status in [206, 403, 429, 500]:
+        result, client, report = _run_external_flow_probe(status_code=status)
+        assert result == ("Probe OK", 200)
+        client.get_transactions.assert_called_once()
+        assert report["status"] == "ok"
+        assert "account_external_flows" not in report
+    for rows in [{}, "unknown"]:
+        result, client, report = _run_external_flow_probe(rows=rows)
+        assert result == ("Probe OK", 200)
+        assert "account_external_flows" not in report
+
+
+def test_probe_external_flow_empty_source_is_not_complete():
+    from application.external_flow_snapshot import attach_external_flow_snapshot
+    from test_external_flow_snapshot import END
+    result, client, report = _run_external_flow_probe(rows=[])
+    assert result == ("Probe OK", 200)
+    raw = report["account_external_flows"]
+    projected = attach_external_flow_snapshot({"account_hash": raw["account_hash"], "observed_finished_at": END}, raw, enabled=True)
+    assert projected["externalFlow"]["windows"][0]["coverage"] == "incomplete"
+    assert projected["externalFlow"]["windows"][0]["records"] == []

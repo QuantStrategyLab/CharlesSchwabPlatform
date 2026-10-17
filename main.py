@@ -3,6 +3,7 @@ import importlib
 import os
 import tempfile
 import time
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from flask import Flask
@@ -27,6 +28,7 @@ from application.broker_reconciliation import (
     validate_reconciliation_preconditions,
 )
 from application import signal_provenance
+from application.external_flow_snapshot import collect_external_flow_snapshot, external_flow_enabled
 from application.runtime_broker_adapters import build_runtime_broker_adapters
 from application.runtime_report_summary import summarize_execution_cycle_result
 from application.runtime_composer import build_runtime_composer
@@ -1146,6 +1148,23 @@ def _handle_schwab_probe(*, response_body: str = "Probe OK"):
         )
         if account_observation is not None:
             summary["account_observation"] = account_observation
+            if external_flow_enabled(os.environ) and account_observation.get("net_assets_currency") == "USD":
+                try:
+                    observed_at = datetime.fromisoformat(account_observation["observed_at"].replace("Z", "+00:00"))
+                    report["account_external_flows"] = collect_external_flow_snapshot(
+                        client,
+                        account_hash=account_observation["account_hash"],
+                        period_start=(observed_at - timedelta(days=1)).isoformat(),
+                        period_end=account_observation["observed_at"],
+                        currency=account_observation["net_assets_currency"],
+                        enabled=True,
+                    )
+                except Exception as flow_exc:
+                    log_runtime_event(
+                        log_context, "external_flow_capture_failed",
+                        message="Optional external flow capture failed",
+                        error_type=type(flow_exc).__name__,
+                    )
         finalize_runtime_report(
             report,
             status="ok",
