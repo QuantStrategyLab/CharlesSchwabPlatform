@@ -519,7 +519,7 @@ def _notify_runtime_error(exc: Exception, *, route_label: str) -> bool:
     return bool(outcomes) and all(outcomes)
 
 
-def _publish_runtime_failure_notification(*, detailed_text: str, compact_text: str, exc: Exception) -> bool:
+def _publish_runtime_failure_notification_legacy(*, detailed_text: str, compact_text: str, exc: Exception) -> bool:
     try:
         if publish_notification(detailed_text=detailed_text, compact_text=compact_text):
             return True
@@ -529,9 +529,26 @@ def _publish_runtime_failure_notification(*, detailed_text: str, compact_text: s
         return _notify_runtime_error(exc, route_label="strategy_cycle")
 
 
+def _publish_runtime_failure_notification(*, detailed_text: str, compact_text: str, exc: Exception) -> bool:
+    from notifications.unified import enabled as unified_enabled, publish_incident
+
+    if not unified_enabled():
+        return _publish_runtime_failure_notification_legacy(detailed_text=detailed_text, compact_text=compact_text, exc=exc)
+
+    return publish_incident(
+        lambda: publish_notification(detailed_text=detailed_text, compact_text=compact_text),
+        reason="runtime_failure:" + type(exc).__name__, profile=STRATEGY_PROFILE,
+        kind="auth_failure" if "auth" in type(exc).__name__.lower() else "real_error",
+    )
+
+
 def _handle_route_runtime_error(exc: Exception, *, route_label: str):
+    from notifications.unified import publish_incident
+
     print(t("runtime_failure_log"), flush=True)
-    _notify_runtime_error(exc, route_label=route_label)
+    publish_incident(lambda: _notify_runtime_error(exc, route_label=route_label),
+        reason="route_runtime_failure:" + route_label + ":" + type(exc).__name__, profile=STRATEGY_PROFILE,
+        kind="auth_failure" if "auth" in type(exc).__name__.lower() else "real_error")
     return "Error", 500
 
 
@@ -846,13 +863,16 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
         )
         if dry_run_only_override is None:
             publish_strategy_plugin_alerts(strategy_plugin_signals, report=report)
-        execution_result = run_strategy_core(
-            client,
-            None,
-            strategy_plugin_signals=strategy_plugin_signals,
-            strategy_plugin_error=strategy_plugin_error,
-            dry_run_only_override=dry_run_only_override,
-        )
+        from notifications.unified import notification_context
+
+        with notification_context(report):
+            execution_result = run_strategy_core(
+                client,
+                None,
+                strategy_plugin_signals=strategy_plugin_signals,
+                strategy_plugin_error=strategy_plugin_error,
+                dry_run_only_override=dry_run_only_override,
+            )
         signal_diagnostics = _signal_diagnostics_from_result(execution_result)
         execution_payload = getattr(execution_result, "execution", None)
         signal_snapshot = (
@@ -946,11 +966,14 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
             error_message="strategy_cycle_failed",
         )
         error_message = _runtime_error_notification_message(exc, route_label="strategy_cycle")
-        _publish_runtime_failure_notification(
-            detailed_text=error_message,
-            compact_text=error_message,
-            exc=exc,
-        )
+        from notifications.unified import notification_context
+
+        with notification_context(report):
+            _publish_runtime_failure_notification(
+                detailed_text=error_message,
+                compact_text=error_message,
+                exc=exc,
+            )
         return "Error", 500
     finally:
         attach_signal_data_provenance(report)
