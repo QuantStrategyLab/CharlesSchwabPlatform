@@ -349,6 +349,48 @@ def _load_projection(path: Path) -> object:
         _stop("INVALID_PROJECTION_FILE")
 
 
+def _network_inventory(network: Mapping) -> None:
+    # Local subset: no explicit network, direct VPC, or a connector. Identifiers
+    # may be short names or these resource paths; no cloud existence is inferred.
+    if not network:
+        return
+    if "egress" in network and network["egress"] not in {"all-traffic", "private-ranges-only"}:
+        _stop("INVALID_NETWORK_EGRESS")
+    if "vpcAccessConnector" in network and {"network", "subnetwork", "networkTags"} & network.keys():
+        _stop("AMBIGUOUS_NETWORK")
+    if not {"network", "subnetwork", "vpcAccessConnector"} & network.keys():
+        _stop("INVALID_NETWORK_CONFIGURATION")
+    name = r"[a-z][a-z0-9-]*"
+    prefixes = {
+        "network": rf"projects/{name}/global/networks/",
+        "subnetwork": rf"projects/{name}/regions/{name}/subnetworks/",
+        "vpcAccessConnector": rf"projects/{name}/locations/{name}/connectors/",
+    }
+    for field, prefix in prefixes.items():
+        if field in network and not re.fullmatch(rf"(?:{prefix})?{name}", network[field]):
+            _stop("INVALID_NETWORK_REFERENCE")
+    tags = network.get("networkTags", [])
+    if len(tags) != len(set(tags)) or any(not re.fullmatch(name, tag) for tag in tags):
+        _stop("INVALID_NETWORK_TAGS")
+
+
+def _probe_inventory(probe: Mapping) -> None:
+    handlers = {"httpGet", "tcpSocket", "grpc"} & probe.keys()
+    if len(handlers) != 1:
+        _stop("INVALID_PROBE")
+    handler = next(iter(handlers))
+    settings = probe[handler]
+    _keys(settings, _PROBE[handler], {"path", "port"} if handler == "httpGet" else {"port"})
+    # _shape already enforces strict int (excluding bool) for every probe port.
+    if not 1 <= settings["port"] <= 65535:
+        _stop("INVALID_PROBE")
+    if handler == "httpGet" and not settings["path"].startswith("/"):
+        _stop("INVALID_PROBE")
+    for key in probe.keys() - handlers:
+        if probe[key] < (0 if key == "initialDelaySeconds" else 1):
+            _stop("INVALID_PROBE")
+
+
 def _inventory(projection: object) -> None:
     _shape(projection, _PROJECTION)
     _keys(projection, _PROJECTION, _PROJECTION)
@@ -360,6 +402,7 @@ def _inventory(projection: object) -> None:
         "containerConcurrency", "timeoutSeconds", "containers", "volumes",
     })
     _keys(runtime["scaling"], _RUNTIME["scaling"], _RUNTIME["scaling"])
+    _network_inventory(runtime["network"])
     containers = runtime["containers"]
     if not containers:
         _stop("MISSING_CONTAINER")
@@ -371,6 +414,15 @@ def _inventory(projection: object) -> None:
         names.add(container["name"])
         _keys(container["resources"], _CONTAINER["resources"], {"limits"})
         _keys(container["resources"]["limits"], {"cpu", "memory"}, {"cpu", "memory"})
+        limits = container["resources"]["limits"]
+        # Explicit local syntax: positive decimal CPU cores or integer
+        # millicores, and positive integer Mi/Gi memory. No quota validation.
+        if (not re.fullmatch(r"(?:[1-9][0-9]*(?:\.[0-9]+)?|0\.[0-9]*[1-9][0-9]*|[1-9][0-9]*m)", limits["cpu"])
+                or not re.fullmatch(r"[1-9][0-9]*(?:Mi|Gi)", limits["memory"])):
+            _stop("INVALID_RESOURCE_LITERAL")
+        for field in ("startupProbe", "livenessProbe"):
+            if field in container:
+                _probe_inventory(container[field])
         for field, key in (("ports", "containerPort"), ("volumeMounts", "name")):
             identifiers = []
             for item in container[field]:
@@ -391,6 +443,10 @@ def _inventory(projection: object) -> None:
             _stop("REQUIRED_LITERAL_MISSING")
     if any(entry["name"] in targets for container in containers[1:] for entry in container["env"]):
         _stop("AMBIGUOUS_OR_MISSING_TARGET")
+    startup = containers[0].get("startupProbe", {})
+    if (startup.get("httpGet") != {"path": "/health", "port": 8080}
+            or "tcpSocket" in startup or "grpc" in startup):
+        _stop("HTTP_STARTUP_GUARD_REQUIRED")
     volumes = runtime["volumes"]
     volume_names = []
     for volume in volumes:
@@ -483,23 +539,10 @@ def _runtime_values(projection: dict, args: argparse.Namespace) -> dict[str, str
             or runtime["scaling"]["minInstanceCount"] < 0
             or runtime["scaling"]["maxInstanceCount"] < max(1, runtime["scaling"]["minInstanceCount"])):
         _stop("INVALID_RUNTIME")
-    startup = runtime["containers"][0].get("startupProbe", {})
-    if (startup.get("httpGet") != {"path": "/health", "port": 8080}
-            or "tcpSocket" in startup or "grpc" in startup):
-        _stop("HTTP_STARTUP_GUARD_REQUIRED")
     for container in runtime["containers"]:
         for port in container["ports"]:
             if not 1 <= port["containerPort"] <= 65535:
                 _stop("INVALID_PORT")
-        for field in ("startupProbe", "livenessProbe"):
-            if field not in container:
-                continue
-            probe = container[field]
-            if len({"httpGet", "tcpSocket", "grpc"} & probe.keys()) != 1:
-                _stop("INVALID_PROBE")
-            for key in probe.keys() - {"httpGet", "tcpSocket", "grpc"}:
-                if probe[key] < (0 if key == "initialDelaySeconds" else 1):
-                    _stop("INVALID_PROBE")
         for entry in container["env"]:
             if "value" in entry and not isinstance(entry["value"], str):
                 _stop("INVALID_ENV_LITERAL")
@@ -548,7 +591,7 @@ def _dependency_projection(repository: Path) -> object:
 def _preflight_local(args: argparse.Namespace, baseline: object, candidate: object) -> None:
     """Compare caller-supplied projections. No cloud reader or subprocess fallback.
 
-    Shape/name inventory for BOTH inputs precedes every literal value access.
+    Metadata/name inventory for BOTH inputs precedes every literal value access.
     This checks declarations, not cloud authenticity, installed dependencies,
     strategy admission, continuity signatures, or application probe success.
     """

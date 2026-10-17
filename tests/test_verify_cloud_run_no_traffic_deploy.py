@@ -250,6 +250,152 @@ class LiteralAccessTrap(dict):
         return super().get(key, default)
 
 
+def trap_all_literals(case):
+    for payload in case[1:]:
+        for container in payload["runtime"]["containers"]:
+            container["env"] = [LiteralAccessTrap(entry) if "value" in entry else entry for entry in container["env"]]
+
+
+@pytest.mark.parametrize("side", ["both", "candidate"])
+@pytest.mark.parametrize("probe,reason", [
+    ({}, "INVALID_PROBE"),
+    ({"tcpSocket": {}}, "MISSING_FIELD"),
+    ({"grpc": {}}, "MISSING_FIELD"),
+    ({"httpGet": {"path": "/health"}}, "MISSING_FIELD"),
+    ({"httpGet": {"port": 8080}}, "MISSING_FIELD"),
+    ({"httpGet": {"path": "", "port": 8080}}, "INVALID_PROBE"),
+    ({"httpGet": {"path": "health", "port": 8080}}, "INVALID_PROBE"),
+    ({"tcpSocket": {"port": 8080}, "httpGet": {"path": "/health", "port": 8080}}, "INVALID_PROBE"),
+    ({"tcpSocket": {"port": 8080}, "grpc": {"port": 8080}}, "INVALID_PROBE"),
+    ({"tcpSocket": {"port": 8080}, "periodSeconds": 0}, "INVALID_PROBE"),
+])
+def test_probe_structure_stops_before_any_literal(case, side, probe, reason):
+    for payload in case[1:] if side == "both" else case[2:]:
+        payload["runtime"]["containers"][0]["livenessProbe"] = copy.deepcopy(probe)
+    trap_all_literals(case)
+    with pytest.raises(check.PreflightError, match="^" + reason + "$"):
+        check._preflight_local(*case)
+
+
+@pytest.mark.parametrize("side", ["both", "candidate"])
+@pytest.mark.parametrize("handler", ["httpGet", "tcpSocket", "grpc"])
+@pytest.mark.parametrize("port,reason", [
+    (-1, "INVALID_PROBE"), (0, "INVALID_PROBE"), (65536, "INVALID_PROBE"),
+    (True, "INVALID_STRUCTURE"), (8080.0, "INVALID_STRUCTURE"), ("8080", "INVALID_STRUCTURE"),
+])
+def test_probe_ports_stop_before_any_literal(case, side, handler, port, reason):
+    for payload in case[1:] if side == "both" else case[2:]:
+        settings = {"port": port}
+        if handler == "httpGet":
+            settings["path"] = "/health"
+        payload["runtime"]["containers"][0]["livenessProbe"] = {handler: settings}
+    trap_all_literals(case)
+    with pytest.raises(check.PreflightError, match="^" + reason + "$"):
+        check._preflight_local(*case)
+
+
+@pytest.mark.parametrize("side", ["both", "candidate"])
+@pytest.mark.parametrize("network,reason", [
+    ({"egress": "UNKNOWN"}, "INVALID_NETWORK_EGRESS"),
+    ({"network": "demo-network", "egress": ""}, "INVALID_NETWORK_EGRESS"),
+    ({"vpcAccessConnector": "demo-connector", "egress": "UNKNOWN"}, "INVALID_NETWORK_EGRESS"),
+    ({"egress": "all-traffic"}, "INVALID_NETWORK_CONFIGURATION"),
+    ({"network": "demo-network", "vpcAccessConnector": "demo-connector"}, "AMBIGUOUS_NETWORK"),
+    ({"subnetwork": "demo-subnet", "vpcAccessConnector": "demo-connector"}, "AMBIGUOUS_NETWORK"),
+    ({"vpcAccessConnector": "demo-connector", "networkTags": ["demo-tag"]}, "AMBIGUOUS_NETWORK"),
+    ({"networkTags": ["demo-tag"]}, "INVALID_NETWORK_CONFIGURATION"),
+    ({"network": ""}, "INVALID_NETWORK_REFERENCE"),
+    ({"subnetwork": ""}, "INVALID_NETWORK_REFERENCE"),
+    ({"vpcAccessConnector": ""}, "INVALID_NETWORK_REFERENCE"),
+    ({"network": "invalid network"}, "INVALID_NETWORK_REFERENCE"),
+    ({"network": "projects/demo-project/regions/demo-region/subnetworks/demo-subnet"}, "INVALID_NETWORK_REFERENCE"),
+    ({"network": "demo-network", "networkTags": [""]}, "INVALID_NETWORK_TAGS"),
+    ({"network": "demo-network", "networkTags": ["demo-tag", "demo-tag"]}, "INVALID_NETWORK_TAGS"),
+])
+def test_network_metadata_stops_before_any_literal(case, side, network, reason):
+    for payload in case[1:] if side == "both" else case[2:]:
+        payload["runtime"]["network"] = copy.deepcopy(network)
+    trap_all_literals(case)
+    with pytest.raises(check.PreflightError, match="^" + reason + "$"):
+        check._preflight_local(*case)
+
+
+@pytest.mark.parametrize("side", ["both", "candidate"])
+@pytest.mark.parametrize("resources,reason", [
+    ({}, "MISSING_FIELD"), ({"limits": {}}, "MISSING_FIELD"),
+    ({"limits": {"cpu": "1"}}, "MISSING_FIELD"),
+    ({"limits": {"memory": "512Mi"}}, "MISSING_FIELD"),
+    ({"limits": {"cpu": "", "memory": ""}}, "INVALID_RESOURCE_LITERAL"),
+    *[({"limits": {"cpu": cpu, "memory": "512Mi"}}, "INVALID_RESOURCE_LITERAL")
+      for cpu in ("", "UNKNOWN", "0", "-1", "0.000", "0m", "-100m", "NaN", "inf", "1 CPU", " 1")],
+    *[({"limits": {"cpu": "1", "memory": memory}}, "INVALID_RESOURCE_LITERAL")
+      for memory in ("", "UNKNOWN", "0Mi", "-1Gi", "512", "512MB", "NaN", "512Mi ")],
+    ({"limits": {"cpu": 1, "memory": "512Mi"}}, "INVALID_STRUCTURE"),
+    ({"limits": {"cpu": "1", "memory": None}}, "INVALID_STRUCTURE"),
+])
+def test_resource_metadata_stops_before_any_literal(case, side, resources, reason):
+    for payload in case[1:] if side == "both" else case[2:]:
+        payload["runtime"]["containers"][0]["resources"] = copy.deepcopy(resources)
+    trap_all_literals(case)
+    with pytest.raises(check.PreflightError, match="^" + reason + "$"):
+        check._preflight_local(*case)
+
+
+@pytest.mark.parametrize("field,value,reason", [
+    ("startupProbe", {"tcpSocket": {}}, "MISSING_FIELD"),
+    ("livenessProbe", {"grpc": {"port": 0}}, "INVALID_PROBE"),
+    ("resources", {"limits": {"cpu": "1", "memory": ""}}, "INVALID_RESOURCE_LITERAL"),
+])
+def test_candidate_sidecar_metadata_stops_before_baseline_literals(case, field, value, reason):
+    sidecar = copy.deepcopy(case[2]["runtime"]["containers"][0])
+    sidecar.update(name="sidecar", env=[], **{field: value})
+    case[2]["runtime"]["containers"].append(sidecar)
+    trap_all_literals(case)
+    with pytest.raises(check.PreflightError, match="^" + reason + "$"):
+        check._preflight_local(*case)
+
+
+@pytest.mark.parametrize("network", [
+    {"network": "demo-network"}, {"subnetwork": "demo-subnet"},
+    {"network": "demo-network", "subnetwork": "demo-subnet", "networkTags": ["demo-tag"]},
+    {"network": "projects/demo-project/global/networks/demo-network",
+     "subnetwork": "projects/demo-project/regions/demo-region/subnetworks/demo-subnet"},
+    {"vpcAccessConnector": "demo-connector"},
+    {"vpcAccessConnector": "projects/demo-project/locations/demo-region/connectors/demo-connector"},
+])
+@pytest.mark.parametrize("egress", [None, "all-traffic", "private-ranges-only"])
+def test_supported_network_combinations_pass_without_rewriting(case, network, egress):
+    for payload in case[1:]:
+        payload["runtime"]["network"] = copy.deepcopy(network)
+        if egress is not None:
+            payload["runtime"]["network"]["egress"] = egress
+    frozen = copy.deepcopy(case[1:])
+    check._preflight_local(*case)
+    assert case[1:] == frozen
+
+
+@pytest.mark.parametrize("cpu,memory", [("1", "512Mi"), ("2", "1Gi"), ("0.5", "256Mi"), ("1000m", "2Gi"), ("1.5", "1024Mi")])
+def test_supported_resource_literals_pass_without_rewriting(case, cpu, memory):
+    for payload in case[1:]:
+        payload["runtime"]["containers"][0]["resources"]["limits"] = {"cpu": cpu, "memory": memory}
+    frozen = copy.deepcopy(case[1:])
+    check._preflight_local(*case)
+    assert case[1:] == frozen
+
+
+@pytest.mark.parametrize("handler", ["httpGet", "tcpSocket", "grpc"])
+@pytest.mark.parametrize("port", [1, 65535])
+def test_supported_probe_handlers_and_port_boundaries_pass(case, handler, port):
+    for payload in case[1:]:
+        settings = {"port": port}
+        if handler == "httpGet":
+            settings["path"] = "/health"
+        elif handler == "grpc":
+            settings["service"] = "synthetic-health"
+        payload["runtime"]["containers"][0]["livenessProbe"] = {handler: settings, "initialDelaySeconds": 0}
+    check._preflight_local(*case)
+
+
 @pytest.mark.parametrize("location", ["baseline", "candidate", "sidecar"])
 def test_unknown_literal_never_accessed_even_after_other_allowed_names(case, location):
     # Trap allowed baseline literals too: BOTH inventories must finish first.
@@ -503,6 +649,9 @@ def snapshot_files(directory):
     ("unknown-env", "UNKNOWN_ENV_LITERAL"), ("unknown-field", "UNKNOWN_FIELD"),
     ("duplicate-json", "DUPLICATE_JSON_KEY"), ("invalid-json", "INVALID_PROJECTION_FILE"),
     ("duplicate-target-key", "INVALID_TARGET"),
+    ("probe-missing-port", "MISSING_FIELD"), ("probe-negative-port", "INVALID_PROBE"),
+    ("unknown-egress", "INVALID_NETWORK_EGRESS"), ("ambiguous-network", "AMBIGUOUS_NETWORK"),
+    ("empty-resources", "INVALID_RESOURCE_LITERAL"),
 ])
 def test_real_cli_in_readonly_sandbox_with_fake_tools(case, tmp_path, variant, reason):
     args, baseline, candidate = case
@@ -510,6 +659,14 @@ def test_real_cli_in_readonly_sandbox_with_fake_tools(case, tmp_path, variant, r
     elif variant == "unknown-env": env(candidate).append({"name": "UNKNOWN_TOKEN", "value": SENTINEL})
     elif variant == "unknown-field": candidate["runtime"]["unknown-field"] = SENTINEL
     elif variant == "duplicate-target-key": literal(candidate, "RUNTIME_TARGET_JSON")["value"] = '{"account":"' + SENTINEL + '","account":"duplicate"}'
+    for payload in (baseline, candidate):
+        runtime = payload["runtime"]
+        container = runtime["containers"][0]
+        if variant == "probe-missing-port": container["livenessProbe"] = {"tcpSocket": {}}
+        elif variant == "probe-negative-port": container["livenessProbe"] = {"tcpSocket": {"port": -1}}
+        elif variant == "unknown-egress": runtime["network"] = {"egress": "UNKNOWN"}
+        elif variant == "ambiguous-network": runtime["network"] = {"network": "demo-network", "vpcAccessConnector": "demo-connector"}
+        elif variant == "empty-resources": container["resources"]["limits"] = {"cpu": "", "memory": ""}
     baseline_file, candidate_file = tmp_path / "baseline.json", tmp_path / "candidate.json"
     baseline_file.write_text(json.dumps(baseline), encoding="utf-8")
     candidate_file.write_text(json.dumps(candidate), encoding="utf-8")
