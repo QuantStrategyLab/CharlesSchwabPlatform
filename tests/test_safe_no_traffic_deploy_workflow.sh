@@ -103,7 +103,16 @@ text = Path(sys.argv[1]).read_text()
 # Ruby is already required by this test. Use JSON to avoid a new Python package.
 wf = json.loads(subprocess.check_output(["ruby", "-rjson", "-ryaml", "-e", "puts JSON.generate(YAML.load_file(ARGV[0]))", sys.argv[1]]))
 steps = wf['jobs']['sync-cloud-run-env']['steps']
-config = next(x['run'] for x in steps if x.get('id') == 'config')
+config_step = next(x for x in steps if x.get('id') == 'config')
+config = config_step['run']
+# Notification dispatch inputs stay local to their steps, preserving the
+# existing sync/drift job-env mirror and actual candidate input forwarding.
+job_env = wf['jobs']['sync-cloud-run-env']['env']
+assert 'NOTIFICATION_ONLY' not in job_env and 'NOTIFICATION_CANDIDATE_REVISION' not in job_env
+assert config_step['env']['NOTIFICATION_ONLY'] == '${{ inputs.notification_only }}'
+assert config_step['env']['NOTIFICATION_CANDIDATE_REVISION'] == '${{ inputs.notification_candidate_revision }}'
+for step in [x for x in steps if x.get('id') == 'notification_image' or x.get('name','').startswith('Publish one native')]:
+    assert step['env']['NOTIFICATION_CANDIDATE_REVISION'] == '${{ inputs.notification_candidate_revision }}'
 for conflicting in [None, 'APPROVE_ENV_SECRET_SYNC', 'APPROVE_SCHEDULER_IAM_SYNC', 'APPROVE_TRAFFIC_SHIFT', 'APPROVE_CLEANUP']:
     with tempfile.TemporaryDirectory() as directory:
         output = Path(directory) / 'output'

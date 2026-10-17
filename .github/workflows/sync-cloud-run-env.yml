@@ -79,8 +79,6 @@ jobs:
       CLOUD_RUN_CLEANUP_ENABLED: ${{ vars.CLOUD_RUN_CLEANUP_ENABLED }}
       APPROVED_REF: ${{ inputs.approved_ref }}
       EXPECTED_SHA: ${{ inputs.expected_sha }}
-      NOTIFICATION_ONLY: ${{ inputs.notification_only }}
-      NOTIFICATION_CANDIDATE_REVISION: ${{ inputs.notification_candidate_revision }}
       APPROVE_IMAGE_DEPLOY: ${{ inputs.approve_image_deploy }}
       APPROVE_ENV_SECRET_SYNC: ${{ inputs.approve_env_secret_sync }}
       APPROVE_SCHEDULER_IAM_SYNC: ${{ inputs.approve_scheduler_iam_sync }}
@@ -179,6 +177,9 @@ jobs:
     steps:
       - name: Check whether Cloud Run automation is enabled
         id: config
+        env:
+          NOTIFICATION_ONLY: ${{ inputs.notification_only }}
+          NOTIFICATION_CANDIDATE_REVISION: ${{ inputs.notification_candidate_revision }}
         run: |
           set -euo pipefail
 
@@ -547,6 +548,8 @@ jobs:
       - name: Build exact notification overlay without dependency installation
         if: steps.config.outputs.notification_only == 'true' && steps.config.outputs.deploy_enabled == 'true'
         id: notification_image
+        env:
+          NOTIFICATION_CANDIDATE_REVISION: ${{ inputs.notification_candidate_revision }}
         run: |
           set -euo pipefail
           umask 077
@@ -580,13 +583,13 @@ jobs:
           from pathlib import Path
           from scripts.verify_image_ues_release_binding import main
           before = json.loads((Path(os.environ["RUNNER_TEMP"]) / "native-notification-before.json").read_text())
-          targets = [e["value"] for e in before["revision"]["spec"]["containers"][0]["env"]
-                     if e["name"] in {"RUNTIME_TARGET_JSON", "QSL_RUNTIME_TARGET_JSON"} and "value" in e]
-          if len(targets) != 1:
+          runtime_literals = [e["value"] for e in before["revision"]["spec"]["containers"][0]["env"]
+                              if e["name"] in {"RUNTIME_TARGET_JSON", "QSL_RUNTIME_TARGET_JSON"} and "value" in e]
+          if len(runtime_literals) != 1:
               raise SystemExit("Selected runtime target unavailable; stopped")
           for name in ("SYNC_PLAN_JSON", "CLOUD_RUN_SERVICE_TARGETS_JSON"):
               os.environ.pop(name, None)
-          os.environ["RUNTIME_TARGET_JSON"] = targets[0]
+          os.environ["RUNTIME_TARGET_JSON"] = runtime_literals[0]
           raise SystemExit(main(["--image", os.environ["NOTIFICATION_IMAGE"], "--lockfile", "notification-source/uv.lock"]))
           PY
           docker push "${image}"
@@ -598,6 +601,7 @@ jobs:
         if: steps.config.outputs.notification_only == 'true' && steps.config.outputs.deploy_enabled == 'true'
         env:
           NOTIFICATION_IMAGE: ${{ steps.notification_image.outputs.immutable_image }}
+          NOTIFICATION_CANDIDATE_REVISION: ${{ inputs.notification_candidate_revision }}
         run: |
           set -euo pipefail
           # Reuse setup-gcloud's authentication libraries; no dependency sync.
