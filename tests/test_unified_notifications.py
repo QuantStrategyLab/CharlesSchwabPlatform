@@ -86,8 +86,9 @@ def test_cold_starts_share_reservation_and_only_one_acknowledged_alert():
         unified.route(event(run=run), env={unified.FLAG: "true"}, store=store, legacy=send)
     assert sent == ["alert"]
     markers = [value for _, value in store.values.values() if "delivery_status" in value]
-    assert markers[0]["delivery_status"] == "delivered"
-    assert markers[0]["receipt_id"].startswith("transport-ack:")
+    assert markers[0]["delivery_status"] == "uncertain"
+    assert markers[0]["receipt_id"] is None
+    assert markers[0]["transport_acknowledged"] is True
 
 
 def test_candidate_failure_does_not_suppress_real_alert_with_available_marker():
@@ -191,10 +192,10 @@ def test_real_rebalance_entrypoint_on_stages_producer_and_keeps_broker_calls(mon
     assert not any(call[0] == "send" for call in actual["calls"])
     fact, projection = next(iter(store.facts.values()))
     assert fact["source_run_id"] == "run-synthetic"
-    assert projection["runs"][0]["source_run_ids"] == ["run-synthetic"]
+    assert projection["runs"][0]["source_run_id"] == "run-synthetic"
     assert projection["runs"][0]["cycle_count"] == 1
     assert projection["runs"][0]["order_count"] == 0
-    assert projection["notification_events"] == [fact]
+    assert projection["runs"][0]["notification_events"] == [fact]
 
 
 @pytest.mark.parametrize("dry_run", [False, True])
@@ -211,3 +212,20 @@ def test_metadata_error_is_never_hidden_as_routine(monkeypatch, dry_run):
         legacy=lambda: sent.append("alert") or True)
     assert sent == ["alert"]
     assert next(iter(store.facts.values()))[0]["event_kind"] != "routine_cycle"
+
+
+@pytest.mark.parametrize("response,delivered", [
+    ({"acknowledged": True, "receipt_id": "telegram:synthetic-message-42"}, True),
+    ({"acknowledged": True, "receipt_id": "transport-ack:synthetic"}, False),
+    ({"acknowledged": True}, False),
+    (True, False),
+])
+def test_delivery_requires_sender_receipt_and_uncertain_ack_is_not_retried(response, delivered):
+    store, calls = MemoryStore(), []
+    for run in ("a", "b"):
+        unified.route(event(run=run), env={unified.FLAG: "true"}, store=store,
+            legacy=lambda: calls.append("send") or response)
+    marker = next(v for _, v in store.values.values() if "delivery_status" in v)
+    assert calls == ["send"]
+    assert marker["delivery_status"] == ("delivered" if delivered else "uncertain")
+    assert marker["receipt_id"] == (response["receipt_id"] if delivered else None)

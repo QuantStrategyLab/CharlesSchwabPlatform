@@ -189,12 +189,22 @@ def _incident(event, *, stream, state, severity, recovered, sender, store):
     if decision is None or decision.action != "send":
         return False
     try:
-        acknowledged = sender() is True
+        response = sender()
+        acknowledged = response is True or isinstance(response, dict) and response.get("acknowledged") is True
+        receipt = response.get("receipt_id") if isinstance(response, dict) else None
+        if (not acknowledged or not isinstance(receipt, str) or not receipt.strip()
+                or receipt.startswith("transport-ack:")
+                or receipt in {decision.transition_key, event.to_candidate().get("dedupe_key")}):
+            receipt = None
     except Exception:
         tracker.record_delivery(decision)
         raise
     # The existing transport exposes a boolean ACK, not a Telegram message ID.
-    tracker.record_delivery(decision, receipt_id=("transport-ack:" + decision.transition_key) if acknowledged else None)
+    tracker.record_delivery(decision, receipt_id=receipt)
+    version, marker = store.read(decision.incident_key)
+    if not store.compare_and_set(decision.incident_key, version,
+            {**marker, "transport_acknowledged": acknowledged}):
+        raise RuntimeError("notification_marker_concurrent_update")
     return acknowledged
 
 
@@ -252,11 +262,10 @@ def _cycle_projection(result, fact, config):
     if report["dry_run"]:
         # Existing live archive acceptance is unchanged; previews are facts only.
         return {"schema_version": "qsl.digest_candidates.v1", "runs": [], "notification_events": [fact]}
-    payload = project_reports([report], expected_target=target, opaque_account_uid=fact["opaque_account_uid"],
+    payload = _project_runs([report], expected_target=target, opaque_account_uid=fact["opaque_account_uid"],
         target_id=fact["target_id"], now=datetime.now(timezone.utc))
-    payload["notification_events"] = [fact]
     for row in payload["runs"]:
-        row["source_run_ids"] = [report["run_id"]]
+        row["notification_events"] = [fact]
     return payload
 
 
@@ -333,49 +342,39 @@ def publish_incident(legacy, *, reason, profile=None, kind="real_error"):
     return route(event_for(kind, profile=profile, reason=reason), legacy=legacy, state=kind)
 
 
+def _project_runs(reports, **kwargs):
+    # The archive remains authoritative. Project each business run separately;
+    # window totals must never be relabelled as one run or copied to every run.
+    unique = {}
+    for report in reports:
+        key = report.get("run_id")
+        if key in unique and unique[key] != report:
+            raise ValueError("notification_source_run_conflict")
+        unique[key] = report
+    rows = []
+    for run_id, report in unique.items():
+        payload = project_reports([report], **kwargs)
+        for row in payload["runs"]:
+            row["source_run_id"] = run_id
+            row["field_status"] = {name: "known" if row.get(name) is not None else "unknown"
+                for name in ("order_count", "fill_count", "cycle_count")}
+            rows.append(row)
+    return {"schema_version": "qsl.digest_candidates.v1", "producer_status": "projected", "runs": rows}
+
+
 def emit_completed_candidates(env, *, now=None, read=None, upload=None):
-    """Existing completed-window archive projection, with non-counting facts."""
+    """Export one archive-authoritative row per business run, with own facts."""
     from .digest_snapshot import digest_archive
     if not enabled(env):
         return digest_archive.emit(env, now=now, **({"read": read} if read else {}), **({"upload": upload} if upload else {}))
     injected_read = read
     read = read or digest_archive._read
     configured = {**env, "QSL_ROUTINE_NOTIFICATION_MODE": effective_notification_mode(env, FLAG)}
-    archived = []
-
-    def archive_read(args):
-        payload = read(args)
-        if args[0] == "cat" and isinstance(payload, dict) and payload.get("schema_version") == "runtime_report.v1":
-            archived.append(payload)
-        return payload
-
-    def project_unique(reports, **kwargs):
-        unique = {}
-        for report in reports:
-            key = report.get("run_id")
-            if key in unique and unique[key] != report:
-                raise ValueError("notification_source_run_conflict")
-            unique[key] = report
-        # The original projector still validates identity, run IDs, source
-        # times, acceptance facts and unknown counts. Only identical evidence
-        # copies are collapsed; conflicting revisions stop publication.
-        return project_reports(list(unique.values()), **kwargs)
 
     def write(uri, body):
         payload = json.loads(body)
-        for row in payload.get("runs", []):
-            raw_bindings = json.loads(str(env.get("DIGEST_TARGET_BINDINGS_JSON") or "[]"))
-            bindings = [{**env, **value} for value in raw_bindings] if raw_bindings else [env]
-            binding = next((value for value in bindings if
-                value.get("DIGEST_OPAQUE_ACCOUNT_UID") == row.get("opaque_account_uid") and
-                value.get("DIGEST_TARGET_ID") == row.get("target_id")), None)
-            if binding is None:
-                raise ValueError("notification_archive_binding_unknown")
-            target = json.loads(str(binding.get("RUNTIME_TARGET_JSON") or "{}"))
-            source_ids = {source["run_id"] for source in archived if source.get("runtime_target") == target
-                and source.get("run_id") and source.get("dry_run") is False
-                and sgt_business_window(_stamp(source["started_at"])).business_day.isoformat() == row["business_day"]}
-            row["source_run_ids"] = sorted(source_ids)
+        rows = payload.get("runs", [])
+        for row in rows:
             prefix, separator, _ = uri.rpartition("/" + row["platform_id"] + "/")
             if not separator:
                 raise ValueError("notification_event_store_mismatch")
@@ -383,37 +382,40 @@ def emit_completed_candidates(env, *, now=None, read=None, upload=None):
             if injected_read:
                 entries = read(["ls", "--json", event_prefix + "*.json"])
             else:
-                # SDK prefix listing distinguishes a confirmed empty prefix
-                # from a listing failure.
                 from google.cloud import storage
                 bucket, _, path = event_prefix[5:].partition("/")
                 entries = [{"url": f"gs://{bucket}/{blob.name}"} for blob in
                     storage.Client().list_blobs(bucket, prefix=path, max_results=10001, retry=None, timeout=30)]
             if len(entries) > 10000:
                 raise ValueError("notification_event_budget_exceeded")
+            source_ids = {other.get("source_run_id") for other in rows
+                if all(other.get(k) == row.get(k) for k in
+                    ("platform_id", "opaque_account_uid", "target_id", "strategy_profile", "business_day"))}
             facts = {}
             for entry in entries:
                 locator = str(entry.get("url") or "").split("#", 1)[0]
-                expected_prefix = event_prefix
-                if not locator.startswith(expected_prefix):
+                if not locator.startswith(event_prefix):
                     raise ValueError("notification_event_locator_mismatch")
                 fact = read(["cat", locator]).get("event", {})
-                identity = ("opaque_account_uid", "target_id", "strategy_profile", "business_day")
+                identity = ("platform_id", "opaque_account_uid", "target_id", "strategy_profile", "business_day")
                 if fact.get("schema_version") != "qsl.notification_event.v1" or any(fact.get(k) != row.get(k) for k in identity):
                     continue
                 key = fact.get("dedupe_key")
                 if not key or fact.get("coverage_status") != "known":
                     raise ValueError("notification_event_identity_unknown")
+                if fact.get("source_run_id") not in source_ids:
+                    if fact.get("event_kind") == "healthy_heartbeat":
+                        # Historical monitor-only observations are not business
+                        # runs. New observations use the receipt's actual run ID.
+                        _log_failure("unassociated_monitor_observation")
+                        continue
+                    raise ValueError("notification_source_report_missing")
+                if fact.get("source_run_id") != row.get("source_run_id"):
+                    continue
                 if key in facts and facts[key] != fact:
                     raise ValueError("notification_event_conflict")
                 facts[key] = fact
             row["notification_events"] = list(facts.values())
-            if any(fact.get("event_kind") != "healthy_heartbeat" and fact.get("source_run_id") not in source_ids for fact in facts.values()):
-                # A durable fact cannot be counted as another run; a missing
-                # source receipt also cannot become a healthy zero-trade day.
-                row.update(status="alert", reason_code="notification_source_report_missing",
-                    order_count=None, fill_count=None, coverage_status="unknown")
-                row.setdefault("field_status", {}).update(order_count="counts_unknown", fill_count="counts_unknown")
         projected = json.dumps(payload, allow_nan=False)
         if upload:
             upload(uri, projected)
@@ -422,22 +424,51 @@ def emit_completed_candidates(env, *, now=None, read=None, upload=None):
             storage.Blob.from_string(uri, client=storage.Client()).upload_from_string(
                 projected, content_type="application/json", retry=None, timeout=30)
 
-    return digest_archive.emit(configured, now=now, read=archive_read, upload=write, projector=project_unique)
+    return digest_archive.emit(configured, now=now, read=read, upload=write, projector=_project_runs)
 
 
-def publish_receipt(legacy, *, kind, reason, recovered=False, observed_at=None):
-    """Receipt checks remain authoritative; only their send callback is routed."""
+def _receipt_event(report, kind, reason):
+    # A monitor run ID never identifies a business run. Keep the receipt's
+    # start time too, so checks after 06:00 still attach to its source window.
+    if not isinstance(report, dict) or not report.get("run_id") or not report.get("started_at"):
+        raise ValueError("notification_receipt_source_unknown")
+    raw = json.loads(os.environ.get("DIGEST_TARGET_BINDINGS_JSON") or "[]")
+    bindings = [{**os.environ, **value} for value in raw] if raw else [os.environ]
+    keys = ("platform_id", "strategy_profile", "service_name", "account_scope", "account_selector", "deployment_selector", "dry_run_only")
+    source_target = dict(report.get("runtime_target") or {})
+    if source_target.get("platform_id") == "charles_schwab":
+        source_target["platform_id"] = "schwab"
+    matches = []
+    for binding in bindings:
+        target = json.loads(str(binding.get("RUNTIME_TARGET_JSON") or "{}"))
+        if all(key in target and source_target.get(key) == target[key] for key in keys):
+            matches.append(binding)
+    if len(matches) != 1:
+        raise ValueError("notification_receipt_binding_unknown")
+    return event_for(kind, profile=report.get("strategy_profile"), reason=reason, env=matches[0],
+        occurred_at=_stamp(report["started_at"]), source_run_id=report["run_id"])
+
+
+def publish_receipt(legacy, *, kind, reason, recovered=False, observed_at=None, source_report=None):
+    """Receipt acceptance and workflow disposition remain authoritative."""
     if not enabled():
         return legacy()
-    event = event_for(kind, reason=reason, occurred_at=observed_at)
     if kind == "healthy_heartbeat":
         try:
-            # A healthy send is covered only after the real completed-window
-            # producer has written; no event-only success can silence it.
-            outcome = emit_completed_candidates(os.environ)
-            if outcome.get("uploaded") is not True:
+            event = _receipt_event(source_report, kind, reason)
+            store = GCSNotificationStore()
+            if store.persist(event.to_candidate()) is not True:
+                raise CandidatePersistenceError("notification_receipt_fact_unconfirmed")
+            # Publish after staging the observation, so the very same export
+            # includes this receipt-linked fact rather than a monitor-only row.
+            if emit_completed_candidates(os.environ).get("uploaded") is not True:
                 raise CandidatePersistenceError("notification_archive_write_unconfirmed")
+            if recovered:
+                _incident(replace(event, occurred_at=observed_at or event.occurred_at), stream="receipt",
+                    state="healthy", severity=0, recovered=True, sender=lambda: False, store=store)
+            return None
         except Exception:
             _log_failure("receipt_candidate_projection_failed")
             return legacy()
+    event = event_for(kind, reason=reason, occurred_at=observed_at)
     return route(event, legacy=legacy, stream="receipt", state=kind, recovered=recovered)

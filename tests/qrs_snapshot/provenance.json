@@ -1,0 +1,51 @@
+{
+  "repository": "QuantStrategyLab/QuantRuntimeSettings",
+  "source_commit": "8f5eee7e72577682e6e897ceb5f02014e49a40a7",
+  "method": "exact test-only source snapshot; no runtime dependency or network in tests",
+  "files": {
+    "unified_daily_digest.py": {
+      "source": "python/scripts/unified_daily_digest.py",
+      "sha256": "788c6e6110c54b5da66e9932214ca6fa906bf558e8e153abc8eeb1e467a552f7"
+    },
+    "daily_digest_notify.py": {
+      "source": "python/scripts/daily_digest_notify.py",
+      "sha256": "189c3c5d86bf9a153141779ddaba9a28be2615fe80b6646368e407fb91a300cc"
+    },
+    "notification_mode.py": {
+      "source": "python/scripts/notification_mode.py",
+      "sha256": "4f3a77af9b677095589c69f976ea0ecf633322b2b41c8eb18457afdaec87d2df"
+    },
+    "notification_snapshot/unified_contract.py": {
+      "source": "python/scripts/notification_snapshot/unified_contract.py",
+      "sha256": "7ba48d1d7c74e66be8cd3ff983c2117002776e82cda6675a084cfe0dc51aecc0"
+    },
+    "display_names.py": {
+      "source": "python/scripts/display_names.py",
+      "sha256": "20e26298cf48c77431257a4d73d2c9ef5ce0eda2a88323a23852d0119bdacf8f"
+    },
+    "daily_digest_aggregator.py": {
+      "source": "python/scripts/daily_digest_aggregator.py",
+      "sha256": "8b38c191d0022c227e7e4f981c57ffcd334f8fcaf21f47385a5a4f70f3df129e"
+    },
+    "notification_candidate_adapter.py": {
+      "source": "python/scripts/notification_candidate_adapter.py",
+      "sha256": "95278e822046d4090cddf12fbe07f3917463620201e12aef4ffbe44b7defaf29"
+    },
+    "merge_digest_candidates.py": {
+      "source": "python/scripts/merge_digest_candidates.py",
+      "sha256": "e364af69ecbee8381230335669ccd2ad2668e63f9153f950c0a5f09e22e8d147"
+    },
+    "daily_digest_delivery_axes.py": {
+      "source": "python/scripts/daily_digest_delivery_axes.py",
+      "sha256": "2db144b93428f95183908d2d1e652021c5dfd1a1851c764c0e71962acd600979"
+    },
+    "display_names.json": {
+      "source": "python/scripts/display_names.json",
+      "sha256": "b453f762fff0186342c4eb2b60e95a24cce56bf988d6cfaeea47afe8b8077b54"
+    },
+    "notification_snapshot/digest_routing.py": {
+      "source": "python/scripts/notification_snapshot/digest_routing.py",
+      "sha256": "60c3f258c4d1a03bc49c7d03b392c02c316541726dfacb0b1d4fae6dbd2e5017"
+    }
+  }
+}

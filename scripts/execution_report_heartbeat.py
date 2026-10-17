@@ -777,16 +777,24 @@ def _send_normal_heartbeat_legacy(name: str, detail: str, *, quiet_eligible: boo
 
 
 def _send_normal_heartbeat(name: str, detail: str, *, quiet_eligible: bool = True,
-                           recovery_at=None, attention_reason="") -> int:
+                           recovery_at=None, attention_reason="", source_reports=()) -> int:
     def legacy():
         return _send_normal_heartbeat_legacy(name, detail, quiet_eligible=quiet_eligible)
     if not unified_enabled():
         return legacy()
     healthy = quiet_eligible and not attention_reason
+    if healthy and source_reports and any(not report.get("execution_receipt") for report in source_reports):
+        healthy = False
+        attention_reason = "receipt_missing"
     message = render_receipt_alert(locale=_notification_locale(), unconfirmed=True, workflow_url=_workflow_run_url())
+    if healthy and source_reports:
+        results = [publish_receipt(legacy, kind="healthy_heartbeat", reason="receipt_evidence_observed",
+            recovered=recovery_at is not None, observed_at=recovery_at, source_report=report)
+            for report in source_reports]
+        return next((value for value in results if type(value) is int and value), 0)
     result = publish_receipt(
         legacy if healthy else lambda: _send_telegram(message),
-        kind="healthy_heartbeat" if healthy else ("order_status_unknown" if attention_reason == "order_status_unknown" else "receipt_unacceptable"),
+        kind="healthy_heartbeat" if healthy else (attention_reason if attention_reason in {"order_status_unknown", "receipt_missing"} else "receipt_unacceptable"),
         reason=attention_reason or "receipt_evidence_unconfirmed",
         recovered=healthy and recovery_at is not None, observed_at=recovery_at,
     )
@@ -938,6 +946,7 @@ def main(now: dt.datetime | None = None) -> int:
     recovery_times = []
     notification_attention = []
     latest_block_reason = ""
+    source_reports = []
     for uri, updated in sorted_objects[:max_reports]:
         payload = _cat_gcs_json(uri, project=project)
         if payload is None:
@@ -990,6 +999,7 @@ def main(now: dt.datetime | None = None) -> int:
                     latest_block_reason = str(summary.get("no_op_reason") or "blocked_run") if isinstance(summary, dict) else "blocked_run"
         inspected.append(f"- {updated.isoformat()} {uri} {reason}")
         if ok and is_latest_report:
+            source_reports.append(payload)
             execution_status = _report_execution_status(payload).lower()
             if execution_status in {"unknown", "pending", "submitted", "broker_acknowledged", "partially_filled", "pending_reconciliation", "reconciliation_required"}:
                 notification_attention.append("order_status_unknown")
@@ -1039,6 +1049,7 @@ def main(now: dt.datetime | None = None) -> int:
                 quiet_eligible=all(quiet_by_service[key] for key in required_keys),
                 recovery_at=min(recovery_times) if recovery_times else None,
                 attention_reason="order_status_unknown" if notification_attention else "",
+                source_reports=source_reports,
             )
     if accepted and not list_errors and not read_incomplete and not latest_report_issues:
         uri, updated, reason = accepted[0]
@@ -1051,6 +1062,7 @@ def main(now: dt.datetime | None = None) -> int:
             quiet_eligible=all(quiet_reports),
             recovery_at=min(recovery_times) if recovery_times else None,
             attention_reason="order_status_unknown" if notification_attention else "",
+            source_reports=source_reports,
         )
 
     issues = []

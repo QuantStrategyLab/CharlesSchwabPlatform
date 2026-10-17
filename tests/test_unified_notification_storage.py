@@ -58,7 +58,7 @@ def test_real_gcs_adapter_uses_shared_atomic_claim_before_one_send(fake_gcs):
     marker_writes = [kwargs for method, uri, kwargs in calls if method == "upload" and "/notification-markers/" in uri]
     assert marker_writes and all("if_generation_match" in kwargs for kwargs in marker_writes)
     assert all(kwargs.get("retry") is None for _, _, kwargs in calls)
-    assert any(json.loads(body).get("delivery_status") == "delivered" for _, body in objects.values())
+    assert any(json.loads(body).get("delivery_status") == "uncertain" for _, body in objects.values())
 
 
 def test_unknown_claim_response_is_never_retried_or_sent(fake_gcs):
@@ -111,8 +111,8 @@ def test_completed_archive_counts_runs_once_and_attaches_noncounting_facts(missi
         return payload
     uploads = []
     import datetime as dt
-    if duplicate_source == "conflict":
-        with pytest.raises(ValueError, match="source_run_conflict"):
+    if duplicate_source == "conflict" or missing_source:
+        with pytest.raises(ValueError, match="source_run_conflict" if duplicate_source == "conflict" else "source_report_missing"):
             unified.emit_completed_candidates(env, now=NOW.replace(hour=23), read=read, upload=lambda *a: uploads.append(a))
         assert not uploads
         return
@@ -120,9 +120,9 @@ def test_completed_archive_counts_runs_once_and_attaches_noncounting_facts(missi
     assert result["uploaded"] and len(uploads) == 1
     row = json.loads(uploads[0][1])["runs"][0]
     assert row["cycle_count"] == 1 and row["order_count"] == (None if missing_source else 0) and row["fill_count"] is None
-    assert row["notification_events"] == facts
+    assert row["notification_events"] == facts[:1]
     assert row["actually_ran"] is True
-    assert row["source_run_ids"] == ["source-run"]
+    assert row["source_run_id"] == "source-run"
     if missing_source:
         assert row["coverage_status"] == "unknown"
         assert row["reason_code"] == "notification_source_report_missing"

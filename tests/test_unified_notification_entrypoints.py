@@ -58,9 +58,22 @@ def test_attention_real_publisher_cold_start_recovery_and_reworsening(monkeypatc
     assert store.values
 
 
+def healthy_business_receipt(monkeypatch):
+    from quant_platform_kit.common.execution_receipts import build_execution_receipt
+    payload = {**report(), "run_id": "business-run", "platform": "schwab"}
+    target = dict(platform_id="schwab", strategy_profile=payload["strategy_profile"], service_name=payload["service_name"],
+        account_scope=payload["account_scope"], account_selector=["synthetic"], deployment_selector="synthetic-slot", dry_run_only=False)
+    payload["runtime_target"] = target
+    payload["execution_receipt"] = build_execution_receipt(platform="schwab", strategy_profile=payload["strategy_profile"],
+        strategy_revision="a" * 40, execution_mode="live", outcome="no_action", observed_at=payload["finished_at"])
+    monkeypatch.setenv("RUNTIME_TARGET_JSON", json.dumps(target))
+    return payload
+
+
 def test_heartbeat_healthy_uses_real_producer_before_suppressing_manual_send(monkeypatch):
     store = configure(monkeypatch)
-    sent = mock_heartbeat(monkeypatch, report())
+    payload = healthy_business_receipt(monkeypatch)
+    sent = mock_heartbeat(monkeypatch, payload)
     monkeypatch.setenv("RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS", "true")
     def produce(env):
         store.operations.append("completed_archive_upload")
@@ -68,15 +81,17 @@ def test_heartbeat_healthy_uses_real_producer_before_suppressing_manual_send(mon
     monkeypatch.setattr(unified, "emit_completed_candidates", produce)
     assert heartbeat.main(NOW) == 0
     assert not sent
-    assert store.operations.index("completed_archive_upload") < store.operations.index("candidate")
+    assert store.operations.index("candidate") < store.operations.index("completed_archive_upload")
     fact, _ = next(iter(store.facts.values()))
     assert fact["event_kind"] == "healthy_heartbeat"
+    assert fact["source_run_id"] == "business-run"
+    assert fact["occurred_at"] == "2026-10-05T12:00:00+00:00"
     assert fact["order_count"] is None and fact["fill_count"] is None
 
 
 def test_heartbeat_failed_producer_keeps_manual_send_and_reports_unknown(monkeypatch, capsys):
     configure(monkeypatch)
-    sent = mock_heartbeat(monkeypatch, report())
+    sent = mock_heartbeat(monkeypatch, healthy_business_receipt(monkeypatch))
     monkeypatch.setenv("RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS", "true")
     monkeypatch.setattr(unified, "emit_completed_candidates", lambda env: {"uploaded": False})
     assert heartbeat.main(NOW) == 0

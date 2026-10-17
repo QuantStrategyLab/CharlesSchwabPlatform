@@ -1,8 +1,7 @@
 {
   "repository": "QuantStrategyLab/QuantPlatformKit",
-  "source_commit": "60a30ff9a5abc8654787095c9d5a003485afb325",
+  "source_commit": "07e24c0c804a9b47316b6ec3c75bb63820d8f421",
   "method": "notification-only exact source snapshot; trading dependency pins unchanged",
-  "before_merge": "must be re-pinned to merged/released QPK before merge",
   "files": {
     "unified_contract.py": {
       "source": "src/quant_platform_kit/notifications/unified_contract.py",
