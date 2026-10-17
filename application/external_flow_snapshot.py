@@ -1,4 +1,4 @@
-"""Opt-in, read-only cash-flow snapshot; never imported by execution/risk code."""
+"""Opt-in, read-only cash-flow snapshot for reports."""
 
 from __future__ import annotations
 
@@ -153,21 +153,22 @@ def collect_external_flow_snapshot(
 
     This does not construct clients or access credentials. Completeness must be
     established by the caller's approved source/backfill policy; HTTP 200 alone
-    cannot prove it. Nothing calls this function from a trading cycle/workflow.
+    cannot prove it. The report publisher projects this raw envelope once.
     """
     if enabled is not True:
         return None
     start, end = _instant(period_start), _instant(period_end)
     if not account_hash or end <= start or end - start > timedelta(days=2):
         raise ValueError("external_flow_window_or_account_invalid")
+    if currency != "USD":
+        raise ValueError("external_flow_window_or_currency_invalid")
     response = client.get_transactions(account_hash, start_date=start, end_date=end)
     if response.status_code != 200:
         raise ValueError("external_flow_source_unavailable")
     transactions = response.json()
     if not isinstance(transactions, list):
         raise ValueError("external_flow_source_invalid")
-    return project_external_flow_snapshot(
-        transactions, expected_account_hash=account_hash, observed_account_hash=account_hash,
-        period_start=period_start, period_end=period_end, currency=currency,
-        source_complete=source_complete, enabled=True,
-    )
+    return {
+        "account_hash": account_hash, "period_start": _utc(start), "period_end": _utc(end),
+        "currency": currency, "source_complete": source_complete is True, "transactions": transactions,
+    }

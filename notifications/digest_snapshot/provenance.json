@@ -1,0 +1,16 @@
+{
+  "repository": "QuantStrategyLab/QuantPlatformKit",
+  "source_commit": "07e24c0c804a9b47316b6ec3c75bb63820d8f421",
+  "method": "notification-only exact source snapshot; trading dependency pins unchanged",
+  "files": {
+    "unified_contract.py": {
+      "source": "src/quant_platform_kit/notifications/unified_contract.py",
+      "sha256": "7ba48d1d7c74e66be8cd3ff983c2117002776e82cda6675a084cfe0dc51aecc0"
+    },
+    "digest_routing.py": {
+      "source": "src/quant_platform_kit/notifications/digest_routing.py",
+      "sha256": "60c3f258c4d1a03bc49c7d03b392c02c316541726dfacb0b1d4fae6dbd2e5017"
+    }
+  },
+  "source_merge_commit": "07e24c0c804a9b47316b6ec3c75bb63820d8f421"
+}

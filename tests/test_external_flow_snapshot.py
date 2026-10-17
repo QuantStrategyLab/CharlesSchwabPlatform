@@ -91,7 +91,8 @@ def test_fake_client_reuses_existing_read_method_without_assuming_complete():
     client.get_transactions.return_value = SimpleNamespace(status_code=200, json=lambda: [TX])
     result = collect_external_flow_snapshot(client, account_hash="synthetic-account-hash", period_start=START,
                                            period_end=END, currency="USD", enabled=True)
-    assert result["windows"][0]["coverage"] == "incomplete"
+    assert result["source_complete"] is False
+    assert attach_external_flow_snapshot({"account_hash": "synthetic-account-hash", "observed_finished_at": END}, result, enabled=True)["externalFlow"]["windows"][0]["coverage"] == "incomplete"
     client.get_transactions.assert_called_once()
     assert client.get_transactions.call_args.args == ("synthetic-account-hash",)
     client.get_transactions.return_value.status_code = 403
@@ -113,7 +114,84 @@ def test_actual_publisher_default_unchanged_and_optional_upload_contract():
     assert publisher.project_schwab_account_facts_history(_valid_report(), external_flow_enabled=True, **kwargs) == legacy
     projected = publisher.project_schwab_account_facts_history(report, external_flow_enabled=True, **kwargs)
     assert projected["externalFlow"] == project([TX])
-    assert publisher.strip_archive_only_keys(projected)["externalFlow"] == project([TX])
+    assert publisher.prepare_sync_payload(projected, include_external_flow=True)["externalFlow"] == project([TX])
     invalid = deepcopy(report)
     invalid["account_external_flows"]["account_hash"] = "wrong-synthetic"
     assert publisher.project_schwab_account_facts_history(invalid, external_flow_enabled=True, **kwargs) == {"status": "skipped", "reason": "external_flow_invalid"}
+
+
+def test_collector_raw_envelope_attaches_without_adapter():
+    client = Mock()
+    client.get_transactions.return_value = SimpleNamespace(status_code=200, json=lambda: [TX])
+    raw = collect_external_flow_snapshot(
+        client, account_hash="synthetic-account-hash", period_start=START,
+        period_end=END, currency="USD", enabled=True,
+    )
+    history = {"account_hash": "synthetic-account-hash", "observed_finished_at": END}
+    attached = attach_external_flow_snapshot(history, raw, enabled=True)
+    assert attached["externalFlow"] == project([TX], source_complete=False)
+    assert set(raw) == {"account_hash", "period_start", "period_end", "currency", "source_complete", "transactions"}
+    assert raw["source_complete"] is False
+    assert raw["transactions"] == [TX]
+
+
+@pytest.mark.parametrize("rows", [[], [TX]])
+@pytest.mark.parametrize("attestation", [False, None, "true", 1, True])
+def test_raw_source_attestation_is_never_inferred(rows, attestation):
+    client = Mock()
+    client.get_transactions.return_value = SimpleNamespace(status_code=200, json=lambda: rows)
+    raw = collect_external_flow_snapshot(
+        client, account_hash="synthetic-account-hash", period_start=START, period_end=END,
+        currency="USD", enabled=True, source_complete=attestation,
+    )
+    out = attach_external_flow_snapshot(
+        {"account_hash": "synthetic-account-hash", "observed_finished_at": END}, raw, enabled=True,
+    )
+    assert out["externalFlow"]["windows"][0]["coverage"] == ("complete" if attestation is True else "incomplete")
+    assert client.get_transactions.call_count == 1
+
+
+@pytest.mark.parametrize("status", [206, 403, 429, 500])
+def test_failed_or_partial_source_does_not_return_raw(status):
+    client = Mock()
+    client.get_transactions.return_value = SimpleNamespace(status_code=status, json=Mock())
+    with pytest.raises(ValueError, match="source_unavailable"):
+        collect_external_flow_snapshot(client, account_hash="synthetic-account-hash", period_start=START,
+                                       period_end=END, currency="USD", enabled=True)
+    client.get_transactions.return_value.json.assert_not_called()
+
+
+@pytest.mark.parametrize("rows", [{}, {"transactions": [TX]}, None, "unknown"])
+def test_non_list_source_is_rejected(rows):
+    client = Mock()
+    client.get_transactions.return_value = SimpleNamespace(status_code=200, json=lambda: rows)
+    with pytest.raises(ValueError, match="source_invalid"):
+        collect_external_flow_snapshot(client, account_hash="synthetic-account-hash", period_start=START,
+                                       period_end=END, currency="USD", enabled=True)
+
+
+def test_json_failure_propagates_without_raw_snapshot():
+    client = Mock()
+    client.get_transactions.return_value = SimpleNamespace(status_code=200, json=Mock(side_effect=ValueError("synthetic invalid JSON")))
+    with pytest.raises(ValueError, match="invalid JSON"):
+        collect_external_flow_snapshot(client, account_hash="synthetic-account-hash", period_start=START,
+                                       period_end=END, currency="USD", enabled=True)
+
+
+@pytest.mark.parametrize("start,end", [(END, START), (START, START), ("2026-09-27T00:00:00Z", END), ("2026-09-29T22:21:00", END), ("invalid", END)])
+def test_invalid_windows_are_rejected_before_sdk(start, end):
+    client = Mock()
+    with pytest.raises(ValueError):
+        collect_external_flow_snapshot(client, account_hash="synthetic-account-hash", period_start=start,
+                                       period_end=end, currency="USD", enabled=True)
+    client.get_transactions.assert_not_called()
+
+
+def test_offsets_dst_and_record_limit_preserve_projector_rules():
+    kwargs = dict(period_start="2026-03-07T12:00:00Z", period_end="2026-03-08T12:00:00Z")
+    for when, expected in [("2026-03-08T01:30:00-05:00", "2026-03-08T06:30:00.000Z"),
+                           ("2026-03-08T03:30:00-04:00", "2026-03-08T07:30:00.000Z")]:
+        out = project([TX | {"time": when}], **kwargs)
+        assert out["windows"][0]["records"][0]["effective_at"] == expected
+    with pytest.raises(ValueError, match="size_limit"):
+        project([TX | {"activityId": str(i)} for i in range(257)])

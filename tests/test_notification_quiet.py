@@ -136,7 +136,7 @@ def test_accepted_report_does_not_cover_incomplete_listing_or_read(monkeypatch):
     assert sent
 
 
-def test_unscoped_mixed_services_unknown_is_visible(monkeypatch):
+def test_unscoped_mixed_services_unknown_is_visible(monkeypatch, capsys):
     sent = mock_heartbeat(monkeypatch, report())
     monkeypatch.setattr(heartbeat, '_list_gcs_objects', lambda *args, **kw: [
         {'url': 'gs://mock/a.json', 'metadata': {'updated': NOW.isoformat()}},
@@ -150,10 +150,11 @@ def test_unscoped_mixed_services_unknown_is_visible(monkeypatch):
     monkeypatch.setattr(heartbeat, '_cat_gcs_json', read)
     assert heartbeat.main(NOW) == 0
     assert len(sent) == 1
-    assert 'unknown' in sent[0]
+    assert 'unknown' in capsys.readouterr().out
+    assert ('运行检查证据待核对' if heartbeat._notification_locale() == 'zh' else 'Runtime check evidence is unconfirmed') in sent[0]
 
 
-def test_conflicting_latest_identity_cannot_be_hidden_by_old_healthy(monkeypatch):
+def test_conflicting_latest_identity_cannot_be_hidden_by_old_healthy(monkeypatch, capsys):
     sent = mock_heartbeat(monkeypatch, report())
     monkeypatch.setenv('RUNTIME_HEARTBEAT_ACCOUNT_SCOPE', TARGET.scope)
     monkeypatch.setattr(heartbeat, '_load_required_services', lambda: [TARGET.service])
@@ -168,7 +169,8 @@ def test_conflicting_latest_identity_cannot_be_hidden_by_old_healthy(monkeypatch
     monkeypatch.setattr(heartbeat, '_cat_gcs_json', read)
     assert heartbeat.main(NOW) == 1
     assert len(sent) == 1
-    assert 'conflicting report identity' in sent[0]
+    assert 'conflicting report identity' in capsys.readouterr().out
+    assert 'gs://' not in sent[0]
 
 
 @pytest.mark.parametrize('value', [True, 1, 'bad'])
@@ -335,7 +337,7 @@ def test_native_schwab_summary_and_alias_remain_healthy_quiet(monkeypatch):
 
 
 @pytest.mark.parametrize('due_at', [None, NOW - dt.timedelta(hours=2), NOW - dt.timedelta(minutes=30)])
-def test_reuploaded_old_payload_is_visible_only_against_existing_precise_due(monkeypatch, due_at):
+def test_reuploaded_old_payload_is_visible_only_against_existing_precise_due(monkeypatch, capsys, due_at):
     sent = mock_heartbeat(monkeypatch, report())
     target = {'service': TARGET.service, 'strategy_profile': TARGET.profile, 'account_scope': TARGET.scope}
     if due_at is not None:
@@ -347,4 +349,5 @@ def test_reuploaded_old_payload_is_visible_only_against_existing_precise_due(mon
     assert bool(sent) is stale
     if stale:
         assert heartbeat._notice('status_normal') not in sent[0]
-        assert 'predates latest due' in sent[0]
+        assert 'predates latest due' in capsys.readouterr().out
+        assert 'gs://' not in sent[0]

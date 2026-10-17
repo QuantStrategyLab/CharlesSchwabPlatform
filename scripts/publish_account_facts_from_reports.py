@@ -71,10 +71,9 @@ _REVISION = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 
 
 POSITIONS_SCOPE = "strategy_symbols_only"
-# Archive-projection-only keys: the console /api/account-facts/sync contract is
-# exact-key, so these are carried for offline consumers (digest emit) and are
-# stripped before any publish.
-ARCHIVE_ONLY_KEYS = ("broker_reported_positions", "broker_reported_positions_scope")
+# QRS accepts these optional fields. Upload requires an explicit opt-in;
+# archived projections remain available to existing offline consumers.
+POSITIONS_KEYS = ("broker_reported_positions", "broker_reported_positions_scope")
 _POSITION_SYMBOL = re.compile(r"[A-Z0-9][A-Z0-9./ -]{0,31}\Z", re.ASCII)
 _MAX_POSITIONS = 64
 
@@ -91,7 +90,7 @@ def _project_positions(observation: Mapping[str, Any]) -> list[dict[str, str]] |
     for item in raw:
         if not isinstance(item, Mapping):
             return None
-        if set(item) - {"symbol", "quantity", "market_value", "currency"}:
+        if set(item) - {"symbol", "quantity", "market_value", "currency", "avg_cost"}:
             return None
         symbol = item.get("symbol")
         if (
@@ -117,11 +116,29 @@ def _project_positions(observation: Mapping[str, Any]) -> list[dict[str, str]] |
                 "currency_source": "owner_confirmed",
             }
         )
+        if item.get("avg_cost") is not None:
+            try:
+                rows[-1]["avg_cost"] = _money_text(item["avg_cost"])
+            except _ProjectionError:
+                pass  # Unknown optional cost; retain the validated holding.
     return rows
 
 
-def strip_archive_only_keys(body: Mapping[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in body.items() if key not in ARCHIVE_ONLY_KEYS}
+def prepare_sync_payload(
+    body: Mapping[str, Any], *, include_positions: bool = False, include_external_flow: bool = False,
+) -> dict[str, Any]:
+    """Keep only receiver fields from an already validated archive projection."""
+    allowed = {
+        "schema_version", "snapshot_schema_version", "account_scope", "target_id",
+        "source_binding", "observed_started_at", "observed_finished_at",
+        "snapshot_atomic", "observation_date", "broker_reported_balances", "cash",
+        "account_hash", "broker_account_type",
+    }
+    if include_positions is True:
+        allowed.update(POSITIONS_KEYS)
+    if include_external_flow is True:
+        allowed.add("externalFlow")
+    return {key: value for key, value in body.items() if key in allowed}
 
 
 class _ProjectionError(ValueError):
@@ -381,13 +398,13 @@ def project_schwab_account_facts_history(
         if positions is not None:
             return_body["broker_reported_positions"] = positions
             return_body["broker_reported_positions_scope"] = POSITIONS_SCOPE
-        if external_flow_enabled:
+        if external_flow_enabled is True:
             from application.external_flow_snapshot import attach_external_flow_snapshot
             try:
                 return_body = attach_external_flow_snapshot(
                     return_body, report.get("account_external_flows"), enabled=True,
                 )
-            except (ValueError, TypeError, AttributeError):
+            except (TypeError, ValueError, AttributeError):
                 raise _ProjectionError("external_flow_invalid") from None
         return return_body
     except _ProjectionError as exc:
@@ -714,6 +731,7 @@ def main(argv: list[str] | None = None) -> int:
     if report is None:
         print("skipped:report_unavailable")
         return 2
+    include_external_flow = os.environ.get("SCHWAB_EXTERNAL_FLOW_EXPORT_ENABLED") == "true"
     projected = project_schwab_account_facts_history(
         report,
         source_report_uri=report_uri,
@@ -722,14 +740,16 @@ def main(argv: list[str] | None = None) -> int:
         expected_runtime_revision=expected_revision,
         expected_target_id=target_id,
         expected_cash_currency=cash_currency,
-        external_flow_enabled=os.environ.get("SCHWAB_EXTERNAL_FLOW_EXPORT_ENABLED") == "true",
+        external_flow_enabled=include_external_flow,
         now=now,
     )
     if projected.get("status") == "skipped":
         print(_safe_result_text(projected))
         return 2
-    history = strip_archive_only_keys(
-        {key: value for key, value in projected.items() if key != "status"}
+    history = prepare_sync_payload(
+        projected,
+        include_positions=os.environ.get("SCHWAB_ACCOUNT_FACTS_INCLUDE_POSITIONS", "").strip().lower() == "true",
+        include_external_flow=include_external_flow,
     )
     result = _publish_once(
         history,

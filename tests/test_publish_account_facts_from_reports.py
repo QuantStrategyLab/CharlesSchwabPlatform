@@ -659,3 +659,70 @@ def test_account_scope_mode_token_classified():
         "status": "skipped",
         "reason": "runtime_target_scope_mismatch:mode_token",
     }
+
+
+def test_prepare_preserves_projected_external_flow_only_when_opted_in():
+    from application.external_flow_snapshot import attach_external_flow_snapshot, collect_external_flow_snapshot
+    from test_external_flow_snapshot import START, END, TX
+    from unittest.mock import Mock
+    client = Mock()
+    client.get_transactions.return_value = SimpleNamespace(status_code=200, json=lambda: [TX])
+    raw = collect_external_flow_snapshot(
+        client, account_hash="synthetic-account-hash", period_start=START, period_end=END,
+        currency="USD", enabled=True,
+    )
+    body = attach_external_flow_snapshot(
+        {"account_hash": "synthetic-account-hash", "observed_finished_at": END}, raw, enabled=True,
+    )
+    assert publisher.prepare_sync_payload(body, include_external_flow=True)["externalFlow"] == body["externalFlow"]
+    assert "externalFlow" not in publisher.prepare_sync_payload(body)
+
+
+def test_main_uses_same_exact_opt_in_for_projection_and_prepare():
+    from test_request_handling import _run_external_flow_probe
+    _, _, report = _run_external_flow_probe()
+    project = publisher.project_schwab_account_facts_history
+    def fixed_projection(value, **kwargs):
+        return project(value, **(kwargs | {"now": datetime(2026, 10, 1, 1, 20, tzinfo=timezone.utc)}))
+    prefix = "gs://example-bucket/execution-reports/charles_schwab/soxl_soxx_trend_income/"
+    env = {
+        "GITHUB_ACTIONS": "true", "SCHWAB_ACCOUNT_FACTS_SYNC_TOKEN": "synthetic-token",
+        "ACCOUNT_FACTS_SYNC_URL": publisher.SYNC_URL, "SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX": prefix,
+        "SCHWAB_ACCOUNT_FACTS_SERVICE_NAME": "synthetic-service", "SCHWAB_NET_ASSETS_CURRENCY": "USD",
+        "SCHWAB_ACCOUNT_FACTS_TARGET_ID": "synthetic-target",
+    }
+    for flag in ["true", "false", "TRUE", ""]:
+        with (patch.dict("os.environ", env | {"SCHWAB_EXTERNAL_FLOW_EXPORT_ENABLED": flag}, clear=True),
+              patch.object(publisher, "_service_revision_matches", return_value=True),
+              patch.object(publisher, "_read_report", return_value=report),
+              patch.object(publisher, "project_schwab_account_facts_history", side_effect=fixed_projection),
+              patch.object(publisher, "_publish_once", return_value={"status": "published"}) as publish):
+            assert publisher.main(["--report-uri", prefix + "2026-09/20260930T222000Z.json", "--expected-runtime-revision", "service-00007-abc"]) == 0
+            assert ("externalFlow" in publish.call_args.args[0]) == (flag == "true")
+
+
+def test_external_flow_opt_in_preserves_independent_positions_opt_in():
+    from application.external_flow_snapshot import attach_external_flow_snapshot, collect_external_flow_snapshot
+    from test_external_flow_snapshot import START, END, TX
+    from unittest.mock import Mock
+    client = Mock()
+    client.get_transactions.return_value = SimpleNamespace(status_code=200, json=lambda: [TX])
+    raw = collect_external_flow_snapshot(client, account_hash="synthetic-account-hash", period_start=START, period_end=END, currency="USD", enabled=True)
+    report = _valid_report()
+    report["account_external_flows"] = raw
+    observation = report["summary"]["account_observation"]
+    observation["broker_reported_positions_scope"] = publisher.POSITIONS_SCOPE
+    observation["broker_reported_positions"] = [{"symbol": "SOXL", "quantity": "1", "market_value": "20", "currency": None}]
+    prefix = "gs://example-bucket/execution-reports/charles_schwab/soxl_soxx_trend_income/"
+    kwargs = dict(source_report_uri=prefix + "2026-09/20260930T222000Z.json", report_prefix=prefix,
+                  expected_service_name="synthetic-service", expected_runtime_revision="service-00007-abc",
+                  expected_target_id="synthetic-target", now=datetime(2026, 10, 1, 1, 20, tzinfo=timezone.utc))
+    projected = publisher.project_schwab_account_facts_history(report, external_flow_enabled=True, **kwargs)
+    assert "broker_reported_positions" in projected
+    for positions in [False, True]:
+        for flow in [False, True]:
+            payload = publisher.prepare_sync_payload(projected, include_positions=positions, include_external_flow=flow)
+            assert ("broker_reported_positions" in payload) is positions
+            assert ("externalFlow" in payload) is flow
+    observation["net_assets_currency_source"] = None
+    assert publisher.project_schwab_account_facts_history(report, external_flow_enabled=True, **kwargs)["reason"] == "net_assets_currency_unconfirmed"

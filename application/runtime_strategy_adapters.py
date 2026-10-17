@@ -254,6 +254,12 @@ class SchwabRuntimeStrategyAdapters:
         reason = decision_block_reason(evaluation.decision)
         if reason:
             plan.setdefault("execution", {})["notification_block_reason"] = reason
+        from notifications.unified import enabled
+        if enabled():
+            from notifications.approved_gates import decision_gate_reasons
+            approved = decision_gate_reasons(evaluation.decision)
+            if approved:
+                plan.setdefault("execution", {})["notification_approved_gates"] = approved
         return plan
 
 
