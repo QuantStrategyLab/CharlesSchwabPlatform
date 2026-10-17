@@ -860,6 +860,9 @@ def collect_digest_runs(
 
 def _run_receipt_dict(entry: digest.DigestRunEntry) -> dict[str, Any]:
     payload = asdict(entry)
+    if not consolidation_enabled():
+        payload.pop("source_run_id", None)
+        payload.pop("approved_gate_reasons", None)
     # holdings are nested dataclasses already flattened by asdict
     payload["identity"] = {
         "platform_id": entry.platform_id,

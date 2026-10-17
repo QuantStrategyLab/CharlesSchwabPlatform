@@ -1,6 +1,7 @@
 """QPK event facts -> existing private digest rows, without IO or alert sends."""
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from dataclasses import fields
 from datetime import datetime
@@ -8,6 +9,7 @@ from typing import Any, Mapping, Sequence
 
 import daily_digest_notify as digest
 from notification_snapshot.unified_contract import NotificationEvent, sgt_business_window
+from notification_approved_gates import merge_reasons, validated_reasons
 
 PLATFORMS = ("ibkr", "schwab", "longbridge", "binance", "firstrade", "qrs")
 ROUTINE_KINDS = {"routine_cycle", "healthy_heartbeat"}
@@ -35,7 +37,7 @@ def _event(raw: Mapping[str, Any]) -> NotificationEvent:
         raise ValueError("notification_event_invalid") from None
 
 
-def events_for(row: Mapping[str, Any]) -> list[NotificationEvent]:
+def event_facts_for(row: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     if "notification_events" in row:
         raw = row["notification_events"]
         if not isinstance(raw, list) or not all(isinstance(item, Mapping) for item in raw):
@@ -48,7 +50,11 @@ def events_for(row: Mapping[str, Any]) -> list[NotificationEvent]:
         return []
     if not all(isinstance(item, Mapping) for item in raw):
         raise ValueError("notification_events_invalid")
-    return [_event(item) for item in raw]
+    return raw
+
+
+def events_for(row: Mapping[str, Any]) -> list[NotificationEvent]:
+    return [_event(item) for item in event_facts_for(row)]
 
 
 def _bind_identity(row, events):
@@ -144,19 +150,6 @@ def aggregate(rows: Sequence[Mapping[str, Any]], expected: Sequence[Mapping[str,
         for event in events:
             if event.coverage_status != "known":
                 unknown_event = True
-            key = event.to_candidate()["dedupe_key"]
-            if key:
-                event_ids.add(key)
-                if event.event_kind not in ROUTINE_KINDS:
-                    immediate_ids.add(key)
-            else:
-                # Keep unrelated unknown events separate; do not invent identity.
-                if event.event_kind not in ROUTINE_KINDS:
-                    immediate_ids.add(("unknown", index, len(immediate_ids)))
-            if event.event_kind not in ROUTINE_KINDS | {"order_submitted", "fill"}:
-                row["status"] = "alert"
-            if event.event_kind == "blocked_run":
-                row["rebalance_conclusion"] = "blocked"
         if row.get("actually_ran") is not True:
             # An explicit not-due row covers a target but is never a run.
             if row.get("actually_ran") is False and all(row.get(name) for name in IDENTITY[:4]):
@@ -171,10 +164,6 @@ def aggregate(rows: Sequence[Mapping[str, Any]], expected: Sequence[Mapping[str,
         else:
             observed_targets.add(identity[:4])
         key = identity if known_identity else ("unknown", index)
-        blocked = bool(row.get("block_reason")) or row.get("rebalance_conclusion") in {"blocked", "risk_blocked"} or row.get("signal_summary") in {"blocked", "risk_blocked"}
-        if (row.get("status") == "alert" or blocked) and not any(
-                event.event_kind not in ROUTINE_KINDS for event in events):
-            immediate_ids.add(("run", key))
         previous = grouped.get(key)
         if previous is None:
             grouped[key] = row
@@ -198,9 +187,10 @@ def aggregate(rows: Sequence[Mapping[str, Any]], expected: Sequence[Mapping[str,
                 merged["field_status"] = {**merged.get("field_status", {}), name: "known"}
         # Keep only this run's events, including later monitor observations.
         facts = {}
-        for event in (*events_for(previous), *events):
-            fact = event.to_candidate()
-            facts[event] = fact
+        for raw_fact in (*event_facts_for(previous), *event_facts_for(row)):
+            # Preserve structured gate evidence outside the pinned QPK event.
+            fact = {**raw_fact, **_event(raw_fact).to_candidate()}
+            facts[json.dumps(fact, sort_keys=True, allow_nan=False)] = fact
         if facts:
             merged.pop("notification_event", None)
             merged["notification_events"] = list(facts.values())
@@ -210,7 +200,30 @@ def aggregate(rows: Sequence[Mapping[str, Any]], expected: Sequence[Mapping[str,
         for name in ("block_reason", "rebalance_conclusion", "execution_status"):
             if row.get(name) and (not merged.get(name) or name == "block_reason"):
                 merged[name] = row[name]
+        merge_reasons(previous, row, merged)
         grouped[key] = merged
+    # Classification follows the final per-run evidence, just like counts.
+    # expected_block_observed alone is never authority to suppress an alert.
+    for key, row in grouped.items():
+        facts = event_facts_for(row)
+        approved = validated_reasons(row, facts)
+        row["_validated_approved_gate_reasons"] = approved
+        urgent = False
+        for index, event in enumerate(events_for(row)):
+            event_key = event.to_candidate()["dedupe_key"]
+            if event_key:
+                event_ids.add(event_key)
+            routine = event.event_kind in ROUTINE_KINDS or (approved and event.event_kind == "expected_block_observed")
+            if not routine:
+                urgent = True
+                immediate_ids.add(event_key or ("unknown", key, index))
+                if event.event_kind not in {"order_submitted", "fill"}:
+                    row["status"] = "alert"
+                if event.event_kind == "blocked_run":
+                    row["rebalance_conclusion"] = "blocked"
+        blocked = bool(row.get("block_reason")) or row.get("rebalance_conclusion") in {"blocked", "risk_blocked"} or row.get("signal_summary") in {"blocked", "risk_blocked"}
+        if not approved and not urgent and (row.get("status") == "alert" or blocked):
+            immediate_ids.add(("run", key))
     # Raw observations do not permanently taint an archive-authoritative run.
     # Conflicts remain sticky on the final row even after later duplicates.
     count_fields = ("order_count", "fill_count", "cycle_count")

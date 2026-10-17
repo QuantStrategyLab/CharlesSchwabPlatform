@@ -1,15 +1,15 @@
 {
   "repository": "QuantStrategyLab/QuantRuntimeSettings",
-  "source_commit": "160933eaa376bd4297616e8affc946430be69771",
+  "source_commit": "bd3dc79f10b2c0b8048721695885c3f9333a53c6",
   "method": "exact test-only source snapshot; no runtime dependency or network in tests",
   "files": {
     "unified_daily_digest.py": {
       "source": "python/scripts/unified_daily_digest.py",
-      "sha256": "71ba99a8ee21448822bf1d464060e84d6287e8ce7f2595f33b813ce852a45ca5"
+      "sha256": "7d2a1f6301597ea75ef314282780cc9b5a6cbc8042f1a4f6e70a3682e7c72816"
     },
     "daily_digest_notify.py": {
       "source": "python/scripts/daily_digest_notify.py",
-      "sha256": "189c3c5d86bf9a153141779ddaba9a28be2615fe80b6646368e407fb91a300cc"
+      "sha256": "11573cb1dabb4e001d975e55f60f8c4c8c95d95f3c1ced7d3ae11cf9341b7387"
     },
     "notification_mode.py": {
       "source": "python/scripts/notification_mode.py",
@@ -25,11 +25,11 @@
     },
     "daily_digest_aggregator.py": {
       "source": "python/scripts/daily_digest_aggregator.py",
-      "sha256": "8b38c191d0022c227e7e4f981c57ffcd334f8fcaf21f47385a5a4f70f3df129e"
+      "sha256": "f0b4672c9a987a525d7b26c7784e108d1e899c5f52708c17f96f2109780695d4"
     },
     "notification_candidate_adapter.py": {
       "source": "python/scripts/notification_candidate_adapter.py",
-      "sha256": "8f0806165f7d99ffd9db7ef41879d9eb7d37e6551678fd0463d29dd7e7bbc19e"
+      "sha256": "f4c3494667b44da9365ae0d6101a42cf855cdbd76ff36d85f62f19a56e1cca8f"
     },
     "merge_digest_candidates.py": {
       "source": "python/scripts/merge_digest_candidates.py",
@@ -46,6 +46,10 @@
     "notification_snapshot/digest_routing.py": {
       "source": "python/scripts/notification_snapshot/digest_routing.py",
       "sha256": "60c3f258c4d1a03bc49c7d03b392c02c316541726dfacb0b1d4fae6dbd2e5017"
+    },
+    "notification_approved_gates.py": {
+      "source": "python/scripts/notification_approved_gates.py",
+      "sha256": "2047e63485797079dc15d7a994344053b0076dce680d376697a56dc9add521b9"
     }
   }
 }

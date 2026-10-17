@@ -108,7 +108,8 @@ def _render_consolidated(payload: DailyDigestInput, *, max_units: int) -> str:
     for row in payload.runs:
         if not is_blocked(row):
             continue
-        detail = block_reason_text(row, "zh" if zh else "en")
+        from notification_approved_gates import render_reasons
+        detail = render_reasons(row.approved_gate_reasons, "zh" if zh else "en") or block_reason_text(row, "zh" if zh else "en")
         detail = detail or ("已拦截，具体原因未知" if zh else "Blocked; specific reason unknown")
         label = display_name("platforms", row.platform_id, "zh" if zh else "en")
         lines.append(f"• {label}：{detail}" if zh else f"• {label}: {detail}")

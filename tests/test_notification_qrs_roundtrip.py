@@ -13,7 +13,7 @@ from notifications import unified
 from test_unified_notifications import MemoryStore
 
 SNAPSHOT = Path(__file__).parent / "qrs_snapshot"
-QRS_SHA = "160933eaa376bd4297616e8affc946430be69771"
+QRS_SHA = "bd3dc79f10b2c0b8048721695885c3f9333a53c6"
 EXPORT_AT = datetime(2026, 10, 16, 23, tzinfo=timezone.utc)
 SOURCE_AT = EXPORT_AT - timedelta(hours=4)
 
@@ -68,7 +68,7 @@ def producer(monkeypatch):
     return SimpleNamespace(run=run, export=export, store=store, reports=reports, uploads=uploads, sends=sends, env=env)
 
 
-def qrs_roundtrip(monkeypatch, tmp_path, payloads):
+def qrs_roundtrip(monkeypatch, tmp_path, payloads, *, locale="zh"):
     monkeypatch.syspath_prepend(str(SNAPSHOT))
     monkeypatch.setenv("QRS_UNIFIED_NOTIFICATION_ENABLED", "true")
     monkeypatch.setenv("DIGEST_CANDIDATES_STORE_STATUS", "loaded")
@@ -90,7 +90,7 @@ def qrs_roundtrip(monkeypatch, tmp_path, payloads):
     merged_path.write_text(json.dumps(merged))
     config = tmp_path / "platform-config.json"
     config.write_text(json.dumps({"notifications": {"quant_sentinel": {"daily_digest": {}}}, "platforms": {}}))
-    payload, text, collected = aggregator.build_digest_payload(business_day="2026-10-16", locale="zh",
+    payload, text, collected = aggregator.build_digest_payload(business_day="2026-10-16", locale=locale,
         candidates_path=merged_path, include_github=False, config_path=config)
     receipt = aggregator.build_receipt(payload, collected, message_chars=len(text))
     return runs, summary, text, receipt, stats

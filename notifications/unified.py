@@ -351,6 +351,18 @@ def publish_incident(legacy, *, reason, profile=None, kind="real_error"):
     return route(event_for(kind, profile=profile, reason=reason), legacy=legacy, state=kind)
 
 
+def _notification_report(report):
+    # Composer identity is preserved in the archive. Only this notification
+    # projection copy uses the contract's canonical platform spelling.
+    value = copy.deepcopy(report)
+    if value.get("platform") in {"charles_schwab", "schwab"}:
+        value["platform"] = "schwab"
+    target = value.get("runtime_target")
+    if isinstance(target, dict) and target.get("platform_id") in {"charles_schwab", "schwab"}:
+        target["platform_id"] = "schwab"
+    return value
+
+
 def _project_runs(reports, **kwargs):
     # The archive remains authoritative. Project each business run separately;
     # window totals must never be relabelled as one run or copied to every run.
@@ -362,13 +374,13 @@ def _project_runs(reports, **kwargs):
         unique[key] = report
     rows = []
     for run_id, report in unique.items():
-        payload = project_reports([report], **kwargs)
+        payload = project_reports([_notification_report(report)], **kwargs)
         for row in payload["runs"]:
             row["source_run_id"] = run_id
             row["field_status"] = {name: "known" if row.get(name) is not None else "unknown"
                 for name in ("order_count", "fill_count", "cycle_count")}
             from .approved_gates import report_gate_reasons, render_gate_reasons
-            approved = report_gate_reasons(report)
+            approved = report_gate_reasons(report, observed_at=kwargs.get("now"))
             if approved:
                 row.update(approved_gate_reasons=approved,
                     reason_text_zh=render_gate_reasons(approved, "zh"), reason_text_en=render_gate_reasons(approved, "en"))
@@ -473,7 +485,13 @@ def emit_completed_candidates(env, *, now=None, read=None, upload=None, required
                 projected, content_type="application/json", retry=None, timeout=30)
         published_runs.update(identities)
 
-    result = digest_archive.emit(configured, now=now, read=read, upload=write, projector=_project_runs)
+    def notification_read(args):
+        value = read(args)
+        if args[0] == "cat" and isinstance(value, dict) and value.get("schema_version") == "runtime_report.v1":
+            return _notification_report(value)
+        return value
+
+    result = digest_archive.emit(configured, now=now, read=notification_read, upload=write, projector=_project_runs)
     if not set(required_runs) <= published_runs:
         raise ValueError("notification_observed_run_not_covered")
     return result
