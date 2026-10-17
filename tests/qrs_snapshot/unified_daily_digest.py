@@ -93,6 +93,9 @@ def _render_consolidated(payload: DailyDigestInput, *, max_units: int) -> str:
         value = str(sum(values)) if known else ("全窗口统计未知" if zh else "whole-window count unknown")
         counts.append(f"{label}：{value}" if zh else f"{label}: {value}")
     lines.append(" · ".join(counts))
+    if complete and all(row.order_count == 0 and row.order_count_status == "known" for row in payload.runs):
+        lines.append(("本轮 0 单" if len(payload.runs) == 1 else "窗口内各轮均为 0 单") if zh else
+                     ("0 orders this run" if len(payload.runs) == 1 else "0 orders in every observed run"))
     for platform, source in summary.get("source_inventory", {}).items():
         label = display_name("platforms", platform, "zh" if zh else "en")
         expected, covered, runs = source["expected_targets"], source["covered_targets"], source["runs"]

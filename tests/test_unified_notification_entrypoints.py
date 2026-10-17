@@ -75,7 +75,7 @@ def test_heartbeat_healthy_uses_real_producer_before_suppressing_manual_send(mon
     payload = healthy_business_receipt(monkeypatch)
     sent = mock_heartbeat(monkeypatch, payload)
     monkeypatch.setenv("RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS", "true")
-    def produce(env):
+    def produce(env, **kwargs):
         store.operations.append("completed_archive_upload")
         return {"uploaded": True}
     monkeypatch.setattr(unified, "emit_completed_candidates", produce)
@@ -93,7 +93,7 @@ def test_heartbeat_failed_producer_keeps_manual_send_and_reports_unknown(monkeyp
     configure(monkeypatch)
     sent = mock_heartbeat(monkeypatch, healthy_business_receipt(monkeypatch))
     monkeypatch.setenv("RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS", "true")
-    monkeypatch.setattr(unified, "emit_completed_candidates", lambda env: {"uploaded": False})
+    monkeypatch.setattr(unified, "emit_completed_candidates", lambda env, **kwargs: {"uploaded": False})
     assert heartbeat.main(NOW) == 0
     assert len(sent) == 1
     assert "coverage=unknown" in capsys.readouterr().out

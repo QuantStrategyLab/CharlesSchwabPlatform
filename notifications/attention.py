@@ -56,7 +56,7 @@ def render_attention(*, decision, platform, account_alias, strategy_profile, gua
 
 def publish_attention_telegram_transition(**kwargs):
     from quant_platform_kit.risk import attention_notify
-    from .unified import enabled, event_for, route
+    from .unified import enabled, event_for, route, observe_attention_recovery, stage_approved_gate_observation
 
     approved = kwargs.pop("approved_gate_reasons", [])
     sender = kwargs.get("telegram_sender") or attention_notify._default_telegram_sender
@@ -74,10 +74,18 @@ def publish_attention_telegram_transition(**kwargs):
     approved = clean_gate_reasons(approved)
     approved_only = (approved and set(kwargs.get("guard_reason_codes") or ()) == {"DAILY_LOSS_LIMIT_EXCEEDED"}
         and set(decision.reason_codes) <= {"new_risk_prohibited"} and decision.level.value == "action")
-    urgent = decision.level.value in {"action", "halt"} and not approved_only
+    urgent = decision.level.value in {"action", "halt"}
     reasons = tuple(sorted(set(kwargs.get("guard_reason_codes") or decision.reason_codes)))
-    event = event_for("risk_escalation" if urgent else "routine_cycle", profile=kwargs["strategy_profile"],
+    event = event_for("risk_escalation", profile=kwargs["strategy_profile"],
         reason="attention:" + ",".join(reasons))
+    if approved_only and stage_approved_gate_observation(profile=kwargs["strategy_profile"], reasons=approved):
+        observe_attention_recovery(event)
+        return {"sent": 0, "skipped": 1, "failed": 0}
+    if not urgent:
+        # A non-notifying attention decision only reconciles its incident;
+        # the real cycle owns the sole routine_cycle fact and its counts.
+        observe_attention_recovery(event)
+        return {"sent": 0, "skipped": 1, "failed": 0}
     observed = []
 
     def publish():

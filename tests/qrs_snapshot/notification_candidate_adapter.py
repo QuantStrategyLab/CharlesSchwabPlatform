@@ -61,7 +61,6 @@ def _bind_identity(row, events):
                 row[name] = value
 
 
-
 def validate_run_row(raw: Mapping[str, Any]) -> dict[str, Any]:
     """Validate one business run; never accept a window aggregate as a run."""
     row = dict(raw)
@@ -69,6 +68,8 @@ def validate_run_row(raw: Mapping[str, Any]) -> dict[str, Any]:
     _bind_identity(row, events)
     if type(row.get("actually_ran")) is not bool:
         raise ValueError("notification_candidate_run_evidence_required")
+    if not row["actually_ran"] and events:
+        raise ValueError("notification_candidate_noncounting_events_unsupported")
     if row["actually_ran"]:
         run_id = row.get("source_run_id")
         if not isinstance(run_id, str) or not run_id.strip():
@@ -77,12 +78,18 @@ def validate_run_row(raw: Mapping[str, Any]) -> dict[str, Any]:
             if event.source_run_id != run_id:
                 raise ValueError("notification_candidate_identity_mismatch")
         if row.get("schema_version") != "qsl.notification_event.v1":
+            for name in ("order_count", "fill_count", "cycle_count"):
+                if name not in row or (row[name] is not None and (type(row[name]) is not int or row[name] < 0)):
+                    raise ValueError("notification_candidate_count_invalid")
             cycles, status = digest.resolve_count_field(row, "cycle_count")
             if status == "known" and cycles != 1:
                 raise ValueError("notification_candidate_per_run_required")
-    if any(name in row for name in ("source_runs", "source_run_ids", "events_by_run")):
+    if any(name in row for name in (
+        "source_runs", "source_run_ids", "events_by_run", "notification_source_runs", "notification_events_by_run"
+    )):
         raise ValueError("notification_candidate_per_run_required")
     return row
+
 
 def partition(rows: Sequence[Mapping[str, Any]], business_day: str):
     """Use event timestamps for new facts; legacy rows retain existing dates."""
@@ -174,6 +181,10 @@ def aggregate(rows: Sequence[Mapping[str, Any]], expected: Sequence[Mapping[str,
             run_counts[row["platform_id"]] += 1
             continue
         merged = dict(previous)
+        if (previous.get("schema_version") == "qsl.notification_event.v1"
+                and row.get("schema_version") != "qsl.notification_event.v1"):
+            # The merged result is an archive run row once archive facts arrive.
+            merged.pop("schema_version", None)
         for name in ("order_count", "fill_count", "cycle_count"):
             old_value, old_status = digest.resolve_count_field(previous, name)
             value, status = digest.resolve_count_field(row, name)

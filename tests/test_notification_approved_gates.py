@@ -77,13 +77,11 @@ def test_approved_block_receipt_suppresses_alert_only_after_candidate_and_still_
     before = copy.deepcopy(source)
     sent = mock_heartbeat(monkeypatch, source)
     monkeypatch.setenv("RUNTIME_TARGET_JSON", json.dumps(source["runtime_target"]))
-    monkeypatch.setattr(unified, "emit_completed_candidates", lambda env: {"uploaded": True})
+    monkeypatch.setattr(unified, "emit_completed_candidates", lambda env, **kwargs: {"uploaded": True})
     assert heartbeat.main(NOW) == 1
     assert not sent and source == before
     assert heartbeat._is_accepted_report(source) == (False, "rejected inner execution status")
-    fact, _ = next(iter(store.facts.values()))
-    assert fact["source_run_id"] == source["run_id"]
-    assert fact["approved_gate_reasons"] == reasons
+    assert store.facts == {}  # Archive coverage owns this receipt; no second cycle fact.
 
 
 @pytest.mark.parametrize("change", ["missing_receipt", "wrong_receipt", "order", "error", "pending", "other_reason", "bad_limit", "producer_failed"])
@@ -98,7 +96,7 @@ def test_other_receipt_failures_stay_immediate(monkeypatch, change):
     if change == "other_reason": source["summary"]["no_op_reason"] = "other_risk_rejected"
     if change == "bad_limit": source["summary"]["notification_approved_gates"][0]["limit"] = 4
     sent = mock_heartbeat(monkeypatch, source)
-    monkeypatch.setattr(unified, "emit_completed_candidates", lambda env: {"uploaded": change != "producer_failed"})
+    monkeypatch.setattr(unified, "emit_completed_candidates", lambda env, **kwargs: {"uploaded": change != "producer_failed"})
     assert heartbeat.main(NOW) == 1
     assert len(sent) == 1
 
@@ -153,7 +151,7 @@ def test_actual_daily_admission_notification_seam_does_not_page_or_change_decisi
         telegram_sender=lambda **kw: pytest.fail("approved daily-loss attention must defer"))
     assert result["sent"] == 0 and admission == before
     assert data["notification_approved_gates"] == [DAILY]
-    assert next(iter(store.facts.values()))[0]["event_kind"] == "routine_cycle"
+    assert next(iter(store.facts.values()))[0]["event_kind"] == "expected_block_observed"
 
 
 @pytest.mark.parametrize("key", ["fail_reason", "plugin_error", "persistence_error", "market_data_retry_required", "notification_error"])
@@ -197,3 +195,39 @@ def test_real_strategy_adapter_only_adds_approved_annotation_when_on(monkeypatch
     if flag == "true":
         assert plan["execution"].pop("notification_approved_gates") == [CONSECUTIVE]
     assert plan == original
+
+
+@pytest.mark.parametrize("approved", [False, True])
+def test_attention_and_cycle_share_immutable_store_without_event_key_collision(monkeypatch, approved):
+    from datetime import datetime, timezone
+    from notifications.attention import publish_attention_telegram_transition
+    from quant_platform_kit.risk.attention import AttentionAxes, evaluate_attention
+    from test_unified_notifications import MemoryStore
+    class ImmutableStore(MemoryStore):
+        def persist(self, fact, projection=None):
+            previous = self.facts.get(fact["dedupe_key"])
+            if previous is not None and previous != (fact, projection):
+                raise ValueError("notification_candidate_conflict")
+            return super().persist(fact, projection)
+    configure(monkeypatch)
+    store, sent = ImmutableStore(), []
+    monkeypatch.setattr(unified, "GCSNotificationStore", lambda *a, **kw: store)
+    target = dict(platform_id="schwab", strategy_profile="synthetic_profile", service_name="synthetic-service",
+        account_scope="synthetic", account_selector=["synthetic"], deployment_selector="synthetic-slot", dry_run_only=False)
+    monkeypatch.setenv("RUNTIME_TARGET_JSON", json.dumps(target))
+    source = dict(schema_version="runtime_report.v1", platform="schwab", strategy_profile="synthetic_profile",
+        service_name="synthetic-service", runtime_target=target, dry_run=False, status="ok", run_id="same-business-run",
+        started_at=datetime.now(timezone.utc).isoformat())
+    data = execution([DAILY]) if approved else dict(execution_status="no_action", broker_submission_done=False)
+    with unified.notification_context(source):
+        publish_attention_telegram_transition(decision=evaluate_attention(AttentionAxes(new_risk_prohibited=approved)),
+            platform="schwab", account_alias="synthetic", strategy_profile="synthetic_profile",
+            guard_reason_codes=("DAILY_LOSS_LIMIT_EXCEEDED",) if approved else (),
+            approved_gate_reasons=[DAILY] if approved else [],
+            telegram_sender=lambda **kw: sent.append("attention") or True, locale="zh")
+        unified.publish_cycle(SimpleNamespace(execution=data, submitted_orders=(), trade_logs=()),
+            config=SimpleNamespace(dry_run_only=False, strategy_profile="synthetic_profile"),
+            legacy=lambda: sent.append("cycle") or True)
+    assert sent == []
+    kinds = {fact["event_kind"] for fact, _ in store.facts.values()}
+    assert kinds == ({"expected_block_observed", "routine_cycle"} if approved else {"routine_cycle"})

@@ -133,7 +133,7 @@ class _OrderedStore:
 
 
 def event_for(kind, *, profile=None, reason=None, occurred_at=None, source_run_id=None,
-              order_count=None, fill_count=None, order_digest=None, env=None):
+              order_count=None, fill_count=None, order_digest=None, env=None, expected_block_evidence=None):
     env = os.environ if env is None else env
     report = _context.get() or {}
     try:
@@ -148,7 +148,8 @@ def event_for(kind, *, profile=None, reason=None, occurred_at=None, source_run_i
         target_id=env.get("DIGEST_TARGET_ID") or None,
         strategy_profile=profile or report.get("strategy_profile") or target.get("strategy_profile") or env.get("STRATEGY_PROFILE") or None,
         source_run_id=source_run_id or report.get("run_id") or env.get("GITHUB_RUN_ID") or None,
-        incident_reason=reason, order_count=order_count, fill_count=fill_count, order_execution_digest=order_digest)
+        incident_reason=reason, order_count=order_count, fill_count=fill_count, order_execution_digest=order_digest,
+        expected_block_evidence=expected_block_evidence)
 
 
 def _log_failure(reason):
@@ -375,7 +376,36 @@ def _project_runs(reports, **kwargs):
     return {"schema_version": "qsl.digest_candidates.v1", "producer_status": "projected", "runs": rows}
 
 
-def emit_completed_candidates(env, *, now=None, read=None, upload=None):
+def _run_identity(value):
+    return tuple(value.get(name) for name in
+        ("platform_id", "opaque_account_uid", "target_id", "strategy_profile", "source_run_id"))
+
+
+def observe_attention_recovery(event):
+    try:
+        _incident(event, stream="attention", state="healthy", severity=0, recovered=True,
+            sender=lambda: False, store=GCSNotificationStore())
+    except Exception:
+        _log_failure("attention_recovery_unconfirmed")
+
+
+def stage_approved_gate_observation(*, profile, reasons):
+    from .approved_gates import clean_gate_reasons
+    reasons = clean_gate_reasons(reasons)
+    if not enabled() or not reasons:
+        return False
+    try:
+        event = event_for("expected_block_observed", profile=profile, reason="approved_gate_block",
+            expected_block_evidence="approved-gate:" + _hash(reasons))
+        # This is a completed gate observation, not a forecast of this run's
+        # orders. Only the cycle/archive may establish the eventual counts.
+        return GCSNotificationStore().persist({**event.to_candidate(), "approved_gate_reasons": reasons}) is True
+    except Exception:
+        _log_failure("approved_gate_observation_unconfirmed")
+        return False
+
+
+def emit_completed_candidates(env, *, now=None, read=None, upload=None, required_runs=()):
     """Export one archive-authoritative row per business run, with own facts."""
     from .digest_snapshot import digest_archive
     if not enabled(env):
@@ -383,6 +413,7 @@ def emit_completed_candidates(env, *, now=None, read=None, upload=None):
     injected_read = read
     read = read or digest_archive._read
     configured = {**env, "QSL_ROUTINE_NOTIFICATION_MODE": effective_notification_mode(env, FLAG)}
+    published_runs = set()
 
     def write(uri, body):
         payload = json.loads(body)
@@ -429,6 +460,10 @@ def emit_completed_candidates(env, *, now=None, read=None, upload=None):
                     raise ValueError("notification_event_conflict")
                 facts[key] = fact
             row["notification_events"] = list(facts.values())
+        identities = {_run_identity(row) for row in rows if row.get("actually_ran") is True}
+        for required in required_runs:
+            if any(value[:4] == required[:4] for value in identities) and required not in identities:
+                raise ValueError("notification_observed_run_not_covered")
         projected = json.dumps(payload, allow_nan=False)
         if upload:
             upload(uri, projected)
@@ -436,8 +471,12 @@ def emit_completed_candidates(env, *, now=None, read=None, upload=None):
             from google.cloud import storage
             storage.Blob.from_string(uri, client=storage.Client()).upload_from_string(
                 projected, content_type="application/json", retry=None, timeout=30)
+        published_runs.update(identities)
 
-    return digest_archive.emit(configured, now=now, read=read, upload=write, projector=_project_runs)
+    result = digest_archive.emit(configured, now=now, read=read, upload=write, projector=_project_runs)
+    if not set(required_runs) <= published_runs:
+        raise ValueError("notification_observed_run_not_covered")
+    return result
 
 
 def _receipt_event(report, kind, reason):
@@ -463,19 +502,17 @@ def _receipt_event(report, kind, reason):
 
 
 def publish_approved_receipts(reports):
-    from .approved_gates import report_gate_reasons, render_gate_reasons
+    from .approved_gates import report_gate_reasons
     try:
-        store = GCSNotificationStore()
+        required = []
         for report in reports:
-            reasons = report_gate_reasons(report)
-            if not reasons:
+            if not report_gate_reasons(report):
                 return False
-            fact = _receipt_event(report, "routine_cycle", "approved_gate_block").to_candidate()
-            fact.update(approved_gate_reasons=reasons,
-                reason_text_zh=render_gate_reasons(reasons, "zh"), reason_text_en=render_gate_reasons(reasons, "en"))
-            if store.persist(fact) is not True:
-                raise CandidatePersistenceError("notification_receipt_fact_unconfirmed")
-        return emit_completed_candidates(os.environ).get("uploaded") is True
+            event = _receipt_event(report, "routine_cycle", "approved_gate_block")
+            required.append(_run_identity(event.to_candidate()))
+        # The real archive export carries this run's validated gate reasons.
+        # Do not write a second routine_cycle fact over the cycle's immutable key.
+        return emit_completed_candidates(os.environ, required_runs=required).get("uploaded") is True
     except Exception:
         _log_failure("approved_receipt_candidate_unconfirmed")
         return False
@@ -493,7 +530,7 @@ def publish_receipt(legacy, *, kind, reason, recovered=False, observed_at=None, 
                 raise CandidatePersistenceError("notification_receipt_fact_unconfirmed")
             # Publish after staging the observation, so the very same export
             # includes this receipt-linked fact rather than a monitor-only row.
-            if emit_completed_candidates(os.environ).get("uploaded") is not True:
+            if emit_completed_candidates(os.environ, required_runs=[_run_identity(event.to_candidate())]).get("uploaded") is not True:
                 raise CandidatePersistenceError("notification_archive_write_unconfirmed")
             if recovered:
                 _incident(replace(event, occurred_at=observed_at or event.occurred_at), stream="receipt",

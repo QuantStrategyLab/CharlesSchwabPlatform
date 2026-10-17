@@ -54,13 +54,10 @@ def _rows(payload: Any) -> list[dict[str, Any]]:
         if type(item.get("actually_ran")) is not bool:
             raise ValueError("candidate_required_fields_invalid")
     from notification_mode import consolidation_enabled
-    if consolidation_enabled() or any(
-        "notification_event" in item or "notification_events" in item
-        or item.get("schema_version") == "qsl.notification_event.v1" for item in raw
-    ):
+    if consolidation_enabled():
         from notification_candidate_adapter import validate_run_row
         if isinstance(payload, dict) and any(
-            name in payload for name in ("source_runs", "source_run_ids", "events_by_run", "notification_events")
+            name in payload for name in ("source_runs", "source_run_ids", "events_by_run", "notification_source_runs", "notification_events_by_run", "notification_events")
         ):
             raise ValueError("notification_candidate_per_run_required")
         raw = [validate_run_row(item) for item in raw]

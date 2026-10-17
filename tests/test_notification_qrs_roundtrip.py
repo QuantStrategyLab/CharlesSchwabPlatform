@@ -13,7 +13,7 @@ from notifications import unified
 from test_unified_notifications import MemoryStore
 
 SNAPSHOT = Path(__file__).parent / "qrs_snapshot"
-QRS_SHA = "8f5eee7e72577682e6e897ceb5f02014e49a40a7"
+QRS_SHA = "160933eaa376bd4297616e8affc946430be69771"
 EXPORT_AT = datetime(2026, 10, 16, 23, tzinfo=timezone.utc)
 SOURCE_AT = EXPORT_AT - timedelta(hours=4)
 
@@ -62,8 +62,8 @@ def producer(monkeypatch):
         return copy.deepcopy(reports[int(key)])
 
     real_export = unified.emit_completed_candidates
-    def export(_env):
-        return real_export(env, now=EXPORT_AT, read=read, upload=lambda uri, body: uploads.append(json.loads(body)))
+    def export(_env, **kwargs):
+        return real_export(env, now=EXPORT_AT, read=read, upload=lambda uri, body: uploads.append(json.loads(body)), **kwargs)
     monkeypatch.setattr(unified, "emit_completed_candidates", export)
     return SimpleNamespace(run=run, export=export, store=store, reports=reports, uploads=uploads, sends=sends, env=env)
 
@@ -139,3 +139,20 @@ def test_notification_snapshots_match_recorded_source_hashes():
     assert provenance["source_commit"] == "07e24c0c804a9b47316b6ec3c75bb63820d8f421"
     for name, metadata in provenance["files"].items():
         assert hashlib.sha256((snapshot / name).read_bytes()).hexdigest() == metadata["sha256"]
+
+
+def test_observed_business_run_must_be_in_the_actual_export_before_heartbeat_deferral(producer):
+    producer.run("business-a")
+    with pytest.raises(ValueError, match="observed_run_not_covered"):
+        producer.export(producer.env, required_runs=[("schwab", "opaque-a", "target-a", "strategy-a", "missing-business")])
+    assert not producer.uploads
+
+
+def test_real_zero_order_producer_renders_this_run_zero_not_unknown(monkeypatch, tmp_path, producer):
+    producer.run("business-zero")
+    assert producer.export(producer.env)["uploaded"] is True
+    _, summary, text, receipt, _ = qrs_roundtrip(monkeypatch, tmp_path, producer.uploads)
+    assert summary["source_inventory"]["schwab"]["runs"] == 1
+    assert summary["counts_unknown"] is False
+    assert "本轮 0 单" in text and "统计未知" not in text
+    assert receipt["run_count"] == 1 and receipt["total_fills"] == 0
