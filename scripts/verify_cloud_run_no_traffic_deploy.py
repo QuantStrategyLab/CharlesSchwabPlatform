@@ -848,14 +848,20 @@ def capture_native_snapshot(identity: dict, *, read=None) -> dict:
             _shape(env, _ENV)
     if len(literal_names) != len(set(literal_names)):
         _stop("NATIVE_AMBIGUOUS_LITERAL_CONTAINER")
-    # Overrides may contain credentials. Inspect their length, never their text.
+    # Overrides may contain credentials. Project lengths only, even if a
+    # different object appears later; a final RV rejection cannot unread text.
+    empty_overrides = {}
     for field in ("command", "args"):
-        lengths = read(revision_cmd + [f"--format=json(spec.containers[].{field}.len())"])
-        if any(value not in (0, None) for value in _native_at(lengths, "spec.containers[]." + field)):
-            _stop("NATIVE_COMMAND_OVERRIDE_UNSUPPORTED")
+        lengths = read(revision_cmd + [f"--format=json(spec.containers[].image,spec.containers[].{field}.len())"])
+        for index, row in enumerate(_native_at(lengths, "spec.containers[]")):
+            if field in row:
+                if type(row[field]) is not int or row[field] != 0:
+                    _stop("NATIVE_COMMAND_OVERRIDE_UNSUPPORTED")
+                empty_overrides.setdefault(index, []).append(field)
     for path in ("spec.traffic", "status.traffic"):
         _native_inventory(read, service_cmd, [{"revisionName": str, "percent": int, "tag": str, "latestRevision": bool, **({"url": str} if path.startswith("status") else {})}], path)
-    spec_fields = _native_fields(_NATIVE_SPEC, "spec")
+    spec_fields = [field for field in _native_fields(_NATIVE_SPEC, "spec")
+                   if field not in {"spec.containers[].command[]", "spec.containers[].args[]"}]
     def metadata_fields(kind):
         fields = [field for key, schema in _NATIVE_METADATA.items() if key != "annotations"
                   for field in _native_fields(schema, "metadata." + key)]
@@ -871,6 +877,13 @@ def capture_native_snapshot(identity: dict, *, read=None) -> dict:
     for kind, obj in (("service", service), ("revision", revision)):
         if not isinstance(obj, dict) or {k: obj.get("metadata", {}).get(k) for k in ("uid", "resourceVersion")} != stamps[kind]:
             _stop("NATIVE_OBJECT_CHANGED_DURING_CAPTURE")
+    # Preserve explicitly observed empty override fields without requesting
+    # their text. Nonempty overrides were rejected; UID/RV is still bracketed.
+    for index, fields in empty_overrides.items():
+        if index >= len(revision.get("spec", {}).get("containers", [])):
+            _stop("NATIVE_OBJECT_CHANGED_DURING_CAPTURE")
+        for field in fields:
+            revision["spec"]["containers"][index][field] = []
     for name in literal_names:
         fmt = 'json(spec.containers[].env.always().filter("name=' + name + '").map().extract(value))'
         values = _cash_values(read(revision_cmd + ["--format=" + fmt]))

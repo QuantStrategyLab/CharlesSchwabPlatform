@@ -965,3 +965,27 @@ def test_native_observed_generation_boolean_is_not_an_integer():
     before["service"]["status"]["observedGeneration"] = True
     with pytest.raises(check.PreflightError, match="INVALID_STRUCTURE"):
         check.native_snapshot_inventory(before)
+
+
+@pytest.mark.parametrize("field", ["command", "args"])
+def test_native_empty_overrides_preserved_without_text_projection(field):
+    expected = native_snapshot(); expected["revision"]["spec"]["containers"][0][field] = []
+    def read(command):
+        obj = expected["revision" if command[2] == "revisions" else "service"]; fmt = command[-1]
+        if fmt == "--format=json(metadata.uid,metadata.resourceVersion)":
+            return {"metadata": {k: obj["metadata"][k] for k in ("uid", "resourceVersion")}}
+        if f".{field}.len()" in fmt: return {"spec": {"containers": [{"image": BASE_IMAGE, field: 0}]}}
+        if "status.observedGeneration" in fmt:
+            assert "spec.containers[].command[]" not in fmt and "spec.containers[].args[]" not in fmt
+            result = copy.deepcopy(obj)
+            if command[2] == "revisions":
+                result["spec"]["containers"][0].pop(field)
+                result["spec"]["containers"][0]["env"][0].pop("value")
+            return result
+        if "env[].name" in fmt:
+            return {"metadata": {k: obj["metadata"][k] for k in ("uid", "resourceVersion")},
+                    "spec": {"containers": [{"env": [{"name": "SCHWAB_CASH_CURRENCY"}]}]}}
+        if "extract(value)" in fmt: return [["USD"]]
+        return {}
+    identity = dict(project="demo-project", region="demo-region", service="demo-service", baseline_revision=BASE_REV)
+    assert check.capture_native_snapshot(identity, read=read) == expected
