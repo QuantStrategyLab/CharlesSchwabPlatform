@@ -540,4 +540,13 @@ def publish_receipt(legacy, *, kind, reason, recovered=False, observed_at=None, 
             _log_failure("receipt_candidate_projection_failed")
             return legacy()
     event = event_for(kind, reason=reason, occurred_at=observed_at)
-    return route(event, legacy=legacy, stream="receipt", state=kind, recovered=recovered)
+    try:
+        # Receipt incidents without a business run belong only to the durable
+        # immediate incident path. A monitor job is never an archive run fact.
+        return _incident(event, stream="receipt", state=kind, severity=1, recovered=recovered,
+            sender=legacy, store=GCSNotificationStore())
+    except StaleObservation:
+        _log_failure("stale_observation")
+    except Exception:
+        _log_failure("receipt_marker_unavailable")
+    return False

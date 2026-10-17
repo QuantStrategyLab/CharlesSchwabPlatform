@@ -231,3 +231,16 @@ def test_attention_and_cycle_share_immutable_store_without_event_key_collision(m
     assert sent == []
     kinds = {fact["event_kind"] for fact, _ in store.facts.values()}
     assert kinds == ({"expected_block_observed", "routine_cycle"} if approved else {"routine_cycle"})
+
+
+@pytest.mark.parametrize("kind", ["receipt_missing", "receipt_stale", "receipt_unacceptable", "real_error"])
+def test_receipt_incidents_without_business_run_never_stage_monitor_as_candidate(monkeypatch, kind):
+    store = configure(monkeypatch)
+    sent = []
+    for monitor in ("monitor-a", "monitor-b"):
+        monkeypatch.setenv("GITHUB_RUN_ID", monitor)
+        unified.publish_receipt(lambda: sent.append("alert") or True, kind=kind, reason="receipt_incident")
+    assert sent == ["alert"]
+    assert store.facts == {}
+    marker = next(value for _, value in store.values.values() if "delivery_status" in value)
+    assert marker["delivery_status"] == "uncertain" and marker["receipt_id"] is None
