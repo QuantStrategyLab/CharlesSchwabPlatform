@@ -43,6 +43,21 @@ _EXPECTED = dict.fromkeys((
     "candidate_image", "resource_version",
 ), str)
 _ALIASES = {"latest", "latest-created", "latest-ready"}
+HTTP_STARTUP_POLICY = "http-health-8080"
+TCP_00781_STARTUP_POLICY = "schwab-00781-tcp-preserve"
+_TCP_00781_IDENTITY = {
+    "project": "charlesschwabquant", "region": "us-central1", "service": "charles-schwab-quant-service",
+    "baseline_revision": "charles-schwab-quant-service-00781-lel",
+}
+_TCP_00781_IMAGE = (
+    "us-central1-docker.pkg.dev/charlesschwabquant/cloud-run-source-deploy/"
+    "charlesschwabplatform/charles-schwab-quant-service@sha256:"
+    "cd4779376abf0ec4a54c0b04c690adc953756cda782ecd8adcf773e659a1733a"
+)
+_TCP_00781_SOURCE = "6c890e3fdfbc0f8dcd7f96b5a634cc482ba3606c"
+_TCP_00781_PROBE = {
+    "failureThreshold": 1, "periodSeconds": 240, "tcpSocket": {"port": 8080}, "timeoutSeconds": 240,
+}
 
 
 class PlanError(ValueError):
@@ -85,7 +100,12 @@ def _image(value: object) -> bool:
         r"[A-Za-z0-9][A-Za-z0-9./_-]*@sha256:[0-9a-f]{64}", value) is not None)
 
 
-def _expected(expected: object) -> None:
+def _startup_policy(policy: object) -> None:
+    if type(policy) is not str or policy not in {HTTP_STARTUP_POLICY, TCP_00781_STARTUP_POLICY}:
+        _stop("INVALID_STARTUP_POLICY")
+
+
+def _expected(expected: object, startup_policy: str = HTTP_STARTUP_POLICY) -> None:
     _required(expected, _EXPECTED)
     a._shape(expected, _EXPECTED)
     if (not all(_name(expected[key]) for key in _IDENTITY)
@@ -100,6 +120,9 @@ def _expected(expected: object) -> None:
         _stop("INVALID_IMMUTABLE_IMAGE")
     if not _nonempty(expected["resource_version"]):
         _stop("INVALID_RESOURCE_VERSION")
+    if startup_policy == TCP_00781_STARTUP_POLICY and any(
+            expected[key] != value for key, value in _TCP_00781_IDENTITY.items()):
+        _stop("TCP_BASELINE_IDENTITY_MISMATCH")
 
 
 def _projection(snapshot: dict) -> dict:
@@ -108,7 +131,7 @@ def _projection(snapshot: dict) -> dict:
             "runtime": revision["runtime"], "traffic": snapshot["service"]["traffic"]}
 
 
-def _inventory(snapshot: object) -> None:
+def _inventory(snapshot: object, startup_policy: str = HTTP_STARTUP_POLICY) -> None:
     # A never reads literal values during inventory. Inventory BOTH snapshots
     # before any subsequent equality, hash, deepcopy or literal type check.
     a._shape(snapshot, _SNAPSHOT)
@@ -119,7 +142,13 @@ def _inventory(snapshot: object) -> None:
         for field in ("identity", "metadata", "provenance"):
             _required(part[field], schema[field])
         _required(part["metadata"]["labels"], _LABELS)
-    a._inventory(_projection(snapshot))
+    projection = _projection(snapshot)
+    if startup_policy == HTTP_STARTUP_POLICY:
+        a._inventory(projection)
+    else:
+        a._structure_inventory(projection)
+        if projection["runtime"]["containers"][0].get("startupProbe") != _TCP_00781_PROBE:
+            _stop("TCP_BASELINE_PROBE_MISMATCH")
 
 
 def _traffic(rows: list, expected: dict) -> None:
@@ -146,7 +175,7 @@ def _traffic(rows: list, expected: dict) -> None:
         _stop("BASELINE_NOT_SERVING")
 
 
-def _snapshot_values(snapshot: dict, expected: dict, *, candidate: bool = False) -> None:
+def _snapshot_values(snapshot: dict, expected: dict, startup_policy: str = HTTP_STARTUP_POLICY, *, candidate: bool = False) -> None:
     revision_name = expected["candidate_revision" if candidate else "baseline_revision"]
     if snapshot["revision"]["identity"]["revision"] != revision_name:
         _stop("BASELINE_IDENTITY_MISMATCH" if not candidate else "CANDIDATE_IDENTITY_MISMATCH")
@@ -170,6 +199,15 @@ def _snapshot_values(snapshot: dict, expected: dict, *, candidate: bool = False)
         _stop("RESOURCE_VERSION_MISMATCH")
     _traffic(snapshot["service"]["traffic"], expected)
     runtime = snapshot["revision"]["runtime"]
+    if startup_policy == TCP_00781_STARTUP_POLICY:
+        # These are exact LOCAL declarations, never proof of cloud origin or
+        # installed source. UID/RV and full equality still bind both snapshots.
+        revision = snapshot["revision"]
+        if not candidate and runtime["containers"][0]["image"] != _TCP_00781_IMAGE:
+            _stop("TCP_BASELINE_IMAGE_MISMATCH")
+        if (revision["provenance"]["commit"] != _TCP_00781_SOURCE
+                or revision["metadata"]["labels"]["commit-sha"] != _TCP_00781_SOURCE):
+            _stop("TCP_BASELINE_SOURCE_MISMATCH")
     if (not re.fullmatch(r"[A-Za-z0-9._-]+@[A-Za-z0-9.-]+", runtime["serviceAccountName"])
             or runtime["ingress"] not in {"all", "internal", "internal-and-cloud-load-balancing"}
             or runtime["executionEnvironment"] not in {"gen1", "gen2"}
@@ -186,15 +224,16 @@ def _snapshot_values(snapshot: dict, expected: dict, *, candidate: bool = False)
             if "value" in entry and type(entry["value"]) is not str:
                 _stop("INVALID_ENV_LITERAL")
     if 8080 not in [port["containerPort"] for port in runtime["containers"][0]["ports"]]:
-        _stop("HTTP_STARTUP_GUARD_REQUIRED")
+        _stop("HTTP_STARTUP_GUARD_REQUIRED" if startup_policy == HTTP_STARTUP_POLICY else "TCP_BASELINE_PROBE_MISMATCH")
 
 
-def _review_candidate(before: dict, candidate: dict, expected: dict) -> dict:
-    _expected(expected)
-    _inventory(before)
-    _inventory(candidate)
-    _snapshot_values(before, expected)
-    _snapshot_values(candidate, expected, candidate=True)
+def _review_candidate(before: dict, candidate: dict, expected: dict, startup_policy: str = HTTP_STARTUP_POLICY) -> dict:
+    _startup_policy(startup_policy)
+    _expected(expected, startup_policy)
+    _inventory(before, startup_policy)
+    _inventory(candidate, startup_policy)
+    _snapshot_values(before, expected, startup_policy)
+    _snapshot_values(candidate, expected, startup_policy, candidate=True)
     old_image = before["revision"]["runtime"]["containers"][0]["image"]
     new_image = candidate["revision"]["runtime"]["containers"][0]["image"]
     if new_image != expected["candidate_image"]:
@@ -214,7 +253,7 @@ def _review_candidate(before: dict, candidate: dict, expected: dict) -> dict:
         ("revision.runtime.containers[0].image", old_image, new_image),
     ):
         changes.append({"path": path, "comparison": "changed", "before_sha256": _hash(old), "after_sha256": _hash(new)})
-    return {
+    review = {
         "model": MODEL, "mode": "review_only", "deployment_ready": False,
         "old_installation": "UNKNOWN", "startup_side_effects": "UNVERIFIED",
         "source": "NOT_VERIFIED", "admission": "NOT_VERIFIED", "cloud_configuration": "NOT_VERIFIED",
@@ -224,12 +263,19 @@ def _review_candidate(before: dict, candidate: dict, expected: dict) -> dict:
                       {"path": "revision_except_image_and_names", "comparison": "equal", "sha256": _hash(restored["revision"])}],
         "coverage": "CLOSED_SYNTHETIC_ENVELOPE_ONLY_OPAQUE_ENV_STRINGS",
     }
+    if startup_policy == TCP_00781_STARTUP_POLICY:
+        review["startup_assurance"] = {
+            "policy": startup_policy, "readiness": "TCP_PORT_READINESS_ONLY",
+            "http_application_health": "NOT_VERIFIED", "runtime_startup": "NOT_EXECUTED",
+            "baseline_binding": "LOCAL_DECLARATION_ONLY_NOT_CLOUD_PROVENANCE",
+        }
+    return review
 
 
-def review_candidate(before: dict, candidate: dict, expected: dict) -> dict:
+def review_candidate(before: dict, candidate: dict, expected: dict, *, startup_policy: str = HTTP_STARTUP_POLICY) -> dict:
     """Review an in-memory candidate without weakening probe or preservation guards."""
     try:
-        return _review_candidate(before, candidate, expected)
+        return _review_candidate(before, candidate, expected, startup_policy)
     except PlanError:
         raise
     except a.PreflightError as exc:
@@ -242,18 +288,20 @@ def build_plan(request: dict) -> tuple[dict, dict]:
     """Return a detached candidate and redacted plan; never inspect desired data."""
     try:
         fields = {"model", "expected", "before", "current", "excluded_desired_template"}
-        a._keys(request, fields, fields)
+        a._keys(request, fields | {"startup_policy"}, fields)
         if request["model"] != MODEL:
             _stop("INVALID_MODEL")
+        startup_policy = request["startup_policy"] if "startup_policy" in request else HTTP_STARTUP_POLICY
+        _startup_policy(startup_policy)
         expected = request["expected"]
-        _expected(expected)
+        _expected(expected, startup_policy)
         before, current = request["before"], request["current"]
         if before is current:
             _stop("INDEPENDENT_SNAPSHOTS_REQUIRED")
-        _inventory(before)
-        _inventory(current)
-        _snapshot_values(before, expected)
-        _snapshot_values(current, expected)
+        _inventory(before, startup_policy)
+        _inventory(current, startup_policy)
+        _snapshot_values(before, expected, startup_policy)
+        _snapshot_values(current, expected, startup_policy)
         for key in ("service", "revision"):
             if before[key]["metadata"]["uid"] != current[key]["metadata"]["uid"]:
                 _stop("OBJECT_RECREATED")
@@ -263,7 +311,7 @@ def build_plan(request: dict) -> tuple[dict, dict]:
         candidate["revision"]["identity"]["revision"] = expected["candidate_revision"]
         candidate["revision"]["metadata"]["name"] = expected["candidate_revision"]
         candidate["revision"]["runtime"]["containers"][0]["image"] = expected["candidate_image"]
-        return candidate, _review_candidate(before, candidate, expected)
+        return candidate, _review_candidate(before, candidate, expected, startup_policy)
     except PlanError:
         raise
     except a.PreflightError as exc:

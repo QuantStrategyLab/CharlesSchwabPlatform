@@ -755,3 +755,39 @@ except SystemExit as exc:
     assert not fake_log.exists()
     assert before_inputs == snapshot_files(tmp_path)
     assert non_target == {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in non_target}
+
+
+@pytest.mark.parametrize("handler", ["tcpSocket", "grpc"])
+def test_structure_inventory_does_not_select_a_startup_policy(case, handler):
+    for payload in case[1:]:
+        payload["runtime"]["containers"][0]["startupProbe"] = {handler: {"port": 8080}}
+    trap_all_literals(case)
+    for payload in case[1:]:
+        check._structure_inventory(payload)
+        with pytest.raises(check.PreflightError, match="^HTTP_STARTUP_GUARD_REQUIRED$"):
+            check._inventory(payload)
+
+
+@pytest.mark.parametrize("handler", ["tcpSocket", "grpc"])
+@pytest.mark.parametrize("exact_identity", [False, True])
+def test_default_preflight_rejects_non_http_even_with_exact_00781_identity(case, handler, exact_identity):
+    for payload in case[1:]:
+        payload["runtime"]["containers"][0]["startupProbe"] = {
+            "failureThreshold": 1, "periodSeconds": 240, handler: {"port": 8080}, "timeoutSeconds": 240,
+        }
+        if exact_identity:
+            payload["identity"].update(project="charlesschwabquant", region="us-central1",
+                                       service="charles-schwab-quant-service",
+                                       revision="charles-schwab-quant-service-00781-lel")
+    trap_all_literals(case)
+    with pytest.raises(check.PreflightError, match="^HTTP_STARTUP_GUARD_REQUIRED$"):
+        check._preflight_local(*case)
+
+
+def test_default_http_failure_keeps_original_precedence_over_volume_semantics(case):
+    for payload in case[1:]:
+        payload["runtime"]["containers"][0]["startupProbe"] = {"tcpSocket": {"port": 8080}}
+        payload["runtime"]["volumes"] = [{"name": "cache", "emptyDir": {}}, {"name": "cache", "emptyDir": {}}]
+    trap_all_literals(case)
+    with pytest.raises(check.PreflightError, match="^HTTP_STARTUP_GUARD_REQUIRED$"):
+        check._preflight_local(*case)

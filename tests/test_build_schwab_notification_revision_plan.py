@@ -757,3 +757,366 @@ def test_non_string_python_mapping_key_has_fixed_error(case):
     case["before"]["revision"]["runtime"]["network"][17] = SENTINEL
     with pytest.raises(planner().PlanError, match="^UNKNOWN_FIELD$"):
         planner().build_plan(case)
+
+
+# Only these public, explicitly authorized identity declarations are real. All
+# UID/RV, env, targets, accounts, secret references and candidate data stay fake.
+TCP_POLICY = "schwab-00781-tcp-preserve"
+HTTP_POLICY = "http-health-8080"
+TCP_SERVICE = "charles-schwab-quant-service"
+TCP_BASE = TCP_SERVICE + "-00781-lel"
+TCP_IMAGE = ("us-central1-docker.pkg.dev/charlesschwabquant/cloud-run-source-deploy/"
+             "charlesschwabplatform/charles-schwab-quant-service@sha256:"
+             "cd4779376abf0ec4a54c0b04c690adc953756cda782ecd8adcf773e659a1733a")
+TCP_SOURCE = "6c890e3fdfbc0f8dcd7f96b5a634cc482ba3606c"
+TCP_PROBE = {"failureThreshold": 1, "periodSeconds": 240, "tcpSocket": {"port": 8080}, "timeoutSeconds": 240}
+
+
+@pytest.fixture
+def tcp_case(case):
+    case["startup_policy"] = TCP_POLICY
+    case["expected"].update(project="charlesschwabquant", region="us-central1", service=TCP_SERVICE,
+                            baseline_revision=TCP_BASE, candidate_revision=TCP_SERVICE + "-00782-review")
+    for side in ("before", "current"):
+        payload = case[side]
+        for part in ("service", "revision"):
+            payload[part]["identity"].update(project="charlesschwabquant", region="us-central1", service=TCP_SERVICE)
+        payload["service"]["metadata"]["name"] = TCP_SERVICE
+        for row in payload["service"]["traffic"]:
+            row["revisionName"] = row["revisionName"].replace("demo-service", TCP_SERVICE)
+        payload["service"]["traffic"][0]["revisionName"] = TCP_BASE
+        payload["revision"]["identity"]["revision"] = TCP_BASE
+        payload["revision"]["metadata"]["name"] = TCP_BASE
+        payload["revision"]["metadata"]["labels"]["commit-sha"] = TCP_SOURCE
+        payload["revision"]["provenance"]["commit"] = TCP_SOURCE
+        main_container(payload)["image"] = TCP_IMAGE
+        main_container(payload)["startupProbe"] = copy.deepcopy(TCP_PROBE)
+    return case
+
+
+def tcp_candidate(case):
+    """Hand derivation lets negative review tests run independently of build_plan."""
+    candidate = copy.deepcopy(case["before"])
+    candidate["revision"]["identity"]["revision"] = case["expected"]["candidate_revision"]
+    candidate["revision"]["metadata"]["name"] = case["expected"]["candidate_revision"]
+    main_container(candidate)["image"] = case["expected"]["candidate_image"]
+    return candidate
+
+
+def tcp_review(case, candidate):
+    return planner().review_candidate(case["before"], candidate, case["expected"], startup_policy=TCP_POLICY)
+
+
+def test_tcp_exact_00781_preserves_complete_context_without_mutation(tcp_case):
+    frozen = copy.deepcopy(tcp_case)
+    candidate, review = planner().build_plan(tcp_case)
+    assert candidate == tcp_candidate(tcp_case)
+    assert tcp_case == frozen
+    assert candidate["service"] == tcp_case["current"]["service"]
+    assert main_container(candidate)["startupProbe"] == TCP_PROBE
+    assert main_container(candidate)["env"][0]["value"].encode() == RAW_TARGET.encode()
+    assert tcp_review(tcp_case, candidate) == review
+    assert review["mode"] == "review_only" and review["deployment_ready"] is False
+    assert review["startup_side_effects"] == "UNVERIFIED"
+    assert review["source"] == review["cloud_configuration"] == "NOT_VERIFIED"
+    assert review["concurrency"] == "MATCHED_LOCAL_SNAPSHOTS_NO_CAS"
+    assert review["startup_assurance"] == {
+        "policy": TCP_POLICY, "readiness": "TCP_PORT_READINESS_ONLY",
+        "http_application_health": "NOT_VERIFIED", "runtime_startup": "NOT_EXECUTED",
+        "baseline_binding": "LOCAL_DECLARATION_ONLY_NOT_CLOUD_PROVENANCE",
+    }
+    again, repeated = planner().build_plan(copy.deepcopy(tcp_case))
+    assert again == candidate and repeated == review
+    main_container(candidate)["env"].reverse()
+    candidate["service"]["metadata"]["labels"]["purpose"] = "detached"
+    assert tcp_case == frozen
+
+
+@pytest.mark.parametrize("policy", [None, True, False, [], {}, 1, "allow_tcp", "skip", TCP_POLICY + "-other"])
+@pytest.mark.parametrize("entry", ["build", "review"])
+def test_tcp_policy_is_a_closed_explicit_enum(tcp_case, policy, entry):
+    candidate = tcp_candidate(tcp_case)
+    with pytest.raises(planner().PlanError, match="^INVALID_STARTUP_POLICY$"):
+        if entry == "build":
+            tcp_case["startup_policy"] = policy
+            planner().build_plan(tcp_case)
+        else:
+            planner().review_candidate(tcp_case["before"], candidate, tcp_case["expected"], startup_policy=policy)
+
+
+@pytest.mark.parametrize("entry", ["build", "review"])
+@pytest.mark.parametrize("explicit", [False, True])
+@pytest.mark.parametrize("handler", ["tcpSocket", "grpc"])
+def test_tcp_or_grpc_exact_identity_cannot_change_default_http_policy(tcp_case, entry, explicit, handler):
+    for side in ("before", "current"):
+        main_container(tcp_case[side])["startupProbe"] = {handler: {"port": 8080}}
+    candidate = tcp_candidate(tcp_case)
+    with pytest.raises(planner().PlanError, match="^HTTP_STARTUP_GUARD_REQUIRED$"):
+        if entry == "build":
+            if explicit:
+                tcp_case["startup_policy"] = HTTP_POLICY
+            else:
+                del tcp_case["startup_policy"]
+            planner().build_plan(tcp_case)
+        else:
+            kwargs = {"startup_policy": HTTP_POLICY} if explicit else {}
+            planner().review_candidate(tcp_case["before"], candidate, tcp_case["expected"], **kwargs)
+
+
+def test_explicit_http_policy_is_identical_to_default(case):
+    default_candidate, default_review = planner().build_plan(case)
+    case["startup_policy"] = HTTP_POLICY
+    assert planner().build_plan(case) == (default_candidate, default_review)
+    assert planner().review_candidate(case["before"], default_candidate, case["expected"],
+                                      startup_policy=HTTP_POLICY) == default_review
+    assert "startup_assurance" not in default_review
+
+
+@pytest.mark.parametrize("field,value", [
+    ("project", "other-project"), ("region", "other-region"), ("service", "other-service"),
+    ("baseline_revision", TCP_SERVICE + "-00781-other"),
+    ("baseline_revision", TCP_SERVICE + "-00715-old"),
+])
+@pytest.mark.parametrize("entry", ["build", "review"])
+def test_tcp_rejects_coherently_rebound_unknown_baselines(tcp_case, field, value, entry):
+    expected = tcp_case["expected"]
+    previous_service = expected["service"]
+    expected[field] = value
+    if field == "service":
+        expected["baseline_revision"] = value + "-00781-lel"
+        expected["candidate_revision"] = value + "-00782-review"
+    for side in ("before", "current"):
+        payload = tcp_case[side]
+        for part in ("service", "revision"):
+            payload[part]["identity"].update({key: expected[key] for key in ("project", "region", "service")})
+        payload["service"]["metadata"]["name"] = expected["service"]
+        payload["revision"]["identity"]["revision"] = expected["baseline_revision"]
+        payload["revision"]["metadata"]["name"] = expected["baseline_revision"]
+        for row in payload["service"]["traffic"]:
+            row["revisionName"] = row["revisionName"].replace(previous_service, expected["service"])
+        payload["service"]["traffic"][0]["revisionName"] = expected["baseline_revision"]
+    with pytest.raises(planner().PlanError, match="^TCP_BASELINE_IDENTITY_MISMATCH$"):
+        if entry == "build": planner().build_plan(tcp_case)
+        else: tcp_review(tcp_case, tcp_candidate(tcp_case))
+
+
+@pytest.mark.parametrize("side", ["before", "current"])
+@pytest.mark.parametrize("image", [OLD_IMAGE, TCP_IMAGE.replace("charlesschwabplatform/", "other/"),
+                                  TCP_IMAGE[:-1] + "0"])
+def test_tcp_old_image_binding_is_exact(tcp_case, side, image):
+    main_container(tcp_case[side])["image"] = image
+    stop(tcp_case, "TCP_BASELINE_IMAGE_MISMATCH")
+
+
+@pytest.mark.parametrize("side", ["before", "current", "candidate"])
+@pytest.mark.parametrize("path", [("revision", "provenance", "commit"),
+                                  ("revision", "metadata", "labels", "commit-sha")])
+def test_tcp_source_declaration_must_match_on_every_snapshot(tcp_case, side, path):
+    candidate = tcp_candidate(tcp_case)
+    set_path(candidate if side == "candidate" else tcp_case[side], path, "d" * 40)
+    with pytest.raises(planner().PlanError, match="^TCP_BASELINE_SOURCE_MISMATCH$"):
+        if side == "candidate": tcp_review(tcp_case, candidate)
+        else: planner().build_plan(tcp_case)
+
+
+TCP_BAD_PROBES = [
+    (None, "TCP_BASELINE_PROBE_MISMATCH"), ({}, "INVALID_PROBE"),
+    *[({key: copy.deepcopy(value) for key, value in TCP_PROBE.items() if key != missing},
+       "INVALID_PROBE" if missing == "tcpSocket" else "TCP_BASELINE_PROBE_MISMATCH")
+      for missing in TCP_PROBE],
+    (TCP_PROBE | {"initialDelaySeconds": 0}, "TCP_BASELINE_PROBE_MISMATCH"),
+    (TCP_PROBE | {"successThreshold": 1}, "TCP_BASELINE_PROBE_MISMATCH"),
+    (TCP_PROBE | {"unknown": SENTINEL}, "UNKNOWN_FIELD"),
+    *[(TCP_PROBE | {field: value}, "TCP_BASELINE_PROBE_MISMATCH") for field, value in
+      [("failureThreshold", 2), ("periodSeconds", 239), ("timeoutSeconds", 239),
+       ("tcpSocket", {"port": 8081}), ("tcpSocket", {"port": 1}), ("tcpSocket", {"port": 65535})]],
+    (TCP_PROBE | {"timeoutSeconds": 0}, "INVALID_PROBE"),
+    (TCP_PROBE | {"tcpSocket": {"port": True}}, "INVALID_STRUCTURE"),
+    (TCP_PROBE | {"tcpSocket": {"port": "8080"}}, "INVALID_STRUCTURE"),
+    (TCP_PROBE | {"tcpSocket": {}}, "MISSING_FIELD"),
+    (TCP_PROBE | {"tcpSocket": {"port": 8080, "unknown": SENTINEL}}, "UNKNOWN_FIELD"),
+    (TCP_PROBE | {"grpc": {"port": 8080}}, "INVALID_PROBE"),
+    (TCP_PROBE | {"httpGet": {"path": "/health", "port": 8080}}, "INVALID_PROBE"),
+    ({"grpc": {"port": 8080}}, "TCP_BASELINE_PROBE_MISMATCH"),
+    ({"httpGet": {"path": "/health", "port": 8080}}, "TCP_BASELINE_PROBE_MISMATCH"),
+]
+
+
+@pytest.mark.parametrize("side", ["before", "current", "candidate"])
+@pytest.mark.parametrize("probe,reason", TCP_BAD_PROBES)
+def test_tcp_complete_probe_is_never_defaulted_or_repaired(tcp_case, side, probe, reason):
+    candidate = tcp_candidate(tcp_case)
+    payload = candidate if side == "candidate" else tcp_case[side]
+    if probe is None: del main_container(payload)["startupProbe"]
+    else: main_container(payload)["startupProbe"] = copy.deepcopy(probe)
+    with pytest.raises(planner().PlanError, match="^" + reason + "$"):
+        if side == "candidate": tcp_review(tcp_case, candidate)
+        else: planner().build_plan(tcp_case)
+
+
+@pytest.mark.parametrize("side", ["current", "candidate"])
+@pytest.mark.parametrize("path,value", PROTECTED_CHANGES)
+def test_tcp_protected_context_cannot_drift(tcp_case, side, path, value):
+    candidate = tcp_candidate(tcp_case)
+    set_path(candidate if side == "candidate" else tcp_case[side], path, value)
+    reason = "CONCURRENT_SNAPSHOT_CHANGED" if side == "current" else "PROTECTED_CONFIGURATION_CHANGED"
+    if path == ("revision", "provenance", "commit"): reason = "TCP_BASELINE_SOURCE_MISMATCH"
+    if "startupProbe" in path: reason = "TCP_BASELINE_PROBE_MISMATCH"
+    with pytest.raises(planner().PlanError, match="^" + reason + "$"):
+        if side == "candidate": tcp_review(tcp_case, candidate)
+        else: planner().build_plan(tcp_case)
+
+
+@pytest.mark.parametrize("side", ["current", "candidate"])
+@pytest.mark.parametrize("mutation", ["traffic-order", "traffic-tag", "traffic-split", "env-order",
+                                      "container-count", "mount-order", "volume-order", "liveness"])
+def test_tcp_preserves_order_routing_and_other_probes(tcp_case, side, mutation):
+    candidate = tcp_candidate(tcp_case)
+    payload = candidate if side == "candidate" else tcp_case[side]
+    container = main_container(payload)
+    if mutation == "traffic-order": payload["service"]["traffic"].reverse()
+    elif mutation == "traffic-tag": payload["service"]["traffic"][-1]["tag"] = "other-tag"
+    elif mutation == "traffic-split":
+        payload["service"]["traffic"][0]["percent"] = 80
+        payload["service"]["traffic"][1]["percent"] = 20
+    elif mutation == "env-order": container["env"].reverse()
+    elif mutation == "container-count": payload["revision"]["runtime"]["containers"].pop()
+    elif mutation == "mount-order": container["volumeMounts"].reverse()
+    elif mutation == "volume-order": payload["revision"]["runtime"]["volumes"].reverse()
+    elif mutation == "liveness": container["livenessProbe"]["periodSeconds"] = 11
+    reason = "CONCURRENT_SNAPSHOT_CHANGED" if side == "current" else "PROTECTED_CONFIGURATION_CHANGED"
+    with pytest.raises(planner().PlanError, match="^" + reason + "$"):
+        if side == "candidate": tcp_review(tcp_case, candidate)
+        else: planner().build_plan(tcp_case)
+
+
+@pytest.mark.parametrize("mutation,reason", [
+    ("alias", "INDEPENDENT_SNAPSHOTS_REQUIRED"), ("service-uid", "OBJECT_RECREATED"),
+    ("revision-uid", "OBJECT_RECREATED"), ("before-rv", "RESOURCE_VERSION_MISMATCH"),
+    ("current-rv", "RESOURCE_VERSION_MISMATCH"), ("expected-rv", "RESOURCE_VERSION_MISMATCH"),
+    ("missing-rv", "MISSING_FIELD"), ("baseline-zero", "BASELINE_NOT_SERVING"),
+    ("candidate-zero", "CANDIDATE_ROUTE_PRESENT"), ("candidate-tag", "CANDIDATE_ROUTE_PRESENT"),
+    ("duplicate-tag", "AMBIGUOUS_TRAFFIC"), ("missing-port", "TCP_BASELINE_PROBE_MISMATCH"),
+])
+def test_tcp_existing_snapshot_and_traffic_guards_remain(tcp_case, mutation, reason):
+    if mutation == "alias": tcp_case["current"] = tcp_case["before"]
+    elif mutation.endswith("-uid"):
+        tcp_case["current"][mutation[:-4]]["metadata"]["uid"] = "replacement-uid"
+    elif mutation in {"before-rv", "current-rv"}:
+        tcp_case[mutation[:-3]]["service"]["metadata"]["resourceVersion"] = "other-rv"
+    elif mutation == "expected-rv": tcp_case["expected"]["resource_version"] = "other-rv"
+    elif mutation == "missing-rv": del tcp_case["before"]["service"]["metadata"]["resourceVersion"]
+    elif mutation == "missing-port": main_container(tcp_case["before"])["ports"] = []
+    else:
+        for side in ("before", "current"):
+            rows = tcp_case[side]["service"]["traffic"]
+            if mutation == "baseline-zero": rows[0]["percent"], rows[1]["percent"] = 0, 100
+            elif mutation == "duplicate-tag": rows[1]["tag"] = rows[0]["tag"]
+            else:
+                row = {"revisionName": tcp_case["expected"]["candidate_revision"], "percent": 0}
+                if mutation == "candidate-tag": row["tag"] = "forbidden-tag"
+                rows.append(row)
+    stop(tcp_case, reason)
+
+
+@pytest.mark.parametrize("side", ["before", "current", "candidate"])
+@pytest.mark.parametrize("path", [("service", "identity"), ("service", "metadata"),
+                                  ("revision", "provenance"), ("revision", "runtime"),
+                                  ("revision", "runtime", "network"),
+                                  ("revision", "runtime", "containers", 0, "resources")])
+def test_tcp_context_unknown_fields_still_stop(tcp_case, side, path):
+    candidate = tcp_candidate(tcp_case)
+    payload = candidate if side == "candidate" else tcp_case[side]
+    for key in path: payload = payload[key]
+    payload["unknown"] = SENTINEL
+    with pytest.raises(planner().PlanError, match="^UNKNOWN_FIELD$"):
+        if side == "candidate": tcp_review(tcp_case, candidate)
+        else: planner().build_plan(tcp_case)
+
+
+@pytest.mark.parametrize("side", ["before", "current", "candidate"])
+def test_tcp_unknown_literal_precedes_literal_access_or_copy(tcp_case, side):
+    candidate = tcp_candidate(tcp_case)
+    for payload in (tcp_case["before"], tcp_case["current"], candidate):
+        entries = main_container(payload)["env"]
+        entries[0] = LiteralTrap(entries[0])
+    main_container(candidate if side == "candidate" else tcp_case[side])["env"].append(
+        LiteralTrap(name="UNKNOWN_LITERAL", value=SENTINEL))
+    with pytest.raises(planner().PlanError, match="^UNKNOWN_ENV_LITERAL$"):
+        if side == "candidate": tcp_review(tcp_case, candidate)
+        else: planner().build_plan(tcp_case)
+
+
+def test_tcp_desired_template_is_never_accessed(tcp_case):
+    candidate, review = planner().build_plan(DesiredTrap(tcp_case))
+    assert main_container(candidate)["env"][0]["value"] == RAW_TARGET
+    assert review["excluded_desired_template"] == "NOT_ACCESSED"
+
+
+def test_tcp_pure_api_reads_no_environment_files_or_full_a_preflight(tcp_case, monkeypatch):
+    module = planner()
+    calls = []
+
+    def denied(*args, **kwargs):
+        calls.append("impure-call")
+        raise AssertionError("Pure TCP API accessed external state")
+
+    class EnvironmentTrap(dict):
+        __getitem__ = get = __iter__ = __contains__ = denied
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(builtins, "open", denied)
+        scoped.setattr(io, "open", denied)
+        scoped.setattr(os, "getenv", denied)
+        scoped.setattr(os, "environ", EnvironmentTrap())
+        for name in ("_preflight_local", "_run_json", "_dependency_projection", "_runtime_values"):
+            scoped.setattr(module.a, name, denied)
+        candidate, review = module.build_plan(tcp_case)
+        assert tcp_review(tcp_case, candidate) == review
+    assert calls == []
+
+
+def test_tcp_review_rechecks_old_binding_and_candidate_image(tcp_case):
+    candidate = tcp_candidate(tcp_case)
+    main_container(tcp_case["before"])["image"] = OLD_IMAGE
+    with pytest.raises(planner().PlanError, match="^TCP_BASELINE_IMAGE_MISMATCH$"):
+        tcp_review(tcp_case, candidate)
+    main_container(tcp_case["before"])["image"] = TCP_IMAGE
+    main_container(candidate)["image"] = OLD_IMAGE
+    with pytest.raises(planner().PlanError, match="^CANDIDATE_IMAGE_MISMATCH$"):
+        tcp_review(tcp_case, candidate)
+
+
+def test_tcp_real_disk_cli_preserves_guard_and_redacted_assurance(tmp_path, tcp_case):
+    result = cli(tmp_path, tcp_case)
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == "LOCAL_GUARD_EVENTS=[]\n"
+    review = json.loads(result.stdout)
+    assert review == planner().build_plan(tcp_case)[1]
+    assert result.stdout == json.dumps(review, sort_keys=True, separators=(",", ":")) + "\n"
+    for forbidden in (SENTINEL, RAW_TARGET, "fictional-env-secret", "fictional-volume-secret", TCP_IMAGE,
+                      TCP_SOURCE, TCP_BASE, "fictional-service-uid", "opaque/RV+781==", '"containers"',
+                      '"metadata"', '"traffic"', "runtime_risk_limits", "apiVersion", "kind: Service"):
+        assert forbidden not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("failure,reason", [
+    ("policy", "INVALID_STARTUP_POLICY"), ("probe", "TCP_BASELINE_PROBE_MISMATCH"),
+    ("image", "TCP_BASELINE_IMAGE_MISMATCH"), ("source", "TCP_BASELINE_SOURCE_MISMATCH"),
+    ("uid", "OBJECT_RECREATED"), ("rv", "RESOURCE_VERSION_MISMATCH"),
+    ("unknown-literal", "UNKNOWN_ENV_LITERAL"), ("unknown-field", "UNKNOWN_FIELD"),
+])
+def test_tcp_real_disk_cli_failures_are_fixed_and_redacted(tmp_path, tcp_case, failure, reason):
+    if failure == "policy": tcp_case["startup_policy"] = SENTINEL
+    elif failure == "probe": main_container(tcp_case["before"])["startupProbe"]["periodSeconds"] = 239
+    elif failure == "image": main_container(tcp_case["before"])["image"] = OLD_IMAGE
+    elif failure == "source": tcp_case["current"]["revision"]["provenance"]["commit"] = "d" * 40
+    elif failure == "uid": tcp_case["current"]["service"]["metadata"]["uid"] = SENTINEL
+    elif failure == "rv": tcp_case["expected"]["resource_version"] = SENTINEL
+    elif failure == "unknown-literal": main_container(tcp_case["current"])["env"].append({"name": "UNKNOWN", "value": SENTINEL})
+    elif failure == "unknown-field": tcp_case["before"]["service"]["secret_field"] = SENTINEL
+    result = cli(tmp_path, tcp_case)
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert result.stderr == "Review stopped: " + reason + "\nLOCAL_GUARD_EVENTS=[]\n"
+    assert SENTINEL not in result.stderr
