@@ -1120,3 +1120,209 @@ def test_tcp_real_disk_cli_failures_are_fixed_and_redacted(tmp_path, tcp_case, f
     assert result.stdout == ""
     assert result.stderr == "Review stopped: " + reason + "\nLOCAL_GUARD_EVENTS=[]\n"
     assert SENTINEL not in result.stderr
+
+
+@pytest.fixture
+def native_case(monkeypatch):
+    b = planner()
+    identity = dict(project="demo-project", region="demo-region", service="demo-service", baseline_revision=BASE)
+    monkeypatch.setattr(b, "_TCP_00781_IDENTITY", identity)
+    monkeypatch.setattr(b, "_TCP_00781_IMAGE", OLD_IMAGE)
+    traffic = [{"revisionName": BASE, "percent": 100, "tag": "stable"},
+               {"revisionName": DESIRED, "percent": 0, "tag": "keep-zero"}]
+    meta = {"name": "demo-service", "namespace": "demo-project", "uid": "service-uid",
+            "resourceVersion": "rv/original==", "generation": 7,
+            "labels": {"managed-by": "synthetic"}, "annotations": {"run.googleapis.com/ingress": "internal"}}
+    revision_meta = dict(meta, name=BASE, uid="revision-uid", resourceVersion="revision-rv", generation=1,
+                         labels={"commit-sha": b._TCP_00781_SOURCE, "serving.knative.dev/service": "demo-service"},
+                         annotations={"run.googleapis.com/health-check-disabled": "false", "autoscaling.knative.dev/maxScale": "1"})
+    raw_target = json.dumps({"strategy_release": {"strategy_revision": b.OLD_UES_PIN},
+                             "runtime_risk_limits": {"binding": {"ues_revision": b.OLD_UES_PIN}},
+                             "live_continuity": {"signature": "unchanged-synthetic"}})
+    spec = {"serviceAccountName": "synthetic@example.invalid", "containerConcurrency": 1, "timeoutSeconds": 300,
+            "containers": [{"image": OLD_IMAGE, "ports": [{"containerPort": 8080}],
+                            "startupProbe": copy.deepcopy(b._TCP_00781_PROBE),
+                            "env": [{"name": "RUNTIME_TARGET_JSON", "value": raw_target},
+                                    {"name": "CREDENTIAL", "valueFrom": {"secretKeyRef": {"name": "synthetic-ref", "key": "3"}}}],
+                            "resources": {"limits": {"cpu": "1", "memory": "512Mi"}}},
+                           {"name": "helper", "image": OLD_IMAGE, "env": []}], "volumes": []}
+    snap = {"service": {"metadata": meta, "spec": {"traffic": traffic},
+                        "status": {"traffic": copy.deepcopy(traffic), "observedGeneration": 7}},
+            "revision": {"metadata": revision_meta, "spec": spec, "status": {"imageDigest": OLD_IMAGE, "observedGeneration": 1}}}
+    expected = dict(identity, candidate_revision=CANDIDATE, candidate_image=NEW_IMAGE,
+                    resource_version=meta["resourceVersion"], candidate_sha=b.NOTIFICATION_SOURCE, candidate_run="987")
+    return b, snap, expected
+
+
+def test_native_request_is_detached_and_keeps_config_and_zero_tags(native_case):
+    b, before, expected = native_case
+    frozen = copy.deepcopy(before)
+    request, report = b.build_native_plan(before, copy.deepcopy(before), expected)
+    assert before == frozen
+    assert request["metadata"]["resourceVersion"] == "rv/original=="
+    assert request["spec"]["traffic"] == before["service"]["spec"]["traffic"]
+    template = request["spec"]["template"]
+    assert template["metadata"]["name"] == CANDIDATE
+    assert set(template["metadata"]) == {"name", "labels", "annotations"}
+    assert template["metadata"]["labels"]["commit-sha"] == b.NOTIFICATION_SOURCE
+    assert "serving.knative.dev/service" not in template["metadata"]["labels"]
+    restored = copy.deepcopy(template["spec"])
+    restored["containers"][0]["image"] = OLD_IMAGE
+    assert restored == before["revision"]["spec"]
+    assert report["deployment_ready"] is False
+    assert "unchanged-synthetic" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("change", ["service-uid", "service-rv", "revision-uid", "zero-tag", "probe", "sidecar", "target"])
+def test_native_stale_or_changed_snapshots_stop(native_case, change):
+    b, before, expected = native_case
+    current = copy.deepcopy(before)
+    if change == "service-uid": current["service"]["metadata"]["uid"] = "recreated"
+    elif change == "service-rv": current["service"]["metadata"]["resourceVersion"] = "later"
+    elif change == "revision-uid": current["revision"]["metadata"]["uid"] = "recreated"
+    elif change == "zero-tag": current["service"]["spec"]["traffic"][1]["tag"] = "changed"
+    elif change == "probe": current["revision"]["spec"]["containers"][0]["startupProbe"]["timeoutSeconds"] = 1
+    elif change == "sidecar": current["revision"]["spec"]["containers"][1]["image"] = NEW_IMAGE
+    else: current["revision"]["spec"]["containers"][0]["env"][0]["value"] += " "
+    with pytest.raises(b.PlanError): b.build_native_plan(before, current, expected)
+
+
+@pytest.mark.parametrize("change", ["desired", "source", "old-image", "disabled-startup", "missing-startup", "wrong-pin", "unknown-env", "latest-route"])
+def test_native_unsupported_or_wrong_baseline_is_not_defaulted(native_case, change):
+    b, before, expected = native_case
+    if change == "desired": before["revision"]["metadata"]["name"] = DESIRED
+    elif change == "source": before["revision"]["metadata"]["labels"]["commit-sha"] = "d" * 40
+    elif change == "old-image": before["revision"]["spec"]["containers"][0]["image"] = NEW_IMAGE
+    elif change == "disabled-startup": before["revision"]["metadata"]["annotations"]["run.googleapis.com/health-check-disabled"] = "true"
+    elif change == "missing-startup": del before["revision"]["metadata"]["annotations"]["run.googleapis.com/health-check-disabled"]
+    elif change == "wrong-pin": before["revision"]["spec"]["containers"][0]["env"][0]["value"] = '{"strategy_release":{"strategy_revision":"wrong"}}'
+    elif change == "unknown-env": before["revision"]["spec"]["containers"][0]["env"].append({"name": "PRIVATE", "value": SENTINEL})
+    else: before["service"]["spec"]["traffic"][0]["latestRevision"] = True
+    with pytest.raises(b.PlanError) as error: b.build_native_plan(before, copy.deepcopy(before), expected)
+    assert SENTINEL not in str(error.value)
+
+
+@pytest.mark.parametrize("status", [200, 409, 412, 500])
+def test_native_transport_one_request_original_rv_no_body_read(native_case, status):
+    b, before, expected = native_case
+    request, _ = b.build_native_plan(before, copy.deepcopy(before), expected)
+    calls = []
+    class Response:
+        status_code = status
+        def close(self): pass
+        def json(self): raise AssertionError("Never read response config or error text")
+    class Session:
+        def request(self, method, url, **kw):
+            calls.append((method, url, kw)); return Response()
+    if status == 200: b.replace_native_service(request, expected, session=Session())
+    else:
+        with pytest.raises(b.PlanError): b.replace_native_service(request, expected, session=Session())
+    assert len(calls) == 1 and calls[0][0] == "PUT"
+    assert calls[0][2]["json"]["metadata"]["resourceVersion"] == "rv/original=="
+    assert calls[0][2]["allow_redirects"] is False and calls[0][2]["stream"] is True
+
+
+def test_native_transport_uncertain_error_is_not_retried(native_case):
+    b, before, expected = native_case
+    request, _ = b.build_native_plan(before, copy.deepcopy(before), expected)
+    calls = []
+    class Session:
+        def request(self, *args, **kwargs):
+            calls.append(1); raise RuntimeError(SENTINEL)
+    with pytest.raises(b.PlanError, match="NATIVE_WRITE_UNCERTAIN") as error:
+        b.replace_native_service(request, expected, session=Session())
+    assert len(calls) == 1 and SENTINEL not in str(error.value)
+
+
+def ready_native(before, request):
+    after = copy.deepcopy(before)
+    after["revision"]["metadata"].update(request["spec"]["template"]["metadata"])
+    after["revision"]["metadata"].update(uid="new-uid", resourceVersion="new-rv")
+    after["revision"]["spec"] = copy.deepcopy(request["spec"]["template"]["spec"])
+    after["revision"]["status"] = {"imageDigest": NEW_IMAGE, "observedGeneration": 1,
+                                     "conditions": [{"type": k, "status": "True"} for k in ("Ready", "ContainerHealthy")]}
+    after["service"]["metadata"]["resourceVersion"] = "after-write-rv"
+    after["service"]["status"]["latestCreatedRevisionName"] = request["spec"]["template"]["metadata"]["name"]
+    return after
+
+
+def test_native_publisher_reads_exact_candidate_and_waits_only_control_plane(native_case):
+    b, before, expected = native_case
+    request, _ = b.build_native_plan(before, copy.deepcopy(before), expected)
+    after = ready_native(before, request)
+    pending = copy.deepcopy(after); pending["revision"]["status"]["conditions"] = []
+    captures, writes, pauses = [], [], []
+    states = iter([copy.deepcopy(before), pending, after])
+    def capture(identity, **kwargs):
+        captures.append(identity["baseline_revision"]); return next(states)
+    result = b.publish_native(before, expected, read=lambda cmd: [], capture=capture,
+                              replace=lambda req, exp: writes.append(req), pause=pauses.append)
+    assert captures == [BASE, CANDIDATE, CANDIDATE]
+    assert len(writes) == 1 and pauses == [15]
+    assert result["startup"] == "CONTROL_PLANE_TCP_READY_ONLY"
+
+
+@pytest.mark.parametrize("failure", ["conflict", "already-exists", "failed-startup", "pending-bound", "tag-changed"])
+def test_native_publisher_never_redeploys_on_conflict_or_failed_readback(native_case, failure):
+    b, before, expected = native_case
+    request, _ = b.build_native_plan(before, copy.deepcopy(before), expected)
+    after = ready_native(before, request)
+    if failure == "failed-startup": after["revision"]["status"]["conditions"][0]["status"] = "False"
+    if failure == "pending-bound": after["revision"]["status"]["conditions"] = []
+    if failure == "tag-changed": after["service"]["spec"]["traffic"][1]["tag"] = "changed"
+    states = iter([copy.deepcopy(before), after]); writes = []
+    def replace(req, exp):
+        writes.append(req)
+        if failure == "conflict": raise b.PlanError("NATIVE_RESOURCE_VERSION_CONFLICT")
+    with pytest.raises(b.PlanError):
+        b.publish_native(before, expected, read=lambda cmd: ([{}] if failure == "already-exists" else []),
+                         capture=lambda *a, **kw: next(states), replace=replace, pause=lambda _: None, attempts=1)
+    assert len(writes) == (0 if failure == "already-exists" else 1)
+
+
+def fake_overlay_git(b, *, omit=None, extra=None, symlink=False, changed_pin=False):
+    paths = sorted(b._OVERLAY_REQUIRED - ({omit} if omit else set()))
+    if extra: paths.append(extra)
+    def git(*args):
+        if args == ("rev-parse", "HEAD"): return b.NOTIFICATION_SOURCE.encode()
+        if args[0] == "merge-base": return b._TCP_00781_SOURCE.encode()
+        if args[0] == "diff": return "\n".join("M\t" + p for p in paths).encode()
+        if args[0] == "ls-tree": return (("120000" if symlink else "100644") + " blob " + "a" * 40 + "\t" + args[-1]).encode()
+        assert args[0] == "show"
+        source, name = args[1].split(":", 1)
+        return (("bad" if changed_pin and source == b.NOTIFICATION_SOURCE else "dependency") if name in b._DEPENDENCY_HASHES else "synthetic " + name).encode()
+    return git
+
+
+def test_overlay_exact_git_blobs_assets_and_no_install_commands(native_case, monkeypatch, tmp_path):
+    b, _, _ = native_case
+    monkeypatch.setattr(b, "_DEPENDENCY_HASHES", {n: __import__('hashlib').sha256(b"dependency").hexdigest() for n in b._DEPENDENCY_HASHES})
+    out = tmp_path / "context"
+    result = b.prepare_notification_overlay(tmp_path, out, git=fake_overlay_git(b))
+    recipe = (out / "Dockerfile").read_text()
+    assert recipe.startswith("FROM " + OLD_IMAGE + "\n")
+    assert all(line.startswith("COPY [") for line in recipe.splitlines()[1:])
+    assert set(result["files_sha256"]) == b._OVERLAY_REQUIRED
+    assert (out / "notifications/display_names.json").exists()
+    assert (out / "notifications/digest_snapshot/provenance.json").exists()
+    assert (out / "scripts/execution_report_heartbeat.py").exists()
+    assert not (out / ".venv").exists() and not (out / "gha-creds-synthetic.json").exists()
+
+
+@pytest.mark.parametrize("case", ["missing-asset", "extra-runtime", "symlink", "pin-changed"])
+def test_overlay_rejects_before_writing_context(native_case, monkeypatch, tmp_path, case):
+    b, _, _ = native_case
+    monkeypatch.setattr(b, "_DEPENDENCY_HASHES", {n: __import__('hashlib').sha256(b"dependency").hexdigest() for n in b._DEPENDENCY_HASHES})
+    git = fake_overlay_git(b, omit="notifications/display_names.json" if case == "missing-asset" else None,
+                           extra="application/unreviewed.py" if case == "extra-runtime" else None,
+                           symlink=case == "symlink", changed_pin=case == "pin-changed")
+    out = tmp_path / "context"
+    with pytest.raises(b.PlanError): b.prepare_notification_overlay(tmp_path, out, git=git)
+    assert not out.exists()
+
+
+def test_native_numeric_project_namespace_is_preserved_not_rewritten(native_case):
+    b, before, expected = native_case
+    for part in ("service", "revision"): before[part]["metadata"]["namespace"] = "123456789"
+    request, _ = b.build_native_plan(before, copy.deepcopy(before), expected)
+    assert request["metadata"]["namespace"] == "123456789"

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -658,6 +659,290 @@ def _preflight_local(args: argparse.Namespace, baseline: object, candidate: obje
             _stop("LIVE_UES_PIN_NOT_ADMITTED")
 
 
+# Native capture deliberately keeps the Service's desired template out of the
+# response. Every supported Revision config field is inventoried by NAME before
+# a value projection; unknown fields or env literals stop that projection.
+_NATIVE_MAP = object()
+_NATIVE_METADATA = {
+    "name": str, "namespace": str, "uid": str, "resourceVersion": str,
+    "generation": int, "creationTimestamp": str, "selfLink": str,
+    "labels": _NATIVE_MAP, "annotations": _NATIVE_MAP,
+    "ownerReferences": [{"apiVersion": str, "kind": str, "name": str, "uid": str,
+                         "controller": bool, "blockOwnerDeletion": bool}],
+}
+_NATIVE_SPEC = {
+    "serviceAccountName": str, "containerConcurrency": int, "timeoutSeconds": int,
+    "containers": [_CONTAINER | {"workingDir": str}],
+    "volumes": _RUNTIME["volumes"],
+}
+_NATIVE_ANNOTATIONS = frozenset({
+    "run.googleapis.com/client-name", "run.googleapis.com/client-version", "run.googleapis.com/operation-id",
+    "run.googleapis.com/ingress", "run.googleapis.com/ingress-status", "run.googleapis.com/urls",
+    "run.googleapis.com/launch-stage", "run.googleapis.com/execution-environment",
+    "run.googleapis.com/network-interfaces", "run.googleapis.com/vpc-access-connector",
+    "run.googleapis.com/vpc-access-egress", "run.googleapis.com/startup-cpu-boost",
+    "run.googleapis.com/cpu-throttling", "run.googleapis.com/container-dependencies",
+    "run.googleapis.com/health-check-disabled", "run.googleapis.com/secrets",
+    "run.googleapis.com/build-source-location", "run.googleapis.com/build-id",
+    "run.googleapis.com/build-image-uri", "run.googleapis.com/base-images",
+    "autoscaling.knative.dev/minScale", "autoscaling.knative.dev/maxScale",
+    "serving.knative.dev/creator", "serving.knative.dev/lastModifier",
+})
+NATIVE_OUTPUT_LABELS = frozenset({"serving.knative.dev/service", "serving.knative.dev/configuration",
+    "serving.knative.dev/configurationGeneration", "serving.knative.dev/route",
+    "cloud.googleapis.com/location", "run.googleapis.com/startupProbeType"})
+NATIVE_OUTPUT_ANNOTATIONS = frozenset({"serving.knative.dev/creator", "serving.knative.dev/lastModifier",
+    "run.googleapis.com/operation-id", "run.googleapis.com/urls", "run.googleapis.com/ingress-status",
+    "run.googleapis.com/client-name", "run.googleapis.com/client-version"})
+_NATIVE_CONDITIONS = [{"type": str, "status": str, "reason": str, "lastTransitionTime": str}]
+
+
+def _native_fields(schema: object, prefix: str) -> list[str]:
+    if schema is _ENV:
+        return [prefix + ".name", prefix + ".valueFrom.secretKeyRef"]
+    if isinstance(schema, dict):
+        return [field for key, child in schema.items()
+                for field in _native_fields(child, prefix + "." + key)]
+    if isinstance(schema, list):
+        return _native_fields(schema[0], prefix + "[]")
+    return [prefix]
+
+
+def _native_at(value: object, path: str) -> list:
+    values = [value]
+    for part in path.split("."):
+        key, repeated = part.removesuffix("[]"), part.endswith("[]")
+        next_values = []
+        for item in values:
+            if isinstance(item, dict) and key in item:
+                child = item[key]
+                next_values.extend(child if repeated and isinstance(child, list) else [child])
+        values = next_values
+    return values
+
+
+def _native_inventory(read, command: list[str], schema: object, path: str) -> None:
+    if schema is _ENV:
+        schema = {"name": str, "value": str, "valueFrom": {"secretKeyRef": {"name": str, "key": str}}}
+    if isinstance(schema, list):
+        _native_inventory(read, command, schema[0], path + "[]")
+    elif isinstance(schema, dict):
+        # Separate projections avoid a parent list(keys) replacing its children
+        # in gcloud's JSON formatter. Only field names leave gcloud here.
+        names = read(command + [f"--format=json({path}.list(show=keys))"])
+        for item in _native_at(names, path):
+            if not isinstance(item, str) or set(filter(None, item.split(","))) - schema.keys():
+                _stop("NATIVE_UNSUPPORTED_CONFIGURATION_FIELD")
+        for key, child in schema.items():
+            _native_inventory(read, command, child, path + "." + key)
+
+
+def _native_metadata(value: object) -> None:
+    _keys(value, _NATIVE_METADATA, {"name", "namespace", "uid", "resourceVersion"})
+    for key, child in value.items():
+        if key in {"labels", "annotations"}:
+            if key == "annotations" and isinstance(child, dict) and child.keys() - _NATIVE_ANNOTATIONS:
+                _stop("NATIVE_UNSUPPORTED_ANNOTATION")
+            if not isinstance(child, dict) or any(type(k) is not str or type(v) is not str for k, v in child.items()):
+                _stop("NATIVE_INVALID_METADATA")
+        else:
+            _shape(child, _NATIVE_METADATA[key])
+
+
+
+def native_routes(rows: object, *, status: bool = False) -> list:
+    if not isinstance(rows, list): _stop("NATIVE_INVALID_TRAFFIC")
+    result = []
+    for row in rows:
+        _keys(row, {"revisionName", "percent", "tag", "latestRevision"} | ({"url"} if status else set()), {"revisionName"})
+        if "latestRevision" in row and row["latestRevision"] is not False:
+            _stop("NATIVE_LATEST_TRAFFIC_UNSUPPORTED")
+        if type(row["revisionName"]) is not str or type(row.get("percent", 0)) is not int:
+            _stop("NATIVE_INVALID_TRAFFIC")
+        normalized = {"revisionName": row["revisionName"], "percent": row.get("percent", 0)}
+        if "tag" in row:
+            if type(row["tag"]) is not str: _stop("NATIVE_INVALID_TRAFFIC")
+            normalized["tag"] = row["tag"]
+        if "url" in row and type(row["url"]) is not str: _stop("NATIVE_INVALID_TRAFFIC")
+        result.append(normalized)
+    return sorted(result, key=_canonical)
+
+
+def native_snapshot_inventory(snapshot: object) -> None:
+    """Validate ALL env names before any copying, hashing or literal access."""
+    _keys(snapshot, {"service", "revision"}, {"service", "revision"})
+    for key in ("service", "revision"):
+        obj = snapshot[key]
+        _keys(obj, {"metadata", "spec", "status"}, {"metadata", "spec", "status"})
+        _native_metadata(obj["metadata"])
+    _keys(snapshot["service"]["spec"], {"traffic"}, {"traffic"})
+    native_routes(snapshot["service"]["spec"]["traffic"])
+    _keys(snapshot["service"]["status"], {"traffic", "observedGeneration", "latestCreatedRevisionName"}, {"traffic"})
+    if "observedGeneration" in snapshot["service"]["status"]:
+        _shape(snapshot["service"]["status"]["observedGeneration"], int)
+    if "latestCreatedRevisionName" in snapshot["service"]["status"]:
+        _shape(snapshot["service"]["status"]["latestCreatedRevisionName"], str)
+    native_routes(snapshot["service"]["status"]["traffic"], status=True)
+    _shape(snapshot["revision"]["status"], {"imageDigest": str, "observedGeneration": int, "conditions": _NATIVE_CONDITIONS})
+    _shape(snapshot["revision"]["spec"], _NATIVE_SPEC)
+    _keys(snapshot["revision"]["spec"], _NATIVE_SPEC, {"containers", "serviceAccountName"})
+    containers = snapshot["revision"]["spec"]["containers"]
+    if not containers:
+        _stop("MISSING_CONTAINER")
+    for container in containers:
+        _keys(container, _NATIVE_SPEC["containers"][0], {"image", "env", "ports", "startupProbe"} if container is containers[0] else {"image"})
+        names = [entry["name"] for entry in container.get("env", [])]
+        if len(names) != len(set(names)):
+            _stop("DUPLICATE_ENV_NAME")
+
+
+def capture_native_snapshot(identity: dict, *, read=None) -> dict:
+    """Read supported native fields; never export desired or unknown env values.
+
+    Nonempty command/args overrides and unsupported config shapes are explicit
+    capability gaps, rather than defaults or silently discarded configuration.
+    """
+    read = read or _run_json
+    for key in ("project", "region", "service", "baseline_revision"):
+        if type(identity.get(key)) is not str or not re.fullmatch(r"[a-z][a-z0-9-]*", identity[key]):
+            _stop("INVALID_EXPECTED_IDENTITY")
+    if not identity["baseline_revision"].startswith(identity["service"] + "-"):
+        _stop("INVALID_EXPECTED_IDENTITY")
+    shared = [f"--project={identity['project']}", f"--region={identity['region']}"]
+    service_cmd = ["gcloud", "run", "services", "describe", identity["service"], *shared]
+    revision_cmd = ["gcloud", "run", "revisions", "describe", identity["baseline_revision"], *shared]
+    commands = {"service": service_cmd, "revision": revision_cmd}
+    stamps, annotation_names = {}, {}
+    # The earliest UID/RV covers every name inventory, not only later values.
+    for kind, cmd in commands.items():
+        stamp = read(cmd + ["--format=json(metadata.uid,metadata.resourceVersion)"])
+        meta = stamp.get("metadata") if isinstance(stamp, dict) else None
+        _keys(meta, {"uid", "resourceVersion"}, {"uid", "resourceVersion"})
+        if any(type(meta[k]) is not str or not meta[k] for k in meta):
+            _stop("NATIVE_INVALID_INITIAL_STAMP")
+        stamps[kind] = meta
+    _native_inventory(read, service_cmd, {"template": _NATIVE_MAP, "traffic": _NATIVE_MAP}, "spec")
+    _native_inventory(read, revision_cmd, _NATIVE_SPEC, "spec")
+    for kind, cmd in commands.items():
+        annotation_names[kind] = set()
+        _native_inventory(read, cmd, _NATIVE_METADATA, "metadata")
+        # A last-applied blob or arbitrary annotation can embed secret env
+        # values. Reject its NAME before requesting any metadata values.
+        keys = read(cmd + ["--format=json(metadata.annotations.list(show=keys))"])
+        for names in _native_at(keys, "metadata.annotations"):
+            if not isinstance(names, str) or set(filter(None, names.split(","))) - _NATIVE_ANNOTATIONS:
+                _stop("NATIVE_UNSUPPORTED_ANNOTATION")
+            annotation_names[kind].update(filter(None, names.split(",")))
+    # A literal name without a secret reference must be explicitly allowlisted.
+    names = read(revision_cmd + ["--format=json(metadata.uid,metadata.resourceVersion,spec.containers[].env[].name,spec.containers[].env[].valueFrom.secretKeyRef)"])
+    if names.get("metadata") != stamps["revision"]:
+        _stop("NATIVE_OBJECT_CHANGED_DURING_CAPTURE")
+    literal_names = []
+    for env in _native_at(names, "spec.containers[].env[]"):
+        _keys(env, {"name", "valueFrom"}, {"name"})
+        if "valueFrom" not in env:
+            if env["name"] not in LITERAL_ENV:
+                _stop("UNKNOWN_ENV_LITERAL")
+            literal_names.append(env["name"])
+        else:
+            _shape(env, _ENV)
+    if len(literal_names) != len(set(literal_names)):
+        _stop("NATIVE_AMBIGUOUS_LITERAL_CONTAINER")
+    # Overrides may contain credentials. Project lengths only, even if a
+    # different object appears later; a final RV rejection cannot unread text.
+    empty_overrides = {}
+    for field in ("command", "args"):
+        lengths = read(revision_cmd + [f"--format=json(spec.containers[].image,spec.containers[].{field}.len())"])
+        for index, row in enumerate(_native_at(lengths, "spec.containers[]")):
+            if field in row:
+                if type(row[field]) is not int or row[field] != 0:
+                    _stop("NATIVE_COMMAND_OVERRIDE_UNSUPPORTED")
+                empty_overrides.setdefault(index, []).append(field)
+    for path in ("spec.traffic", "status.traffic"):
+        _native_inventory(read, service_cmd, [{"revisionName": str, "percent": int, "tag": str, "latestRevision": bool, **({"url": str} if path.startswith("status") else {})}], path)
+    spec_fields = [field for field in _native_fields(_NATIVE_SPEC, "spec")
+                   if field not in {"spec.containers[].command[]", "spec.containers[].args[]"}]
+    def metadata_fields(kind):
+        fields = [field for key, schema in _NATIVE_METADATA.items() if key != "annotations"
+                  for field in _native_fields(schema, "metadata." + key)]
+        return fields + ["metadata.annotations." + json.dumps(key) for key in sorted(annotation_names[kind])]
+    service = read(service_cmd + ["--format=json(" + ",".join([
+        *metadata_fields("service"), "spec.traffic", "status.traffic", "status.observedGeneration",
+        "status.latestCreatedRevisionName",
+    ]) + ")"])
+    revision = read(revision_cmd + ["--format=json(" + ",".join([
+        *metadata_fields("revision"), *spec_fields, "status.imageDigest", "status.observedGeneration",
+        *_native_fields(_NATIVE_CONDITIONS, "status.conditions"),
+    ]) + ")"])
+    for kind, obj in (("service", service), ("revision", revision)):
+        if not isinstance(obj, dict) or {k: obj.get("metadata", {}).get(k) for k in ("uid", "resourceVersion")} != stamps[kind]:
+            _stop("NATIVE_OBJECT_CHANGED_DURING_CAPTURE")
+    # Preserve explicitly observed empty override fields without requesting
+    # their text. Nonempty overrides were rejected; UID/RV is still bracketed.
+    for index, fields in empty_overrides.items():
+        if index >= len(revision.get("spec", {}).get("containers", [])):
+            _stop("NATIVE_OBJECT_CHANGED_DURING_CAPTURE")
+        for field in fields:
+            revision["spec"]["containers"][index][field] = []
+    for name in literal_names:
+        fmt = 'json(spec.containers[].env.always().filter("name=' + name + '").map().extract(value))'
+        values = _cash_values(read(revision_cmd + ["--format=" + fmt]))
+        if len(values) != 1 or type(values[0]) is not str:
+            _stop("NATIVE_LITERAL_UNAVAILABLE")
+        for env in _native_at(revision, "spec.containers[].env[]"):
+            if env["name"] == name:
+                env["value"] = values[0]
+    for kind, cmd in commands.items():
+        stamp = read(cmd + ["--format=json(metadata.uid,metadata.resourceVersion)"])
+        if not isinstance(stamp, dict) or stamp.get("metadata") != stamps[kind]:
+            _stop("NATIVE_OBJECT_CHANGED_DURING_CAPTURE")
+    snapshot = {"service": service, "revision": revision}
+    native_snapshot_inventory(snapshot)
+    return snapshot
+
+
+def verify_native_readback(before: dict, request: dict, service: dict, revision: dict) -> None:
+    """Check the exact candidate, not latest, without any application request."""
+    native_snapshot_inventory({"service": service, "revision": revision})
+    old_meta, new_meta = before["service"]["metadata"], service["metadata"]
+    if any(new_meta[k] != old_meta[k] for k in ("name", "namespace", "uid")):
+        _stop("NATIVE_SERVICE_IDENTITY_CHANGED")
+    if service["spec"]["traffic"] != before["service"]["spec"]["traffic"] or native_routes(service["status"]["traffic"], status=True) != native_routes(before["service"]["status"]["traffic"], status=True):
+        _stop("NATIVE_TRAFFIC_CHANGED")
+    template = request["spec"]["template"]
+    if (revision["metadata"]["name"] != template["metadata"]["name"]
+            or revision["metadata"]["namespace"] != old_meta["namespace"]
+            or not revision["metadata"]["uid"]):
+        _stop("NATIVE_WRONG_CANDIDATE")
+    if revision["spec"] != template["spec"]:
+        _stop("NATIVE_CANDIDATE_CONFIGURATION_CHANGED")
+    # Compare complete protected metadata; only closed server-output sets differ.
+    for obj, wanted_meta in ((service, request["metadata"]), (revision, template["metadata"])):
+        for field, output in (("labels", NATIVE_OUTPUT_LABELS), ("annotations", NATIVE_OUTPUT_ANNOTATIONS)):
+            actual = {k: v for k, v in obj["metadata"].get(field, {}).items() if k not in output}
+            wanted = {k: v for k, v in wanted_meta.get(field, {}).items() if k not in output}
+            if actual != wanted:
+                _stop("NATIVE_PROTECTED_METADATA_CHANGED")
+    if revision["status"].get("imageDigest") != template["spec"]["containers"][0]["image"]:
+        _stop("NATIVE_CANDIDATE_IMAGE_CHANGED")
+    for obj in (service, revision):
+        generation = obj["metadata"].get("generation")
+        if type(generation) is not int or obj["status"].get("observedGeneration") != generation:
+            _stop("NATIVE_STARTUP_PENDING")
+    latest = service["status"].get("latestCreatedRevisionName")
+    if latest != template["metadata"]["name"]:
+        old_generation = old_meta.get("generation")
+        if (latest and type(old_generation) is int
+                and service["metadata"]["generation"] > old_generation):
+            _stop("NATIVE_OTHER_CANDIDATE_OBSERVED")
+        _stop("NATIVE_STARTUP_PENDING")
+    conditions = {x["type"]: x["status"] for x in revision["status"].get("conditions", [])}
+    if any(conditions.get(k) == "False" for k in ("Ready", "ContainerHealthy")):
+        _stop("NATIVE_STARTUP_FAILED")
+    if any(conditions.get(k) != "True" for k in ("Ready", "ContainerHealthy")):
+        _stop("NATIVE_STARTUP_PENDING")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -679,9 +964,22 @@ def main() -> int:
     local.add_argument("--candidate-run")
     for flag in ("baseline", "candidate", "baseline-repository", "candidate-repository"):
         local.add_argument(f"--{flag}", required=True, type=Path)
+    native = subparsers.add_parser("capture-native", help="Read a selected supported native revision, stopping on unknown literals")
+    for flag in ("project", "region", "service", "baseline-revision"):
+        native.add_argument(f"--{flag}", required=True)
+    native.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
     try:
-        if args.command == "capture":
+        if args.command == "capture-native":
+            snapshot = capture_native_snapshot(vars(args))
+            try:
+                descriptor = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+                    output.write(_canonical(snapshot))
+            except OSError:
+                _stop("NATIVE_CAPTURE_OUTPUT_UNAVAILABLE")
+            print("Captured selected native configuration; no application health or notification delivery verified.")
+        elif args.command == "capture":
             args.output.write_text(_canonical(_snapshot(args)), encoding="utf-8")
             print("Captured non-secret Cloud Run deployment baseline.")
         elif args.command == "verify":

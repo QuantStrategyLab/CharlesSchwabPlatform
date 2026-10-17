@@ -11,6 +11,16 @@ on:
         description: Exact 40-character commit SHA approved for this operation.
         required: true
         type: string
+      notification_only:
+        description: Use the reviewed notification overlay and preserve the selected 00781 TCP configuration.
+        default: false
+        required: true
+        type: boolean
+      notification_candidate_revision:
+        description: Exact fresh revision name for notification_only. No latest aliases or reuse.
+        default: ""
+        required: false
+        type: string
       approve_image_deploy:
         description: Create a new Cloud Run revision without traffic.
         default: false
@@ -167,6 +177,9 @@ jobs:
     steps:
       - name: Check whether Cloud Run automation is enabled
         id: config
+        env:
+          NOTIFICATION_ONLY: ${{ inputs.notification_only }}
+          NOTIFICATION_CANDIDATE_REVISION: ${{ inputs.notification_candidate_revision }}
         run: |
           set -euo pipefail
 
@@ -210,6 +223,27 @@ jobs:
           if [ "${deploy_enabled}" = "true" ] && [ "${CLOUD_RUN_CLEANUP_ENABLED:-}" = "true" ] && [ "${APPROVE_CLEANUP:-false}" = "true" ]; then
             cleanup_enabled=true
           fi
+
+          if [ "${NOTIFICATION_ONLY:-false}" = "true" ]; then
+            for approval in APPROVE_ENV_SECRET_SYNC APPROVE_SCHEDULER_IAM_SYNC APPROVE_TRAFFIC_SHIFT APPROVE_CLEANUP; do
+              if [ "${!approval:-false}" != "false" ]; then
+                echo "Notification-only cannot combine environment, IAM, traffic or cleanup operations." >&2
+                exit 1
+              fi
+            done
+            if [[ ! "${NOTIFICATION_CANDIDATE_REVISION:-}" =~ ^charles-schwab-quant-service-[a-z0-9-]+$ ]] || [ "${#NOTIFICATION_CANDIDATE_REVISION}" -gt 63 ]; then
+              echo "Exact notification candidate revision required." >&2
+              exit 1
+            fi
+            env_sync_enabled=false
+            scheduler_iam_sync_enabled=false
+            traffic_shift_enabled=false
+            cleanup_enabled=false
+          elif [ "${NOTIFICATION_ONLY:-false}" != "false" ]; then
+            echo "Invalid notification-only selector." >&2
+            exit 1
+          fi
+          write_github_output "notification_only=${NOTIFICATION_ONLY:-false}"
 
           write_github_output \
             "deploy_enabled=${deploy_enabled}" \
@@ -259,7 +293,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install strategy status dependencies
-        if: steps.config.outputs.enabled == 'true'
+        if: steps.config.outputs.enabled == 'true' && inputs.notification_only != true
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip uv
@@ -394,7 +428,7 @@ jobs:
           version: ">= 416.0.0"
 
       - name: Capture no-traffic deployment baseline
-        if: steps.config.outputs.deploy_enabled == 'true'
+        if: steps.config.outputs.deploy_enabled == 'true' && inputs.notification_only != true
         env:
           DEPLOY_READBACK_FILE: ${{ runner.temp }}/cloud-run-no-traffic-baseline.json
         run: |
@@ -412,7 +446,7 @@ jobs:
             --output="${DEPLOY_READBACK_FILE}"
 
       - name: Verify deployed runtime target admission before traffic shift
-        if: steps.config.outputs.deploy_enabled == 'true' || steps.config.outputs.env_sync_enabled == 'true' || steps.config.outputs.traffic_shift_enabled == 'true'
+        if: inputs.notification_only != true && (steps.config.outputs.deploy_enabled == 'true' || steps.config.outputs.env_sync_enabled == 'true' || steps.config.outputs.traffic_shift_enabled == 'true')
         run: |
           set -euo pipefail
           uv run --no-sync python scripts/verify_deployed_runtime_target_admission.py \
@@ -423,7 +457,7 @@ jobs:
 
       - name: Build, push, and deploy Cloud Run image
         id: deploy
-        if: steps.config.outputs.deploy_enabled == 'true'
+        if: steps.config.outputs.deploy_enabled == 'true' && inputs.notification_only != true
         env:
           SYNC_PLAN_JSON: ${{ steps.strategy_requirements.outputs.sync_plan_json }}
         run: |
@@ -473,7 +507,7 @@ jobs:
             --quiet
 
       - name: Verify no-traffic deployment readback
-        if: steps.config.outputs.deploy_enabled == 'true'
+        if: steps.config.outputs.deploy_enabled == 'true' && inputs.notification_only != true
         env:
           DEPLOY_READBACK_FILE: ${{ runner.temp }}/cloud-run-no-traffic-baseline.json
           EXPECTED_IMAGE_DIGEST: ${{ steps.deploy.outputs.image_digest }}
@@ -492,6 +526,93 @@ jobs:
             --before="${DEPLOY_READBACK_FILE}" \
             --expected-sha="${EXPECTED_SHA}" \
             --expected-image-digest="${EXPECTED_IMAGE_DIGEST}"
+
+      - name: Checkout reviewed notification source
+        if: steps.config.outputs.notification_only == 'true' && steps.config.outputs.deploy_enabled == 'true'
+        uses: actions/checkout@v6
+        with:
+          ref: e159e6cc07f9a9eea417b810674f934eb5291e6f
+          fetch-depth: 0
+          path: notification-source
+
+      - name: Capture selected native notification baseline
+        if: steps.config.outputs.notification_only == 'true' && steps.config.outputs.deploy_enabled == 'true'
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 scripts/verify_cloud_run_no_traffic_deploy.py capture-native \
+            --project="${GCP_PROJECT_ID}" --region="${CLOUD_RUN_REGION}" --service="${CLOUD_RUN_SERVICE}" \
+            --baseline-revision=charles-schwab-quant-service-00781-lel \
+            --output="${RUNNER_TEMP}/native-notification-before.json"
+
+      - name: Build exact notification overlay without dependency installation
+        if: steps.config.outputs.notification_only == 'true' && steps.config.outputs.deploy_enabled == 'true'
+        id: notification_image
+        env:
+          NOTIFICATION_CANDIDATE_REVISION: ${{ inputs.notification_candidate_revision }}
+        run: |
+          set -euo pipefail
+          umask 077
+          # Validate the frozen serving baseline before spending build resources.
+          # The placeholder is used only by the pure planner, never submitted.
+          python3 - <<'PY_CHECK'
+          import json, os
+          from pathlib import Path
+          from scripts.build_schwab_notification_revision_plan import build_native_plan, NOTIFICATION_SOURCE
+          before = json.loads((Path(os.environ["RUNNER_TEMP"]) / "native-notification-before.json").read_text())
+          expected = dict(project=os.environ["GCP_PROJECT_ID"], region=os.environ["CLOUD_RUN_REGION"], service=os.environ["CLOUD_RUN_SERVICE"],
+                          baseline_revision="charles-schwab-quant-service-00781-lel", candidate_revision=os.environ["NOTIFICATION_CANDIDATE_REVISION"],
+                          candidate_image="registry.invalid/prebuild-only@sha256:" + "0" * 64,
+                          resource_version=before["service"]["metadata"]["resourceVersion"], candidate_sha=NOTIFICATION_SOURCE, candidate_run=os.environ["GITHUB_RUN_ID"])
+          import copy
+          build_native_plan(before, copy.deepcopy(before), expected)
+          print("Selected baseline pre-build validation passed; image and runtime adoption remain unverified.")
+          PY_CHECK
+          context="${RUNNER_TEMP}/notification-overlay"
+          python3 scripts/build_schwab_notification_revision_plan.py prepare-overlay \
+            --repository=notification-source --output="${context}"
+          artifact_registry_hostname="${GCP_ARTIFACT_REGISTRY_HOSTNAME:-${CLOUD_RUN_REGION}-docker.pkg.dev}"
+          image_repo="${artifact_registry_hostname}/${GCP_PROJECT_ID}/${GCP_ARTIFACT_REGISTRY_REPOSITORY}/charlesschwabplatform/${CLOUD_RUN_SERVICE}"
+          image="${image_repo}:notification-e159-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          gcloud auth configure-docker "${artifact_registry_hostname}" --quiet
+          docker build -t "${image}" "${context}"
+          # The existing RS-08 image probe runs Python with --network none, not
+          # the application entrypoint. Use the OLD source lock and exact target.
+          NOTIFICATION_IMAGE="${image}" python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          from scripts.verify_image_ues_release_binding import main
+          before = json.loads((Path(os.environ["RUNNER_TEMP"]) / "native-notification-before.json").read_text())
+          runtime_literals = [e["value"] for e in before["revision"]["spec"]["containers"][0]["env"]
+                              if e["name"] in {"RUNTIME_TARGET_JSON", "QSL_RUNTIME_TARGET_JSON"} and "value" in e]
+          if len(runtime_literals) != 1:
+              raise SystemExit("Selected runtime target unavailable; stopped")
+          for name in ("SYNC_PLAN_JSON", "CLOUD_RUN_SERVICE_TARGETS_JSON"):
+              os.environ.pop(name, None)
+          os.environ["RUNTIME_TARGET_JSON"] = runtime_literals[0]
+          raise SystemExit(main(["--image", os.environ["NOTIFICATION_IMAGE"], "--lockfile", "notification-source/uv.lock"]))
+          PY
+          docker push "${image}"
+          digest="$(gcloud artifacts docker images describe "${image}" --project="${GCP_PROJECT_ID}" --format='value(image_summary.digest)')"
+          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "Invalid notification digest" >&2; exit 1; }
+          printf 'immutable_image=%s@%s\n' "${image_repo}" "${digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Publish one native notification revision and wait for its TCP startup
+        if: steps.config.outputs.notification_only == 'true' && steps.config.outputs.deploy_enabled == 'true'
+        env:
+          NOTIFICATION_IMAGE: ${{ steps.notification_image.outputs.immutable_image }}
+          NOTIFICATION_CANDIDATE_REVISION: ${{ inputs.notification_candidate_revision }}
+        run: |
+          set -euo pipefail
+          # Reuse setup-gcloud's authentication libraries; no dependency sync.
+          sdk_root="$(gcloud info --format='value(installation.sdk_root)')"
+          PYTHONPATH="${sdk_root}/lib:${sdk_root}/lib/third_party${PYTHONPATH:+:${PYTHONPATH}}" \
+            python3 scripts/build_schwab_notification_revision_plan.py native-publish \
+            --before="${RUNNER_TEMP}/native-notification-before.json" \
+            --project="${GCP_PROJECT_ID}" --region="${CLOUD_RUN_REGION}" --service="${CLOUD_RUN_SERVICE}" \
+            --baseline-revision=charles-schwab-quant-service-00781-lel \
+            --candidate-revision="${NOTIFICATION_CANDIDATE_REVISION}" \
+            --candidate-image="${NOTIFICATION_IMAGE}" --candidate-run="${GITHUB_RUN_ID}"
 
       - name: Sync Cloud Run environment
         if: steps.config.outputs.env_sync_enabled == 'true'
