@@ -14,7 +14,7 @@ def composer_report(env, started_at, run_id):
     runtime = resolve_runtime_target_from_env(env={**env, "RUNTIME_TARGET_JSON": json.dumps(target)}, expected_platform_id="schwab")
     composer = SchwabRuntimeComposer(
         project_id=None, service_name="synthetic-service", secret_id="", app_key=None, app_secret=None,
-        token_path="", strategy_profile="strategy-a", strategy_domain="us_equity",
+        token_path="", strategy_profile=target["strategy_profile"], strategy_domain="us_equity",
         strategy_display_name="Synthetic", strategy_display_name_localized="Synthetic", notify_lang="en",
         tg_token=None, tg_chat_id=None, managed_symbols=(), benchmark_symbol="",
         signal_effective_after_trading_days=1, dry_run_only=False, limit_buy_premium=1.0,

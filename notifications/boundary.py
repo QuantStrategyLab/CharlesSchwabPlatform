@@ -48,7 +48,7 @@ def annotate_summary(summary, result, *, dry_run):
         execution = dict(getattr(result, "execution", {}) or {})
         summary["notification_digest"] = cycle_evidence(execution,
             tuple(getattr(result, "submitted_orders", ()) or ()), dry_run=dry_run)
-        for key in ("notification_events", "notification_block_reason", "notification_attention_reason_codes"):
+        for key in ("notification_events", "notification_block_reason", "notification_attention_reason_codes", "notification_gate_completion"):
             if execution.get(key):
                 summary[key] = execution[key]
         if execution.get("notification_approved_gates"):

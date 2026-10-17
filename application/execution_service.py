@@ -826,8 +826,20 @@ def execute_rebalance_cycle(
     submission_halted = False
     submission_outcome_unknown = False
 
+    try:
+        from notifications.execution_observation import start_observation
+        notification_observer = start_observation()
+    except Exception:
+        notification_observer = None
+
     def execute_fire_forget(symbol, action_type, quantity, price=None):
         nonlocal submission_halted, submission_outcome_unknown
+        nonlocal notification_observer
+        if notification_observer is not None:
+            try:
+                notification_observer.order_path()
+            except Exception:
+                notification_observer = None
         if submission_halted:
             return False
         if is_account_new_risk_gate_enabled() and action_type != "SELL":
@@ -1391,6 +1403,16 @@ def execute_rebalance_cycle(
                 }
             )
 
+    if notification_observer is not None:
+        try:
+            notification_observer.complete(result_execution,
+                admission=admission if account_new_risk_buy_blocked else None,
+                snapshot=cycle_snapshot if account_new_risk_buy_blocked else None,
+                portfolio=portfolio, orders=submitted_orders, branch=buys_blocked_reason,
+                needed_buys=buy_needed_symbols, sold=sell_executed, bought=buy_executed,
+                outcome_unknown=submission_outcome_unknown, dry_run=dry_run_only)
+        except Exception:
+            pass
     set_cycle_snapshot(None)
     return ExecutionCycleResult(
         plan=dict(plan or {}),

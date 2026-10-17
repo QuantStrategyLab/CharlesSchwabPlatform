@@ -1,5 +1,5 @@
 """Notification-only facade around the unchanged production heartbeat policy."""
-from .approved_gates import report_gate_reasons
+from .execution_observation import report_reasons as report_gate_reasons
 from .receipt_evidence import _run, _instant
 from .receipt_alerts import render_receipt_alert
 from .unified import enabled, publish_receipt, publish_approved_receipts

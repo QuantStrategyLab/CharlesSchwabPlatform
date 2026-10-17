@@ -277,6 +277,9 @@ def publish_cycle(result, *, config, legacy):
     execution, orders = result.execution, tuple(result.submitted_orders or ())
     from .approved_gates import approved_block_reasons, render_gate_reasons
     approved = approved_block_reasons(execution, order_count=len(orders), dry_run=config.dry_run_only)
+    if not approved and not config.dry_run_only:
+        from .execution_observation import execution_reasons
+        approved = execution_reasons(execution, report=_context.get() or {}, order_count=len(orders))
     if set(getattr(config, "notification_attention_reason_codes", ()) or ()) - {"account_new_risk_gate"}:
         approved = []
     healthy = defer_routine_cycle_to_digest(execution, submitted_order_count=len(orders),
@@ -379,9 +382,15 @@ def _project_runs(reports, **kwargs):
             row["source_run_id"] = run_id
             row["field_status"] = {name: "known" if row.get(name) is not None else "unknown"
                 for name in ("order_count", "fill_count", "cycle_count")}
-            from .approved_gates import report_gate_reasons, render_gate_reasons
+            from .approved_gates import render_gate_reasons
+            from .execution_observation import report_reasons as report_gate_reasons
             approved = report_gate_reasons(report, observed_at=kwargs.get("now"))
             if approved:
+                if not row.get("block_reason") and report.get("summary", {}).get("notification_gate_completion"):
+                    # The observed executor branch actually blocked new buys.
+                    # Preserve report status and receipt; only describe that
+                    # proven gate decision in this notification projection.
+                    row["block_reason"] = {"reason_code": "strategy_risk_rejected", "order_submitted_this_run": False}
                 row.update(approved_gate_reasons=approved,
                     reason_text_zh=render_gate_reasons(approved, "zh"), reason_text_en=render_gate_reasons(approved, "en"))
             rows.append(row)
@@ -520,7 +529,7 @@ def _receipt_event(report, kind, reason):
 
 
 def publish_approved_receipts(reports):
-    from .approved_gates import report_gate_reasons
+    from .execution_observation import report_reasons as report_gate_reasons
     try:
         required = []
         for report in reports:
