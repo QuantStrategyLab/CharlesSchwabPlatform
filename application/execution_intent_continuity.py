@@ -172,7 +172,7 @@ class _RecoveryLocatorStore:
     def read_registered(self) -> _LocatorVersion:
         blob = self._blob(reading=True)
         try:
-            blob.reload()
+            blob.reload(retry=None)
         except Exception as exc:
             self._io_failure(exc, reading=True)
         try:
@@ -180,7 +180,7 @@ class _RecoveryLocatorStore:
         except (ValueError, OverflowError):
             raise _LocatorUncertain("read_generation_unavailable") from None
         try:
-            text = blob.download_as_text(if_generation_match=generation)
+            text = blob.download_as_text(if_generation_match=generation, retry=None)
         except Exception as exc:
             self._io_failure(exc, reading=True)
         return self._decode(text, generation)
@@ -189,7 +189,7 @@ class _RecoveryLocatorStore:
         envelope, canonical, digest = self._encode(payload_json)
         blob = self._blob(reading=False)
         try:
-            blob.upload_from_string(envelope, content_type="application/json", if_generation_match=expected_generation)
+            blob.upload_from_string(envelope, content_type="application/json", if_generation_match=expected_generation, retry=None)
         except Exception as exc:
             self._io_failure(exc, reading=False)
         try:

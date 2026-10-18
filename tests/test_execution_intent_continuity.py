@@ -91,7 +91,8 @@ class FileBlob:
         self.name = name
         self.generation = None
 
-    def reload(self):
+    def reload(self, *, retry):
+        assert retry is None
         self.owner.calls.append(("reload",))
         if self.owner.reload_error:
             raise self.owner.reload_error
@@ -102,7 +103,8 @@ class FileBlob:
         if callback:
             callback()
 
-    def download_as_text(self, *, if_generation_match):
+    def download_as_text(self, *, if_generation_match, retry):
+        assert retry is None
         self.owner.calls.append(("download", if_generation_match))
         with self.owner.locked():
             state = self.owner.load()
@@ -110,7 +112,8 @@ class FileBlob:
                 raise ContractHTTPError(412)
             return state["data"]
 
-    def upload_from_string(self, data, *, content_type, if_generation_match):
+    def upload_from_string(self, data, *, content_type, if_generation_match, retry):
+        assert retry is None
         assert content_type == "application/json"
         self.owner.calls.append(("upload", if_generation_match))
         if if_generation_match == 0:
@@ -138,6 +141,97 @@ class FileBlob:
 
 def store(client, *, scope=SCOPE):
     return _RecoveryLocatorStore(client, locator_uri=URI, scope=scope)
+
+
+_SDK_DEFAULT_RETRY = object()
+
+
+class _SdkRetryClient:
+    """C's explicit lost-503/retried-412 model; no SDK or HTTP execution."""
+    def __init__(self, generation=0, blob_type=None):
+        self.generation = generation
+        self.data = None
+        self.attempts = 0
+        self.policies = []
+        self.blob_type = blob_type
+
+    def bucket(self, name):
+        cls = self.blob_type or _SdkRetryBlob
+        return SimpleNamespace(name=name, blob=lambda key: cls(self, name, key))
+
+
+class _SdkRetryBlob:
+    def __init__(self, owner, bucket, name):
+        self.owner = owner
+        self.bucket = SimpleNamespace(name=bucket)
+        self.name = name
+        self.generation = None
+
+    def reload(self, *, retry=_SDK_DEFAULT_RETRY):
+        self.owner.policies.append(("reload", None if retry is None else "SDK_DEFAULT"))
+        self.generation = str(self.owner.generation)
+
+    def download_as_text(self, *, if_generation_match, retry=_SDK_DEFAULT_RETRY):
+        self.owner.policies.append(("download", None if retry is None else "SDK_DEFAULT"))
+        assert if_generation_match == self.owner.generation
+        return self.owner.data
+
+    def upload_from_string(self, data, *, content_type, if_generation_match, retry=_SDK_DEFAULT_RETRY):
+        self.owner.policies.append(("upload", None if retry is None else "SDK_DEFAULT"))
+        self.owner.attempts += 1
+        assert content_type == "application/json" and if_generation_match == self.owner.generation
+        self.owner.generation += 1
+        self.owner.data = data
+        self.generation = str(self.owner.generation)
+        if retry is None:
+            raise ContractHTTPError(503)  # committed, acknowledgement lost
+        self.owner.attempts += 1  # modeled SDK retry reuses the now-stale precondition
+        raise ContractHTTPError(412)
+
+
+@pytest.mark.parametrize("generation", [0, 7], ids=["create", "cas"])
+def test_sdk_lost_reply_has_one_attempt_and_remains_uncertain(generation):
+    client = _SdkRetryClient(generation)
+    target = store(client)
+    token = _LocatorVersion(generation, "{}", hashlib.sha256(b"{}").hexdigest(), URI, SCOPE)
+    with pytest.raises(_LocatorUncertain) as raised:
+        if generation == 0:
+            target.initialize_new_cohort(ORIGINAL)
+        else:
+            target.compare_update(ORIGINAL, expected=token)
+    assert raised.value.status_code == 503
+    assert client.attempts == 1
+    assert client.policies == [("upload", None)]
+    payload = json.loads(json.loads(client.data)["payload_json"])
+    assert payload["state"] == "UNKNOWN" and payload["native_order_id"] is None
+
+
+def test_registered_read_explicitly_disables_both_sdk_retry_defaults():
+    client = _SdkRetryClient(7)
+    target = store(client)
+    client.data = target._encode(ORIGINAL)[0]
+    assert target.read_registered().generation == 7
+    assert client.policies == [("reload", None), ("download", None)]
+
+
+@pytest.mark.parametrize("generation", [0, 7], ids=["create", "cas"])
+def test_sdk_default_policy_negative_control_exposes_retry_and_conflict(generation):
+    class DropWriteRetry(_SdkRetryBlob):
+        def upload_from_string(self, data, *, content_type, if_generation_match, retry=_SDK_DEFAULT_RETRY):
+            # Deliberately remove the fixed wrapper's policy at this model seam.
+            return super().upload_from_string(data, content_type=content_type, if_generation_match=if_generation_match)
+
+    client = _SdkRetryClient(generation, blob_type=DropWriteRetry)
+    target = store(client)
+    token = _LocatorVersion(generation, "{}", hashlib.sha256(b"{}").hexdigest(), URI, SCOPE)
+    with pytest.raises(_LocatorConflict) as raised:
+        if generation == 0:
+            target.initialize_new_cohort(ORIGINAL)
+        else:
+            target.compare_update(ORIGINAL, expected=token)
+    assert raised.value.status_code == 412
+    assert client.attempts == 2
+    assert client.policies == [("upload", "SDK_DEFAULT")]
 
 
 def test_create_and_fresh_instance_recovery_preserve_original(tmp_path):
@@ -182,7 +276,8 @@ def test_consistent_retained_old_version_cannot_authorize_stale_cas(tmp_path):
     old_data = client.load()["data"]
     client.after_reload = lambda: store(client).compare_update('{"references":["newer"]}', expected=original)
 
-    def retained_download(blob, *, if_generation_match):
+    def retained_download(blob, *, if_generation_match, retry):
+        assert retry is None
         assert if_generation_match == 1
         return old_data  # synthetic retained-version response, not a cloud call
 
