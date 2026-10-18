@@ -442,6 +442,7 @@ class _IntentSession:
         self.originals = []
         self.current = []
         self.version = None
+        self.plan_sources = {}
         try:
             self._restore(snapshot, profile_id)
         except Exception:
@@ -477,6 +478,8 @@ class _IntentSession:
         if not validate_runtime_loaded_receipt(c.runtime_release_receipt,
                 expected_strategy_release=target.strategy_release, required=True).is_valid:
             raise _EvidenceRequired("current_release_receipt_required")
+        if not target.market_timezone or c.session_timezone != target.market_timezone:
+            raise _EvidenceRequired("runtime_consumption_timezone_mismatch")
         now = c.consumption_clock()
         if not isinstance(now, datetime) or now.tzinfo is None or not c.session_timezone:
             raise _EvidenceRequired("independent_current_clock_required")
@@ -499,6 +502,36 @@ class _IntentSession:
             command = self._read_reference(ref)
             events = store.events(command)
             self.originals.append((command, events))
+
+    def register_plan_source(self, plan, snapshot):
+        """Bind the exact planner input without changing original lineage."""
+        if self.fatal_reason:
+            return
+        try:
+            if snapshot.metadata.get("account_hash") != self.context.scope.account_hash:
+                raise _EvidenceRequired("refreshed_snapshot_scope_mismatch")
+            source = asdict(snapshot)
+            source["as_of"] = snapshot.as_of.isoformat()
+            digest = _digest(_canonical_json(source))
+            prior = self.plan_sources.get(id(plan))
+            if prior is not None and prior[1] != digest:
+                raise _EvidenceRequired("reused_plan_has_ambiguous_source")
+            # Retain the object itself, so an id cannot be reused in this call.
+            self.plan_sources[id(plan)] = (plan, digest)
+        except Exception:
+            self.fatal_reason = "continuity_plan_source_evidence_required"
+            self.reasons.append(self.fatal_reason)
+
+    def select_plan_source(self, plan):
+        """Activate the chosen plan, including an earlier best refresh."""
+        if self.fatal_reason:
+            return
+        bound = self.plan_sources.get(id(plan))
+        if bound is None or bound[0] is not plan:
+            self.fatal_reason = "continuity_plan_source_evidence_required"
+            self.reasons.append(self.fatal_reason)
+            return
+        self.snapshot_sha256 = bound[1]
 
     def _payload(self, version):
         value = _object_json(version.payload_json)
@@ -555,6 +588,7 @@ class _IntentSession:
         if (facts.get("scope") != asdict(self.context.scope) or facts.get("session") != self.session
                 or facts.get("complete_original_obligations") != obligations
                 or facts.get("resource_reconciliation") != "verified_complete"
+                or facts.get("snapshot_sha256") != self.snapshot_sha256
                 or facts.get("proposal_order_sha256") != _digest(_canonical_json(asdict(order)))
                 or facts.get("strategy_release") != self.context.runtime_target.strategy_release.to_dict()
                 or not re.fullmatch("[a-f0-9]{64}", str(facts.get("source_sha256") or ""))):

@@ -648,6 +648,9 @@ def execute_rebalance_cycle(
     notional_buy_execution: bool = False,
     intent_continuity: _IntentSession | None = None,
 ) -> ExecutionCycleResult:
+    if intent_continuity is not None:
+        intent_continuity.select_plan_source(plan)
+
     def load_quotes(symbols):
         quotes = {}
         for symbol in symbols:
@@ -1199,6 +1202,8 @@ def execute_rebalance_cycle(
                 best_buying_power > previous_buying_power or confirmed_sell_release_value > 0.0
             )
             plan, portfolio, execution, allocation = best_refreshed_state
+            if intent_continuity is not None:
+                intent_continuity.select_plan_source(plan)
             plan, allocation = _apply_safe_haven_cash_substitution(
                 plan=plan,
                 portfolio=portfolio,

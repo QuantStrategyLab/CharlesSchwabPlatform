@@ -631,6 +631,8 @@ def run_strategy_core(
             qqq_history=reference_history,
             snapshot=current_snapshot,
         )
+        if continuity is not None:
+            continuity.register_plan_source(current_plan, current_snapshot)
         current_portfolio = _plan_portfolio(current_plan)
         current_execution = _plan_execution(current_plan)
         current_allocation = _plan_allocation(current_plan)

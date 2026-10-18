@@ -656,7 +656,7 @@ def test_competing_native_attempt_writers_have_one_durable_claim(tmp_path):
     assert len(c.store.events(command)) == 1
 
 
-@pytest.mark.parametrize("qualification", ["complete", "absent", "same_symbol", "missing_sellable", "incomplete_obligations", "missing_release"])
+@pytest.mark.parametrize("qualification", ["complete", "absent", "same_symbol", "missing_sellable", "incomplete_obligations", "missing_release", "wrong_snapshot"])
 def test_native_independent_reduction_requires_complete_original_resource_facts(tmp_path, qualification):
     from test_rebalance_service import continuity_case, run_strategy_core
     from application.execution_intent_continuity import _canonical_json, _digest
@@ -668,6 +668,8 @@ def test_native_independent_reduction_requires_complete_original_resource_facts(
     later.plan["portfolio"]["market_values"] = {symbol: 400}
     later.plan["portfolio"]["quantities"] = {symbol: 4}
     later.plan["allocation"].update(strategy_symbols=(symbol,), risk_symbols=(symbol,), targets={symbol: 0})
+    later.snapshot = replace(later.snapshot, positions=(Position(symbol, 4, 400),))
+    later.runtime = replace(later.runtime, portfolio_port=CallablePortfolioPort(lambda: later.snapshot))
     session = __import__("application.execution_intent_continuity", fromlist=["_IntentSession"])._IntentSession(
         later.context, snapshot=later.snapshot, profile_id=later.scope.profile_id)
     obligations = [{"command_id": cmd.command_id, "descriptor_sha256": _digest(_canonical_json(cmd.to_dict())),
@@ -675,6 +677,7 @@ def test_native_independent_reduction_requires_complete_original_resource_facts(
     order = OrderIntent(symbol, "sell", 4)
     facts = {"scope": __import__("dataclasses").asdict(later.scope), "session": "2026-10-01",
              "complete_original_obligations": obligations, "resource_reconciliation": "verified_complete",
+             "snapshot_sha256": session.snapshot_sha256,
              "source_sha256": "1"*64, "proposal_order_sha256": _digest(_canonical_json(__import__("dataclasses").asdict(order))),
              "strategy_release": later.context.runtime_target.strategy_release.to_dict(),
              "long_quantities": {symbol: 4}, "short_quantities": {symbol: 0},
@@ -683,6 +686,7 @@ def test_native_independent_reduction_requires_complete_original_resource_facts(
     elif qualification == "missing_sellable": facts.pop("sellable_quantities")
     elif qualification == "incomplete_obligations": facts["complete_original_obligations"] = []
     elif qualification == "missing_release": facts.pop("strategy_release")
+    elif qualification == "wrong_snapshot": facts["snapshot_sha256"] = "0"*64
     result = run_strategy_core(runtime=later.runtime, config=replace(later.config,
         intent_continuity=replace(later.context, resource_facts=facts)))
     assert len(later.calls) == int(qualification == "complete")

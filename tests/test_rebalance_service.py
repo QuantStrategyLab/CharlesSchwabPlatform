@@ -2676,3 +2676,79 @@ def _offline_caller_external_ports(monkeypatch):
     monkeypatch.setattr(rebalance_service, "try_record_platform_execution", lambda *args, **kwargs: False)
     monkeypatch.setattr(daily_loss_fact_producer, "load_recent_runtime_reports_from_gcs", lambda **kwargs: ())
     monkeypatch.setattr(account_new_risk_gate_support, "resolve_production_drift_status_from_store", lambda **kwargs: None)
+
+
+@pytest.mark.parametrize("refresh_attempts", [1, 2])
+def test_final_buy_uses_the_selected_refreshed_snapshot_source(tmp_path, refresh_attempts):
+    import json
+    from copy import deepcopy
+    from datetime import timedelta
+    from dataclasses import asdict
+    from application.execution_intent_continuity import _canonical_json, _digest
+    c = continuity_case(tmp_path)
+    # Lower cash prevents early refresh-loop exit. The best snapshot can be an
+    # earlier one; settled cash remains sufficient for this synthetic BUY.
+    first_refresh = replace(c.snapshot, as_of=c.snapshot.as_of+timedelta(minutes=1),
+                            positions=(), cash_balance=49999, buying_power=49999)
+    last_refresh = replace(first_refresh, as_of=first_refresh.as_of+timedelta(minutes=1),
+                           cash_balance=49998, buying_power=49998)
+    snapshots = [c.snapshot, first_refresh, last_refresh]
+    reads = []
+    def snapshot():
+        value = snapshots[len(reads)]
+        reads.append(value)
+        return value
+    plans = [deepcopy(c.plan) for _ in snapshots]
+    for plan, observed in zip(plans[1:], snapshots[1:]):
+        plan["portfolio"].update(quantities={"SOXL": 0}, market_values={"SOXL": 0}, liquid_cash=observed.cash_balance)
+        plan["allocation"]["targets"] = {"SOXL": 400}
+    # Existing cash-only policy can intentionally defer buys without cash
+    # release. This fixture opts into its existing non-cash-only mode; no new
+    # admission or release rule is introduced by continuity.
+    def resolve(**kwargs):
+        return plans[snapshots.index(kwargs["snapshot"])]
+    runtime = replace(c.runtime, portfolio_port=CallablePortfolioPort(snapshot), resolve_rebalance_plan=resolve)
+    run_strategy_core(runtime=runtime, config=replace(c.config, post_sell_refresh_attempts=refresh_attempts,
+                                                     cash_only_execution=False))
+    assert len(reads) == 1+refresh_attempts
+    assert len(c.calls) == 2 and c.calls[-1].side == "buy"
+    refs = json.loads(c.locator.read_registered().payload_json)["references"]
+    commands = [json.loads(c.store.object_store.read_text(ref["descriptor_uri"])) for ref in refs]
+    buy = next(command for command in commands if command["intent"]["order"]["side"] == "buy")
+    source = asdict(first_refresh)
+    source["as_of"] = first_refresh.as_of.isoformat()
+    assert buy["intent"]["source_plan"]["snapshot_sha256"] == _digest(_canonical_json(source))
+
+
+@pytest.mark.parametrize("context_timezone", ["America/New_York", "UTC"])
+def test_context_timezone_cannot_advance_authoritative_runtime_session(tmp_path, context_timezone):
+    from datetime import timedelta
+    clock = datetime(2026, 10, 1, 1, tzinfo=timezone.utc) # still September 30 in NY
+    c = continuity_case(tmp_path, "2026-10-01")
+    observed = replace(c.snapshot, as_of=clock-timedelta(minutes=10))
+    ctx = replace(c.context, consumption_clock=lambda: clock, session_timezone=context_timezone)
+    result = run_strategy_core(runtime=replace(c.runtime, portfolio_port=CallablePortfolioPort(lambda: observed)),
+                               config=replace(c.config, intent_continuity=ctx))
+    assert c.calls == [] and result.submitted_orders == ()
+    assert result.execution["broker_submission_done"] is False
+    assert result.execution["continuity_coverage"] == "evidence_required"
+
+
+def test_reused_mutable_plan_with_new_snapshot_requires_evidence(tmp_path):
+    from datetime import timedelta
+    c = continuity_case(tmp_path)
+    refreshed = replace(c.snapshot, as_of=c.snapshot.as_of+timedelta(minutes=1), positions=())
+    reads = []
+    def snapshot():
+        reads.append(1)
+        return c.snapshot if len(reads) == 1 else refreshed
+    def resolve(**kwargs):
+        if kwargs["snapshot"].as_of != c.snapshot.as_of:
+            c.plan["portfolio"].update(market_values={"SOXL": 0}, quantities={"SOXL": 0}, liquid_cash=50400)
+            c.plan["allocation"]["targets"] = {"SOXL": 400}
+        return c.plan
+    result = run_strategy_core(runtime=replace(c.runtime, portfolio_port=CallablePortfolioPort(snapshot),
+                                              resolve_rebalance_plan=resolve), config=c.config)
+    assert len(c.calls) == 1 and c.calls[0].side == "sell"
+    assert "continuity_plan_source_evidence_required" in result.execution["continuity_reason_codes"]
+    assert result.execution["broker_submission_done"] is False
