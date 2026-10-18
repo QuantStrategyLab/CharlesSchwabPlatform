@@ -160,13 +160,24 @@ def test_outcome_read_failure_keeps_unknown_and_sanitizes_detail(setup_cycle,mon
     assert "synthetic-private-store-detail" not in str(result.execution)+capsys.readouterr().out
 
 
-def test_confirmed_no_action_outcome_does_not_invent_pending(setup_cycle):
+@pytest.mark.parametrize("status", ["completed", "no_action", "no_op"])
+def test_confirmed_no_action_outcome_does_not_invent_pending(setup_cycle,status):
     case=setup_cycle;data=metadata()
-    data.update(execution_status="completed",orders_pending_count=0,submitted_orders=[])
+    data.update(execution_status=status,orders_pending_count=0,submitted_orders=[])
     seed(case,data);result=case.run()
     assert case.calls == []
     assert summarize_execution_cycle_result(result,dry_run=False)["result"]=="ok"
     assert "recorded_submitted_orders" not in result.execution
+
+
+@pytest.mark.parametrize("status", ["unknown", "failed", "rejected", "blocked", "invalid", ""])
+def test_zero_count_is_not_a_success_certificate(setup_cycle,status):
+    case=setup_cycle;data=metadata()
+    data.update(execution_status=status,orders_pending_count=0,submitted_orders=[])
+    seed(case,data);result=case.run()
+    assert case.calls==[]
+    assert_pending_replay(case,result,0)
+    assert result.execution["no_op_reason"]=="execution_outcome_unavailable"
 
 
 def test_dry_run_dedup_does_not_read_live_outcome(setup_cycle,monkeypatch):

@@ -417,7 +417,9 @@ def _recorded_execution_replay(*, config, marker_key: str, plan: dict, execution
             return unresolved
         pending_orders = [order for order in orders if order.get("status") in {"accepted", "unknown"}]
         if status != "pending_reconciliation":
-            return unresolved if count or pending_orders else dict(execution)
+            if status in {"completed", "no_action", "no_op"} and count == 0 and not orders:
+                return dict(execution)
+            return unresolved
         if count < len(pending_orders):
             return unresolved
         fields = ("symbol", "side", "quantity", "order_type", "status", "price",
