@@ -2752,3 +2752,147 @@ def test_reused_mutable_plan_with_new_snapshot_requires_evidence(tmp_path):
     assert len(c.calls) == 1 and c.calls[0].side == "sell"
     assert "continuity_plan_source_evidence_required" in result.execution["continuity_reason_codes"]
     assert result.execution["broker_submission_done"] is False
+
+
+def resolution_material(original, current, *, terminal="FILLED", filled=None, order_id=None):
+    """Synthetic externally-qualified immutable source; no broker parser/auth."""
+    import json
+    from dataclasses import asdict
+    from application.execution_intent_continuity import _canonical_json, _digest
+    from application.execution_event_accounting import ExecutionEventLedger
+    refs=json.loads(original.locator.read_registered().payload_json)["references"]
+    ref=refs[0]
+    command=json.loads(original.store.object_store.read_text(ref["descriptor_uri"]))
+    order=command["intent"]["order"]
+    broker_id=order_id or "SYNTH_ORDER"
+    ledger=ExecutionEventLedger(current.root/"resolution-source-ledger.json")
+    requested="4" if float(order["quantity"])==0 else str(order["quantity"])
+    ledger.record_order_intent(intent_id=command["command_id"],order_id=broker_id,
+        owner_id=current.scope.profile_id,symbol=order["symbol"],side=order["side"].upper(),
+        quantity=requested,reserved_amount="400")
+    filled=requested if filled is None else filled
+    if filled!="0":
+        ledger.record_execution_event({"event_id":"SYNTH_FILL_1","event_type":"FILL","order_id":broker_id,
+          "quantity":filled,"price":"100","fee":"0.40","fee_source":"synthetic_per_fill",
+          "event_time":"2026-09-30T15:01:00Z"})
+    ledger.record_order_update(order_id=broker_id,status=terminal,cumulative_filled_quantity=filled)
+    snapshot=asdict(current.snapshot);snapshot["as_of"]=current.snapshot.as_of.isoformat()
+    body={"schema_version":"schwab_original_resolution.v1","scope":asdict(current.scope),
+          "enrollment_sha256":_digest(_canonical_json(current.context.enrollment)),
+          "strategy_release":command["intent"]["strategy_release"],"original_ref":ref,
+          "original_request_sha256":_digest(_canonical_json(order)),
+          "identity_binding":{"command_id":command["command_id"],"order_id":broker_id,"method":"exact_persisted_source_binding"},
+          "broker_requested_quantity":requested,"broker_requested_notional":order["metadata"].get("notional_usd"),"terminal_observed_at":"2026-09-30T15:02:00Z",
+          "coverage":{"from":command["created_at"],"through":current.snapshot.as_of.isoformat(),
+            "orders_complete":True,"executions_complete":True,"fees_complete":True,"corrections_complete":True},
+          "observed_at":current.snapshot.as_of.isoformat(),"current_snapshot_sha256":_digest(_canonical_json(snapshot)),
+          "ledger":ledger.snapshot()}
+    return body,ledger
+
+
+def with_resolution_source(context, body, *, qualified=True, uri="synthetic-evidence://qualified/receipt"):
+    from dataclasses import replace
+    from application.execution_intent_continuity import _canonical_json,_digest
+    raw=_canonical_json(body)
+    fields={"resolution_sources":{uri:_digest(raw)} if qualified else {},"resolution_receipts":{uri:raw}}
+    if all(name in context.__dataclass_fields__ for name in fields):
+        return replace(context,**fields)
+    # Base behavioral witness: existing caller ignores requested proof inputs.
+    for key,value in fields.items():object.__setattr__(context,key,value)
+    return context
+
+
+@pytest.mark.parametrize("branch",["port","fallback"])
+@pytest.mark.parametrize(("terminal","filled"),[("FILLED",None),("CANCELED","2"),("EXPIRED","0")])
+def test_qualified_exact_original_resolution_allows_only_fresh_replanned_proposal(tmp_path,branch,terminal,filled):
+    def lost(_):raise TimeoutError("synthetic response loss")
+    original=continuity_case(tmp_path,branch=branch,fault=lost)
+    first=run_strategy_core(runtime=original.runtime,config=original.config)
+    assert len(original.calls)==1 and first.submitted_orders[0]["status"]=="unknown"
+    current=continuity_case(tmp_path,"2026-10-01",branch=branch,kind="BUY_LIMIT")
+    body,ledger=resolution_material(original,current,terminal=terminal,filled=filled)
+    assert ledger.snapshot()["account"]["reserved_amount"]=="0.00"
+    assert all(item["settlement_status"]=="pending" for item in ledger.snapshot()["account"]["pending_settlement_items"])
+    before_cash=current.plan["portfolio"]["liquid_cash"]
+    result=run_strategy_core(runtime=current.runtime,config=replace(current.config,
+        intent_continuity=with_resolution_source(current.context,body)))
+    assert len(current.calls)==1, "qualified original closure must unblock a genuinely new current plan"
+    assert current.calls[0].side=="buy" and result.submitted_orders[0]["status"]=="accepted"
+    assert current.plan["portfolio"]["liquid_cash"]==before_cash
+
+
+@pytest.mark.parametrize("branch",["port","fallback"])
+def test_late_resolution_does_not_create_orphans_or_permanent_clearance(tmp_path,branch):
+    import json
+    def lost(_):raise TimeoutError("synthetic")
+    original=continuity_case(tmp_path,branch=branch,fault=lost)
+    run_strategy_core(runtime=original.runtime,config=original.config)
+    current=continuity_case(tmp_path,"2026-10-01",branch=branch,kind="BUY_LIMIT")
+    bad,_=resolution_material(original,current)
+    bad["observed_at"]="2026-10-01T13:59:00Z"
+    held=run_strategy_core(runtime=current.runtime,config=replace(current.config,
+        intent_continuity=with_resolution_source(current.context,bad)))
+    assert current.calls==[] and held.submitted_orders==()
+    assert len(json.loads(current.locator.read_registered().payload_json)["references"])==1
+    fresh=continuity_case(tmp_path,"2026-10-02",branch=branch,kind="BUY_LIMIT")
+    complete,_=resolution_material(original,fresh)
+    result=run_strategy_core(runtime=fresh.runtime,config=replace(fresh.config,
+        intent_continuity=with_resolution_source(fresh.context,complete)))
+    assert len(fresh.calls)==1 and fresh.calls[0].side=="buy"
+    assert len(result.submitted_orders)==1
+    # Receipt is not permanently trusted on its own. A fresh same-cycle replay
+    # without source qualification still reports the old obligation held, and
+    # the existing cycle marker prevents current resubmission.
+    replay=continuity_case(tmp_path,"2026-10-02",branch=branch,kind="BUY_LIMIT")
+    replayed=run_strategy_core(runtime=replay.runtime,config=replay.config)
+    assert replay.calls==[] and replayed.submitted_orders==()
+    assert replayed.execution["broker_submission_done"] is False
+
+
+@pytest.mark.parametrize("gate",["cash","new_risk"])
+def test_resolved_original_never_supplies_cash_sellable_or_new_risk_approval(tmp_path,gate):
+    def lost(_):raise TimeoutError("synthetic")
+    original=continuity_case(tmp_path,fault=lost)
+    run_strategy_core(runtime=original.runtime,config=original.config)
+    current=continuity_case(tmp_path,"2026-10-01",kind="BUY_LIMIT")
+    if gate=="cash":
+        current.plan["portfolio"]["liquid_cash"]=0
+        current.snapshot=replace(current.snapshot,cash_balance=0,buying_power=0)
+        current.runtime=replace(current.runtime,portfolio_port=CallablePortfolioPort(lambda:current.snapshot))
+    else:
+        current.plan["portfolio"]["durable_circuit_breaker_state"]="OPEN"
+    body,ledger=resolution_material(original,current)
+    before=dict(current.plan["portfolio"])
+    result=run_strategy_core(runtime=current.runtime,config=replace(current.config,
+        intent_continuity=with_resolution_source(current.context,body)))
+    assert current.calls==[] and result.submitted_orders==()
+    assert current.plan["portfolio"]==before
+    assert result.execution.get("broker_submission_done") is not True
+    assert "sellable_quantities" not in current.plan["portfolio"]
+    assert all(item["settlement_status"]=="pending" for item in ledger.snapshot()["account"]["pending_settlement_items"])
+
+
+@pytest.mark.parametrize("after_commit",[False,True])
+def test_resolution_proof_registration_cas_failure_never_grants_transport(tmp_path,after_commit):
+    from unittest.mock import patch
+    from application.execution_intent_continuity import _IntentSession
+    def lost(_):raise TimeoutError("synthetic")
+    original=continuity_case(tmp_path,fault=lost)
+    run_strategy_core(runtime=original.runtime,config=original.config)
+    current=continuity_case(tmp_path,"2026-10-01",kind="BUY_LIMIT")
+    body,_=resolution_material(original,current)
+    ctx=with_resolution_source(current.context,body)
+    before=_IntentSession(ctx,snapshot=current.snapshot,profile_id=current.scope.profile_id)
+    original_command,original_events=before.originals[0]
+    compare_update=current.locator.compare_update
+    def uncertain(*args,**kwargs):
+        if after_commit:compare_update(*args,**kwargs)
+        raise TimeoutError("synthetic CAS response unavailable")
+    with patch.object(current.locator,"compare_update",uncertain):
+        result=run_strategy_core(runtime=current.runtime,config=replace(current.config,intent_continuity=ctx))
+    assert current.calls==[] and result.submitted_orders==()
+    assert result.execution["broker_submission_done"] is False
+    after=_IntentSession(ctx,snapshot=current.snapshot,profile_id=current.scope.profile_id)
+    assert current.store.events(original_command)==original_events
+    for command,events in after.originals:
+        if command.command_id!=original_command.command_id:assert events==()

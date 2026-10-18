@@ -695,3 +695,137 @@ def test_native_independent_reduction_requires_complete_original_resource_facts(
 
 # Reuse explicit test-only external ports under ordinary pytest as well.
 from test_rebalance_service import _offline_caller_external_ports
+
+
+@pytest.mark.parametrize("fault",["scope","enrollment","release","descriptor","original_request","binding",
+    "requested_quantity","terminal_quantity","pending_terminal","missing_fee","fee_digest","fee_source",
+    "duplicate_fill","missing_fill","fee_total","owner_fee_total","quarantine","unsupported_correction","late_fill","late_source",
+    "incomplete_coverage","snapshot","unqualified_source","changed_source_bytes"])
+def test_resolution_contract_refuses_inconsistent_or_unqualified_original_facts(tmp_path,fault):
+    from application.execution_intent_continuity import _IntentSession
+    from test_rebalance_service import continuity_case,resolution_material,with_resolution_source,run_strategy_core
+    def lost(_):raise TimeoutError("synthetic")
+    original=continuity_case(tmp_path,fault=lost);run_strategy_core(runtime=original.runtime,config=original.config)
+    current=continuity_case(tmp_path,"2026-10-01",kind="BUY_LIMIT")
+    body,ledger=resolution_material(original,current)
+    cid=body["original_ref"]["command_id"];oid=body["identity_binding"]["order_id"]
+    if fault=="scope":body["scope"]["account_hash"]="OTHER_ACCOUNT"
+    elif fault=="enrollment":body["enrollment_sha256"]="0"*64
+    elif fault=="release":body["strategy_release"]["release_id"]="OTHER_RELEASE"
+    elif fault=="descriptor":body["original_ref"]["descriptor_sha256"]="0"*64
+    elif fault=="original_request":body["original_request_sha256"]="0"*64
+    elif fault=="binding":body["identity_binding"]["command_id"]="OTHER_COMMAND"
+    elif fault=="requested_quantity":body["broker_requested_quantity"]="5"
+    elif fault=="terminal_quantity":body["ledger"]["orders"][oid]["cumulative_filled_quantity"]="3"
+    elif fault=="pending_terminal":body["ledger"]["orders"][oid]["status"]="PENDING_CANCEL"
+    elif fault=="missing_fee":body["ledger"]["events"][0].pop("fee")
+    elif fault=="fee_digest":body["ledger"]["events"][0]["fee"]="0.50"
+    elif fault=="fee_source":body["ledger"]["events"][0]["fee_source"]="order_level_commission"
+    elif fault=="duplicate_fill":body["ledger"]["events"].append(dict(body["ledger"]["events"][0]))
+    elif fault=="missing_fill":body["ledger"]["events"]=[]
+    elif fault=="fee_total":body["ledger"]["account"]["fees"]="999.00"
+    elif fault=="owner_fee_total":body["ledger"]["owners"][current.scope.profile_id]["fees"]="999.00"
+    elif fault=="quarantine":body["ledger"]["quarantined_order_ids"]=[oid]
+    elif fault=="unsupported_correction":body["ledger"]["unsupported_event_ids"]=["CORRECTION"]
+    elif fault=="late_fill":body["ledger"]["events"][0]["event_time"]="2026-10-01T14:01:00Z"
+    elif fault=="late_source":body["observed_at"]="2026-10-01T13:59:00Z"
+    elif fault=="incomplete_coverage":body["coverage"]["corrections_complete"]=False
+    elif fault=="snapshot":body["current_snapshot_sha256"]="0"*64
+    ctx=with_resolution_source(current.context,body,qualified=fault!="unqualified_source")
+    if fault=="changed_source_bytes":
+        ctx=replace(ctx,resolution_receipts={key:raw+" " for key,raw in ctx.resolution_receipts.items()})
+    session=_IntentSession(ctx,snapshot=current.snapshot,profile_id=current.scope.profile_id)
+    assert session.fatal_reason is None
+    assert session._resolved_originals()=={}
+    assert session.resolution_diagnostics
+    assert current.calls==[]
+
+
+def test_resolution_preserves_known_broker_identity_and_unsupported_notional_hold(tmp_path):
+    from test_rebalance_service import continuity_case,resolution_material,with_resolution_source,run_strategy_core
+    from application.execution_intent_continuity import _IntentSession
+    for label,kind,lost_reply in [("known_id","SELL",False),("notional","BUY_NOTIONAL",True)]:
+        def lost(_):raise TimeoutError("synthetic")
+        original=continuity_case(tmp_path/label,kind=kind,fault=lost if lost_reply else None)
+        run_strategy_core(runtime=original.runtime,config=original.config)
+        current=continuity_case(tmp_path/label,"2026-10-01",kind="BUY_LIMIT")
+        body,_=resolution_material(original,current,order_id="DIFFERENT_FROM_NATIVE_ACK" if not lost_reply else None)
+        session=_IntentSession(with_resolution_source(current.context,body),snapshot=current.snapshot,profile_id=current.scope.profile_id)
+        assert session._resolved_originals()=={}
+
+
+def test_resolution_anchor_refuses_later_changed_fills_and_never_resubmits_original(tmp_path):
+    from test_rebalance_service import continuity_case,resolution_material,with_resolution_source,run_strategy_core
+    from application.execution_intent_continuity import _IntentSession
+    def lost(_):raise TimeoutError("synthetic")
+    original=continuity_case(tmp_path,fault=lost);run_strategy_core(runtime=original.runtime,config=original.config)
+    current=continuity_case(tmp_path,"2026-10-01",kind="BUY_LIMIT")
+    body,ledger=resolution_material(original,current)
+    ctx=with_resolution_source(current.context,body)
+    session=_IntentSession(ctx,snapshot=current.snapshot,profile_id=current.scope.profile_id)
+    old,history=session.originals[0];original_bytes=current.store.object_store.read_text(str(current.store._command_location(old)))
+    current_order=OrderIntent("SOXL","buy",3,order_type="limit",limit_price=100.0)
+    ticket=session.prepare(order=current_order,plan=current.plan,action_type="BUY_LIMIT")
+    assert ticket is not None
+    anchored=json.loads(current.locator.read_registered().payload_json)["resolution_bindings"][old.command_id]
+    assert session._resolved_originals()[old.command_id]==anchored
+    # New read of exactly the same receipt is idempotent; old event history is
+    # still present. Nothing reset the old command to QUEUED or rewrote it.
+    reopened=_IntentSession(ctx,snapshot=current.snapshot,profile_id=current.scope.profile_id)
+    assert reopened._resolved_originals()[old.command_id]==anchored
+    assert reopened.prepare(order=OrderIntent(**old.intent["order"]),
+        plan={**current.plan,"execution":{**current.plan["execution"],"signal_date":old.signal_date,"effective_date":old.effective_date}},
+        action_type="SELL") is None # not due/current-source differs; no requeue or transport
+    assert current.store.object_store.read_text(str(current.store._command_location(old)))==original_bytes
+    assert current.store.events(old)==history
+    # The existing ledger retains an original fill when a contradictory copy
+    # arrives. A qualified source cannot hide that conflict with a new digest.
+    fill=dict(ledger.snapshot()["events"][0]);fill.pop("event_digest");fill["fee"]="0.50"
+    from application.execution_event_accounting import ExecutionEventError
+    with pytest.raises(ExecutionEventError):ledger.record_execution_event(fill)
+    changed={**body,"ledger":ledger.snapshot()}
+    conflict=_IntentSession(with_resolution_source(current.context,changed),snapshot=current.snapshot,profile_id=current.scope.profile_id)
+    assert conflict._resolved_originals()=={}
+    assert ledger.snapshot()["events"][0]["fee"]=="0.40"
+    assert current.calls==[]
+
+
+def test_resolution_anchor_rejects_new_self_consistent_contradiction_and_old_observation(tmp_path):
+    from test_rebalance_service import continuity_case,resolution_material,with_resolution_source,run_strategy_core
+    from application.execution_intent_continuity import _IntentSession,_canonical_json,_digest,_validated_original_resolution,_EvidenceRequired
+    from application.execution_event_accounting import _json_digest
+    def lost(_):raise TimeoutError("synthetic")
+    original=continuity_case(tmp_path,fault=lost);run_strategy_core(runtime=original.runtime,config=original.config)
+    current=continuity_case(tmp_path,"2026-10-01",kind="BUY_LIMIT")
+    body,_=resolution_material(original,current)
+    session=_IntentSession(with_resolution_source(current.context,body),snapshot=current.snapshot,profile_id=current.scope.profile_id)
+    assert session.prepare(order=OrderIntent("SOXL","buy",3,order_type="limit",limit_price=100),plan=current.plan,action_type="BUY_LIMIT")
+    for mode in ("new_fee","old_observation"):
+        offset=timedelta(minutes=1 if mode=="new_fee" else -1)
+        snapshot=replace(current.snapshot,as_of=current.snapshot.as_of+offset)
+        material=deepcopy(body)
+        observed=snapshot.as_of.isoformat()
+        material["observed_at"]=observed;material["coverage"]["through"]=observed
+        snap=__import__("dataclasses").asdict(snapshot);snap["as_of"]=observed
+        material["current_snapshot_sha256"]=_digest(_canonical_json(snap))
+        if mode=="new_fee":
+            event=material["ledger"]["events"][0];event["fee"]="0.50"
+            event["event_digest"]=_json_digest({key:value for key,value in event.items() if key!="event_digest"})
+            material["ledger"]["account"]["fees"]="0.50"
+            material["ledger"]["owners"][current.scope.profile_id]["fees"]="0.50"
+        probe=_IntentSession(with_resolution_source(current.context,material),snapshot=snapshot,profile_id=current.scope.profile_id)
+        # Each source is internally consistent against its own exact current
+        # snapshot. Only the persisted economic/time binding must reject it.
+        command,_=session.originals[0]
+        uri,proof=next(iter(probe.resolution_sources.items()))
+        kwargs=dict(scope=current.scope,enrollment_sha256=probe.enrollment_sha256,
+            strategy_release=probe.original_release,snapshot_sha256=probe.snapshot_sha256,
+            snapshot_as_of=probe.snapshot_as_of,now=probe.now,source_uri=uri,proof_sha256=proof,
+            known_order_ids=set(),attempted=True)
+        assert _validated_original_resolution(command,material["original_ref"],material,prior_binding=None,**kwargs)
+        anchor=json.loads(current.locator.read_registered().payload_json)["resolution_bindings"][command.command_id]
+        with pytest.raises(_EvidenceRequired,match="resolution_conflicts_with_persisted_economics"):
+            _validated_original_resolution(command,material["original_ref"],material,prior_binding=anchor,**kwargs)
+        assert probe._resolved_originals()=={},mode
+    assert body["ledger"]["events"][0]["fee"]=="0.40"
+    assert current.calls==[]
