@@ -300,3 +300,7 @@ def test_same_native_id_preserves_first_created_at_and_validates_existing_conten
     assert ticket is not None
     assert c.store.object_store.read_text(ref["descriptor_uri"]) == original
     assert ticket.command.created_at == json.loads(original)["created_at"]
+
+
+# Reuse explicit test-only external ports under ordinary pytest as well.
+from test_rebalance_service import _offline_caller_external_ports

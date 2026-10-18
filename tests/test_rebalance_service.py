@@ -2667,3 +2667,12 @@ def test_selected_same_cycle_keeps_existing_replay_reason_and_current_submission
     assert result.execution["no_op_reason"] == "recorded_pending_reconciliation"
     assert result.execution["broker_submission_done"] is False
     assert result.execution["continuity_prior_orders"][0]["broker_order_id"] == "SYNTH_ACK"
+
+
+@pytest.fixture(autouse=True)
+def _offline_caller_external_ports(monkeypatch):
+    """Isolate external reads/telemetry; keep actual admission policy and math."""
+    from application import account_new_risk_gate_support, daily_loss_fact_producer
+    monkeypatch.setattr(rebalance_service, "try_record_platform_execution", lambda *args, **kwargs: False)
+    monkeypatch.setattr(daily_loss_fact_producer, "load_recent_runtime_reports_from_gcs", lambda **kwargs: ())
+    monkeypatch.setattr(account_new_risk_gate_support, "resolve_production_drift_status_from_store", lambda **kwargs: None)

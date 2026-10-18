@@ -203,3 +203,7 @@ def test_runtime_composer_parks_live_without_durable_execution_claim_backend():
         assert "requires a gs:// execution state URI" in str(exc)
     else:
         raise AssertionError("live execution must fail closed without durable atomic claims")
+
+
+# Reuse explicit test-only external ports under ordinary pytest as well.
+from test_rebalance_service import _offline_caller_external_ports

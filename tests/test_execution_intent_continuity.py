@@ -687,3 +687,7 @@ def test_native_independent_reduction_requires_complete_original_resource_facts(
         intent_continuity=replace(later.context, resource_facts=facts)))
     assert len(later.calls) == int(qualification == "complete")
     assert result.execution["broker_submission_done"] is False # original still pending, including positive independent control
+
+
+# Reuse explicit test-only external ports under ordinary pytest as well.
+from test_rebalance_service import _offline_caller_external_ports
