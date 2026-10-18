@@ -14,6 +14,9 @@ _IN = frozenset({"ACH_RECEIPT", "CASH_RECEIPT", "WIRE_IN"})
 _OUT = frozenset({"ACH_DISBURSEMENT", "CASH_DISBURSEMENT", "WIRE_OUT"})
 _INTERNAL = frozenset({"TRADE", "DIVIDEND_OR_INTEREST", "MONEY_MARKET"})
 _MONEY = re.compile(r"^-?(?:0|[1-9]\d{0,11})(?:\.\d{1,8})?$")
+_SETTLEMENT_TIMESTAMP = re.compile(
+    r"\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:[0-5]\d)"
+)
 
 
 def external_flow_enabled(config: Mapping[str, str]) -> bool:
@@ -105,8 +108,10 @@ def project_external_flow_snapshot(
         settlement = tx.get("settlementDate")
         if settlement is not None:
             try:
-                # Preserve the broker date without assigning it a timezone/time.
-                if date.fromisoformat(settlement).isoformat() != settlement:
+                # Keep the broker calendar date as metadata, never as flow time.
+                if isinstance(settlement, str) and _SETTLEMENT_TIMESTAMP.fullmatch(settlement):
+                    settlement = datetime.fromisoformat(settlement.upper().replace("Z", "+00:00")).date().isoformat()
+                elif date.fromisoformat(settlement).isoformat() != settlement:
                     raise ValueError
             except (ValueError, TypeError):
                 complete = False

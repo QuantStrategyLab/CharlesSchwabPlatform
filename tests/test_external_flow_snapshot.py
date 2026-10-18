@@ -195,3 +195,46 @@ def test_offsets_dst_and_record_limit_preserve_projector_rules():
         assert out["windows"][0]["records"][0]["effective_at"] == expected
     with pytest.raises(ValueError, match="size_limit"):
         project([TX | {"activityId": str(i)} for i in range(257)])
+
+
+@pytest.mark.parametrize("settlement,expected_date", [
+    ("2026-09-30T00:00:00.000Z", "2026-09-30"),
+    ("2026-09-30T00:00:00Z", "2026-09-30"),
+    ("2026-09-30T23:30:00.123-04:00", "2026-09-30"),
+    ("2026-10-01T00:30:00.123+02:00", "2026-10-01"),
+    ("2026-09-30t00:00:00.123z", "2026-09-30"),
+])
+def test_official_settlement_timestamp_preserves_record_and_broker_date(settlement, expected_date):
+    window = project([TX | {"time": "2026-09-30T10:21:00.123Z", "settlementDate": settlement}],
+                     source_complete=False)["windows"][0]
+    assert len(window["records"]) == 1
+    assert window["records"][0]["settlement_date"] == expected_date
+    assert window["records"][0]["effective_at"] == "2026-09-30T10:21:00.123Z"
+    assert window["coverage"] == "incomplete"
+
+
+@pytest.mark.parametrize("settlement", [
+    "2026-09-30T00:00:00", "2026-02-30T00:00:00.000Z", "2026-09-30T00:00:00+04:99",
+])
+def test_invalid_settlement_timestamp_remains_incomplete(settlement):
+    window = project([TX | {"settlementDate": settlement}], source_complete=False)["windows"][0]
+    assert window["records"] == []
+    assert window["coverage"] == "incomplete"
+
+
+def test_documented_response_limit_does_not_infer_source_complete():
+    client = Mock()
+    rows = [{"type": "TRADE"}] * 2999 + [TX]
+    client.get_transactions.return_value = SimpleNamespace(status_code=200, json=lambda: rows)
+    raw = collect_external_flow_snapshot(
+        client, account_hash="synthetic-account-hash", period_start=START, period_end=END,
+        currency="USD", enabled=True,
+    )
+    assert len(raw["transactions"]) == 3000
+    assert raw["source_complete"] is False
+    window = attach_external_flow_snapshot(
+        {"account_hash": "synthetic-account-hash", "observed_finished_at": END}, raw, enabled=True,
+    )["externalFlow"]["windows"][0]
+    assert len(window["records"]) == 1
+    assert window["coverage"] == "incomplete"
+    client.get_transactions.assert_called_once()
