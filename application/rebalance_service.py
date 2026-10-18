@@ -19,7 +19,9 @@ from application.runtime_dependencies import SchwabRebalanceConfig, SchwabRebala
 from application.signal_snapshot import build_signal_snapshot
 from notifications.events import NotificationPublisher, RenderedNotification
 from notifications import renderers as notification_renderers
-from quant_platform_kit.common.execution_state import build_execution_marker_key, claim_account_owner
+from quant_platform_kit.common.execution_state import (
+    ExecutionMarkerStore, build_execution_marker_key, claim_account_owner,
+)
 from quant_platform_kit.common.models import QuoteSnapshot
 from quant_platform_kit.common.notification_localization import (
     localize_notification_text as _base_localize_notification_text,
@@ -373,6 +375,71 @@ def _has_submitted_orders(result: ExecutionCycleResult) -> bool:
     return bool(tuple(getattr(result, "submitted_orders", ()) or ()))
 
 
+def _recorded_execution_replay(*, config, marker_key: str, plan: dict, execution: dict) -> dict:
+    """Project a same-key outcome for display; never submit or resolve its claim."""
+    unresolved = {
+        **execution,
+        "execution_status": "pending_reconciliation",
+        "broker_submission_done": False,
+        "orders_pending_count": 0,
+        "no_op_reason": "execution_outcome_unavailable",
+    }
+    try:
+        store = config.execution_state_store
+        if not isinstance(store, ExecutionMarkerStore):
+            return unresolved
+        # Reuse the store's existing read API in its existing outcome namespace.
+        payload = replace(store, namespace=store.outcome_namespace).read_marker(marker_key)
+        if not isinstance(payload, dict) or payload.get("schema_version") != "execution_outcome.v1":
+            return unresolved
+        if payload.get("marker_key") != marker_key:
+            return unresolved
+        metadata = payload.get("metadata")
+        if not isinstance(metadata, dict):
+            return unresolved
+        expected = {
+            "strategy_profile": config.strategy_profile,
+            "account_scope": _resolve_execution_account_scope(config=config, plan=plan),
+            "signal_date": str(execution.get("signal_date") or ""),
+            "effective_date": str(execution.get("effective_date") or ""),
+        }
+        if any(metadata.get(key) != value for key, value in expected.items()):
+            return unresolved
+        if metadata.get("dry_run_only") is not False:
+            return unresolved
+        count = metadata.get("orders_pending_count")
+        orders = metadata.get("submitted_orders")
+        status = metadata.get("execution_status")
+        if (type(count) is not int or count < 0 or not isinstance(orders, list)
+                or not all(isinstance(order, dict) for order in orders)
+                or not isinstance(status, str)
+                or type(metadata.get("broker_submission_done")) is not bool):
+            return unresolved
+        pending_orders = [order for order in orders if order.get("status") in {"accepted", "unknown"}]
+        if status != "pending_reconciliation":
+            return unresolved if count or pending_orders else dict(execution)
+        if count < len(pending_orders):
+            return unresolved
+        fields = ("symbol", "side", "quantity", "order_type", "status", "price",
+                  "limit_price", "notional_usd", "broker_order_id")
+        return {
+            **unresolved,
+            "orders_pending_count": count,
+            "no_op_reason": (
+                "recorded_submission_unknown"
+                if any(order.get("status") == "unknown" for order in orders)
+                else "recorded_pending_reconciliation"
+            ),
+            "recorded_submitted_orders": [
+                {key: order[key] for key in fields if key in order} for order in orders
+            ],
+            "recorded_broker_submission_done": metadata["broker_submission_done"],
+        }
+    except Exception:
+        # A missing/invalid/unreadable outcome cannot turn an unresolved claim into success.
+        return unresolved
+
+
 
 def _should_publish_cycle_notification(result: ExecutionCycleResult, *, config) -> bool:
     from notifications.digest_snapshot.digest_routing import defer_routine_cycle_to_digest
@@ -584,6 +651,7 @@ def run_strategy_core(
     execution_marker_key = _build_execution_marker_key(config=config, execution=execution, plan=plan)
     execution_state_store = getattr(config, "execution_state_store", None)
     execution_already_recorded = False
+    same_key_live_replay = False
     notification_attention_reason_codes = []
     execution_claim_acquired = False
     dry_run_bypass_marker = _dry_run_bypasses_execution_marker(config)
@@ -633,6 +701,7 @@ def run_strategy_core(
         try:
             if not execution_already_recorded:
                 execution_already_recorded = bool(execution_state_store.has_marker(execution_marker_key))
+                same_key_live_replay = execution_already_recorded and not bool(config.dry_run_only)
         except Exception as exc:
             raise RuntimeError(
                 f"Execution marker read failed before broker submission: {type(exc).__name__}"
@@ -666,6 +735,7 @@ def run_strategy_core(
                 },
             )
             execution_already_recorded = not execution_claim_acquired
+            same_key_live_replay = execution_already_recorded and not bool(config.dry_run_only)
 
     # N13 ADR-B: always consult T1 (shadow). Enforce only behind flag + dedup-on.
     # Never forge identity_held=True for dedup-off.
@@ -751,6 +821,14 @@ def run_strategy_core(
                     reason="execution_outcome_persistence_failed", profile=config.strategy_profile,
                 ),
             )
+    if same_key_live_replay:
+        execution_result = replace(
+            execution_result,
+            execution=_recorded_execution_replay(
+                config=config, marker_key=execution_marker_key, plan=plan,
+                execution=execution_result.execution,
+            ),
+        )
     portfolio = execution_result.portfolio
     execution = execution_result.execution
     if notification_attention_reason_codes:
