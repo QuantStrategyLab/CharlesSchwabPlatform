@@ -2955,3 +2955,52 @@ def test_resolution_identity_component_uniqueness_in_actual_caller(tmp_path,bran
     if expected:
         run_strategy_core(runtime=current.runtime,config=config)
         assert len(current.calls)==1 # same facts/proof never duplicate transport
+
+
+@pytest.mark.parametrize("branch",["port","fallback"])
+@pytest.mark.parametrize("known_first_identity",[False,True])
+@pytest.mark.parametrize("conflict",[False,True])
+def test_resolution_receipt_collection_requires_unique_broker_binding(tmp_path,branch,known_first_identity,conflict):
+    import json
+    from application.execution_intent_continuity import _canonical_json,_digest,_IntentSession
+    box={}
+    def first_transport(intent):
+        if len(box["original"].calls)==1:
+            return ExecutionReport(intent.symbol,intent.side,intent.quantity,"accepted",
+                broker_order_id="SYNTH_FIRST_ORDER" if known_first_identity else None)
+        raise TimeoutError("synthetic second response loss")
+    original=continuity_case(tmp_path,branch=branch,fault=first_transport)
+    box["original"]=original
+    original.snapshot=replace(original.snapshot,positions=(Position("SOXL",4,400),Position("TQQQ",4,400)))
+    original.runtime=replace(original.runtime,portfolio_port=CallablePortfolioPort(lambda:original.snapshot))
+    original.plan["portfolio"]["market_values"]["TQQQ"]=400
+    original.plan["portfolio"]["quantities"]["TQQQ"]=4
+    original.plan["allocation"].update(strategy_symbols=("SOXL","TQQQ"),risk_symbols=("SOXL","TQQQ"),targets={"SOXL":0,"TQQQ":0})
+    run_strategy_core(runtime=original.runtime,config=original.config)
+    assert len(original.calls)==2
+    version=original.locator.read_registered();payload=json.loads(version.payload_json)
+    assert len(payload["references"])==2
+    current=continuity_case(tmp_path,"2026-10-01",branch=branch,kind="BUY_LIMIT")
+    restored=_IntentSession(current.context,snapshot=current.snapshot,profile_id=current.scope.profile_id)
+    original_bytes={cmd.command_id:current.store.object_store.read_text(str(current.store._command_location(cmd)))
+        for cmd,_ in restored.originals}
+    sources,receipts={},{}
+    for i,ref in enumerate(payload["references"]):
+        one=replace(version,payload_json=_canonical_json({**payload,"references":[ref]}))
+        fixture_original=SimpleNamespace(store=original.store,locator=SimpleNamespace(read_registered=lambda one=one:one))
+        fixture_current=SimpleNamespace(**{**vars(current),"root":tmp_path/f"source{i}"})
+        fixture_current.root.mkdir()
+        broker_id="SYNTH_FIRST_ORDER" if conflict or i==0 else "SYNTH_SECOND_ORDER"
+        body,_=resolution_material(fixture_original,fixture_current,order_id=broker_id)
+        uri=f"synthetic-evidence://qualified/receipt{i}";raw=_canonical_json(body)
+        sources[uri]=_digest(raw);receipts[uri]=raw
+    context=replace(current.context,resolution_sources=sources,resolution_receipts=receipts)
+    result=run_strategy_core(runtime=current.runtime,config=replace(current.config,intent_continuity=context))
+    assert len(current.calls)==int(not conflict)
+    assert len(result.submitted_orders)==int(not conflict)
+    for cmd,events in restored.originals:
+        assert current.store.object_store.read_text(str(current.store._command_location(cmd)))==original_bytes[cmd.command_id]
+        assert current.store.events(cmd)==events
+    if conflict:
+        held=json.loads(current.locator.read_registered().payload_json)
+        assert len(held["references"])==2 and not held.get("resolution_bindings")

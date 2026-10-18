@@ -739,6 +739,14 @@ class _IntentSession:
             refs = {ref["command_id"]: ref for ref in payload["references"]}
             originals = {command.command_id: (command, events) for command, events in self.originals}
             duplicates = set()
+            # Bounded cohort facts already restored in this invocation, plus
+            # validated supplied proofs. No external account lookup or index.
+            broker_claims = {}
+            for command, events in self.originals:
+                for event in events:
+                    broker_id = event.details.get("broker_order_id")
+                    if broker_id:
+                        broker_claims.setdefault(broker_id, set()).add(command.command_id)
             for uri, raw in self.resolution_receipts.items():
                 if (not isinstance(uri, str) or not uri or len(uri) > 2048
                         or any(character.isspace() or character in "?#@" for character in uri)
@@ -759,6 +767,10 @@ class _IntentSession:
                         known_order_ids={event.details.get("broker_order_id") for event in events if event.details.get("broker_order_id")},
                         attempted=any(event.state is ExecutionCommandState.CLAIMED for event in events),
                         prior_binding=payload.get("resolution_bindings", {}).get(command_id))
+                    claims = broker_claims.setdefault(body["identity_binding"]["order_id"], set())
+                    if claims - {command_id}:
+                        duplicates.update(claims | {command_id})
+                    claims.add(command_id)
                     if command_id in resolved:
                         duplicates.add(command_id)
                     resolved[command_id] = view
