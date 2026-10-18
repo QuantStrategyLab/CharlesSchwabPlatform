@@ -754,6 +754,30 @@ def test_resolution_preserves_known_broker_identity_and_unsupported_notional_hol
         assert session._resolved_originals()=={}
 
 
+@pytest.mark.parametrize("fault",["unknown_corrections_collection","missing_quarantine_collection",
+    "unknown_events_collection","unknown_quarantined_orders","unknown_quarantined_events"])
+def test_zero_fill_resolution_requires_complete_typed_conflict_collections(tmp_path,fault):
+    from test_rebalance_service import continuity_case,resolution_material,with_resolution_source,run_strategy_core
+    from application.execution_intent_continuity import _IntentSession
+    def lost(_):raise TimeoutError("synthetic")
+    original=continuity_case(tmp_path,fault=lost)
+    run_strategy_core(runtime=original.runtime,config=original.config)
+    current=continuity_case(tmp_path,"2026-10-01",kind="BUY_LIMIT")
+    body,_=resolution_material(original,current,terminal="EXPIRED",filled="0")
+    if fault=="unknown_corrections_collection":body["ledger"]["unsupported_event_ids"]=0
+    elif fault=="missing_quarantine_collection":body["ledger"].pop("quarantined_event_ids")
+    elif fault=="unknown_events_collection":body["ledger"]["events"]={}
+    elif fault=="unknown_quarantined_orders":body["ledger"]["quarantined_order_ids"]=""
+    elif fault=="unknown_quarantined_events":body["ledger"]["quarantined_event_ids"]=""
+    context=with_resolution_source(current.context,body)
+    session=_IntentSession(context,snapshot=current.snapshot,profile_id=current.scope.profile_id)
+    assert session.fatal_reason is None
+    assert session._resolved_originals()=={}
+    result=run_strategy_core(runtime=current.runtime,config=replace(current.config,intent_continuity=context))
+    assert current.calls==[] and result.submitted_orders==()
+    assert len(json.loads(current.locator.read_registered().payload_json)["references"])==1
+
+
 def test_resolution_anchor_refuses_later_changed_fills_and_never_resubmits_original(tmp_path):
     from test_rebalance_service import continuity_case,resolution_material,with_resolution_source,run_strategy_core
     from application.execution_intent_continuity import _IntentSession

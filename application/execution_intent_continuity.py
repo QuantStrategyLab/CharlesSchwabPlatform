@@ -500,7 +500,15 @@ def _validated_original_resolution(command, ref, body, *, scope, enrollment_sha2
         # manufacture a share quantity or budget rule for quantity=0 intents.
         raise _EvidenceRequired("resolution_notional_source_contract_unavailable")
     ledger = body["ledger"]
-    if ledger["schema_version"] != ExecutionEventLedger.schema_version or ledger["unsupported_event_ids"]:
+    conflict_lists = ("unsupported_event_ids", "quarantined_order_ids", "quarantined_event_ids")
+    # Even a zero-fill terminal needs explicit known-empty coverage. Missing
+    # collections, integer zero and empty objects are unknown, not empty lists.
+    if (not isinstance(ledger, dict)
+            or any(not isinstance(ledger.get(key), list) for key in (*conflict_lists, "events"))
+            or any(not isinstance(item, str) or not item.strip()
+                   for key in conflict_lists for item in ledger[key])
+            or ledger["schema_version"] != ExecutionEventLedger.schema_version
+            or ledger["unsupported_event_ids"]):
         raise _EvidenceRequired("resolution_ledger_unsupported")
     intent = ledger["intents"][command.command_id]
     state = ledger["orders"][broker_id]
