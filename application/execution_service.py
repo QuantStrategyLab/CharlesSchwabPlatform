@@ -16,6 +16,7 @@ from application.account_new_risk_gate_support import (
     new_risk_buy_prohibited,
     set_cycle_snapshot,
 )
+from application.execution_intent_continuity import _IntentSession
 from application.daily_loss_fact_producer import attach_daily_loss_fact_to_portfolio
 from application.execution_kernel_adapter import should_block_halted_resubmit
 from quant_platform_kit.common.order_status import compute_confirmed_sell_release_value
@@ -645,6 +646,7 @@ def execute_rebalance_cycle(
     safe_haven_cash_substitute_threshold_usd=DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
     cash_only_execution=True,
     notional_buy_execution: bool = False,
+    intent_continuity: _IntentSession | None = None,
 ) -> ExecutionCycleResult:
     def load_quotes(symbols):
         quotes = {}
@@ -848,6 +850,7 @@ def execute_rebalance_cycle(
         submission_attempted = False
         outcome_confirmed = False
         report = None
+        continuity_ticket = None
         try:
             price_text = "{:.2f}".format(price) if price else None
             if action_type == "SELL":
@@ -912,6 +915,10 @@ def execute_rebalance_cycle(
                 record_submitted_order(symbol, action_type, quantity, price, status="dry_run")
                 return True
 
+            if intent_continuity is not None:
+                continuity_ticket = intent_continuity.prepare(order=order_intent, plan=plan, action_type=action_type)
+                if continuity_ticket is None:
+                    return False
             if execution_port is not None:
                 submission_attempted = True
                 report = execution_port.submit_order(order_intent)
@@ -937,6 +944,11 @@ def execute_rebalance_cycle(
                     symbol, action_type, quantity, price,
                     status=report.status, broker_order_id=report.broker_order_id,
                 )
+            if intent_continuity is not None and not intent_continuity.record_outcome(
+                    continuity_ticket, accepted=success, broker_order_id=report.broker_order_id):
+                submission_halted = True
+                submission_outcome_unknown = True
+                return False
             info = report.broker_order_id if success else report.status
             order_id_suffix = str(translator("order_id_suffix", order_id=info)).strip()
             if not order_id_suffix or order_id_suffix == "order_id_suffix":
@@ -973,6 +985,8 @@ def execute_rebalance_cycle(
             publish_order_issue(message)
             return False
         except Exception:
+            if continuity_ticket is not None and not outcome_confirmed:
+                intent_continuity.record_outcome(continuity_ticket)
             if submission_attempted:
                 submission_halted = True
                 if not outcome_confirmed:
@@ -982,6 +996,9 @@ def execute_rebalance_cycle(
                         broker_order_id=getattr(report, "broker_order_id", None),
                     )
                 message = "Order cycle stopped; reconciliation required."
+            elif continuity_ticket is not None:
+                submission_halted = True
+                message = "Order attempt fenced; reconciliation required."
             else:
                 message = "Order validation failed before submission."
             trade_logs.append(message)
@@ -1403,6 +1420,8 @@ def execute_rebalance_cycle(
                 }
             )
 
+    if intent_continuity is not None:
+        result_execution = intent_continuity.present(result_execution, current_submitted=submitted_orders)
     set_cycle_snapshot(None)
     return ExecutionCycleResult(
         plan=dict(plan or {}),

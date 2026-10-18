@@ -575,3 +575,115 @@ def process_worker(action, root):
 
 if __name__ == "__main__":
     process_worker(sys.argv[1], sys.argv[2])
+
+
+class MultiFileClient:
+    """Test-only per-object durable synthetic GCS; every SDK call records retry."""
+    def __init__(self, root):
+        self.root = Path(root)
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.owners = {}
+        self.list_error = None
+        self.partial = False
+        self.list_calls = []
+
+    def owner(self, name):
+        if name not in self.owners:
+            owner = FileClient(self.root / hashlib.sha256(name.encode()).hexdigest())
+            (owner.root / "key.json").write_text(json.dumps(name))
+            self.owners[name] = owner
+        return self.owners[name]
+
+    def bucket(self, name):
+        return SimpleNamespace(name=name, blob=lambda key: FileBlob(self.owner(key), name, key))
+
+    def list_blobs(self, bucket, *, prefix, retry):
+        assert retry is None
+        self.list_calls.append((bucket, prefix, retry))
+        if self.list_error:
+            raise self.list_error
+        names = []
+        for key_file in self.root.glob("*/key.json"):
+            key = json.loads(key_file.read_text())
+            if key.startswith(prefix) and (key_file.parent / "object.json").exists():
+                names.append(key)
+        class Listing:
+            next_page_token = "synthetic-incomplete" if self.partial else None
+            def __iter__(self):
+                return iter(SimpleNamespace(name=name) for name in names)
+        return Listing()
+
+
+def test_locator_competition_preserves_winner_and_later_reference_union(tmp_path):
+    from test_rebalance_service import continuity_case
+    from application.execution_intent_continuity import _IntentSession
+    c = continuity_case(tmp_path)
+    a = _IntentSession(c.context, snapshot=c.snapshot, profile_id=c.scope.profile_id)
+    b = _IntentSession(c.context, snapshot=c.snapshot, profile_id=c.scope.profile_id)
+    sell = OrderIntent("SOXL", "sell", 4)
+    other = OrderIntent("SOXX", "sell", 2)
+    winner = a.prepare(order=sell, plan=c.plan, action_type="SELL")
+    assert winner is not None
+    assert b.prepare(order=other, plan=c.plan, action_type="SELL") is None
+    assert b.fatal_reason
+    first = json.loads(c.locator.read_registered().payload_json)["references"]
+    assert len(first) == 1 and first[0]["command_id"] == winner.command.command_id
+    later = _IntentSession(c.context, snapshot=c.snapshot, profile_id=c.scope.profile_id)
+    assert later.prepare(order=other, plan=c.plan, action_type="SELL") is None
+    refs = json.loads(c.locator.read_registered().payload_json)["references"]
+    assert len(refs) == 2 and first[0] in refs
+    assert c.store.events(later._read_reference(refs[1])) == ()
+
+
+def test_competing_native_attempt_writers_have_one_durable_claim(tmp_path):
+    from test_rebalance_service import continuity_case
+    from application.execution_intent_continuity import _IntentSession
+    c = continuity_case(tmp_path)
+    session = _IntentSession(c.context, snapshot=c.snapshot, profile_id=c.scope.profile_id)
+    with patch.object(type(c.store), "claim_due", return_value=None):
+        session.prepare(order=OrderIntent("SOXL", "sell", 4), plan=c.plan, action_type="SELL")
+    ref = json.loads(c.locator.read_registered().payload_json)["references"][0]
+    command = session._read_reference(ref)
+    barrier = Barrier(2)
+    original = c.store.object_store.create_text
+    def create(uri, *args):
+        if uri.endswith("00000001.json"):
+            barrier.wait(timeout=10)
+        return original(uri, *args)
+    with patch.object(c.store.object_store, "create_text", create), ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: c.store.claim_due(command, as_of_date="2026-09-30", claimant="synthetic"), range(2)))
+    assert sum(result is not None for result in results) == 1
+    assert len(c.store.events(command)) == 1
+
+
+@pytest.mark.parametrize("qualification", ["complete", "absent", "same_symbol", "missing_sellable", "incomplete_obligations", "missing_release"])
+def test_native_independent_reduction_requires_complete_original_resource_facts(tmp_path, qualification):
+    from test_rebalance_service import continuity_case, run_strategy_core
+    from application.execution_intent_continuity import _canonical_json, _digest
+    from quant_platform_kit.common.port_adapters import CallablePortfolioPort
+    c = continuity_case(tmp_path)
+    run_strategy_core(runtime=c.runtime, config=c.config)
+    later = continuity_case(tmp_path, "2026-10-01")
+    symbol = "SOXL" if qualification == "same_symbol" else "SOXX"
+    later.plan["portfolio"]["market_values"] = {symbol: 400}
+    later.plan["portfolio"]["quantities"] = {symbol: 4}
+    later.plan["allocation"].update(strategy_symbols=(symbol,), risk_symbols=(symbol,), targets={symbol: 0})
+    session = __import__("application.execution_intent_continuity", fromlist=["_IntentSession"])._IntentSession(
+        later.context, snapshot=later.snapshot, profile_id=later.scope.profile_id)
+    obligations = [{"command_id": cmd.command_id, "descriptor_sha256": _digest(_canonical_json(cmd.to_dict())),
+                    "order": cmd.intent["order"], "routing_account_hash": cmd.intent["routing_account_hash"]} for cmd, _ in session.originals]
+    order = OrderIntent(symbol, "sell", 4)
+    facts = {"scope": __import__("dataclasses").asdict(later.scope), "session": "2026-10-01",
+             "complete_original_obligations": obligations, "resource_reconciliation": "verified_complete",
+             "source_sha256": "1"*64, "proposal_order_sha256": _digest(_canonical_json(__import__("dataclasses").asdict(order))),
+             "strategy_release": later.context.runtime_target.strategy_release.to_dict(),
+             "long_quantities": {symbol: 4}, "short_quantities": {symbol: 0},
+             "sellable_quantities": {symbol: 4}, "allowed_symbols": (symbol,)}
+    if qualification == "absent": facts = None
+    elif qualification == "missing_sellable": facts.pop("sellable_quantities")
+    elif qualification == "incomplete_obligations": facts["complete_original_obligations"] = []
+    elif qualification == "missing_release": facts.pop("strategy_release")
+    result = run_strategy_core(runtime=later.runtime, config=replace(later.config,
+        intent_continuity=replace(later.context, resource_facts=facts)))
+    assert len(later.calls) == int(qualification == "complete")
+    assert result.execution["broker_submission_done"] is False # original still pending, including positive independent control

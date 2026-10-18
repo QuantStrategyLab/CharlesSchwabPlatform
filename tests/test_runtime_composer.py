@@ -12,7 +12,7 @@ from quant_platform_kit.common import build_runtime_target  # noqa: E402
 from application.runtime_composer import SchwabRuntimeComposer
 
 
-def test_runtime_composer_builds_runtime_and_config_from_local_builders():
+def test_runtime_composer_builds_runtime_and_config_from_local_builders(tmp_path):
     observed = {}
 
     def fake_notification_builder(**kwargs):
@@ -99,6 +99,30 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders():
         strategy_plugin_signals=("plugin-line",),
         strategy_plugin_error="bad config",
     )
+    # Exercise the real composer carrier with explicit synthetic enrollment.
+    # None leaves legacy unselected and does not construct a command provider.
+    assert config.intent_continuity is None
+    from test_rebalance_service import continuity_case, run_strategy_core
+    c = continuity_case(tmp_path)
+    managed = replace(composer, strategy_profile=c.scope.profile_id, dry_run_only=False,
+        runtime_target=c.context.runtime_target, intent_continuity=replace(c.context, runtime_target=None),
+        env_reader=lambda name, default="": {"SCHWAB_EXECUTION_STATE_CLOUD_URI": "gs://synthetic/cycle"}.get(name, default))
+    selected = managed.build_rebalance_config()
+    assert selected.intent_continuity.runtime_target is managed.runtime_target
+    assert selected.intent_continuity.locator is c.locator
+    wired = replace(managed, broker_adapters=SimpleNamespace(
+        build_market_data_port=lambda _: c.runtime.market_data_port,
+        build_portfolio_port=lambda _: c.runtime.portfolio_port,
+        build_execution_port=lambda _, account: c.runtime.execution_port_factory(account),
+        build_order_status_fetcher=lambda *_: None),
+        strategy_adapters=SimpleNamespace(fetch_reference_history=lambda _: None,
+            resolve_rebalance_plan=c.runtime.resolve_rebalance_plan),
+        notification_builder=lambda **_: SimpleNamespace(notification_port=c.runtime.notifications))
+    actual_runtime = wired.build_rebalance_runtime(object())
+    result = run_strategy_core(runtime=actual_runtime, config=replace(selected,
+        execution_state_store=c.config.execution_state_store, translator=c.config.translator))
+    assert len(c.calls) == 1
+    assert result.execution["continuity_coverage"] == "managed_new_cohort"
     reporting_adapters = composer.build_reporting_adapters()
     built_client = composer.build_client()
 
