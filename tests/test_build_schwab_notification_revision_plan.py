@@ -1187,14 +1187,46 @@ def test_native_stale_or_changed_snapshots_stop(native_case, change):
     with pytest.raises(b.PlanError): b.build_native_plan(before, current, expected)
 
 
-@pytest.mark.parametrize("change", ["desired", "source", "old-image", "disabled-startup", "missing-startup", "wrong-pin", "unknown-env", "latest-route"])
+@pytest.mark.parametrize("startup", ["absent-key", "absent-map", "explicit-false"])
+def test_native_default_startup_check_preserves_baseline(native_case, startup):
+    b, before, expected = native_case
+    annotation = "run.googleapis.com/health-check-disabled"
+    if startup == "absent-key":
+        del before["revision"]["metadata"]["annotations"][annotation]
+    elif startup == "absent-map":
+        del before["revision"]["metadata"]["annotations"]
+    frozen = copy.deepcopy(before)
+    request, report = b.build_native_plan(before, copy.deepcopy(before), expected)
+    assert before == frozen
+    assert request["metadata"]["resourceVersion"] == expected["resource_version"]
+    assert request["spec"]["traffic"] == before["service"]["spec"]["traffic"]
+    template = request["spec"]["template"]
+    annotations = template["metadata"].get("annotations", {})
+    if startup == "explicit-false":
+        assert annotations[annotation] == "false"
+    else:
+        assert annotation not in annotations
+    restored = copy.deepcopy(template["spec"])
+    restored["containers"][0]["image"] = OLD_IMAGE
+    assert restored == before["revision"]["spec"]
+    assert report["deployment_ready"] is False
+
+
+@pytest.mark.parametrize("value", ["", None, False, "FALSE", "invalid"])
+def test_native_invalid_startup_annotation_still_stops(native_case, value):
+    b, before, expected = native_case
+    before["revision"]["metadata"]["annotations"]["run.googleapis.com/health-check-disabled"] = value
+    with pytest.raises(b.PlanError):
+        b.build_native_plan(before, copy.deepcopy(before), expected)
+
+
+@pytest.mark.parametrize("change", ["desired", "source", "old-image", "disabled-startup", "wrong-pin", "unknown-env", "latest-route"])
 def test_native_unsupported_or_wrong_baseline_is_not_defaulted(native_case, change):
     b, before, expected = native_case
     if change == "desired": before["revision"]["metadata"]["name"] = DESIRED
     elif change == "source": before["revision"]["metadata"]["labels"]["commit-sha"] = "d" * 40
     elif change == "old-image": before["revision"]["spec"]["containers"][0]["image"] = NEW_IMAGE
     elif change == "disabled-startup": before["revision"]["metadata"]["annotations"]["run.googleapis.com/health-check-disabled"] = "true"
-    elif change == "missing-startup": del before["revision"]["metadata"]["annotations"]["run.googleapis.com/health-check-disabled"]
     elif change == "wrong-pin": before["revision"]["spec"]["containers"][0]["env"][0]["value"] = '{"strategy_release":{"strategy_revision":"wrong"}}'
     elif change == "unknown-env": before["revision"]["spec"]["containers"][0]["env"].append({"name": "PRIVATE", "value": SENTINEL})
     else: before["service"]["spec"]["traffic"][0]["latestRevision"] = True
