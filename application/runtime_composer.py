@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
+from application.execution_intent_continuity import _IntentContinuityContext
 from application.runtime_dependencies import SchwabRebalanceConfig, SchwabRebalanceRuntime
 from application.runtime_notification_adapters import build_runtime_notification_adapters
 from application.runtime_reporting_adapters import build_runtime_reporting_adapters
@@ -63,6 +64,7 @@ class SchwabRuntimeComposer:
     runtime_target: RuntimeTarget | None = None
     limit_buy_premium_by_symbol: dict[str, float] | None = None
     extra_reporting_fields: dict[str, Any] = field(default_factory=dict)
+    intent_continuity: _IntentContinuityContext | None = None
 
     def send_message(self, message: str) -> bool:
         """Send a cycle notification through the configured channel."""
@@ -219,6 +221,8 @@ class SchwabRuntimeComposer:
             ),
             execution_state_store=execution_state_store,
             execution_state_account_scope=execution_state_account_scope,
+            intent_continuity=(replace(self.intent_continuity, runtime_target=self.runtime_target)
+                if isinstance(self.intent_continuity, _IntentContinuityContext) else self.intent_continuity),
         )
 
     def load_strategy_plugin_signals(self, raw_mounts):
@@ -270,6 +274,7 @@ def build_runtime_composer(
     printer: Callable[..., Any] = print,
     extra_reporting_fields: dict[str, Any] | None = None,
     runtime_target: RuntimeTarget | None = None,
+    intent_continuity: _IntentContinuityContext | None = None,
     limit_buy_premium_by_symbol: dict[str, float] | None = None,
 ) -> SchwabRuntimeComposer:
     return SchwabRuntimeComposer(
@@ -309,5 +314,6 @@ def build_runtime_composer(
         sleeper=sleeper,
         printer=printer,
         runtime_target=runtime_target,
+        intent_continuity=intent_continuity,
         extra_reporting_fields=dict(extra_reporting_fields or {}),
     )

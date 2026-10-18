@@ -2357,7 +2357,7 @@ class RebalanceServiceTests(unittest.TestCase):
         self.assertEqual(observed_orders, [])
 
 
-if __name__ == "__main__":
+if __name__ == "__main__" and "--continuity-worker" not in sys.argv:
     unittest.main()
 
 
@@ -2394,3 +2394,361 @@ def test_cycle_notification_quiets_successful_preview_but_keeps_real_and_rejecte
     for status in ("rejected", "unknown"):
         result = SimpleNamespace(execution={}, submitted_orders=({"status": status},))
         assert _should_publish_cycle_notification(result, config=config)
+
+
+# Explicit synthetic admission inputs; no prebuilt command or replay relation.
+def continuity_case(root, day="2026-09-30", *, kind="SELL", branch="port", selected=True,
+                    fault=None, resource_facts=None):
+    import json
+    from dataclasses import replace
+    from application import execution_intent_continuity as ci
+    from quant_platform_kit.common.execution_commands import ExecutionCommandStore
+    from quant_platform_kit.common.strategy_release import StrategyReleaseIdentity, build_runtime_loaded_receipt
+    from quant_platform_kit.common.runtime_target import RuntimeTarget
+    from test_execution_intent_continuity import MultiFileClient
+
+    root = Path(root)
+    client = MultiFileClient(root / "objects")
+    scope = ci._RecoveryScope("SYNTH_HASH", "SYNTH_PROFILE", "SYNTH_RELEASE", "SYNTH_COHORT")
+    release = StrategyReleaseIdentity("SYNTH_RELEASE", "a"*64, "synthetic-revision", "b"*64,
+                                      "c"*64, "d"*64, "e"*64, "2026-09-01")
+    target = RuntimeTarget("schwab", scope.profile_id, False, market_timezone="America/New_York",
+                           strategy_release=release)
+    enrollment = {"schema_version": "schwab_intent_enrollment.v1", "scope": ci.asdict(scope),
+                  "authority_sha256": "f"*64, "managed_writers": "native_create_only.v1",
+                  "complete_event_reads": True, "strategy_release": release.to_dict()}
+    locator = ci._RecoveryLocatorStore(client, locator_uri="gs://synthetic-offline-bucket/cohort/locator.json", scope=scope)
+    if not client.owner("cohort/locator.json").path.exists():
+        locator.initialize_new_cohort(json.dumps({"enrollment_sha256": ci._digest(ci._canonical_json(enrollment)), "references": []}))
+    driver_type = getattr(ci, "_ScopedCommandObjectStore", None)
+    driver = driver_type(client, prefix_uri="gs://synthetic-offline-bucket/cohort/commands") if driver_type else None
+    store = ExecutionCommandStore(cloud_prefix_uri="gs://synthetic-offline-bucket/cohort/commands", object_store=driver)
+    values = dict(scope=scope, enrollment=enrollment, locator=locator, command_store=store,
+                  consumption_clock=lambda: datetime.fromisoformat(day+"T15:00:00+00:00"),
+                  session_timezone="America/New_York", runtime_target=target,
+                  runtime_release_receipt=build_runtime_loaded_receipt(strategy_release=release, loaded_at=day+"T14:00:00Z"),
+                  resource_facts=resource_facts)
+    context_type = getattr(ci, "_IntentContinuityContext", SimpleNamespace)
+    context = context_type(**values)
+    qty = 4.0 if kind == "SELL" else 0.0
+    snapshot = PortfolioSnapshot(as_of=datetime.fromisoformat(day+"T14:00:00+00:00"), total_equity=50000,
+        cash_balance=50000, buying_power=50000,
+        positions=(Position("SOXL", qty, qty*100),), metadata={"account_hash": scope.account_hash})
+    portfolio = {"market_values": {"SOXL": qty*100}, "quantities": {"SOXL": qty}, "total_equity": 50000,
+                 "liquid_cash": 50000, "cash_sweep_symbol": "SOXL" if kind == "BUY_MARKET" else None,
+                 "portfolio_rows": ()}
+    execution = {"trade_threshold_value": 10, "reserved_cash": 0, "signal_date": day, "effective_date": day,
+                 "execution_timing_contract": "same_session", "signal_display": "synthetic",
+                 "dashboard_text": "", "separator": "---", "account_new_risk_snapshot": {
+                     **HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT, "production_drift_status": "healthy"}}
+    allocation = {"target_mode": "value", "strategy_symbols": ("SOXL",), "risk_symbols": ("SOXL",),
+                  "income_symbols": (), "safe_haven_symbols": (), "targets": {"SOXL": 0 if qty or kind == "BUY_MARKET" else 400}}
+    plan = {"account_hash": scope.account_hash, "portfolio": portfolio, "execution": execution,
+            "allocation": allocation}
+    calls = []
+    def submit(intent):
+        calls.append(intent)
+        counter = root / "transport_calls.jsonl"
+        with counter.open("a") as stream:
+            stream.write(json.dumps(ci.asdict(intent))+"\n")
+        if fault:
+            return fault(intent)
+        return ExecutionReport(intent.symbol, intent.side, intent.quantity, "accepted", broker_order_id="SYNTH_ACK")
+    runtime = SchwabRebalanceRuntime(fetch_reference_history=lambda: None,
+        portfolio_port=CallablePortfolioPort(lambda: snapshot),
+        market_data_port=CallableMarketDataPort(quote_loader=lambda symbol: QuoteSnapshot(symbol, day, 100, ask_price=100)),
+        resolve_rebalance_plan=lambda **_: plan, notifications=CallableNotificationPort(lambda _: True),
+        execution_port_factory=(lambda _: CallableExecutionPort(submit)) if branch == "port" else None,
+        submit_equity_order=(lambda _, intent: submit(intent)) if branch == "fallback" else None)
+    config = SchwabRebalanceConfig(translator=build_translator("en"), strategy_display_name="synthetic",
+        limit_buy_premium=1, sell_settle_delay_sec=0, strategy_profile=scope.profile_id,
+        execution_dedup_enabled=True, execution_state_store=__import__(
+            "quant_platform_kit.common.execution_state", fromlist=["ExecutionMarkerStore"]).ExecutionMarkerStore(
+                local_dir=str(root / "cycle")), execution_state_account_scope="LIVE",
+        notional_buy_execution=kind == "BUY_NOTIONAL", notify_no_trade_cycles=False)
+    if selected:
+        object.__setattr__(config, "intent_continuity", context)
+    return SimpleNamespace(root=root, client=client, scope=scope, context=context, config=config, runtime=runtime,
+                           plan=plan, snapshot=snapshot, calls=calls, store=store, locator=locator)
+
+
+def test_actual_caller_cross_month_does_not_replay_unknown(tmp_path):
+    def lost(_):
+        raise TimeoutError("synthetic response loss")
+    first = continuity_case(tmp_path, fault=lost)
+    result1 = run_strategy_core(runtime=first.runtime, config=first.config)
+    second = continuity_case(tmp_path, "2026-10-01", fault=lost)
+    result2 = run_strategy_core(runtime=second.runtime, config=second.config)
+    assert len(first.calls) == 1
+    assert second.calls == []
+    assert result1.submitted_orders[0]["status"] == "unknown"
+    assert result2.submitted_orders == ()
+    assert result2.execution["broker_submission_done"] is False
+
+
+import pytest
+from dataclasses import replace
+
+
+@pytest.mark.parametrize("kind", ["SELL", "BUY_LIMIT", "BUY_MARKET", "BUY_NOTIONAL"])
+@pytest.mark.parametrize("branch", ["port", "fallback"])
+def test_managed_caller_all_final_orders_and_both_transports(tmp_path, kind, branch):
+    import json
+    c = continuity_case(tmp_path, kind=kind, branch=branch)
+    result = run_strategy_core(runtime=c.runtime, config=c.config)
+    assert len(c.calls) == 1
+    ref = json.loads(c.locator.read_registered().payload_json)["references"][0]
+    raw = json.loads(c.store.object_store.read_text(ref["descriptor_uri"]))
+    assert raw["intent"]["order"] == __import__("dataclasses").asdict(c.calls[0])
+    assert raw["intent"]["routing_account_hash"] == c.scope.account_hash
+    assert raw["intent"]["action_type"] == kind
+    assert raw["effective_date"] == "2026-09-30"
+    if kind == "BUY_NOTIONAL":
+        assert c.calls[0].quantity == 0 and c.calls[0].metadata["notional_usd"] > 0
+    replay = continuity_case(tmp_path, "2026-10-01", kind=kind, branch=branch)
+    result2 = run_strategy_core(runtime=replay.runtime, config=replay.config)
+    assert replay.calls == []
+    assert result2.submitted_orders == ()
+    assert result2.execution["broker_submission_done"] is False
+    assert result2.execution["continuity_prior_orders"][0]["broker_order_id"] == "SYNTH_ACK"
+    assert result.execution["execution_status"] == "pending_reconciliation"
+
+
+@pytest.mark.parametrize("invalid", ["account", "profile", "release", "cohort", "enrollment", "provider", "missing_locator", "clock", "receipt", "route"])
+def test_selected_invalid_context_stops_actual_caller(tmp_path, invalid):
+    c = continuity_case(tmp_path)
+    ctx = c.context
+    if invalid in {"account", "profile", "release", "cohort"}:
+        names = {"account": "account_hash", "profile": "profile_id", "release": "release_id", "cohort": "cohort_id"}
+        ctx = replace(ctx, scope=replace(ctx.scope, **{names[invalid]: "WRONG"}))
+    elif invalid == "enrollment":
+        ctx = replace(ctx, enrollment={})
+    elif invalid == "provider":
+        ctx = replace(ctx, command_store=replace(ctx.command_store, object_store=None))
+    elif invalid == "missing_locator":
+        c.client.owner("cohort/locator.json").path.unlink()
+    elif invalid == "clock":
+        ctx = replace(ctx, consumption_clock=lambda: datetime(2026, 9, 30))
+    elif invalid == "receipt":
+        ctx = replace(ctx, runtime_release_receipt=None)
+    else:
+        c.plan["account_hash"] = "WRONG_ROUTE"
+    result = run_strategy_core(runtime=c.runtime, config=replace(c.config, intent_continuity=ctx))
+    assert c.calls == []
+    assert result.submitted_orders == ()
+    assert result.execution["broker_submission_done"] is False
+    assert result.execution["continuity_coverage"] == "evidence_required"
+
+
+def test_legacy_unselected_retains_behavior_and_dry_run_has_no_native_writes(tmp_path):
+    legacy = continuity_case(tmp_path / "legacy", selected=False)
+    result = run_strategy_core(runtime=legacy.runtime, config=legacy.config)
+    assert len(legacy.calls) == 1 and "continuity_coverage" not in result.execution
+    c = continuity_case(tmp_path / "preview")
+    result = run_strategy_core(runtime=c.runtime, config=replace(c.config, dry_run_only=True))
+    assert c.calls == []
+    assert len(list((c.root / "objects").glob("*/object.json"))) == 1 # upstream enrollment only
+    assert "continuity_coverage" not in result.execution
+
+
+def test_original_not_backdated_to_effective_session(tmp_path):
+    c = continuity_case(tmp_path)
+    ctx = replace(c.context, consumption_clock=lambda: datetime(2026, 10, 1, 15, tzinfo=timezone.utc))
+    result = run_strategy_core(runtime=c.runtime, config=replace(c.config, intent_continuity=ctx))
+    assert c.calls == []
+    assert "original_claim_unavailable_or_not_due" in result.execution["continuity_reason_codes"]
+    assert not any("events" in __import__("json").loads(p.read_text()) for p in (c.root/"objects").glob("*/key.json"))
+
+
+def test_restore_happens_before_first_plan_and_refresh_retains_originals(tmp_path):
+    from application.execution_intent_continuity import _IntentSession
+    c = continuity_case(tmp_path)
+    run_strategy_core(runtime=c.runtime, config=c.config)
+    second = continuity_case(tmp_path, "2026-10-01")
+    trace = []
+    original_restore = _IntentSession._restore
+    from unittest.mock import patch
+    def restore(self, *args):
+        original_restore(self, *args)
+        trace.append(("restore", len(self.originals)))
+    def plan(**_):
+        trace.append(("plan", None))
+        return second.plan
+    with patch.object(_IntentSession, "_restore", restore):
+        run_strategy_core(runtime=replace(second.runtime, resolve_rebalance_plan=plan), config=second.config)
+    assert trace[:2] == [("restore", 1), ("plan", None)]
+
+
+def continuity_process_worker(root, day, kind, branch, fault):
+    """Launched by the outer guarded evidence runner as a fresh interpreter."""
+    import json
+    from unittest.mock import patch
+    from application import account_new_risk_gate_support, daily_loss_fact_producer
+    def response(_):
+        if fault == "crash":
+            raise SystemExit(73) # after durable claim, before any broker receipt
+        if fault == "lost":
+            raise TimeoutError("synthetic lost reply")
+        return ExecutionReport(_.symbol, _.side, _.quantity, "accepted", broker_order_id="SYNTH_ACK")
+    c = continuity_case(root, day, kind=kind, branch=branch, fault=response)
+    from contextlib import ExitStack
+    with ExitStack() as faults, patch.object(rebalance_service, "try_record_platform_execution", return_value=False), \
+         patch.object(account_new_risk_gate_support, "resolve_production_drift_status_from_store", return_value=None), \
+         patch.object(daily_loss_fact_producer, "load_recent_runtime_reports_from_gcs", return_value=()):
+        if fault == "claim_crash":
+            from application.execution_intent_continuity import _IntentSession
+            original_prepare = _IntentSession.prepare
+            def claim_then_crash(self, **kwargs):
+                ticket = original_prepare(self, **kwargs)
+                if ticket is not None:
+                    raise SystemExit(74)
+                return ticket
+            faults.enter_context(patch.object(_IntentSession, "prepare", claim_then_crash))
+        elif fault == "ack_event_loss":
+            original_create = c.store.object_store.create_text
+            def create(uri, *args):
+                if uri.endswith("00000002.json"):
+                    raise TimeoutError("synthetic ACK event loss")
+                return original_create(uri, *args)
+            faults.enter_context(patch.object(c.store.object_store, "create_text", create))
+        elif fault == "final_outcome_loss":
+            faults.enter_context(patch.object(type(c.config.execution_state_store), "record_outcome", side_effect=OSError("synthetic")))
+        result = run_strategy_core(runtime=c.runtime, config=c.config)
+    value = {"day": day, "kind": kind, "branch": branch, "calls": len(c.calls),
+             "submitted_orders": list(result.submitted_orders), "execution": result.execution}
+    (Path(root) / (day+"-result.json")).write_text(json.dumps(value, default=str, indent=2)+"\n")
+
+
+if __name__ == "__main__" and "--continuity-worker" in sys.argv:
+    sys.path.insert(0, str(Path(__file__).parent))
+    continuity_process_worker(*sys.argv[2:])
+
+
+def test_runtime_release_change_preserves_old_reference_without_new_attempt(tmp_path):
+    import json
+    from quant_platform_kit.common.strategy_release import build_runtime_loaded_receipt
+    first = continuity_case(tmp_path)
+    run_strategy_core(runtime=first.runtime, config=first.config)
+    before = json.loads(first.locator.read_registered().payload_json)["references"]
+    later = continuity_case(tmp_path, "2026-10-01")
+    release = replace(later.context.runtime_target.strategy_release, release_id="SYNTH_RELEASE_NEW")
+    ctx = replace(later.context, runtime_target=replace(later.context.runtime_target, strategy_release=release),
+                  runtime_release_receipt=build_runtime_loaded_receipt(strategy_release=release))
+    result = run_strategy_core(runtime=later.runtime, config=replace(later.config, intent_continuity=ctx))
+    assert later.calls == [] and result.submitted_orders == ()
+    assert json.loads(later.locator.read_registered().payload_json)["references"] == before
+    assert result.execution["continuity_prior_orders"][0]["command_id"] == before[0]["command_id"]
+
+
+def test_plan_refresh_route_change_cannot_bypass_bound_lineage(tmp_path):
+    from copy import deepcopy
+    c = continuity_case(tmp_path)
+    trace = []
+    refreshed = deepcopy(c.plan)
+    refreshed["account_hash"] = "WRONG_ROUTE"
+    refreshed["portfolio"].update(market_values={"SOXL": 0}, quantities={"SOXL": 0})
+    refreshed["allocation"]["targets"] = {"SOXL": 400}
+    def resolve(**_):
+        trace.append("plan")
+        return c.plan if len(trace) == 1 else refreshed
+    result = run_strategy_core(runtime=replace(c.runtime, resolve_rebalance_plan=resolve), config=c.config)
+    assert len(trace) == 2 # real post-ACK refresh traversed the same session
+    assert len(c.calls) == 1 and c.calls[0].side == "sell"
+    assert result.execution["broker_submission_done"] is False
+    assert result.execution["continuity_coverage"] == "evidence_required"
+
+
+def test_selected_same_cycle_keeps_existing_replay_reason_and_current_submission_split(tmp_path):
+    first = continuity_case(tmp_path)
+    run_strategy_core(runtime=first.runtime, config=first.config)
+    replay = continuity_case(tmp_path)
+    result = run_strategy_core(runtime=replay.runtime, config=replay.config)
+    assert replay.calls == [] and result.submitted_orders == ()
+    assert result.execution["no_op_reason"] == "recorded_pending_reconciliation"
+    assert result.execution["broker_submission_done"] is False
+    assert result.execution["continuity_prior_orders"][0]["broker_order_id"] == "SYNTH_ACK"
+
+
+@pytest.fixture(autouse=True)
+def _offline_caller_external_ports(monkeypatch):
+    """Isolate external reads/telemetry; keep actual admission policy and math."""
+    from application import account_new_risk_gate_support, daily_loss_fact_producer
+    monkeypatch.setattr(rebalance_service, "try_record_platform_execution", lambda *args, **kwargs: False)
+    monkeypatch.setattr(daily_loss_fact_producer, "load_recent_runtime_reports_from_gcs", lambda **kwargs: ())
+    monkeypatch.setattr(account_new_risk_gate_support, "resolve_production_drift_status_from_store", lambda **kwargs: None)
+
+
+@pytest.mark.parametrize("refresh_attempts", [1, 2])
+def test_final_buy_uses_the_selected_refreshed_snapshot_source(tmp_path, refresh_attempts):
+    import json
+    from copy import deepcopy
+    from datetime import timedelta
+    from dataclasses import asdict
+    from application.execution_intent_continuity import _canonical_json, _digest
+    c = continuity_case(tmp_path)
+    # Lower cash prevents early refresh-loop exit. The best snapshot can be an
+    # earlier one; settled cash remains sufficient for this synthetic BUY.
+    first_refresh = replace(c.snapshot, as_of=c.snapshot.as_of+timedelta(minutes=1),
+                            positions=(), cash_balance=49999, buying_power=49999)
+    last_refresh = replace(first_refresh, as_of=first_refresh.as_of+timedelta(minutes=1),
+                           cash_balance=49998, buying_power=49998)
+    snapshots = [c.snapshot, first_refresh, last_refresh]
+    reads = []
+    def snapshot():
+        value = snapshots[len(reads)]
+        reads.append(value)
+        return value
+    plans = [deepcopy(c.plan) for _ in snapshots]
+    for plan, observed in zip(plans[1:], snapshots[1:]):
+        plan["portfolio"].update(quantities={"SOXL": 0}, market_values={"SOXL": 0}, liquid_cash=observed.cash_balance)
+        plan["allocation"]["targets"] = {"SOXL": 400}
+    # Existing cash-only policy can intentionally defer buys without cash
+    # release. This fixture opts into its existing non-cash-only mode; no new
+    # admission or release rule is introduced by continuity.
+    def resolve(**kwargs):
+        return plans[snapshots.index(kwargs["snapshot"])]
+    runtime = replace(c.runtime, portfolio_port=CallablePortfolioPort(snapshot), resolve_rebalance_plan=resolve)
+    run_strategy_core(runtime=runtime, config=replace(c.config, post_sell_refresh_attempts=refresh_attempts,
+                                                     cash_only_execution=False))
+    assert len(reads) == 1+refresh_attempts
+    assert len(c.calls) == 2 and c.calls[-1].side == "buy"
+    refs = json.loads(c.locator.read_registered().payload_json)["references"]
+    commands = [json.loads(c.store.object_store.read_text(ref["descriptor_uri"])) for ref in refs]
+    buy = next(command for command in commands if command["intent"]["order"]["side"] == "buy")
+    source = asdict(first_refresh)
+    source["as_of"] = first_refresh.as_of.isoformat()
+    assert buy["intent"]["source_plan"]["snapshot_sha256"] == _digest(_canonical_json(source))
+
+
+@pytest.mark.parametrize("context_timezone", ["America/New_York", "UTC"])
+def test_context_timezone_cannot_advance_authoritative_runtime_session(tmp_path, context_timezone):
+    from datetime import timedelta
+    clock = datetime(2026, 10, 1, 1, tzinfo=timezone.utc) # still September 30 in NY
+    c = continuity_case(tmp_path, "2026-10-01")
+    observed = replace(c.snapshot, as_of=clock-timedelta(minutes=10))
+    ctx = replace(c.context, consumption_clock=lambda: clock, session_timezone=context_timezone)
+    result = run_strategy_core(runtime=replace(c.runtime, portfolio_port=CallablePortfolioPort(lambda: observed)),
+                               config=replace(c.config, intent_continuity=ctx))
+    assert c.calls == [] and result.submitted_orders == ()
+    assert result.execution["broker_submission_done"] is False
+    assert result.execution["continuity_coverage"] == "evidence_required"
+
+
+def test_reused_mutable_plan_with_new_snapshot_requires_evidence(tmp_path):
+    from datetime import timedelta
+    c = continuity_case(tmp_path)
+    refreshed = replace(c.snapshot, as_of=c.snapshot.as_of+timedelta(minutes=1), positions=())
+    reads = []
+    def snapshot():
+        reads.append(1)
+        return c.snapshot if len(reads) == 1 else refreshed
+    def resolve(**kwargs):
+        if kwargs["snapshot"].as_of != c.snapshot.as_of:
+            c.plan["portfolio"].update(market_values={"SOXL": 0}, quantities={"SOXL": 0}, liquid_cash=50400)
+            c.plan["allocation"]["targets"] = {"SOXL": 400}
+        return c.plan
+    result = run_strategy_core(runtime=replace(c.runtime, portfolio_port=CallablePortfolioPort(snapshot),
+                                              resolve_rebalance_plan=resolve), config=c.config)
+    assert len(c.calls) == 1 and c.calls[0].side == "sell"
+    assert "continuity_plan_source_evidence_required" in result.execution["continuity_reason_codes"]
+    assert result.execution["broker_submission_done"] is False

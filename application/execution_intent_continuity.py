@@ -1,9 +1,9 @@
 """Private recovery I/O and reported-position decoding for the Schwab adopter.
 
-These primitives do not enroll a cohort, authorize an attempt, resolve UNKNOWN,
-or call transport. Runtime caller wiring and backend/broker qualification remain
-separate. A caller must supply an already-qualified existing GCS client; this
-module never constructs a client or invokes a provider/default-auth factory.
+The optional caller session requires explicit qualified new-cohort enrollment,
+restores exact original references, and fences native attempts before transport.
+It cannot resolve prior attempts or establish cloud/broker qualification. A caller
+must supply its existing qualified client; no provider/default-auth factory is used.
 """
 from __future__ import annotations
 
@@ -331,3 +331,390 @@ def _read_schwab_position_quantities(
             unavailable[symbol] = tuple(reasons)
     return _PositionQuantities(MappingProxyType(longs), MappingProxyType(shorts), MappingProxyType(unavailable),
                                digest, started, completed)
+
+
+# Adopter-private caller boundary. Selection is explicit; no environment flag,
+# provider factory, legacy migration, or resolution authority lives here.
+from collections.abc import Callable
+from zoneinfo import ZoneInfo
+
+from quant_platform_kit.common.execution_commands import ExecutionCommand, ExecutionCommandStore, ExecutionCommandState
+from quant_platform_kit.common.models import OrderIntent
+from quant_platform_kit.common.reduce_only_command_admission import (
+    build_reduce_only_order_digest, evaluate_reduce_only_command_admission,
+)
+from quant_platform_kit.common.strategy_release import validate_runtime_loaded_receipt
+
+
+class _ScopedCommandObjectStore:
+    """Known native command/event paths on an explicitly supplied client only."""
+    def __init__(self, client, *, prefix_uri: str):
+        if (not isinstance(prefix_uri, str) or not re.fullmatch(r"gs://[^/\s?#*]+/[^\s?#*]+", prefix_uri)
+                or any(part in {"", ".", ".."} for part in prefix_uri[5:].split("/"))):
+            raise ValueError("fixed command prefix required")
+        self.client = client
+        self.prefix_uri = prefix_uri.rstrip("/")
+
+    def _parts(self, uri):
+        if not isinstance(uri, str) or not uri.startswith(self.prefix_uri + "/execution_commands/execution_command.v1/"):
+            raise _EvidenceRequired("command_path_outside_scope")
+        suffix = uri[len(self.prefix_uri):]
+        if not re.fullmatch(r"/execution_commands/execution_command.v1/\d{4}-\d{2}-\d{2}/cmd-[a-f0-9]{32}/(?:command\.json|events(?:/\d{8}\.json)?)", suffix):
+            raise _EvidenceRequired("command_path_invalid")
+        return uri[5:].split("/", 1)
+
+    def _blob(self, uri):
+        bucket, key = self._parts(uri)
+        blob = self.client.bucket(bucket).blob(key)
+        if blob.name != key or blob.bucket.name != bucket:
+            raise _EvidenceRequired("command_path_identity_mismatch")
+        return blob
+
+    def create_text(self, uri, data, content_type):
+        blob = self._blob(uri)
+        try:
+            blob.upload_from_string(data, content_type=content_type, if_generation_match=0, retry=None)
+        except Exception as exc:
+            if getattr(exc, "code", None) in {409, 412}:
+                return False
+            raise _LocatorUncertain("command_create_uncertain") from None
+        try:
+            _generation(blob.generation)
+        except ValueError:
+            raise _LocatorUncertain("command_create_ack_unqualified") from None
+        return True
+
+    def read_text(self, uri):
+        blob = self._blob(uri)
+        try:
+            blob.reload(retry=None)
+            generation = _generation(blob.generation)
+            return blob.download_as_text(if_generation_match=generation, retry=None)
+        except Exception:
+            raise _LocatorUncertain("command_read_uncertain") from None
+
+    def list(self, uri):
+        bucket, key = self._parts(uri)
+        if not uri.endswith("/events"):
+            raise _EvidenceRequired("only_known_command_event_listing_allowed")
+        try:
+            listing = self.client.list_blobs(bucket, prefix=key + "/", retry=None)
+            # Materialize *all* pages before exposing even an empty history.
+            blobs = tuple(listing)
+            if getattr(listing, "next_page_token", None):
+                raise ValueError("incomplete listing")
+            paths = tuple("gs://" + bucket + "/" + blob.name for blob in blobs)
+            if len(set(paths)) != len(paths):
+                raise ValueError("duplicate listing")
+            for path in paths:
+                self._parts(path)
+                if not path.startswith(uri + "/"):
+                    raise ValueError("listing escaped prefix")
+            return paths
+        except Exception:
+            raise _LocatorUncertain("command_events_incomplete") from None
+
+
+@dataclass(frozen=True)
+class _IntentContinuityContext:
+    scope: _RecoveryScope
+    enrollment: Mapping
+    locator: _RecoveryLocatorStore
+    command_store: ExecutionCommandStore
+    consumption_clock: Callable[[], datetime]
+    session_timezone: str
+    runtime_target: Any = None
+    runtime_release_receipt: Mapping | None = None
+    resource_facts: Mapping | None = None
+
+
+@dataclass(frozen=True)
+class _IntentTicket:
+    command: ExecutionCommand
+
+
+class _IntentSession:
+    """One invocation, one bounded registration CAS; durable claims never clear."""
+    def __init__(self, context, *, snapshot, profile_id):
+        self.context = context
+        self.fatal_reason = None
+        self.reasons = []
+        self.originals = []
+        self.current = []
+        self.version = None
+        self.plan_sources = {}
+        try:
+            self._restore(snapshot, profile_id)
+        except Exception:
+            self.fatal_reason = "continuity_restore_evidence_required"
+            self.reasons.append(self.fatal_reason)
+
+    def _restore(self, snapshot, profile_id):
+        c = self.context
+        if not isinstance(c, _IntentContinuityContext):
+            raise _EvidenceRequired("selected_context_invalid")
+        scope = c.scope
+        if not isinstance(scope, _RecoveryScope) or profile_id != scope.profile_id:
+            raise _EvidenceRequired("profile_scope_mismatch")
+        if snapshot.metadata.get("account_hash") != scope.account_hash:
+            raise _EvidenceRequired("snapshot_route_mismatch")
+        target = c.runtime_target
+        enrollment = dict(c.enrollment)
+        if (enrollment.get("schema_version") != "schwab_intent_enrollment.v1"
+                or enrollment.get("scope") != asdict(scope)
+                or not re.fullmatch("[a-f0-9]{64}", str(enrollment.get("authority_sha256") or ""))
+                or enrollment.get("managed_writers") != "native_create_only.v1"
+                or enrollment.get("complete_event_reads") is not True):
+            raise _EvidenceRequired("positive_new_cohort_enrollment_required")
+        # Original release remains enrolled even when a runtime release changes.
+        # New candidate release must independently match its current receipt.
+        from quant_platform_kit.common.strategy_release import StrategyReleaseIdentity
+        self.original_release = StrategyReleaseIdentity(**enrollment["strategy_release"])
+        if self.original_release.release_id != scope.release_id:
+            raise _EvidenceRequired("enrolled_release_mismatch")
+        if (target is None or target.strategy_profile != scope.profile_id or target.platform_id not in {"schwab", "charles_schwab"}
+                or target.strategy_release is None or target.dry_run_only):
+            raise _EvidenceRequired("current_runtime_binding_required")
+        if not validate_runtime_loaded_receipt(c.runtime_release_receipt,
+                expected_strategy_release=target.strategy_release, required=True).is_valid:
+            raise _EvidenceRequired("current_release_receipt_required")
+        if not target.market_timezone or c.session_timezone != target.market_timezone:
+            raise _EvidenceRequired("runtime_consumption_timezone_mismatch")
+        now = c.consumption_clock()
+        if not isinstance(now, datetime) or now.tzinfo is None or not c.session_timezone:
+            raise _EvidenceRequired("independent_current_clock_required")
+        self.now = now
+        self.session = now.astimezone(ZoneInfo(c.session_timezone)).date().isoformat()
+        store = c.command_store
+        driver = getattr(store, "object_store", None)
+        if (not isinstance(store, ExecutionCommandStore) or not isinstance(driver, _ScopedCommandObjectStore)
+                or store.cloud_prefix_uri != driver.prefix_uri or store.namespace != "execution_commands"
+                or not isinstance(c.locator, _RecoveryLocatorStore) or c.locator._scope != scope
+                or c.locator._client is not driver.client):
+            raise _EvidenceRequired("explicit_scoped_native_store_required")
+        snapshot_source = asdict(snapshot)
+        snapshot_source["as_of"] = snapshot.as_of.isoformat()
+        self.snapshot_sha256 = _digest(_canonical_json(snapshot_source))
+        self.enrollment_sha256 = _digest(_canonical_json(enrollment))
+        self.version = c.locator.read_registered()
+        payload = self._payload(self.version)
+        for ref in payload["references"]:
+            command = self._read_reference(ref)
+            events = store.events(command)
+            self.originals.append((command, events))
+
+    def register_plan_source(self, plan, snapshot):
+        """Bind the exact planner input without changing original lineage."""
+        if self.fatal_reason:
+            return
+        try:
+            if snapshot.metadata.get("account_hash") != self.context.scope.account_hash:
+                raise _EvidenceRequired("refreshed_snapshot_scope_mismatch")
+            source = asdict(snapshot)
+            source["as_of"] = snapshot.as_of.isoformat()
+            digest = _digest(_canonical_json(source))
+            prior = self.plan_sources.get(id(plan))
+            if prior is not None and prior[1] != digest:
+                raise _EvidenceRequired("reused_plan_has_ambiguous_source")
+            # Retain the object itself, so an id cannot be reused in this call.
+            self.plan_sources[id(plan)] = (plan, digest)
+        except Exception:
+            self.fatal_reason = "continuity_plan_source_evidence_required"
+            self.reasons.append(self.fatal_reason)
+
+    def select_plan_source(self, plan):
+        """Activate the chosen plan, including an earlier best refresh."""
+        if self.fatal_reason:
+            return
+        bound = self.plan_sources.get(id(plan))
+        if bound is None or bound[0] is not plan:
+            self.fatal_reason = "continuity_plan_source_evidence_required"
+            self.reasons.append(self.fatal_reason)
+            return
+        self.snapshot_sha256 = bound[1]
+
+    def _payload(self, version):
+        value = _object_json(version.payload_json)
+        if (set(value) != {"enrollment_sha256", "references"} or value["enrollment_sha256"] != self.enrollment_sha256
+                or not isinstance(value["references"], list)):
+            raise _EvidenceRequired("registered_references_invalid")
+        ids = [ref["command_id"] for ref in value["references"]]
+        if len(set(ids)) != len(ids):
+            raise _EvidenceRequired("duplicate_original_reference")
+        return value
+
+    def _read_command(self, uri):
+        store = self.context.command_store
+        raw = _object_json(store.object_store.read_text(uri))
+        if not raw.get("created_at") or datetime.fromisoformat(raw["created_at"].replace("Z", "+00:00")).tzinfo is None:
+            raise _EvidenceRequired("original_creation_time_missing")
+        command = ExecutionCommand.from_dict(raw)
+        if raw != command.to_dict() or str(store._command_location(command)) != uri:
+            raise _EvidenceRequired("descriptor_identity_mismatch")
+        intent = command.intent
+        scope = self.context.scope
+        if (command.platform != "schwab" or command.strategy_profile != scope.profile_id.lower()
+                or command.account_scope != scope.account_hash.lower() or command.execution_mode != "live"
+                or intent.get("routing_account_hash") != scope.account_hash or intent.get("cohort_id") != scope.cohort_id
+                or not isinstance(intent.get("order"), dict) or not re.fullmatch("[a-f0-9]{64}", command.decision_digest)):
+            raise _EvidenceRequired("descriptor_scope_mismatch")
+        if _digest(_canonical_json(intent.get("source_plan"))) != command.decision_digest:
+            raise _EvidenceRequired("source_plan_digest_mismatch")
+        order = OrderIntent(**intent["order"])
+        if not order.symbol or order.side not in {"buy", "sell"}:
+            raise _EvidenceRequired("descriptor_order_invalid")
+        return command
+
+    def _read_reference(self, ref):
+        if set(ref) != {"command_id", "effective_date", "descriptor_uri", "descriptor_sha256"}:
+            raise _EvidenceRequired("exact_original_reference_required")
+        command = self._read_command(ref["descriptor_uri"])
+        if (command.command_id != ref["command_id"] or command.effective_date != ref["effective_date"]
+                or _digest(_canonical_json(command.to_dict())) != ref["descriptor_sha256"]):
+            raise _EvidenceRequired("original_reference_content_mismatch")
+        # Original release identity is in the immutable full descriptor, not the
+        # current plan's release. A later runtime cannot rename that obligation.
+        if command.intent.get("strategy_release") != self.original_release.to_dict():
+            raise _EvidenceRequired("original_release_mismatch")
+        return command
+
+    def _independent_reduction(self, order, candidate):
+        facts = self.context.resource_facts
+        if not isinstance(facts, Mapping):
+            return False
+        obligations = [{"command_id": cmd.command_id, "descriptor_sha256": _digest(_canonical_json(cmd.to_dict())),
+                        "order": cmd.intent["order"], "routing_account_hash": cmd.intent["routing_account_hash"]}
+                       for cmd, _ in self.originals if cmd.command_id != candidate.command_id]
+        if (facts.get("scope") != asdict(self.context.scope) or facts.get("session") != self.session
+                or facts.get("complete_original_obligations") != obligations
+                or facts.get("resource_reconciliation") != "verified_complete"
+                or facts.get("snapshot_sha256") != self.snapshot_sha256
+                or facts.get("proposal_order_sha256") != _digest(_canonical_json(asdict(order)))
+                or facts.get("strategy_release") != self.context.runtime_target.strategy_release.to_dict()
+                or not re.fullmatch("[a-f0-9]{64}", str(facts.get("source_sha256") or ""))):
+            return False
+        # No reserve release or new quantity formula. Explicitly qualified
+        # disjoint reduction only; another pending sell in this symbol refuses.
+        if any(item["order"]["symbol"] == order.symbol for item in obligations):
+            return False
+        admission = evaluate_reduce_only_command_admission(
+            order=order, command=candidate, as_of_session=self.session,
+            long_quantities=facts.get("long_quantities", {}), short_quantities=facts.get("short_quantities", {}),
+            sellable_quantities=facts.get("sellable_quantities", {}), allowed_symbols=facts.get("allowed_symbols", ()),
+            runtime_release_receipt=self.context.runtime_release_receipt,
+            expected_strategy_release=self.context.runtime_target.strategy_release,
+            command_state=ExecutionCommandState.QUEUED)
+        return admission.approved
+
+    def prepare(self, *, order, plan, action_type):
+        if self.fatal_reason:
+            return None
+        c = self.context
+        try:
+            if plan.get("account_hash") != c.scope.account_hash:
+                raise _EvidenceRequired("routed_account_changed")
+            if c.runtime_target.strategy_release != self.original_release:
+                raise _EvidenceRequired("new_release_enrollment_required")
+            execution = plan["execution"]
+            # Final business inputs, never a notification/display string.
+            source = {"portfolio": plan["portfolio"], "allocation": plan["allocation"],
+                      "signal_date": execution.get("signal_date"), "effective_date": execution.get("effective_date"),
+                      "execution_timing_contract": execution.get("execution_timing_contract"),
+                      "reserved_cash": execution.get("reserved_cash"), "trade_threshold_value": execution.get("trade_threshold_value"),
+                      "snapshot_sha256": self.snapshot_sha256}
+            intent = {"order": asdict(order), "action_type": action_type, "routing_account_hash": c.scope.account_hash,
+                      "cohort_id": c.scope.cohort_id, "strategy_release": c.runtime_target.strategy_release.to_dict(),
+                      "source_plan": source, "reduce_only_order_sha256": build_reduce_only_order_digest(order)}
+            if action_type == "BUY_NOTIONAL" and not (order.quantity == 0 and float(order.metadata["notional_usd"]) > 0):
+                raise _EvidenceRequired("notional_obligation_missing")
+            candidate = ExecutionCommand.from_decision(platform="schwab", account_scope=c.scope.account_hash,
+                strategy_profile=c.scope.profile_id, execution_mode="live", signal_date=execution["signal_date"],
+                effective_date=execution["effective_date"], execution_timing_contract=execution["execution_timing_contract"],
+                decision_digest=_digest(_canonical_json(source)), intent=intent, created_at=self.now.isoformat())
+            # Enqueue false is not proof: read and compare full immutable content,
+            # preserving its first timestamp (not part of the native ID hash).
+            c.command_store.enqueue(candidate)
+            stored = self._read_command(str(c.command_store._command_location(candidate)))
+            expected, actual = candidate.to_dict(), stored.to_dict()
+            expected.pop("created_at"); actual.pop("created_at")
+            if expected != actual:
+                raise _EvidenceRequired("existing_descriptor_mismatch")
+            candidate = stored
+            ref = {"command_id": candidate.command_id, "effective_date": candidate.effective_date,
+                   "descriptor_uri": str(c.command_store._command_location(candidate)),
+                   "descriptor_sha256": _digest(_canonical_json(candidate.to_dict()))}
+            payload = self._payload(self.version)
+            known = next((r for r in payload["references"] if r["command_id"] == candidate.command_id), None)
+            if known is not None and known != ref:
+                raise _EvidenceRequired("registered_descriptor_changed")
+            if known is None:
+                # Exactly one CAS, including losing/uncertain replies. No loop.
+                payload["references"].append(ref)
+            self.version = c.locator.compare_update(_canonical_json(payload), expected=self.version)
+            verified = c.locator.read_registered()
+            if verified != self.version:
+                raise _EvidenceRequired("registration_readback_changed")
+            self._read_command(ref["descriptor_uri"])
+            events = c.command_store.events(candidate)
+            if events:
+                self.reasons.append("original_attempt_pending_reconciliation")
+                return None
+            other_originals = [cmd for cmd, _ in self.originals if cmd.command_id != candidate.command_id]
+            if other_originals and not self._independent_reduction(order, candidate):
+                self.reasons.append("original_obligations_evidence_required")
+                return None
+            # A future release needs a separate cohort enrollment; it may read
+            # old obligations but cannot create attempts in this old cohort.
+            if c.runtime_target.strategy_release != self.original_release:
+                raise _EvidenceRequired("new_release_enrollment_required")
+            ticket = _IntentTicket(candidate)
+            claim = c.command_store.claim_due(candidate, as_of_date=self.session, claimant="schwab-managed-caller")
+            if claim is None:
+                self.reasons.append("original_claim_unavailable_or_not_due")
+                return None
+            self.current.append(candidate)
+            return ticket
+        except Exception:
+            self.fatal_reason = "continuity_registration_or_claim_evidence_required"
+            self.reasons.append(self.fatal_reason)
+            return None
+
+    def record_outcome(self, ticket, *, accepted=None, broker_order_id=None):
+        try:
+            store = self.context.command_store
+            if accepted is None:
+                self.reasons.append("original_attempt_pending_reconciliation")
+                states = (ExecutionCommandState.RECONCILIATION_REQUIRED,)
+            else:
+                states = (ExecutionCommandState.SUBMITTED,
+                          ExecutionCommandState.ACCEPTED if accepted else ExecutionCommandState.REJECTED)
+            for state in states:
+                event = store.append_event(ticket.command, next_state=state,
+                    details={"broker_order_id": broker_order_id} if broker_order_id is not None else {})
+                if event is None:
+                    raise _EvidenceRequired("attempt_outcome_conflict")
+            return True
+        except Exception:
+            self.fatal_reason = "continuity_attempt_outcome_evidence_required"
+            self.reasons.append(self.fatal_reason)
+            return False
+
+    def present(self, execution, *, current_submitted=()):
+        value = dict(execution)
+        if self.originals:
+            value["continuity_prior_orders"] = [{"command_id": cmd.command_id, "effective_date": cmd.effective_date,
+                "order": cmd.intent["order"], "state": events[-1].state.value if events else "queued",
+                "broker_order_id": next((e.details.get("broker_order_id") for e in reversed(events)
+                                         if e.details.get("broker_order_id") is not None), None)} for cmd, events in self.originals]
+        value["continuity_coverage"] = "evidence_required" if self.reasons else "managed_new_cohort"
+        value["continuity_reason_codes"] = tuple(dict.fromkeys(self.reasons))
+        if self.reasons or self.originals:
+            # Keep prior DP02/T1 diagnostics while presenting an honest pending
+            # obligation. Never copy an old order into current submitted_orders.
+            value.setdefault("no_op_reason", "continuity_evidence_required")
+            if value.get("execution_status") not in {"blocked", "skipped_already_executed"}:
+                value["execution_status"] = "pending_reconciliation"
+            value["broker_submission_done"] = False
+            value["orders_pending_count"] = max(int(value.get("orders_pending_count") or 0),
+                len(current_submitted) + sum(bool(events) for _, events in self.originals))
+        return value

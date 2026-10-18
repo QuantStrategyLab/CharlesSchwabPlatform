@@ -6,6 +6,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from application.execution_intent_continuity import _IntentContinuityContext
+
 from quant_platform_kit.common.ports import ExecutionPort, MarketDataPort, NotificationPort, PortfolioPort
 
 
@@ -33,6 +35,7 @@ class SchwabRebalanceConfig:
     execution_state_store: Any = None
     execution_state_account_scope: str = ""
     notification_attention_reason_codes: tuple[str, ...] = ()
+    intent_continuity: _IntentContinuityContext | None = None
 
 
 @dataclass(frozen=True)

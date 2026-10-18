@@ -9,6 +9,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 
 from application.account_observation import build_account_observation
+from application.execution_intent_continuity import _IntentSession
 from application.execution_service import execute_rebalance_cycle, ExecutionCycleResult
 from application.execution_claim import claim_execution_marker
 from application.execution_kernel_adapter import (
@@ -630,6 +631,8 @@ def run_strategy_core(
             qqq_history=reference_history,
             snapshot=current_snapshot,
         )
+        if continuity is not None:
+            continuity.register_plan_source(current_plan, current_snapshot)
         current_portfolio = _plan_portfolio(current_plan)
         current_execution = _plan_execution(current_plan)
         current_allocation = _plan_allocation(current_plan)
@@ -638,6 +641,9 @@ def run_strategy_core(
         return current_plan, current_portfolio, current_execution, current_allocation
 
     snapshot = runtime.portfolio_port.get_portfolio_snapshot()
+    continuity_context = getattr(config, "intent_continuity", None)
+    continuity = (_IntentSession(continuity_context, snapshot=snapshot, profile_id=config.strategy_profile)
+                  if continuity_context is not None and not config.dry_run_only else None)
     account_observation = build_account_observation(snapshot)
     plan, portfolio, execution, allocation = load_plan(snapshot)
     execution_port = (
@@ -806,6 +812,7 @@ def run_strategy_core(
             safe_haven_cash_substitute_threshold_usd=config.safe_haven_cash_substitute_threshold_usd,
             cash_only_execution=getattr(config, "cash_only_execution", True),
             notional_buy_execution=getattr(config, "notional_buy_execution", False),
+            intent_continuity=continuity,
             publish_order_issue=lambda message: publish_incident(
                 lambda: notification_publisher.publish(RenderedNotification(detailed_text=message, compact_text=message)),
                 reason="order_integrity_issue", profile=config.strategy_profile, kind="order_status_unknown",
@@ -831,6 +838,9 @@ def run_strategy_core(
                 execution=execution_result.execution,
             ),
         )
+    if continuity is not None:
+        execution_result = replace(execution_result, execution=continuity.present(
+            execution_result.execution, current_submitted=execution_result.submitted_orders))
     portfolio = execution_result.portfolio
     execution = execution_result.execution
     if notification_attention_reason_codes:
