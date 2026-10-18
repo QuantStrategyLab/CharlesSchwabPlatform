@@ -399,8 +399,8 @@ def build_native_plan(before: dict, current: dict, expected: dict) -> tuple[dict
                 _stop("NATIVE_BASELINE_PROVENANCE_MISMATCH")
             if main_container["startupProbe"] != _TCP_00781_PROBE:
                 _stop("TCP_BASELINE_PROBE_MISMATCH")
-            # Absence is a capability/decision gap, not permission to enable it.
-            if revision["metadata"].get("annotations", {}).get("run.googleapis.com/health-check-disabled") != "false":
+            # Missing means the default check is enabled; retain the old metadata.
+            if revision["metadata"].get("annotations", {}).get("run.googleapis.com/health-check-disabled", "false") != "false":
                 _stop("NATIVE_STARTUP_CHECK_NOT_EXPLICITLY_ENABLED")
             _traffic(a.native_routes(snap["service"]["spec"]["traffic"]), expected)
             if a.native_routes(snap["service"]["status"]["traffic"], status=True) != a.native_routes(snap["service"]["spec"]["traffic"]):
