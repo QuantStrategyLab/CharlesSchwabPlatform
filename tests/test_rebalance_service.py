@@ -2896,3 +2896,62 @@ def test_resolution_proof_registration_cas_failure_never_grants_transport(tmp_pa
     assert current.store.events(original_command)==original_events
     for command,events in after.originals:
         if command.command_id!=original_command.command_id:assert events==()
+
+
+@pytest.mark.parametrize("branch",["port","fallback"])
+@pytest.mark.parametrize("variant",["consistent","same_intent_second_active_order","same_order_second_intent",
+    "duplicate_order_fact","duplicate_intent_fact","intent_key_identity_mismatch","order_key_identity_mismatch",
+    "cross_account","cross_cohort","repeated_native_fact","unrelated_binding"])
+def test_resolution_identity_component_uniqueness_in_actual_caller(tmp_path,branch,variant):
+    from copy import deepcopy
+    from application.execution_intent_continuity import _IntentSession
+    def lost(_):raise TimeoutError("synthetic")
+    original=continuity_case(tmp_path,branch=branch,fault=lost)
+    run_strategy_core(runtime=original.runtime,config=original.config)
+    current=continuity_case(tmp_path,"2026-10-01",branch=branch,kind="BUY_LIMIT")
+    body,ledger=resolution_material(original,current)
+    cid=body["original_ref"]["command_id"];oid=body["identity_binding"]["order_id"]
+    before=_IntentSession(current.context,snapshot=current.snapshot,profile_id=current.scope.profile_id)
+    old,events=before.originals[0]
+    raw=current.store.object_store.read_text(body["original_ref"]["descriptor_uri"])
+    if variant in {"same_intent_second_active_order","duplicate_order_fact"}:
+        alias=deepcopy(body["ledger"]["orders"][oid])
+        if variant=="same_intent_second_active_order":
+            alias.update(status="WORKING",terminal=False,cumulative_filled_quantity="0",
+                recorded_filled_quantity="0",reservation_status="pending")
+            body["ledger"]["account"]["reserved_amount"]="400.00"
+            body["ledger"]["owners"][current.scope.profile_id]["reserved_amount"]="400.00"
+        body["ledger"]["orders"]["SYNTH_ORDER_ALIAS"]=alias
+    elif variant in {"same_order_second_intent","duplicate_intent_fact"}:
+        alias=deepcopy(body["ledger"]["intents"][cid])
+        if variant=="same_order_second_intent":alias["intent_id"]="SYNTH_OTHER_INTENT"
+        body["ledger"]["intents"]["SYNTH_OTHER_INTENT"]=alias
+    elif variant=="intent_key_identity_mismatch":
+        body["ledger"]["intents"]["SYNTH_WRONG_KEY"]=body["ledger"]["intents"].pop(cid)
+    elif variant=="order_key_identity_mismatch":
+        body["ledger"]["orders"]["SYNTH_WRONG_KEY"]=body["ledger"]["orders"].pop(oid)
+    elif variant=="cross_account":body["scope"]["account_hash"]="OTHER_ACCOUNT"
+    elif variant=="cross_cohort":body["scope"]["cohort_id"]="OTHER_COHORT"
+    elif variant=="repeated_native_fact":
+        intent=body["ledger"]["intents"][cid]
+        ledger.record_order_intent(**{key:intent[key] for key in
+            ("intent_id","order_id","owner_id","symbol","side","quantity","reserved_amount")})
+        assert ledger.snapshot()==body["ledger"]
+    elif variant=="unrelated_binding":
+        ledger.record_order_intent(intent_id="SYNTH_UNRELATED_INTENT",order_id="SYNTH_UNRELATED_ORDER",
+            owner_id=current.scope.profile_id,symbol="TQQQ",side="BUY",quantity="1",reserved_amount="100")
+        body["ledger"]=ledger.snapshot()
+    context=with_resolution_source(current.context,body)
+    config=replace(current.config,intent_continuity=context)
+    result=run_strategy_core(runtime=current.runtime,config=config)
+    expected=int(variant in {"consistent","repeated_native_fact","unrelated_binding"})
+    assert len(current.calls)==expected,variant
+    assert len(result.submitted_orders)==expected
+    assert current.store.object_store.read_text(body["original_ref"]["descriptor_uri"])==raw
+    assert current.store.events(old)==events
+    if not expected:
+        payload=__import__("json").loads(current.locator.read_registered().payload_json)
+        assert len(payload["references"])==1 and not payload.get("resolution_bindings")
+    if expected:
+        run_strategy_core(runtime=current.runtime,config=config)
+        assert len(current.calls)==1 # same facts/proof never duplicate transport

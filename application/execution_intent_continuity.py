@@ -510,6 +510,19 @@ def _validated_original_resolution(command, ref, body, *, scope, enrollment_sha2
             or ledger["schema_version"] != ExecutionEventLedger.schema_version
             or ledger["unsupported_event_ids"]):
         raise _EvidenceRequired("resolution_ledger_unsupported")
+    intents, orders = ledger["intents"], ledger["orders"]
+    if (not isinstance(intents, dict) or not isinstance(orders, dict)
+            or any(not isinstance(row, dict) for row in (*intents.values(), *orders.values()))):
+        raise _EvidenceRequired("resolution_identity_component_unknown")
+    # Check both directions inside this supplied original-related component.
+    # An active alias or duplicate fact under another key cannot disappear by
+    # selecting the one terminal row. Unrelated correctly bound rows may remain.
+    intent_keys = {key for key, row in intents.items() if key == command.command_id
+                   or row.get("intent_id") == command.command_id or row.get("order_id") == broker_id}
+    order_keys = {key for key, row in orders.items() if key == broker_id
+                  or row.get("intent_id") == command.command_id}
+    if intent_keys != {command.command_id} or order_keys != {broker_id}:
+        raise _EvidenceRequired("resolution_identity_component_conflict")
     intent = ledger["intents"][command.command_id]
     state = ledger["orders"][broker_id]
     if (intent["intent_id"] != command.command_id or intent["order_id"] != broker_id
