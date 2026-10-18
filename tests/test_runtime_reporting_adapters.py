@@ -2,6 +2,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -58,7 +60,8 @@ def test_runtime_reporting_adapters_start_run_builds_report_with_runtime_target(
     assert report == {"run_id": "run-001"}
 
 
-def test_actual_probe_qpk_writer_readback_publisher_prepare_roundtrip(tmp_path, monkeypatch):
+@pytest.mark.parametrize("rows,expected_count", [(None, 1), ([], 0)], ids=["nonempty", "empty"])
+def test_actual_probe_qpk_writer_readback_publisher_prepare_roundtrip(tmp_path, monkeypatch, rows, expected_count):
     import json
     from quant_platform_kit.common import runtime_reports
     from test_request_handling import _run_external_flow_probe
@@ -84,11 +87,14 @@ def test_actual_probe_qpk_writer_readback_publisher_prepare_roundtrip(tmp_path, 
         return observed["path"]
     def finalize(report, **kwargs):
         return runtime_reports.finalize_runtime_report(report, finished_at="2026-09-30T22:25:00Z", **kwargs)
-    result, client, original = _run_external_flow_probe(persist=persist, finalizer=finalize)
+    result, client, original = _run_external_flow_probe(rows=rows, persist=persist, finalizer=finalize)
     assert result == ("Probe OK", 200)
     client.get_transactions.assert_called_once()
     saved = json.loads(Path(observed["path"]).read_text())
     assert saved["account_external_flows"] == original["account_external_flows"]
+    assert saved["account_external_flows"]["source_complete"] is False
+    assert isinstance(saved["account_external_flows"]["transactions"], list)
+    assert len(saved["account_external_flows"]["transactions"]) == expected_count
     prefix = "gs://example-bucket/execution-reports/charles_schwab/soxl_soxx_trend_income/"
     kwargs = dict(source_report_uri=prefix + "2026-09/20260930T222000Z.json", report_prefix=prefix,
                   expected_service_name="synthetic-service", expected_runtime_revision="service-00007-abc",
@@ -98,7 +104,7 @@ def test_actual_probe_qpk_writer_readback_publisher_prepare_roundtrip(tmp_path, 
     assert actual == publisher.project_schwab_account_facts_history(original, external_flow_enabled=True, **kwargs)
     payload = publisher.prepare_sync_payload(actual, include_external_flow=True)
     assert payload["externalFlow"]["windows"][0]["coverage"] == "incomplete"
-    assert len(payload["externalFlow"]["windows"][0]["records"]) == 1
+    assert len(payload["externalFlow"]["windows"][0]["records"]) == expected_count
     (tmp_path / "actual-chain-payload.json").write_text(json.dumps(payload, indent=2))
     # OFF and ON without a source keep the same actual archive projection.
     saved.pop("account_external_flows")
