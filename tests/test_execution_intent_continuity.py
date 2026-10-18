@@ -25,7 +25,7 @@ import pytest
 
 from application.execution_intent_continuity import (
     _EvidenceRequired, _LocatorConflict, _LocatorStateError, _LocatorUncertain,
-    _LocatorUnavailable, _RecoveryLocatorStore, _RecoveryScope,
+    _LocatorUnavailable, _LocatorVersion, _RecoveryLocatorStore, _RecoveryScope,
     _read_schwab_position_quantities,
 )
 from quant_platform_kit.common.long_only_reduce import validate_long_only_reduce_only_order
@@ -166,8 +166,8 @@ def test_missing_registered_locator_never_initializes_empty(tmp_path):
 
 def test_metadata_data_read_conflict_never_returns_mixed_or_empty_state(tmp_path):
     client = FileClient(tmp_path)
-    store(client).initialize_new_cohort(ORIGINAL)
-    client.after_reload = lambda: store(client).compare_update('{"original_id":"new-reference"}', expected_generation=1)
+    original = store(client).initialize_new_cohort(ORIGINAL)
+    client.after_reload = lambda: store(client).compare_update('{"original_id":"new-reference"}', expected=original)
     with pytest.raises(_LocatorConflict):
         store(client).read_registered()
     assert ("download", 1) in client.calls
@@ -180,7 +180,7 @@ def test_consistent_retained_old_version_cannot_authorize_stale_cas(tmp_path):
     client = FileClient(tmp_path)
     original = store(client).initialize_new_cohort(ORIGINAL)
     old_data = client.load()["data"]
-    client.after_reload = lambda: store(client).compare_update('{"references":["newer"]}', expected_generation=1)
+    client.after_reload = lambda: store(client).compare_update('{"references":["newer"]}', expected=original)
 
     def retained_download(blob, *, if_generation_match):
         assert if_generation_match == 1
@@ -190,25 +190,39 @@ def test_consistent_retained_old_version_cannot_authorize_stale_cas(tmp_path):
         read = store(client).read_registered()
     assert read == original  # same-generation bytes may remain consistently readable
     with pytest.raises(_LocatorConflict):
-        store(client).compare_update(ORIGINAL, expected_generation=read.generation)
+        store(client).compare_update(ORIGINAL, expected=read)
     assert json.loads(store(client).read_registered().payload_json) == {"references": ["newer"]}
 
 
 @pytest.mark.parametrize("generation", [0, -1, True, False, "1", 1.0, None])
 def test_cas_requires_positive_integer_version_before_io(tmp_path, generation):
     client = FileClient(tmp_path)
+    token = _LocatorVersion(generation, "{}", hashlib.sha256(b"{}").hexdigest(), URI, SCOPE)
     with pytest.raises(ValueError):
-        store(client).compare_update(ORIGINAL, expected_generation=generation)
+        store(client).compare_update(ORIGINAL, expected=token)
+    assert client.calls == []
+
+
+def test_cas_rejects_version_from_other_locator_scope_or_payload(tmp_path):
+    client = FileClient(tmp_path)
+    original = store(client).initialize_new_cohort(ORIGINAL)
+    tokens = [replace(original, locator_uri="gs://other/locator"),
+              replace(original, scope=_RecoveryScope("OTHER", "SYNTH_PROFILE", "SYNTH_RELEASE", "SYNTH_COHORT")),
+              replace(original, payload_sha256="0" * 64)]
+    client.calls.clear()
+    for token in tokens:
+        with pytest.raises(ValueError):
+            store(client).compare_update(ORIGINAL, expected=token)
     assert client.calls == []
 
 
 def test_stale_cas_cannot_overwrite_winner(tmp_path):
     client = FileClient(tmp_path)
     original = store(client).initialize_new_cohort(ORIGINAL)
-    winner = store(client).compare_update('{"references":["original","additional"]}', expected_generation=original.generation)
+    winner = store(client).compare_update('{"references":["original","additional"]}', expected=original)
     before = client.path.read_bytes()
     with pytest.raises(_LocatorConflict):
-        store(client).compare_update('{"references":["stale"]}', expected_generation=original.generation)
+        store(client).compare_update('{"references":["stale"]}', expected=original)
     assert client.path.read_bytes() == before
     assert store(client).read_registered() == winner
 
@@ -216,7 +230,7 @@ def test_stale_cas_cannot_overwrite_winner(tmp_path):
 @pytest.mark.parametrize("operation", ["create", "cas"])
 def test_concurrent_conditional_writers_have_one_winner(tmp_path, operation):
     if operation == "cas":
-        store(FileClient(tmp_path)).initialize_new_cohort(ORIGINAL)
+        initial = store(FileClient(tmp_path)).initialize_new_cohort(ORIGINAL)
     barrier = Barrier(2)
 
     def writer(index):
@@ -225,7 +239,7 @@ def test_concurrent_conditional_writers_have_one_winner(tmp_path, operation):
         try:
             target = store(client)
             result = (target.initialize_new_cohort if operation == "create" else
-                      lambda data: target.compare_update(data, expected_generation=1))(json.dumps({"writer": index}))
+                      lambda data: target.compare_update(data, expected=initial))(json.dumps({"writer": index}))
             return "winner", json.loads(result.payload_json)["writer"]
         except _LocatorConflict:
             return "conflict", index
@@ -242,14 +256,14 @@ def test_lost_write_response_stays_uncertain_and_is_recoverable(tmp_path, operat
     client = FileClient(tmp_path)
     target = store(client)
     if operation == "cas":
-        target.initialize_new_cohort('{"original_id":"synthetic-original"}')
+        initial = target.initialize_new_cohort('{"original_id":"synthetic-original"}')
     client.calls.clear()
     client.lose_ack = True
     with pytest.raises(_LocatorUncertain):
         if operation == "create":
             target.initialize_new_cohort(ORIGINAL)
         else:
-            target.compare_update(ORIGINAL, expected_generation=1)
+            target.compare_update(ORIGINAL, expected=initial)
     assert len([x for x in client.calls if x[0] == "upload"]) == 1  # no automatic retry
     recovered = store(FileClient(tmp_path)).read_registered()
     assert json.loads(recovered.payload_json)["state"] == "UNKNOWN"
@@ -258,7 +272,7 @@ def test_lost_write_response_stays_uncertain_and_is_recoverable(tmp_path, operat
         if operation == "create":
             target.initialize_new_cohort(ORIGINAL)
         else:
-            target.compare_update(ORIGINAL, expected_generation=1)
+            target.compare_update(ORIGINAL, expected=initial)
 
 
 def test_unbound_write_ack_generation_is_not_success(tmp_path):

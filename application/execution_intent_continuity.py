@@ -59,6 +59,8 @@ class _LocatorVersion:
     generation: int
     payload_json: str
     payload_sha256: str
+    locator_uri: str
+    scope: _RecoveryScope
 
 
 def _unique_object(pairs):
@@ -118,6 +120,7 @@ class _RecoveryLocatorStore:
         if not bucket or not separator or not name or not isinstance(scope, _RecoveryScope):
             raise ValueError("fixed locator and recovery scope required")
         self._client = client
+        self._uri = locator_uri
         self._bucket = bucket
         self._name = name
         self._scope = scope
@@ -164,7 +167,7 @@ class _RecoveryLocatorStore:
                 raise ValueError("locator payload digest mismatch")
         except (ValueError, TypeError, OverflowError, RecursionError):
             raise _LocatorUncertain("registered_locator_invalid") from None
-        return _LocatorVersion(generation, canonical, digest)
+        return _LocatorVersion(generation, canonical, digest, self._uri, self._scope)
 
     def read_registered(self) -> _LocatorVersion:
         blob = self._blob(reading=True)
@@ -195,15 +198,19 @@ class _RecoveryLocatorStore:
                 raise ValueError("no new version bound to write acknowledgement")
         except (ValueError, OverflowError):
             raise _LocatorUncertain("write_generation_unavailable") from None
-        return _LocatorVersion(acknowledged_generation, canonical, digest)
+        return _LocatorVersion(acknowledged_generation, canonical, digest, self._uri, self._scope)
 
     def initialize_new_cohort(self, payload_json: str) -> _LocatorVersion:
         return self._write(payload_json, 0)
 
-    def compare_update(self, payload_json: str, *, expected_generation: int) -> _LocatorVersion:
-        if isinstance(expected_generation, bool) or not isinstance(expected_generation, int) or expected_generation <= 0:
-            raise ValueError("CAS requires a positive integer version from a qualified read")
-        return self._write(payload_json, expected_generation)
+    def compare_update(self, payload_json: str, *, expected: _LocatorVersion) -> _LocatorVersion:
+        if (not isinstance(expected, _LocatorVersion) or isinstance(expected.generation, bool)
+                or not isinstance(expected.generation, int) or expected.generation <= 0):
+            raise ValueError("CAS requires a positive version from a qualified read or write acknowledgement")
+        if (expected.locator_uri != self._uri or expected.scope != self._scope
+                or not isinstance(expected.payload_json, str) or _digest(expected.payload_json) != expected.payload_sha256):
+            raise ValueError("CAS version must bind the same locator, scope and payload")
+        return self._write(payload_json, expected.generation)
 
 
 @dataclass(frozen=True)
