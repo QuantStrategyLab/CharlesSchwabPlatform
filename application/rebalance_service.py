@@ -473,6 +473,10 @@ def _should_publish_cycle_notification(result: ExecutionCycleResult, *, config) 
             return True
     if bool(getattr(config, "dry_run_only", False)):
         return False
+    # A digest may summarize a physical order, but cannot suppress its
+    # immediate notification eligibility. Existing routing/state stays intact.
+    if submitted_orders:
+        return True
     if defer_routine_cycle_to_digest(execution, submitted_order_count=len(submitted_orders), submitted_orders=submitted_orders):
         return False
     return bool(submitted_orders) or bool(getattr(config, "notify_no_trade_cycles", False))

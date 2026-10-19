@@ -2398,7 +2398,7 @@ def test_cycle_notification_quiets_successful_preview_but_keeps_real_and_rejecte
 
 # Explicit synthetic admission inputs; no prebuilt command or replay relation.
 def continuity_case(root, day="2026-09-30", *, kind="SELL", branch="port", selected=True,
-                    fault=None, resource_facts=None):
+                    fault=None, resource_facts=None, strategy_revision="synthetic-revision"):
     import json
     from dataclasses import replace
     from application import execution_intent_continuity as ci
@@ -2410,7 +2410,7 @@ def continuity_case(root, day="2026-09-30", *, kind="SELL", branch="port", selec
     root = Path(root)
     client = MultiFileClient(root / "objects")
     scope = ci._RecoveryScope("SYNTH_HASH", "SYNTH_PROFILE", "SYNTH_RELEASE", "SYNTH_COHORT")
-    release = StrategyReleaseIdentity("SYNTH_RELEASE", "a"*64, "synthetic-revision", "b"*64,
+    release = StrategyReleaseIdentity("SYNTH_RELEASE", "a"*64, strategy_revision, "b"*64,
                                       "c"*64, "d"*64, "e"*64, "2026-09-01")
     target = RuntimeTarget("schwab", scope.profile_id, False, market_timezone="America/New_York",
                            strategy_release=release)
@@ -2672,6 +2672,8 @@ def test_selected_same_cycle_keeps_existing_replay_reason_and_current_submission
 @pytest.fixture(autouse=True)
 def _offline_caller_external_ports(monkeypatch):
     """Isolate external reads/telemetry; keep actual admission policy and math."""
+    import socket
+    monkeypatch.setattr(socket, "has_ipv6", False)
     from application import account_new_risk_gate_support, daily_loss_fact_producer
     monkeypatch.setattr(rebalance_service, "try_record_platform_execution", lambda *args, **kwargs: False)
     monkeypatch.setattr(daily_loss_fact_producer, "load_recent_runtime_reports_from_gcs", lambda **kwargs: ())
@@ -3004,3 +3006,149 @@ def test_resolution_receipt_collection_requires_unique_broker_binding(tmp_path,b
     if conflict:
         held=json.loads(current.locator.read_registered().payload_json)
         assert len(held["references"])==2 and not held.get("resolution_bindings")
+
+
+@pytest.mark.parametrize("mode", ["immediate", "daily_digest"])
+@pytest.mark.parametrize("routine_orders", [None, "true", "false"])
+def test_A_physical_order_eligibility_is_independent_of_digest(monkeypatch, mode, routine_orders):
+    """Eligibility only: synthetic statuses do not assert real broker fills."""
+    monkeypatch.setenv("QSL_ROUTINE_NOTIFICATION_MODE", mode)
+    if routine_orders is None:
+        monkeypatch.delenv("QSL_DIGEST_ROUTINE_ORDERS", raising=False)
+    else:
+        monkeypatch.setenv("QSL_DIGEST_ROUTINE_ORDERS", routine_orders)
+    config = SimpleNamespace(dry_run_only=False, notify_no_trade_cycles=False,
+                             notification_attention_reason_codes=())
+    states = ("accepted", "pending", "submitted", "new", "working", "partially_filled",
+              "partiallyfilled", "filled", "completed", "executed", "rejected", "unknown",
+              "failed", "error", "canceled", "cancelled")
+    for state in states:
+        result = SimpleNamespace(execution={"execution_status": "executed", "signal_metadata": {}},
+                                 submitted_orders=({"status": state},))
+        assert rebalance_service._should_publish_cycle_notification(result, config=config), (mode, routine_orders, state)
+
+
+def test_A_no_order_dry_run_and_error_controls_keep_existing_policy(monkeypatch):
+    for mode in ("immediate", "daily_digest"):
+        monkeypatch.setenv("QSL_ROUTINE_NOTIFICATION_MODE", mode)
+        for flag in (None, "true", "false"):
+            if flag is None:
+                monkeypatch.delenv("QSL_DIGEST_ROUTINE_ORDERS", raising=False)
+            else:
+                monkeypatch.setenv("QSL_DIGEST_ROUTINE_ORDERS", flag)
+            config = SimpleNamespace(dry_run_only=False, notify_no_trade_cycles=False,
+                                     notification_attention_reason_codes=())
+            empty = SimpleNamespace(execution={"execution_status": "no_action", "signal_metadata": {}},
+                                    submitted_orders=())
+            assert not rebalance_service._should_publish_cycle_notification(empty, config=config)
+            config.notify_no_trade_cycles = True
+            assert rebalance_service._should_publish_cycle_notification(empty, config=config) is (mode == "immediate")
+            config.dry_run_only = True
+            preview = SimpleNamespace(execution={"execution_status": "dry_run", "signal_metadata": {}},
+                                      submitted_orders=({"status": "dry_run"},))
+            assert not rebalance_service._should_publish_cycle_notification(preview, config=config)
+            rejected = SimpleNamespace(execution={"execution_status": "dry_run", "signal_metadata": {}},
+                                       submitted_orders=({"status": "rejected"},))
+            assert rebalance_service._should_publish_cycle_notification(rejected, config=config)
+            error = SimpleNamespace(execution={"notification_error": "synthetic_error"}, submitted_orders=())
+            assert rebalance_service._should_publish_cycle_notification(error, config=config)
+
+
+def test_A_native_pending_sender_and_complete_raw9_remain_stable(tmp_path, monkeypatch):
+    """Real engine/old notification route/renderer/adapter, fake external ports.
+
+    The producer actually returns accepted, pending reconciliation. Other status
+    shapes belong to the eligibility test, not a claimed real fill producer.
+    """
+    import copy
+    import hashlib
+    import json
+    import os
+    from dataclasses import asdict, replace
+    from unittest.mock import patch
+    from application.execution_receipt_adapter import attach_cycle_execution_receipt
+    from notifications import unified
+    from quant_platform_kit.common import execution_receipts
+
+    class CAS:
+        def __init__(self):
+            self.rows = {}
+
+        def read(self, key):
+            return copy.deepcopy(self.rows.get(key, (None, None)))
+
+        def compare_and_set(self, key, version, value):
+            prior = self.rows.get(key, (None, None))[0]
+            if prior != version:
+                return False
+            self.rows[key] = ((prior or 0) + 1, copy.deepcopy(value))
+            return True
+
+        def persist(self, *_):
+            return True
+
+    fixed = datetime(2026, 9, 30, 15, tzinfo=timezone.utc)
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed.astimezone(tz) if tz else fixed.replace(tzinfo=None)
+
+    monkeypatch.setattr(execution_receipts, "datetime", FixedDatetime)
+    monkeypatch.setenv("DIGEST_OPAQUE_ACCOUNT_UID", "synthetic-A-opaque")
+    monkeypatch.setenv("DIGEST_TARGET_ID", "synthetic-A-target")
+    outputs, attempts = [], []
+    for unified_flag in ("false", "true"):
+        monkeypatch.setenv(unified.FLAG, unified_flag)
+        for mode in ("immediate", "daily_digest"):
+            monkeypatch.setenv("QSL_ROUTINE_NOTIFICATION_MODE", mode)
+            for flag in (None, "true", "false"):
+                if flag is None:
+                    monkeypatch.delenv("QSL_DIGEST_ROUTINE_ORDERS", raising=False)
+                else:
+                    monkeypatch.setenv("QSL_DIGEST_ROUTINE_ORDERS", flag)
+                label = f"{unified_flag}-{mode}-{flag}"
+                case = continuity_case(tmp_path / label, kind="BUY_LIMIT", strategy_revision="1" * 40)
+                sent = []
+                runtime = replace(case.runtime, notifications=CallableNotificationPort(lambda text: sent.append(text) or True))
+                store = CAS()
+                monkeypatch.setattr(unified, "GCSNotificationStore", lambda *a, **kw: store)
+                with patch("application.signal_snapshot._utcnow", return_value=fixed), unified.notification_context(
+                        {"started_at": fixed.isoformat(), "run_id": "synthetic-A-fixed-run"}):
+                    result = run_strategy_core(runtime=runtime, config=case.config)
+                assert len(sent) == 1, label
+                assert len(case.calls) == len(result.submitted_orders) == 1
+                assert result.submitted_orders[0]["status"] == "accepted"
+                assert result.execution["execution_status"] == "pending_reconciliation"
+                assert "submitted; fill not confirmed" in sent[0].lower()
+                if unified_flag == "true":
+                    markers = [value for _, value in store.rows.values()
+                               if value.get("schema_version") == "qsl.notification_incident.v1"]
+                    assert len(markers) == 1 and markers[0]["delivery_status"] == "uncertain"
+                    assert markers[0]["receipt_id"] is None
+                report = {"platform": "schwab", "strategy_profile": case.scope.profile_id, "dry_run": False,
+                          "runtime_target": case.context.runtime_target.to_dict(),
+                          "runtime_release_receipt": case.context.runtime_release_receipt}
+                attach_cycle_execution_receipt(report, result)
+                raw9 = report["execution_receipt"]
+                assert set(raw9) == {"receipt_id", "schema_version", "platform", "strategy_profile", "strategy_revision",
+                                     "execution_mode", "outcome", "broker_confirmation", "observed_at"}
+                assert raw9["outcome"] == raw9["broker_confirmation"] == "reconciliation_required"
+                economic = {k: v for k, v in result.execution.items()
+                            if k not in {"notification_events", "notification_delivery_summary"}}
+                refs = json.loads(case.locator.read_registered().payload_json)["references"]
+                commands = [json.loads(case.store.object_store.read_text(ref["descriptor_uri"])) for ref in refs]
+                outputs.append(json.dumps({"economic": economic, "orders": [asdict(x) for x in case.calls],
+                                           "commands": commands, "report": report, "raw9": raw9,
+                                           "receipt_digest": execution_receipts.calculate_execution_receipt_sha256(raw9)},
+                                          sort_keys=True, separators=(",", ":")))
+                attempts.append({"unified": unified_flag, "mode": mode, "routine_orders": flag,
+                                 "fake_sender_attempts": len(sent), "actual_delivered": "UNKNOWN"})
+    assert len(set(outputs)) == 1
+    # Only code-output hashes/attempt counts leave memory. Raw9 includes
+    # receipt_id in the compared bytes; this is not the eight-field digest alone.
+    if os.environ.get("DP01_A_ORACLE_OUTPUT"):
+        Path(os.environ["DP01_A_ORACLE_OUTPUT"]).write_text(json.dumps({
+            "same_head_comparison_equal": True, "complete_output_sha256": hashlib.sha256(outputs[0].encode()).hexdigest(),
+            "combinations": attempts, "scope": "Synthetic pending producer; real engine+old route+renderer+adapter, no full handler or actual delivery."},
+            indent=2) + "\n")
