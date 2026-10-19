@@ -173,7 +173,7 @@ def test_ci_executes_frozen_artifact_gate_before_editable(monkeypatch):
     start = workflow.index(name)
     end = workflow.index("\n      - name:", start + len(name))
     step = workflow[start:end]
-    assert start < workflow.index("- name: Install dependencies")
+    assert workflow.index("- name: Install dependencies") < start
     assert start < workflow.index("- name: Install editable shared repositories")
     assert "UV_PROJECT_ENVIRONMENT: ${{ runner.temp }}/frozen-shared-artifacts" in step
     assert "uv sync --frozen --no-dev" in step
@@ -196,3 +196,16 @@ def test_ci_executes_frozen_artifact_gate_before_editable(monkeypatch):
     monkeypatch.setattr(sys, "argv", args[5:])
     assert module.main() == 1
     assert called == [Path("uv.lock")]
+
+
+def test_ci_bootstraps_uv_once_before_first_uv_command():
+    workflow = Path(".github/workflows/ci.yml").read_text()
+    bootstrap = "python -m pip install --upgrade pip uv"
+    assert workflow.count(bootstrap) == 1
+    commands = [line.strip().removeprefix("run: ").strip()
+                for line in workflow.splitlines()]
+    install = commands.index(bootstrap)
+    first_use = next(i for i, command in enumerate(commands)
+                     if command.startswith("uv "))
+    assert install < first_use
+    assert workflow.index("- name: Setup Python") < workflow.index(bootstrap)

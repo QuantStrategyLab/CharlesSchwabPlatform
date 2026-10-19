@@ -77,6 +77,12 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip uv
+          uv sync --frozen --extra test
+
       - name: Verify frozen shared artifacts
         env:
           UV_PROJECT_ENVIRONMENT: ${{ runner.temp }}/frozen-shared-artifacts
@@ -84,12 +90,6 @@ jobs:
           set -euo pipefail
           uv sync --frozen --no-dev
           uv run --no-sync python -I scripts/verify_frozen_shared_artifacts.py --lockfile uv.lock
-
-      - name: Install dependencies
-        run: |
-          set -euo pipefail
-          python -m pip install --upgrade pip uv
-          uv sync --frozen --extra test
 
       - name: Smoke import pinned shared packages
         run: |
