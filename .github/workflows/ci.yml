@@ -83,6 +83,14 @@ jobs:
           python -m pip install --upgrade pip uv
           uv sync --frozen --extra test
 
+      - name: Verify frozen shared artifacts
+        env:
+          UV_PROJECT_ENVIRONMENT: ${{ runner.temp }}/frozen-shared-artifacts
+        run: |
+          set -euo pipefail
+          uv sync --frozen --no-dev
+          uv run --no-sync python -I scripts/verify_frozen_shared_artifacts.py --lockfile uv.lock
+
       - name: Smoke import pinned shared packages
         run: |
           set -euo pipefail
