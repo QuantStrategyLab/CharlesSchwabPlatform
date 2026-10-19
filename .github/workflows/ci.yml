@@ -77,6 +77,14 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Verify frozen shared artifacts
+        env:
+          UV_PROJECT_ENVIRONMENT: ${{ runner.temp }}/frozen-shared-artifacts
+        run: |
+          set -euo pipefail
+          uv sync --frozen --no-dev
+          uv run --no-sync python -I scripts/verify_frozen_shared_artifacts.py --lockfile uv.lock
+
       - name: Install dependencies
         run: |
           set -euo pipefail
