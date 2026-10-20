@@ -424,6 +424,10 @@ def main(
     operation: Callable[..., dict[str, str | int]] = run_daily,
 ) -> int:
     args = sys.argv[1:] if argv is None else argv
+    if args and args[0] == "--capture-transactions-once":
+        from scripts.capture_schwab_transactions_once import main as capture_main
+
+        return capture_main(args[1:], environ=os.environ if environ is None else environ)
     if args not in (
         [],
         ["--publish"],
