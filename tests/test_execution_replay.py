@@ -12,23 +12,23 @@ from application.runtime_report_summary import summarize_execution_cycle_result
 from notifications.telegram import build_translator
 from quant_platform_kit.common.execution_state import ExecutionMarkerStore
 from quant_platform_kit.common.execution_state import claim_account_owner
-from quant_platform_kit.common.models import ExecutionReport, QuoteSnapshot
+from quant_platform_kit.common.models import ExecutionReport, OrderIntent, QuoteSnapshot
 from quant_platform_kit.common.port_adapters import (
     CallableExecutionPort, CallableMarketDataPort, CallableNotificationPort, CallablePortfolioPort,
 )
 
 
-def plan():
+def plan(*, buy=False):
     symbols = ("SOXL", "SOXX")
     return {
         "account_hash": "synthetic-only",
         "portfolio": {"strategy_symbols": symbols, "portfolio_rows": (symbols,),
-            "market_values": dict.fromkeys(symbols, 400.0),
-            "quantities": dict.fromkeys(symbols, 4), "total_equity": 50000.0,
+            "market_values": dict.fromkeys(symbols, 0.0 if buy else 400.0),
+            "quantities": dict.fromkeys(symbols, 0 if buy else 4), "total_equity": 50000.0,
             "liquid_cash": 1500.0, "cash_sweep_symbol": None, "daily_loss_usd": 0.0},
         "allocation": {"target_mode": "value", "strategy_symbols": symbols,
             "risk_symbols": symbols, "income_symbols": (), "safe_haven_symbols": (),
-            "targets": dict.fromkeys(symbols, 0.0)},
+            "targets": dict.fromkeys(symbols, 400.0 if buy else 0.0)},
         "execution": {"trade_threshold_value": 10.0, "reserved_cash": 0.0,
             "signal_date": "2026-10-16", "effective_date": "2026-10-16",
             "execution_timing_contract": "synthetic_close", "signal_display": "synthetic",
@@ -47,13 +47,20 @@ def setup_cycle(tmp_path, monkeypatch):
             raise TimeoutError("synthetic-private-provider-detail")
         return ExecutionReport(symbol=intent.symbol, side=intent.side, quantity=intent.quantity,
             status="accepted", broker_order_id="synthetic-order-" + intent.symbol)
+    from test_rebalance_service import synthetic_sell_session
+    native, _session = synthetic_sell_session(tmp_path / "native", plan(), OrderIntent("SOXL", "sell", 4),
+                                              profile_id="soxl_soxx_trend_income")
+    # Accepted replay keeps two real ACKs via legitimate BUYs. One flat SELL
+    # proof cannot authorize two different SELLs in a single current cycle.
+    # Unknown replay still really submits the single native-qualified SELL.
     runtime = SchwabRebalanceRuntime(
         fetch_reference_history=lambda: [],
-        portfolio_port=CallablePortfolioPort(lambda: SimpleNamespace(metadata={})),
+        portfolio_port=CallablePortfolioPort(lambda: replace(native.snapshot, positions=())
+                                            if outcome["kind"] == "accepted" else native.snapshot),
         market_data_port=CallableMarketDataPort(quote_loader=lambda symbol: QuoteSnapshot(
             symbol=symbol, as_of=datetime(2026,10,16,tzinfo=timezone.utc),
             last_price=100.0, ask_price=100.0)),
-        resolve_rebalance_plan=lambda **_: plan(),
+        resolve_rebalance_plan=lambda **_: plan(buy=outcome["kind"] == "accepted"),
         notifications=CallableNotificationPort(lambda _: None),
         execution_port_factory=lambda _: CallableExecutionPort(submit),
     )
@@ -61,7 +68,8 @@ def setup_cycle(tmp_path, monkeypatch):
     config = SchwabRebalanceConfig(translator=build_translator("en"),
         strategy_display_name="synthetic", strategy_profile="soxl_soxx_trend_income",
         limit_buy_premium=1.0, sell_settle_delay_sec=0,
-        execution_dedup_enabled=True, execution_state_store=store, notify_no_trade_cycles=False)
+        execution_dedup_enabled=True, execution_state_store=store, notify_no_trade_cycles=False,
+        intent_continuity=native.context)
     key = rebalance_service._build_execution_marker_key(config=config, plan=plan(), execution=plan()["execution"])
     def run(config_override=None):
         return rebalance_service.run_strategy_core(runtime=runtime, config=config_override or config)
@@ -99,6 +107,7 @@ def test_full_caller_replay_retains_pending_without_new_submission(setup_cycle, 
     config = replace(case.config, execution_kernel_t1_enforce=enforce)
     first = case.run(config)
     count = len(first.submitted_orders)
+    assert {order["side"] for order in first.submitted_orders} == ({"buy"} if outcome == "accepted" else {"sell"})
     assert count == (1 if outcome == "unknown" else 2)
     before = {p.relative_to(case.tmp_path):p.read_bytes() for p in case.tmp_path.rglob("*.json")}
     calls_before = len(case.calls)

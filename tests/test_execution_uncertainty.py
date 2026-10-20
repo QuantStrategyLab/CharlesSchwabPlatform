@@ -10,7 +10,7 @@ from quant_platform_kit.common.models import ExecutionReport, QuoteSnapshot
 from quant_platform_kit.common.port_adapters import CallableExecutionPort, CallableMarketDataPort
 
 
-def run_cycle(submit, *, sell=False, notional=False, notify=lambda _: None, translator=None):
+def run_cycle(submit, *, sell=False, notional=False, notify=lambda _: None, translator=None, native_root=None):
     symbols = ("SOXL", "SOXX", "QQQM")
     portfolio = {
         "market_values": dict.fromkeys(symbols, 400.0 if sell else 0.0),
@@ -31,14 +31,50 @@ def run_cycle(submit, *, sell=False, notional=False, notify=lambda _: None, tran
     def no_refresh(_):
         raise AssertionError("an uncertain cycle must not refresh and resume")
 
+    session = None
+    refreshed = None
+    last_submission_accepted = False
+
+    def observed_submit(intent):
+        nonlocal last_submission_accepted
+        last_submission_accepted = False
+        outcome = submit(intent)
+        last_submission_accepted = getattr(outcome, "status", None) == "accepted"
+        return outcome
+
+    def refreshed_snapshot(_):
+        assert last_submission_accepted, "an uncertain SELL must not refresh and resume"
+        return observed
+
+    if sell:
+        from dataclasses import replace
+        from datetime import timedelta
+        from quant_platform_kit.common.models import OrderIntent
+        from test_rebalance_service import synthetic_sell_session
+        assert native_root is not None
+        # One qualified SELL, followed (only after observed cash refresh) by
+        # BUYs. This does not claim one proof supports multiple different SELLs.
+        for symbol in symbols[1:]:
+            portfolio["market_values"][symbol] = 0
+            portfolio["quantities"][symbol] = 0
+            allocation["targets"][symbol] = 400
+        native, session = synthetic_sell_session(native_root, plan, OrderIntent("SOXL", "sell", 4))
+        observed = replace(native.snapshot, as_of=native.snapshot.as_of+timedelta(minutes=1),
+                           positions=(), cash_balance=1900, buying_power=1900)
+        refreshed_portfolio = {**portfolio, "market_values": dict.fromkeys(symbols, 0),
+                               "quantities": dict.fromkeys(symbols, 0), "liquid_cash": 1900}
+        refreshed = {**plan, "portfolio": refreshed_portfolio}
+        session.register_plan_source(refreshed, observed)
+
     return execute_rebalance_cycle(
         client=object(), plan=plan, portfolio=portfolio, execution=execution,
-        allocation=allocation, fetch_managed_snapshot=no_refresh,
+        allocation=allocation, fetch_managed_snapshot=refreshed_snapshot if sell else no_refresh,
+        intent_continuity=session,
         market_data_port=CallableMarketDataPort(quote_loader=lambda symbol: QuoteSnapshot(
             symbol=symbol, as_of="2026-09-08", last_price=100.0, ask_price=100.0,
         )),
-        load_plan=lambda _: (plan, portfolio, execution, allocation),
-        execution_port=CallableExecutionPort(submit),
+        load_plan=lambda _: (refreshed, refreshed["portfolio"], execution, allocation) if sell else (plan, portfolio, execution, allocation),
+        execution_port=CallableExecutionPort(observed_submit if sell else submit),
         translator=translator or build_translator("en"), limit_buy_premium=1.0,
         sell_settle_delay_sec=0, publish_order_issue=notify,
         notional_buy_execution=notional,
@@ -52,7 +88,7 @@ def report(intent, status="accepted", **kwargs):
 
 @pytest.mark.parametrize("sell,notional", [(False, False), (True, False), (False, True)])
 @pytest.mark.parametrize("prior_accepted", [False, True])
-def test_uncertain_submission_stops_cycle_and_preserves_original_intent(sell, notional, prior_accepted):
+def test_uncertain_submission_stops_cycle_and_preserves_original_intent(tmp_path, sell, notional, prior_accepted):
     calls = []
 
     def submit(intent):
@@ -61,7 +97,7 @@ def test_uncertain_submission_stops_cycle_and_preserves_original_intent(sell, no
             return report(intent)
         raise TimeoutError("synthetic-private-provider-detail")
 
-    result = run_cycle(submit, sell=sell, notional=notional)
+    result = run_cycle(submit, sell=sell, notional=notional, native_root=tmp_path)
     assert len(calls) == 1 + int(prior_accepted)
     unknown = result.submitted_orders[-1]
     assert unknown["status"] == "unknown"
@@ -251,18 +287,24 @@ def test_actual_managed_caller_boundary_faults_have_zero_transport(tmp_path, bou
 @pytest.mark.parametrize("boundary", ["ack_event", "final_cycle_outcome"])
 def test_actual_ack_persistence_failure_keeps_current_ack_and_blocks_restart(tmp_path, boundary):
     c = continuity_case(tmp_path)
+    from test_rebalance_service import qualify_synthetic_sell
+    qualify_synthetic_sell(c)
     original_create = c.store.object_store.create_text
+    fault_hits = []
     def create(uri, *args):
         if uri.endswith("00000002.json"):
+            fault_hits.append(uri)
             raise TimeoutError("synthetic event write failure")
         return original_create(uri, *args)
     if boundary == "ack_event":
         with patch.object(c.store.object_store, "create_text", create):
             result = run_strategy_core(runtime=c.runtime, config=c.config)
+        assert fault_hits
         assert result.execution["broker_submission_done"] is False
     else:
-        with patch.object(type(c.config.execution_state_store), "record_outcome", side_effect=OSError("synthetic")):
+        with patch.object(type(c.config.execution_state_store), "record_outcome", side_effect=OSError("synthetic")) as persistence_fault:
             result = run_strategy_core(runtime=c.runtime, config=c.config)
+        assert persistence_fault.call_count == 1
     assert len(c.calls) == 1
     assert result.submitted_orders[0]["status"] == "accepted"
     later = continuity_case(tmp_path, "2026-10-01")

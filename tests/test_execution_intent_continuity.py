@@ -747,7 +747,13 @@ def test_resolution_preserves_known_broker_identity_and_unsupported_notional_hol
     for label,kind,lost_reply in [("known_id","SELL",False),("notional","BUY_NOTIONAL",True)]:
         def lost(_):raise TimeoutError("synthetic")
         original=continuity_case(tmp_path/label,kind=kind,fault=lost if lost_reply else None)
-        run_strategy_core(runtime=original.runtime,config=original.config)
+        if kind == "SELL":
+            from test_rebalance_service import qualify_synthetic_sell
+            qualify_synthetic_sell(original)
+        first = run_strategy_core(runtime=original.runtime,config=original.config)
+        assert len(original.calls) == 1
+        if not lost_reply:
+            assert first.submitted_orders[0]["broker_order_id"] == "SYNTH_ACK"
         current=continuity_case(tmp_path/label,"2026-10-01",kind="BUY_LIMIT")
         body,_=resolution_material(original,current,order_id="DIFFERENT_FROM_NATIVE_ACK" if not lost_reply else None)
         session=_IntentSession(with_resolution_source(current.context,body),snapshot=current.snapshot,profile_id=current.scope.profile_id)

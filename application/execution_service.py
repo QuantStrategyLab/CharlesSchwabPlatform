@@ -962,8 +962,11 @@ def execute_rebalance_cycle(
                 continuity_ticket = intent_continuity.prepare(order=order_intent, plan=plan, action_type=action_type)
                 if continuity_ticket is None:
                     return False
+                resolved = intent_continuity._resolved_originals() if action_type == "SELL" else {}
+                unresolved = [(command, events) for command, events in intent_continuity.originals
+                              if command.command_id not in resolved]
                 if action_type == "SELL" and not intent_continuity._independent_reduction(
-                    order_intent, continuity_ticket.command,
+                    order_intent, continuity_ticket.command, originals=unresolved,
                 ):
                     # Reuse the existing scope/snapshot/release/obligation and
                     # long-only admission. A claim alone does not reserve shares.
