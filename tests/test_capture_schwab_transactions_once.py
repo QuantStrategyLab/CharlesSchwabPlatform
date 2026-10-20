@@ -149,7 +149,7 @@ def test_stream_exception_is_private_and_not_retried(inputs, capsys):
     assert "PRIVATE_STREAM" not in str(capsys.readouterr()) + json.dumps(receipt)
 
 
-@pytest.mark.parametrize("mutation", ["binding", "missing", "time", "flag", "duplicate", "mode", "symlink", "output"])
+@pytest.mark.parametrize("mutation", ["binding", "missing", "time", "flag", "duplicate", "mode", "symlink", "output", "extra", "appended"])
 def test_preflight_before_auth_or_request(inputs, mutation):
     env, metadata, document, out = inputs
     if mutation == "binding":
@@ -170,6 +170,11 @@ def test_preflight_before_auth_or_request(inputs, mutation):
         alternate = metadata.with_name("link.json")
         alternate.symlink_to(metadata)
         inputs = env, alternate, document, out
+    elif mutation == "extra":
+        document["payload_json"] = "PRIVATE_ASSET_SENTINEL"
+        metadata.write_text(json.dumps(document))
+    elif mutation == "appended":
+        metadata.write_text(json.dumps(document) + ", {}")
     else:
         out.mkdir()
     receipt, requests, loaded, _ = execute(inputs)

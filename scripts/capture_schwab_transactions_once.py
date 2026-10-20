@@ -341,8 +341,13 @@ class HttpxTransport:
 
 def _read_metadata(path):
     _private_path(Path(path), file=True)
+    _private_path(Path(path).parent)
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     with os.fdopen(fd, "rb") as handle:
+        actual = os.fstat(handle.fileno())
+        if (not stat.S_ISREG(actual.st_mode) or actual.st_uid != os.getuid()
+                or stat.S_IMODE(actual.st_mode) & 0o077):
+            raise CaptureError("metadata_invalid")
         raw = handle.read(65537)
     if len(raw) > 65536:
         raise CaptureError("metadata_invalid")
