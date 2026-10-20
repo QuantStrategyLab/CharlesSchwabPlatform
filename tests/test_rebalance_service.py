@@ -3152,3 +3152,53 @@ def test_A_native_pending_sender_and_complete_raw9_remain_stable(tmp_path, monke
             "same_head_comparison_equal": True, "complete_output_sha256": hashlib.sha256(outputs[0].encode()).hexdigest(),
             "combinations": attempts, "scope": "Synthetic pending producer; real engine+old route+renderer+adapter, no full handler or actual delivery."},
             indent=2) + "\n")
+
+
+@pytest.mark.parametrize("branch", ["port", "fallback"])
+@pytest.mark.parametrize("selected", [False, True])
+def test_unproven_sell_resources_cannot_be_reused_across_cycles(tmp_path, branch, selected):
+    from concurrent.futures import ThreadPoolExecutor
+    def invoke(day):
+        c = continuity_case(tmp_path / day, day=day, selected=selected, branch=branch)
+        c.plan["portfolio"]["unknown_pending_orders"] = True
+        result = run_strategy_core(runtime=c.runtime, config=c.config)
+        assert result.submitted_orders == ()
+        assert "sell_resource_evidence_required" in result.execution["notification_attention_reason_codes"]
+        return c.calls
+    # Separate cycles/instances with identical holdings cannot each spend them.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        calls = list(pool.map(invoke, ["2026-09-30", "2026-10-01"]))
+    assert calls == [[], []]
+
+
+@pytest.mark.parametrize("state", ["unknown", "accepted", "partially_filled", "cancel_pending"])
+@pytest.mark.parametrize("branch", ["port", "fallback"])
+@pytest.mark.parametrize("invalid_target", [False, True])
+def test_resource_refusal_keeps_native_old_sell_obligation_and_known_identity(tmp_path, state, branch, invalid_target):
+    from application.execution_intent_continuity import _IntentSession
+    from quant_platform_kit.common.execution_commands import ExecutionCommandState
+    from quant_platform_kit.common.models import OrderIntent
+    old = continuity_case(tmp_path, branch=branch)
+    session = _IntentSession(old.context, snapshot=old.snapshot, profile_id=old.scope.profile_id)
+    ticket = session.prepare(order=OrderIntent("SOXL", "sell", 4), plan=old.plan, action_type="SELL")
+    assert ticket is not None
+    assert session.record_outcome(ticket, accepted=None if state == "unknown" else True,
+                                  broker_order_id=None if state == "unknown" else "SYNTH_OLD_ACK")
+    if state == "partially_filled":
+        assert old.store.append_event(ticket.command, next_state=ExecutionCommandState.PARTIALLY_FILLED,
+                                      details={"filled_quantity": 2, "broker_order_id": "SYNTH_OLD_ACK"}) is not None
+    # Cancel requested is still an accepted, potentially fillable order; there
+    # is deliberately no CANCELLED event or resource release.
+    before = old.store.events(ticket.command)
+    for day in ("2026-10-01", "2026-10-02"):
+        current = continuity_case(tmp_path, day, branch=branch)
+        if invalid_target:
+            current.plan["allocation"]["targets"] = {"SOXL": -1}
+        result = run_strategy_core(runtime=current.runtime, config=current.config)
+        assert current.calls == [] and result.submitted_orders == ()
+        prior = result.execution["continuity_prior_orders"][0]
+        assert prior["command_id"] == ticket.command.command_id
+        assert prior["order"]["quantity"] == 4
+        assert prior["broker_order_id"] == (None if state == "unknown" else "SYNTH_OLD_ACK")
+        assert result.execution["broker_submission_done"] is False
+        assert current.store.events(ticket.command) == before

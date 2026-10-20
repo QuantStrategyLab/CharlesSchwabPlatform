@@ -304,3 +304,48 @@ def test_same_native_id_preserves_first_created_at_and_validates_existing_conten
 
 # Reuse explicit test-only external ports under ordinary pytest as well.
 from test_rebalance_service import _offline_caller_external_ports
+
+
+@pytest.mark.parametrize("quantity", [None, 0, -1, True, False, float("nan"), float("inf"), -float("inf"), "4"])
+@pytest.mark.parametrize("preview", [False, True])
+def test_untrusted_long_quantity_never_reconstructs_sell_from_value(tmp_path, quantity, preview):
+    from test_rebalance_service import continuity_case
+    c = continuity_case(tmp_path, selected=False)
+    c.plan["portfolio"]["market_values"]["SOXL"] = 500.0
+    if quantity is None:
+        c.plan["portfolio"]["quantities"].pop("SOXL")
+    else:
+        c.plan["portfolio"]["quantities"]["SOXL"] = quantity
+    result = __import__("application.rebalance_service", fromlist=["run_strategy_core"]).run_strategy_core(
+        runtime=c.runtime, config=replace(c.config, dry_run_only=preview))
+    assert c.calls == []
+    assert result.submitted_orders == ()
+
+
+@pytest.mark.parametrize("held,target,value,expected", [
+    (3, 0, 524.10, 3), (3.9, -1000, 10000, 0),
+    (0.9, 0, 500, 0), (4, 200, 400, 2), (4, 0, 1000000, 4),
+])
+def test_preview_sell_quantity_stays_within_whole_long_holding(tmp_path, held, target, value, expected):
+    c = continuity_case(tmp_path, selected=False)
+    c.plan["portfolio"].update(quantities={"SOXL": held}, market_values={"SOXL": value})
+    c.plan["allocation"]["targets"] = {"SOXL": target}
+    # Preview isolates sizing from the independently required live resource
+    # proof. It does not authorize or simulate broker acceptance.
+    result = run_strategy_core(runtime=c.runtime, config=replace(c.config, dry_run_only=True))
+    assert c.calls == []
+    assert sum(order["quantity"] for order in result.submitted_orders if order["side"] == "sell") <= int(held)
+    if expected:
+        assert result.submitted_orders[0]["quantity"] == expected
+    else:
+        assert result.submitted_orders == ()
+
+
+@pytest.mark.parametrize("selected", [False, True])
+def test_live_sell_requires_complete_resource_proof_even_with_continuity(tmp_path, selected):
+    from test_rebalance_service import continuity_case, run_strategy_core
+    c = continuity_case(tmp_path, selected=selected)
+    result = run_strategy_core(runtime=c.runtime, config=c.config)
+    assert c.calls == []
+    assert result.submitted_orders == ()
+    assert "sell_resource_evidence_required" in result.execution["notification_attention_reason_codes"]

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from math import isfinite
 
 from application.account_new_risk_gate_support import (
     apply_combined_scale_to_allocation_targets,
@@ -651,6 +652,25 @@ def execute_rebalance_cycle(
     if intent_continuity is not None:
         intent_continuity.select_plan_source(plan)
 
+    # Reject malformed long-only targets before risk scaling can remove them.
+    # Never reconstruct a liquidation target from an absent/rejected decision.
+    if any(
+        isinstance(value, bool) or not isinstance(value, (int, float))
+        or not isfinite(value) or value < 0
+        for value in dict(allocation.get("targets") or {}).values()
+    ):
+        result_execution = {**dict(execution or {}), "execution_status": "blocked",
+                            "broker_submission_done": False, "no_op_reason": "invalid_long_only_target"}
+        if intent_continuity is not None:
+            result_execution = intent_continuity.present(result_execution, current_submitted=())
+        set_cycle_snapshot(None)
+        return ExecutionCycleResult(
+            plan=dict(plan or {}), portfolio=dict(portfolio or {}),
+            execution=result_execution,
+            allocation=dict(allocation or {}),
+            trade_logs=("Order cycle blocked; invalid long-only target.",), submitted_orders=(),
+        )
+
     def load_quotes(symbols):
         quotes = {}
         for symbol in symbols:
@@ -795,15 +815,28 @@ def execute_rebalance_cycle(
             small_account_bootstrap_note_messages.add(message)
             trade_logs.append(message)
 
-    def sell_order_quantity(symbol, current_value, target_value, price):
-        if price <= 0:
+    def held_whole_shares(symbol):
+        raw = quantities.get(symbol)
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
             return 0
-        value_based_quantity = int((current_value - target_value) // price)
-        held_quantity = int(quantities.get(symbol, 0) or 0)
-        if held_quantity <= 0:
-            return max(0, value_based_quantity)
-        position_value = held_quantity * price
-        quantity_from_position = int(max(0.0, position_value - target_value) / price + 1e-9)
+        try:
+            if not isfinite(raw) or raw <= 0:
+                return 0
+            return int(raw)
+        except (OverflowError, ValueError):
+            return 0
+
+    def sell_order_quantity(symbol, current_value, target_value, price):
+        held_quantity = held_whole_shares(symbol)
+        if held_quantity <= 0 or not all(isfinite(value) for value in (current_value, target_value, price)) or price <= 0:
+            return 0
+        target_value = max(0.0, target_value)
+        try:
+            value_based_quantity = int((current_value - target_value) // price)
+            position_value = held_quantity * price
+            quantity_from_position = int(max(0.0, position_value - target_value) / price + 1e-9)
+        except (OverflowError, ValueError):
+            return 0
         return min(held_quantity, max(quantity_from_position, value_based_quantity))
 
     def record_submitted_order(symbol, action_type, quantity, price=None, *, status, broker_order_id=None):
@@ -831,9 +864,10 @@ def execute_rebalance_cycle(
 
     submission_halted = False
     submission_outcome_unknown = False
+    sell_resource_evidence_required = False
 
     def execute_fire_forget(symbol, action_type, quantity, price=None):
-        nonlocal submission_halted, submission_outcome_unknown
+        nonlocal submission_halted, submission_outcome_unknown, sell_resource_evidence_required
         if submission_halted:
             # N13: redundant T2/T3 consult; local halt always wins (no behavior change).
             should_block_halted_resubmit(
@@ -849,6 +883,12 @@ def execute_rebalance_cycle(
             if float(quantity or 0.0) < MIN_NOTIONAL_BUY_USD:
                 return False
         elif quantity <= 0:
+            return False
+        if action_type == "SELL" and (not isfinite(quantity) or quantity > held_whole_shares(symbol)):
+            return False
+        if action_type == "SELL" and not dry_run_only and not isinstance(intent_continuity, _IntentSession):
+            sell_resource_evidence_required = True
+            trade_logs.append("Automatic sell deferred; complete sell-resource evidence required.")
             return False
         submission_attempted = False
         outcome_confirmed = False
@@ -921,6 +961,15 @@ def execute_rebalance_cycle(
             if intent_continuity is not None:
                 continuity_ticket = intent_continuity.prepare(order=order_intent, plan=plan, action_type=action_type)
                 if continuity_ticket is None:
+                    return False
+                if action_type == "SELL" and not intent_continuity._independent_reduction(
+                    order_intent, continuity_ticket.command,
+                ):
+                    # Reuse the existing scope/snapshot/release/obligation and
+                    # long-only admission. A claim alone does not reserve shares.
+                    # Keep this native claim; do not release or replay it.
+                    sell_resource_evidence_required = True
+                    intent_continuity.reasons.append("sell_resource_evidence_required")
                     return False
             if execution_port is not None:
                 submission_attempted = True
@@ -1113,10 +1162,10 @@ def execute_rebalance_cycle(
         not cash_sweep_sold_this_cycle
         and funding_buy_candidates
         and cash_sweep_symbol
-        and quantities.get(cash_sweep_symbol, 0.0) > 0.0
+        and held_whole_shares(cash_sweep_symbol) > 0
     ):
         sweep_quantity = cash_sweep_sale_quantity_to_fund_buy(
-            int(quantities[cash_sweep_symbol]),
+            held_whole_shares(cash_sweep_symbol),
             funding_buy_candidates,
         )
         if sweep_quantity > 0:
@@ -1404,6 +1453,9 @@ def execute_rebalance_cycle(
 
     result_execution = dict(execution or {})
     attention_reasons = list(result_execution.get("notification_attention_reason_codes") or ())
+    if sell_resource_evidence_required:
+        attention_reasons.append("sell_resource_evidence_required")
+        result_execution.update(execution_status="blocked", broker_submission_done=False)
     if account_new_risk_buy_blocked:
         attention_reasons.append("account_new_risk_gate")
     if buys_blocked_reason:
