@@ -39,6 +39,10 @@ def _utc(value: datetime) -> str:
     return value.isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
+def _loses_fractional_precision(value: str, digits: int) -> bool:
+    return any(char != "0" for fraction in re.findall(r"[.,](\d+)", value) for char in fraction[digits:])
+
+
 def project_external_flow_snapshot(
     transactions: Sequence[Mapping[str, Any]] | None,
     *,
@@ -159,6 +163,8 @@ def collect_external_flow_snapshot(
     This does not construct clients or access credentials. Completeness must be
     established by the caller's approved source/backfill policy; HTTP 200 alone
     cannot prove it. The report publisher projects this raw envelope once.
+    The SDK sends whole seconds, so query outwards and retain the exact local
+    interval. The caller must still qualify the vendor query clock and coverage.
     """
     if enabled is not True:
         return None
@@ -167,13 +173,43 @@ def collect_external_flow_snapshot(
         raise ValueError("external_flow_window_or_account_invalid")
     if currency != "USD":
         raise ValueError("external_flow_window_or_currency_invalid")
-    response = client.get_transactions(account_hash, start_date=start, end_date=end)
+    if any(_loses_fractional_precision(value, 6) for value in (period_start, period_end)):
+        raise ValueError("external_flow_time_precision_invalid")
+    query_start = start.replace(microsecond=0)
+    try:
+        # Strictly above end, including a whole-second end with exclusive bounds.
+        query_end = end.replace(microsecond=0) + timedelta(seconds=1)
+    except OverflowError:
+        raise ValueError("external_flow_window_or_account_invalid") from None
+    response = client.get_transactions(account_hash, start_date=query_start, end_date=query_end)
     if response.status_code != 200:
         raise ValueError("external_flow_source_unavailable")
     transactions = response.json()
     if not isinstance(transactions, list):
         raise ValueError("external_flow_source_invalid")
+    # The documented cap is checked before filtering. Millisecond serialization
+    # cannot certify sub-ms boundaries or external events as lossless either.
+    complete = (source_complete is True and len(transactions) < 3000
+                and not any(_loses_fractional_precision(value, 3) for value in (period_start, period_end)))
+    selected = []
+    for tx in transactions:
+        if not isinstance(tx, Mapping) or tx.get("type") not in _IN | _OUT | _INTERNAL:
+            selected.append(tx)  # Unknown facts must reach the conservative projector.
+            continue
+        try:
+            when = _instant(tx.get("time"))
+        except ValueError:
+            selected.append(tx)
+            continue
+        if _loses_fractional_precision(tx["time"], 6):
+            selected.append(tx)  # datetime cannot determine membership without truncation.
+            complete = False
+            continue
+        if start < when <= end:
+            selected.append(tx)
+            if tx.get("type") in _IN | _OUT and _loses_fractional_precision(tx["time"], 3):
+                complete = False
     return {
         "account_hash": account_hash, "period_start": _utc(start), "period_end": _utc(end),
-        "currency": currency, "source_complete": source_complete is True, "transactions": transactions,
+        "currency": currency, "source_complete": complete, "transactions": selected,
     }
