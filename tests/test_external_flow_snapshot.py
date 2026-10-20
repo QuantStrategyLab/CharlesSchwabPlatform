@@ -1,5 +1,5 @@
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -238,3 +238,156 @@ def test_documented_response_limit_does_not_infer_source_complete():
     assert len(window["records"]) == 1
     assert window["coverage"] == "incomplete"
     client.get_transactions.assert_called_once()
+
+
+class _SecondPrecisionTransactionsClient:
+    """Synthetic endpoint port with the locked SDK's whole-second wire format."""
+
+    def __init__(self, rows, *, left_closed=True, right_closed=True):
+        self.rows = rows
+        self.left_closed = left_closed
+        self.right_closed = right_closed
+        self.calls = []
+
+    def get_transactions(self, account_hash, *, start_date, end_date):
+        start = start_date.astimezone(timezone.utc).replace(microsecond=0)
+        end = end_date.astimezone(timezone.utc).replace(microsecond=0)
+        self.calls.append((account_hash, start, end))
+        rows = []
+        for row in self.rows:
+            when = datetime.fromisoformat(row["time"])
+            after = when >= start if self.left_closed else when > start
+            before = when <= end if self.right_closed else when < end
+            if after and before:
+                rows.append(row)
+        return SimpleNamespace(status_code=200, json=lambda: rows)
+
+
+@pytest.mark.parametrize("left_closed,right_closed", [(False, False), (False, True), (True, False), (True, True)])
+@pytest.mark.parametrize("end_fraction", [0, 304509])
+def test_sdk_second_precision_retains_exact_interval_membership(left_closed, right_closed, end_fraction):
+    start = datetime(2026, 10, 15, 19, 45, 5, 443766, tzinfo=timezone.utc)
+    end = datetime(2026, 10, 16, 19, 45, 6, end_fraction, tzinfo=timezone.utc)
+    times = [start - timedelta(microseconds=1), start, start + timedelta(microseconds=1),
+             end - timedelta(microseconds=1), end, end + timedelta(microseconds=1)]
+    rows = [TX | {"activityId": f"synthetic-edge-{i}", "time": when.isoformat()} for i, when in enumerate(times)]
+    client = _SecondPrecisionTransactionsClient(rows, left_closed=left_closed, right_closed=right_closed)
+    raw = collect_external_flow_snapshot(
+        client, account_hash="synthetic-account-hash", period_start=start.isoformat(),
+        period_end=end.isoformat(), currency="USD", enabled=True,
+    )
+    assert raw["transactions"] == [rows[2], rows[3], rows[4]]
+    assert rows == [TX | {"activityId": f"synthetic-edge-{i}", "time": when.isoformat()} for i, when in enumerate(times)]
+    assert len(client.calls) == 1
+    assert client.calls[0][1] <= start
+    assert client.calls[0][2] > end
+    assert raw["source_complete"] is False
+
+
+def test_sdk_bounds_normalize_offsets_without_expanding_financial_window():
+    client = Mock()
+    client.get_transactions.return_value = SimpleNamespace(status_code=200, json=lambda: [])
+    raw = collect_external_flow_snapshot(
+        client, account_hash="synthetic-account-hash", period_start="2026-10-15T21:45:05+02:00",
+        period_end="2026-10-17T21:45:05+02:00", currency="USD", enabled=True, source_complete=True,
+    )
+    assert client.get_transactions.call_args.kwargs == {
+        "start_date": datetime(2026, 10, 15, 19, 45, 5, tzinfo=timezone.utc),
+        "end_date": datetime(2026, 10, 17, 19, 45, 6, tzinfo=timezone.utc),
+    }
+    assert raw["period_start"] == "2026-10-15T19:45:05.000Z"
+    assert raw["period_end"] == "2026-10-17T19:45:05.000Z"
+    assert raw["source_complete"] is True
+
+
+def test_expanded_response_filters_known_times_but_keeps_unknown_facts():
+    rows = [TX | {"time": START}, TX | {"time": END},
+            TX | {"time": "2026-10-01T00:00:00Z"},
+            {"type": "JOURNAL", "time": "2026-10-01T00:00:00Z"},
+            {"type": "ACH_RECEIPT", "time": "invalid"}, None]
+    client = Mock()
+    client.get_transactions.return_value = SimpleNamespace(status_code=200, json=lambda: rows)
+    raw = collect_external_flow_snapshot(
+        client, account_hash="synthetic-account-hash", period_start=START, period_end=END,
+        currency="USD", enabled=True, source_complete=True,
+    )
+    assert raw["transactions"] == [rows[1], *rows[3:]]
+    window = attach_external_flow_snapshot(
+        {"account_hash": "synthetic-account-hash", "observed_finished_at": END}, raw, enabled=True,
+    )["externalFlow"]["windows"][0]
+    assert len(window["records"]) == 1
+    assert window["coverage"] == "incomplete"
+
+
+@pytest.mark.parametrize("count", [2999, 3000, 3001])
+def test_response_cap_uses_unfiltered_count_even_with_caller_attestation(count):
+    rows = [{"type": "TRADE", "time": START}] * count
+    client = Mock()
+    client.get_transactions.return_value = SimpleNamespace(status_code=200, json=lambda: rows)
+    raw = collect_external_flow_snapshot(
+        client, account_hash="synthetic-account-hash", period_start=START, period_end=END,
+        currency="USD", enabled=True, source_complete=True,
+    )
+    assert raw["transactions"] == []
+    window = attach_external_flow_snapshot(
+        {"account_hash": "synthetic-account-hash", "observed_finished_at": END}, raw, enabled=True,
+    )["externalFlow"]["windows"][0]
+    # Fewer records never establishes completeness; only the explicit caller can.
+    assert window["coverage"] == ("complete" if count < 3000 else "incomplete")
+
+
+@pytest.mark.parametrize("start,end,when", [
+    ("2026-09-29T22:21:00.000001Z", END, TX["time"]),
+    (START, "2026-09-30T22:21:00.000001Z", TX["time"]),
+    (START, END, "2026-09-30T10:21:00.000001Z"),
+])
+def test_submillisecond_times_cannot_claim_lossless_complete_coverage(start, end, when):
+    client = Mock()
+    client.get_transactions.return_value = SimpleNamespace(status_code=200, json=lambda: [TX | {"time": when}])
+    raw = collect_external_flow_snapshot(
+        client, account_hash="synthetic-account-hash", period_start=start, period_end=end,
+        currency="USD", enabled=True, source_complete=True,
+    )
+    assert len(raw["transactions"]) == 1
+    assert raw["transactions"][0]["time"] == when
+    assert raw["source_complete"] is False
+    window = attach_external_flow_snapshot(
+        {"account_hash": "synthetic-account-hash", "observed_finished_at": end}, raw, enabled=True,
+    )["externalFlow"]["windows"][0]
+    assert window["coverage"] == "incomplete"
+
+
+def test_sdk_upper_padding_overflow_fails_before_request():
+    client = Mock()
+    with pytest.raises(ValueError, match="window"):
+        collect_external_flow_snapshot(
+            client, account_hash="synthetic-account-hash", period_start="9999-12-30T23:59:59Z",
+            period_end="9999-12-31T23:59:59Z", currency="USD", enabled=True,
+        )
+    client.get_transactions.assert_not_called()
+
+
+def test_unrepresentable_window_precision_fails_before_request():
+    client = Mock()
+    with pytest.raises(ValueError, match="precision"):
+        collect_external_flow_snapshot(
+            client, account_hash="synthetic-account-hash", period_start="2026-09-29T22:21:00.0000001Z",
+            period_end=END, currency="USD", enabled=True, source_complete=True,
+        )
+    client.get_transactions.assert_not_called()
+
+
+def test_submicrosecond_event_is_retained_as_unqualified_not_silently_dropped():
+    row = TX | {"time": "2026-09-29T22:21:00.0000001Z"}
+    client = Mock()
+    client.get_transactions.return_value = SimpleNamespace(status_code=200, json=lambda: [row])
+    raw = collect_external_flow_snapshot(
+        client, account_hash="synthetic-account-hash", period_start=START, period_end=END,
+        currency="USD", enabled=True, source_complete=True,
+    )
+    assert raw["transactions"] == [row]
+    assert raw["source_complete"] is False
+    window = attach_external_flow_snapshot(
+        {"account_hash": "synthetic-account-hash", "observed_finished_at": END}, raw, enabled=True,
+    )["externalFlow"]["windows"][0]
+    assert window["coverage"] == "incomplete"
