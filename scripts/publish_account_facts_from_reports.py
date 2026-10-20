@@ -649,6 +649,13 @@ def _safe_result_text(result: Mapping[str, Any]) -> str:
         return "published"
     if status == "unchanged" and reason == "observation_unchanged":
         return "unchanged:observation_unchanged"
+    if status == "skipped" and isinstance(reason, str):
+        prefix, _, scope_kind = reason.partition(":")
+        if prefix == "runtime_target_scope_mismatch" and scope_kind in {
+            "non_string", "market_code", "looks_like_target_id",
+            "hash_shaped", "mode_token", "other_token",
+        }:
+            return f"skipped:{reason}"
     if status == "skipped" and isinstance(reason, str) and re.fullmatch(r"[a-z_]+", reason):
         http_status = result.get("http_status")
         if isinstance(http_status, int) and not isinstance(http_status, bool) and 100 <= http_status <= 599:

@@ -3,6 +3,8 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from scripts import publish_account_facts_from_reports as publisher
 
 
@@ -51,6 +53,68 @@ def _valid_report(
             }
         },
     }
+
+
+@pytest.mark.parametrize("scope,kind", [
+    (17, "non_string"),
+    ("US", "market_code"),
+    ("synthetic-target", "looks_like_target_id"),
+    ("ACCOUNT_CANARY_01234567890123456789", "hash_shaped"),
+    ("paper", "mode_token"),
+    ("ACCOUNT_CANARY:gs://URI_CANARY/path\nASSET_CANARY", "other_token"),
+])
+def test_scope_rejection_observability_keeps_only_produced_kind(scope, kind, capsys):
+    prefix = "gs://example-bucket/execution-reports/charles_schwab/soxl_soxx_trend_income/"
+    uri = prefix + "2026-09/20260930T222000Z.json"
+    report = _valid_report()
+    report["runtime_target"]["account_scope"] = scope
+    report["summary"]["account_observation"]["account_hash"] = "ACCOUNT_CANARY"
+    env = {
+        "GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": "schedule",
+        "SCHWAB_ACCOUNT_FACTS_SYNC_TOKEN": "TOKEN_CANARY",
+        "ACCOUNT_FACTS_SYNC_URL": publisher.SYNC_URL,
+        "SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX": prefix,
+        "SCHWAB_ACCOUNT_FACTS_SERVICE_NAME": "synthetic-service",
+        "SCHWAB_NET_ASSETS_CURRENCY": "USD",
+        "SCHWAB_ACCOUNT_FACTS_TARGET_ID": "synthetic-target",
+    }
+    with (
+        patch.dict("os.environ", env, clear=True),
+        patch.object(publisher, "_current_serving_revision", return_value="service-00007-abc"),
+        patch.object(publisher, "_latest_recent_report_uri", return_value=uri),
+        patch.object(publisher, "_service_revision_matches", return_value=True),
+        patch.object(publisher, "_read_report", return_value=report),
+        patch.object(publisher, "_publish_once") as publish,
+    ):
+        # The real projection and formatter run through main; no invalid case may publish.
+        assert publisher.main(["--latest-scheduled-report"]) == 2
+    publish.assert_not_called()
+    output = capsys.readouterr().out
+    assert output == f"skipped:runtime_target_scope_mismatch:{kind}\n"
+    assert "CANARY" not in output and "gs://" not in output
+
+
+@pytest.mark.parametrize("suffix", [
+    "absent", "blank", "live", "unknown", "mode_token:extra", "mode_token\n",
+    "mode_token\nACCOUNT_CANARY", "gs://URI_CANARY/path", "ACCOUNT_CANARY", "",
+])
+def test_scope_rejection_observability_rejects_forged_suffixes(suffix):
+    result = {
+        "status": "skipped", "reason": f"runtime_target_scope_mismatch:{suffix}",
+        "account_scope": "ACCOUNT_CANARY", "diagnostics": "ASSET_CANARY",
+    }
+    assert publisher._safe_result_text(result) == "skipped:unknown"
+
+
+@pytest.mark.parametrize("result,expected", [
+    ({"status": "published"}, "published"),
+    ({"status": "unchanged", "reason": "observation_unchanged"}, "unchanged:observation_unchanged"),
+    ({"status": "skipped", "reason": "report_invalid"}, "skipped:report_invalid"),
+    ({"status": "skipped", "reason": "publish_failed", "http_status": 403}, "skipped:publish_failed:http_status=403"),
+    ({"status": "skipped", "reason": "publish_failed", "category": "timeout"}, "skipped:publish_failed:category=timeout"),
+])
+def test_scope_rejection_observability_preserves_other_cli_results(result, expected):
+    assert publisher._safe_result_text(result) == expected
 
 
 def test_valid_same_cycle_observation_projects_with_native_time_and_empty_cash():
