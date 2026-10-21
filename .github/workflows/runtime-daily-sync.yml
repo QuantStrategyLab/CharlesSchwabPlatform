@@ -28,6 +28,11 @@ on:
         required: false
         type: boolean
         default: false
+      renew_access_token_once:
+        description: Separately authorized one-shot refresh-token grant and append-only token Secret update. No login, broker data request or automatic retry.
+        required: false
+        type: boolean
+        default: false
       emit_digest_candidates:
         description: After prepare/publish path, write ephemeral DIGEST_CANDIDATES JSON under runner temp (no public artifact; does not mutate QRS Environment).
         required: false
@@ -85,8 +90,13 @@ jobs:
           DIAGNOSE_SOURCE_ACCESS: ${{ inputs.diagnose_source_access }}
           VERIFY_NATIVE_IDENTITY: ${{ inputs.verify_native_identity }}
           CHECK_TOKEN_LOAD: ${{ inputs.check_token_load }}
+          RENEW_ACCESS_TOKEN_ONCE: ${{ inputs.renew_access_token_once }}
           EMIT_DIGEST_CANDIDATES: ${{ inputs.emit_digest_candidates }}
         run: |
+          if [[ "$RENEW_ACCESS_TOKEN_ONCE" == "true" && ( "$CAPTURE_TRANSACTIONS_ONCE" == "true" || "$PUBLISH" == "true" || "$DIAGNOSE_SOURCE_ACCESS" == "true" || "$VERIFY_NATIVE_IDENTITY" == "true" || "$CHECK_TOKEN_LOAD" == "true" || "$EMIT_DIGEST_CANDIDATES" == "true" || "$CAPTURE_ARTIFACT" == "true" ) ]]; then
+            echo "skipped:conflicting_operation_inputs"
+            exit 2
+          fi
           if [[ "$CAPTURE_TRANSACTIONS_ONCE" == "true" ]]; then
             if [[ "$PUBLISH" == "true" || "$DIAGNOSE_SOURCE_ACCESS" == "true" || "$VERIFY_NATIVE_IDENTITY" == "true" || "$CHECK_TOKEN_LOAD" == "true" || "$EMIT_DIGEST_CANDIDATES" == "true" || "$CAPTURE_ARTIFACT" == "true" ]]; then
               echo "skipped:conflicting_operation_inputs"
@@ -123,6 +133,13 @@ jobs:
         with:
           workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+
+      - name: Renew cached Schwab access token once
+        if: ${{ inputs.renew_access_token_once && !inputs.capture_transactions_once && !inputs.publish && !inputs.diagnose_source_access && !inputs.verify_native_identity && !inputs.check_token_load && !inputs.emit_digest_candidates && !inputs.capture_digest_candidates_artifact }}
+        env:
+          SCHWAB_RENEW_ACCESS_TOKEN_ONCE: "true"
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: uv run --no-sync python -m scripts.schwab_native_identity --renew-access-token-once
 
       - name: Capture fixed Schwab transactions once
         if: ${{ inputs.capture_transactions_once && !inputs.publish && !inputs.diagnose_source_access && !inputs.verify_native_identity && !inputs.check_token_load && !inputs.emit_digest_candidates && !inputs.capture_digest_candidates_artifact }}
@@ -261,30 +278,30 @@ jobs:
           PY
 
       - name: Prepare runtime daily
-        if: ${{ !inputs.capture_transactions_once && !inputs.publish && !inputs.diagnose_source_access && !inputs.verify_native_identity && !inputs.check_token_load }}
+        if: ${{ !inputs.capture_transactions_once && !inputs.publish && !inputs.diagnose_source_access && !inputs.verify_native_identity && !inputs.check_token_load && !inputs.renew_access_token_once }}
         run: uv run --no-sync python scripts/run_runtime_daily_from_reports.py
 
       - name: Verify native Schwab account identity
-        if: ${{ !inputs.capture_transactions_once && inputs.verify_native_identity && !inputs.publish && !inputs.diagnose_source_access && !inputs.check_token_load }}
+        if: ${{ !inputs.capture_transactions_once && inputs.verify_native_identity && !inputs.publish && !inputs.diagnose_source_access && !inputs.check_token_load && !inputs.renew_access_token_once }}
         run: uv run --no-sync python scripts/run_runtime_daily_from_reports.py --verify-native-identity
 
       - name: Check existing Schwab token load status
-        if: ${{ !inputs.capture_transactions_once && inputs.check_token_load && !inputs.publish && !inputs.diagnose_source_access && !inputs.verify_native_identity }}
+        if: ${{ !inputs.capture_transactions_once && inputs.check_token_load && !inputs.publish && !inputs.diagnose_source_access && !inputs.verify_native_identity && !inputs.renew_access_token_once }}
         run: uv run --no-sync python scripts/run_runtime_daily_from_reports.py --check-token-load
 
       - name: Check Schwab token Secret metadata and read permission
-        if: ${{ !inputs.capture_transactions_once && inputs.diagnose_source_access && !inputs.publish && !inputs.verify_native_identity && !inputs.check_token_load }}
+        if: ${{ !inputs.capture_transactions_once && inputs.diagnose_source_access && !inputs.publish && !inputs.verify_native_identity && !inputs.check_token_load && !inputs.renew_access_token_once }}
         run: uv run --no-sync python scripts/inspect_schwab_token_secret_readiness.py --metadata-only
 
       - name: Publish runtime daily
-        if: ${{ !inputs.capture_transactions_once && inputs.publish && !inputs.diagnose_source_access && !inputs.verify_native_identity && !inputs.check_token_load }}
+        if: ${{ !inputs.capture_transactions_once && inputs.publish && !inputs.diagnose_source_access && !inputs.verify_native_identity && !inputs.check_token_load && !inputs.renew_access_token_once }}
         env:
           EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
           SCHWAB_RUNTIME_DAILY_TARGET_JSON: ${{ secrets.SCHWAB_RUNTIME_DAILY_TARGET_JSON }}
         run: uv run --no-sync python scripts/run_runtime_daily_from_reports.py --publish
 
       - name: Emit DIGEST_CANDIDATES (ephemeral, no artifact)
-        if: ${{ !inputs.capture_transactions_once && inputs.emit_digest_candidates && !inputs.diagnose_source_access && !inputs.verify_native_identity && !inputs.check_token_load }}
+        if: ${{ !inputs.capture_transactions_once && inputs.emit_digest_candidates && !inputs.diagnose_source_access && !inputs.verify_native_identity && !inputs.check_token_load && !inputs.renew_access_token_once }}
         env:
           SCHWAB_DIGEST_CANDIDATES_OUTPUT_PATH: ${{ runner.temp }}/schwab-digest-candidates.json
           SCHWAB_DIGEST_ACCOUNT_FACTS_OUTPUT_PATH: ${{ runner.temp }}/schwab-digest-account-facts.json
@@ -304,7 +321,7 @@ jobs:
           python3 -c 'import json,os; p=os.environ["SCHWAB_DIGEST_CANDIDATES_OUTPUT_PATH"]; d=json.load(open(p,encoding="utf-8")); r=d.get("runs") or []; print(json.dumps({"ephemeral_path_present":True,"schema_version":d.get("schema_version"),"producer_status":d.get("producer_status"),"runs":len(r),"fill_count_null":all(x.get("fill_count") is None for x in r),"equity_present":any(x.get("equity") is not None for x in r),"holdings_omitted":all("holdings" not in x for x in r)},sort_keys=True))'
 
       - name: Capture DIGEST_CANDIDATES private artifact (opt-in)
-        if: ${{ !inputs.capture_transactions_once && inputs.emit_digest_candidates && inputs.capture_digest_candidates_artifact && !inputs.diagnose_source_access && !inputs.verify_native_identity && !inputs.check_token_load }}
+        if: ${{ !inputs.capture_transactions_once && inputs.emit_digest_candidates && inputs.capture_digest_candidates_artifact && !inputs.diagnose_source_access && !inputs.verify_native_identity && !inputs.check_token_load && !inputs.renew_access_token_once }}
         uses: actions/upload-artifact@v4
         with:
           name: schwab-digest-candidates

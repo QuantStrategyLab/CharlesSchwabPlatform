@@ -896,6 +896,7 @@ def test_workflow_event_branch_and_modes_are_mutually_exclusive(
     def evaluate(expression):
         expression = (
             expression.replace("inputs.capture_transactions_once", "False")
+            .replace("inputs.renew_access_token_once", "False")
             .replace("github.event_name", repr(event))
             .replace("github.ref", repr(ref))
             .replace("inputs.publish", repr(publish))
@@ -1876,3 +1877,37 @@ def test_capture_continuation_never_switches_the_selected_key_reference(capture_
     assert code == 2 and receipt["request_attempts"] == 0
     assert not ports.events and not ports.key_requests and not ports.requests
     assert ports.objects == {ports.predecessor_key: ports.predecessor_body}
+
+
+@pytest.mark.parametrize("conflict", [None, "CAPTURE_TRANSACTIONS_ONCE", "PUBLISH", "DIAGNOSE_SOURCE_ACCESS",
+                                       "VERIFY_NATIVE_IDENTITY", "CHECK_TOKEN_LOAD", "EMIT_DIGEST_CANDIDATES", "CAPTURE_ARTIFACT"])
+def test_standard_refresh_actual_shell_gate_is_exclusive_before_cloud_auth(conflict):
+    import os
+    import subprocess
+
+    workflow = (ROOT / ".github/workflows/runtime-daily-sync.yml").read_text()
+    step = workflow.split("- name: Reject conflicting operation inputs\n", 1)[1].split("      - name:", 1)[0]
+    script = step.split("        run: |\n", 1)[1]
+    script = "\n".join(line[10:] for line in script.splitlines())
+    env = {"PATH": os.environ["PATH"], "RENEW_ACCESS_TOKEN_ONCE": "true"}
+    if conflict:
+        env[conflict] = "true"
+    result = subprocess.run(["/bin/bash", "-c", script], env=env, capture_output=True, text=True)
+    assert result.returncode == (2 if conflict else 0)
+    assert result.stdout == ("skipped:conflicting_operation_inputs\n" if conflict else "")
+    assert result.stderr == ""
+
+
+def test_standard_refresh_is_separate_default_off_and_has_no_data_or_login_path():
+    workflow = (ROOT / ".github/workflows/runtime-daily-sync.yml").read_text()
+    section = workflow.split("      renew_access_token_once:\n", 1)[1].split("      emit_digest_candidates:", 1)[0]
+    assert "type: boolean" in section and "default: false" in section
+    step = workflow.split("      - name: Renew cached Schwab access token once\n", 1)[1].split("      - name:", 1)[0]
+    assert "python -m scripts.schwab_native_identity --renew-access-token-once" in step
+    assert 'SCHWAB_RENEW_ACCESS_TOKEN_ONCE: "true"' in step
+    assert not any(x in step for x in ("SCHWAB_PASSWORD", "TOTP", "GCP_SA_KEY", "capture.started", "upload-artifact"))
+    for other in workflow.split("      - name:")[1:]:
+        if other.startswith((" Renew cached Schwab access token once", " Capture fixed Schwab transactions once")):
+            continue
+        conditions = re.findall(r"^        if: (.+)$", other, re.MULTILINE)
+        assert all("!inputs.renew_access_token_once" in x for x in conditions)
