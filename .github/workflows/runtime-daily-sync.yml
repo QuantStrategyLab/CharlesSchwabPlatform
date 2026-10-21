@@ -152,6 +152,7 @@ jobs:
                     "private_files_saved": 0}
           cli_started = False
           receipt_known = False
+          data_file_inflight = False
           exit_code = 2
           try:
               with capture_module._private_call_output():
@@ -217,9 +218,13 @@ jobs:
                       if path.is_symlink() or path.stat().st_uid != os.getuid() or path.stat().st_mode & 0o077:
                           raise ValueError("private capture file invalid")
                       blob = bucket.blob(prefix + "result/" + remote_name)
+                      data_file_inflight = True
                       blob.upload_from_filename(str(path), if_generation_match=0, timeout=15, retry=None)
                       if not re.fullmatch(r"[1-9][0-9]{0,19}", str(blob.generation)):
                           raise ValueError("private upload generation unavailable")
+                      # Count only confirmed response/receipt files, not the manifest.
+                      public["private_files_saved"] += 1
+                      data_file_inflight = False
                       private_records.append({"name": remote_name, "generation": blob.generation,
                           "size": path.stat().st_size, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
                   if exit_code == 0 and {x["name"] for x in private_records} != {"response.body", "capture.receipt"}:
@@ -227,12 +232,13 @@ jobs:
                   manifest = bucket.blob(prefix + "result/storage.receipt")
                   manifest.upload_from_string(json.dumps({"files": private_records}).encode(),
                       if_generation_match=0, timeout=15, retry=None)
-                  public["private_files_saved"] = len(private_records)
           except BaseException:
               # CLI or private upload failure never issues a second broker request.
               # An unparseable CLI outcome remains unknown, not a fabricated zero.
               if cli_started and not receipt_known:
                   public["request_attempts"] = None
+              if data_file_inflight:
+                  public["private_files_saved"] = None
               public.update(status="blocked", reason="capture_workflow_failed")
               exit_code = 2
           print(json.dumps(public, sort_keys=True))

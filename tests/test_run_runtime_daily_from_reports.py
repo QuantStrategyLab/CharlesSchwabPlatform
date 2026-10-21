@@ -1505,6 +1505,8 @@ def capture_workflow_ports(tmp_path, monkeypatch, capsys):
                 raise RuntimeError("SYNTHETIC_PRIVATE_STORAGE failure")
             state.objects[self.name] = body
             self.generation = "23"
+            if state.fault == self.name.rsplit("/", 1)[-1] + ".committed":
+                raise RuntimeError("SYNTHETIC_PRIVATE_STORAGE committed before lost acknowledgement")
 
         def upload_from_filename(self, path, **options):
             self.upload_from_string(Path(path).read_bytes(), **options)
@@ -1653,6 +1655,23 @@ def test_capture_workflow_http_error_is_private_and_not_retried(capture_workflow
     assert len(ports.requests) == 1
     assert ports.objects[ports.prefix + "result/response.body"] == ports.body
     assert receipt["private_files_saved"] == 2
+
+
+@pytest.mark.parametrize("fault,confirmed_count", [
+    ("capture.receipt", None), ("storage.receipt", 2),
+    ("response.body.committed", None), ("capture.receipt.committed", None),
+])
+def test_capture_workflow_save_receipt_preserves_confirmed_or_unknown_writes(capture_workflow_ports, fault, confirmed_count):
+    ports = capture_workflow_ports
+    ports.fault = fault
+    code, receipt = ports.execute()
+    assert code == 2 and receipt["request_attempts"] == 1
+    assert receipt["private_files_saved"] == confirmed_count
+    assert len(ports.requests) == 1 and ports.events.count("capture_cli") == 1
+    assert ports.prefix + "result/capture.started" in ports.objects
+    if fault in {"storage.receipt", "capture.receipt.committed"}:
+        assert ports.prefix + "result/response.body" in ports.objects
+        assert ports.prefix + "result/capture.receipt" in ports.objects
 
 
 @pytest.mark.parametrize("fault", [
