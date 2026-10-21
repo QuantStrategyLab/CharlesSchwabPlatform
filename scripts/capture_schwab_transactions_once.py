@@ -157,17 +157,25 @@ class _OneShotSession:
                 timeout_seconds=remaining, follow_redirects=False, retries=0, trust_env=False)
         except BaseException:
             self.fail("transport_error")
+        try:
+            return self._consume_reply(reply)
+        finally:
+            # Opening the response transfers close ownership immediately, even
+            # when the first deadline/status/encoding check rejects it.
+            if type(reply) is WireReply:
+                close = getattr(reply.chunks, "close", None)
+                if close is not None:
+                    try:
+                        close()
+                    except BaseException:
+                        self.fail("stream_error")
+
+    def _consume_reply(self, reply):
         self.check_deadline()
         if type(reply) is not WireReply or type(reply.status_code) is not int or not 100 <= reply.status_code <= 599:
             self.fail("stream_invalid")
         self.status = reply.status_code
         if type(reply.encoding) is not str or reply.encoding not in ("", "identity"):
-            close = getattr(reply.chunks, "close", None)
-            if close is not None:
-                try:
-                    close()
-                except BaseException:
-                    pass
             self.fail("encoding_unsupported")
         body = bytearray()
         try:
@@ -182,13 +190,6 @@ class _OneShotSession:
             raise
         except BaseException:
             self.fail("stream_error")
-        finally:
-            close = getattr(reply.chunks, "close", None)
-            if close is not None:
-                try:
-                    close()
-                except BaseException:
-                    self.fatal = self.fatal or "stream_error"
         if self.fatal:
             self.fail(self.fatal)
         self.check_deadline()
@@ -313,7 +314,7 @@ class HttpxTransport:
         self.client = httpx.Client(
             headers={"Authorization": "Bearer " + access_token, "Accept-Encoding": "identity"},
             trust_env=False, verify=True, follow_redirects=False,
-            transport=transport if transport is not None else httpx.HTTPTransport(retries=0),
+            transport=transport if transport is not None else httpx.HTTPTransport(retries=0, trust_env=False),
         )
 
     def request(self, method, url, *, params, timeout_seconds, **policy):

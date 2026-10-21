@@ -113,6 +113,22 @@ def test_actual_sdk_stream_and_collector_window_privacy(inputs, capsys):
     assert all(value not in public for value in [HASH, "PRIVATE_AMOUNT_SENTINEL", "PRIVATE_TOKEN_SENTINEL"])
 
 
+def test_default_transport_disables_environment_and_retries(monkeypatch):
+    created = []
+    def transport(**kwargs):
+        created.append(kwargs)
+        return httpx.MockTransport(lambda _request: pytest.fail("no request authorized"))
+    monkeypatch.setattr(httpx, "HTTPTransport", transport)
+    wire = capture.HttpxTransport("synthetic-token")
+    try:
+        assert created == [{"retries": 0, "trust_env": False}]
+        assert wire.client.trust_env is False
+        assert wire.client.follow_redirects is False
+        assert wire.client.auth is None
+    finally:
+        wire.close()
+
+
 @pytest.mark.parametrize("body,status,encoding,reason", [
     (b'{"error":"PRIVATE_BODY"}', 403, "identity", "http_error"),
     (b"[]", 200, "gzip", "encoding_unsupported"),
@@ -225,6 +241,44 @@ def test_real_alarm_interrupts_blocking_transport_once(inputs, monkeypatch):
     assert receipt["reason"] == "deadline_exceeded" and len(requests) == 1 and stream.closed
     assert signal.getsignal(signal.SIGALRM) is previous_handler
     assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+
+
+@pytest.mark.parametrize("failure", ["deadline", "status"])
+def test_opened_reply_closed_even_if_client_retains_exception(tmp_path, failure):
+    os.chmod(tmp_path, 0o700)
+    clock, errors, requests = [0.0], [], []
+    stream = Stream([b"[]"])
+    def handler(request):
+        requests.append(request)
+        if failure == "deadline":
+            clock[0] = 31.0
+        return httpx.Response(200, stream=stream)
+    wire = capture.HttpxTransport("synthetic", transport=httpx.MockTransport(handler))
+    class CheckedTransport:
+        def request(self, *args, **kwargs):
+            reply = wire.request(*args, **kwargs)
+            if failure == "status":
+                reply.status_code = "invalid"
+            return reply
+    class PreservingClient(Client):
+        def get_transactions(self, *args, **kwargs):
+            try:
+                return super().get_transactions(*args, **kwargs)
+            except capture.CaptureError as error:
+                errors.append(error)  # Keep traceback alive; GC is not a close contract.
+                class Fallback:
+                    status_code = 200
+                    def json(self):
+                        return []
+                return Fallback()
+    operation = capture.CaptureOnce(client_builder=lambda session: PreservingClient("synthetic", session),
+        transport=CheckedTransport(), collector=collect_external_flow_snapshot, clock=lambda: clock[0])
+    result = operation.run(binding=capture.BindingInputs(HASH, "target", "binding", "target", "binding"),
+                           output_dir=tmp_path / "out")
+    wire.close()
+    assert result.receipt["status"] == "blocked" and len(requests) == 1 and len(errors) == 1
+    assert result.receipt["reason"] == ("deadline_exceeded" if failure == "deadline" else "stream_invalid")
+    assert stream.reads == 0 and stream.closed
 
 
 def test_expired_auth_never_reaches_http(inputs):
