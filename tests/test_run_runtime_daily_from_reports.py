@@ -895,7 +895,8 @@ def test_workflow_event_branch_and_modes_are_mutually_exclusive(
 
     def evaluate(expression):
         expression = (
-            expression.replace("github.event_name", repr(event))
+            expression.replace("inputs.capture_transactions_once", "False")
+            .replace("github.event_name", repr(event))
             .replace("github.ref", repr(ref))
             .replace("inputs.publish", repr(publish))
             .replace("inputs.diagnose_source_access", repr(diagnose))
@@ -1401,3 +1402,309 @@ def test_scope_subcount_validation_rejects_malformed_diagnostics(fault, monkeypa
     assert result["status"] == "prepared" and result["projected_run_count"] == 0
     assert not any(key.startswith("zero_run_") for key in result)
     readers["publisher"].assert_not_called()
+
+
+def test_capture_workflow_is_default_off_and_checks_private_refs_before_auth():
+    workflow = (ROOT / ".github/workflows/runtime-daily-sync.yml").read_text()
+    capture_input = workflow.split("      capture_transactions_once:\n", 1)[1].split("permissions:", 1)[0]
+    assert "type: boolean" in capture_input and "default: false" in capture_input
+    guard = workflow.split("- name: Reject conflicting operation inputs", 1)[1].split("- name:", 1)[0]
+    assert "CAPTURE_TRANSACTIONS_ONCE" in guard
+    assert "capture_private_references_required" in guard
+    assert workflow.index("capture_private_references_required") < workflow.index("- name: Authenticate to Google Cloud")
+    capture_step = workflow.split("- name: Capture fixed Schwab transactions once", 1)[1].split("- name:", 1)[0]
+    assert "inputs.capture_transactions_once" in capture_step
+    assert "--capture-transactions-once" in capture_step
+    assert "source_complete" in capture_step and "False" in capture_step
+    assert "upload-artifact" not in capture_step
+
+
+def _capture_workflow_python():
+    import textwrap
+
+    workflow = (ROOT / ".github/workflows/runtime-daily-sync.yml").read_text()
+    step = workflow.split("- name: Capture fixed Schwab transactions once\n", 1)[1]
+    body = step.split("          uv run --no-sync python - <<'PY'\n", 1)[1]
+    return compile(textwrap.dedent(body.split("          PY\n", 1)[0]),
+                   "<actual capture workflow Python>", "exec")
+
+
+@pytest.fixture
+def capture_workflow_ports(tmp_path, monkeypatch, capsys):
+    """Execute the workflow's exact body and real runner/SDK/collector; fake external ports only."""
+    import os
+    import socket
+    from types import SimpleNamespace
+
+    import httpx
+
+    from scripts import capture_schwab_transactions_once as capture
+    from scripts.publish_account_facts_from_reports import _binding_id
+
+    prefix = "digest-candidates/schwab/_transactions_once/window-20261015-20261016/"
+    base = "gs://qsl-runtime-logs-shared/" + prefix
+    account = "SYNTHETIC_PRIVATE_ACCOUNT"
+    document = {
+        "ok": True, "projection": "identity", "target_id": "synthetic-target",
+        "source_binding_id": _binding_id(account, caller.TARGET["service"]),
+        "records": [
+            {"observation_date": date, "observed_finished_at": stamp,
+             "target_id_matches": True, "source_binding_id_matches": True,
+             "account_scope_matches": True, "record_revision": None}
+            for date, stamp in zip(["2026-10-15", "2026-10-16"],
+                                   [capture.FINANCIAL_START, capture.FINANCIAL_END])
+        ],
+    }
+    env = {
+        "RUNNER_TEMP": str(tmp_path), "GCP_PROJECT_ID": "charlesschwabquant",
+        "CAPTURE_BINDING_URI": base + "identity.input",
+        "CAPTURE_BINDING_GENERATION": "17", "CAPTURE_OUTPUT_PREFIX": base + "result/",
+        "SCHWAB_API_KEY": "SYNTHETIC_PRIVATE_KEY",
+        "SCHWAB_ACCOUNT_FACTS_TARGET_ID": document["target_id"],
+        "RUNTIME_TARGET_JSON": json.dumps({
+            **caller.TARGET, "account_selector": ["live"],
+            "runtime_risk_limits": {"binding": {"account_hash": account}},
+            "market_calendar": "NYSE", "market_timezone": "America/New_York",
+        }),
+    }
+    state = SimpleNamespace(document=document, events=[], objects={}, requests=[],
+                            fault=None, env=env, cli_receipts=[], prefix=prefix,
+                            status=200, body=b"[]")
+
+    def deny(*_args, **_kwargs):
+        raise AssertionError("unconfigured external capability forbidden")
+
+    monkeypatch.setattr(os, "environ", env)
+    monkeypatch.setattr(socket, "socket", deny)
+    monkeypatch.setattr("subprocess.Popen", deny)
+    monkeypatch.setattr("scripts.schwab_native_identity._load_existing_token", deny)
+
+    class Blob:
+        def __init__(self, name, generation=None):
+            self.name, self.generation, self.size = name, generation, None
+
+        def reload(self, **options):
+            assert options == {"timeout": 15, "retry": None}
+            state.events.append("metadata_reload")
+            self.size = 65537 if state.fault == "metadata_size" else len(json.dumps(state.document).encode())
+            if state.fault == "metadata_generation":
+                self.generation = 18
+
+        def download_to_file(self, handle, **options):
+            assert options == {"timeout": 15, "retry": None, "if_generation_match": 17}
+            state.events.append("metadata_download")
+            handle.write(json.dumps(state.document).encode())
+
+        def upload_from_string(self, body, **options):
+            assert options == {"timeout": 15, "retry": None, "if_generation_match": 0}
+            assert self.name.startswith(prefix + "result/")
+            state.events.append(self.name.rsplit("/", 1)[-1])
+            if self.name in state.objects:
+                raise RuntimeError("SYNTHETIC_PRIVATE_STORAGE collision")
+            if state.fault == self.name.rsplit("/", 1)[-1]:
+                raise RuntimeError("SYNTHETIC_PRIVATE_STORAGE failure")
+            state.objects[self.name] = body
+            self.generation = "23"
+            if state.fault == self.name.rsplit("/", 1)[-1] + ".committed":
+                raise RuntimeError("SYNTHETIC_PRIVATE_STORAGE committed before lost acknowledgement")
+
+        def upload_from_filename(self, path, **options):
+            self.upload_from_string(Path(path).read_bytes(), **options)
+
+    class Bucket:
+        def blob(self, name, generation=None):
+            assert name in {prefix + value for value in (
+                "identity.input", "result/capture.started", "result/response.body",
+                "result/capture.receipt", "result/storage.receipt")}
+            return Blob(name, generation)
+
+    class Storage:
+        def __init__(self, **options):
+            assert options == {"project": "charlesschwabquant"}
+            state.events.append("storage_client")
+
+        def bucket(self, name):
+            assert name == "qsl-runtime-logs-shared"
+            return Bucket()
+
+    class Secrets:
+        def access_secret_version(self, **options):
+            assert options == {"request": {"name": "projects/charlesschwabquant/secrets/synthetic-key/versions/latest"},
+                               "retry": None, "timeout": 15}
+            state.events.append("key_secret")
+            if state.fault == "key_secret":
+                raise RuntimeError("SYNTHETIC_PRIVATE_SECRET failure")
+            return SimpleNamespace(payload=SimpleNamespace(data=b"SYNTHETIC_PRIVATE_KEY"))
+
+    monkeypatch.setattr("google.cloud.storage.Client", Storage)
+    monkeypatch.setattr("google.cloud.secretmanager.SecretManagerServiceClient", Secrets)
+    real_capture = capture.capture
+
+    def token_loader(*_args):
+        state.events.append("token_loader")
+        return json.dumps({"creation_timestamp": 1792179840,
+                           "token": {"access_token": "SYNTHETIC_PRIVATE_TOKEN", "expires_at": 1792183500}})
+
+    def transport(request):
+        state.events.append("broker_get")
+        state.requests.append(request)
+        assert request.method == "GET"
+        return httpx.Response(state.status, stream=httpx.ByteStream(state.body))
+
+    def actual_capture(**options):
+        state.events.append("capture_cli")
+        if state.fault == "cli_unknown":
+            raise KeyboardInterrupt("SYNTHETIC_PRIVATE_CLI")
+        result = real_capture(**options, token_loader=token_loader,
+                              http_transport=httpx.MockTransport(transport), now=1792179900)
+        state.cli_receipts.append(result.receipt)
+        return result
+
+    monkeypatch.setattr(capture, "capture", actual_capture)
+
+    def execute():
+        with pytest.raises(SystemExit) as raised:
+            exec(_capture_workflow_python(), {})
+        output = capsys.readouterr()
+        assert output.err == ""
+        assert "SYNTHETIC_PRIVATE" not in output.out
+        public = json.loads(output.out)
+        assert set(public) == {"status", "reason", "request_attempts", "source_complete", "private_files_saved"}
+        assert public["source_complete"] is False
+        return raised.value.code, public
+
+    state.execute = execute
+    return state
+
+
+def test_capture_workflow_real_sdk_and_collector_one_request_private_save_and_reservation(capture_workflow_ports):
+    ports = capture_workflow_ports
+    code, receipt = ports.execute()
+    assert code == 0 and receipt == {"status": "captured_incomplete", "reason": None,
+        "request_attempts": 1, "source_complete": False, "private_files_saved": 2}, (receipt, ports.events, ports.cli_receipts)
+    assert ports.events == ["storage_client", "metadata_reload", "metadata_download", "capture.started",
+                            "capture_cli", "token_loader", "broker_get", "response.body",
+                            "capture.receipt", "storage.receipt"]
+    assert len(ports.requests) == 1
+    request = ports.requests[0]
+    assert request.url.params["startDate"] == "2026-10-15T19:45:05Z"
+    assert request.url.params["endDate"] == "2026-10-16T19:45:07Z"
+    assert ports.objects[ports.prefix + "result/response.body"] == b"[]"
+    private = json.loads(ports.objects[ports.prefix + "result/capture.receipt"])
+    assert private["request_attempts"] == 1 and private["source_complete"] is False
+    manifest = json.loads(ports.objects[ports.prefix + "result/storage.receipt"])
+    assert {row["name"] for row in manifest["files"]} == {"response.body", "capture.receipt"}
+    assert all(row["generation"] == "23" for row in manifest["files"])
+    # A separate workflow attempt cannot reinterpret a previous reservation as unsent.
+    code, receipt = ports.execute()
+    assert code == 2 and receipt["request_attempts"] == 0
+    assert ports.events.count("capture_cli") == ports.events.count("broker_get") == 1
+
+
+@pytest.mark.parametrize("fault", ["references", "metadata_size", "metadata_generation", "metadata_schema",
+                                       "capture.started", "key_secret"])
+def test_capture_workflow_pre_request_failures_never_enter_collector(capture_workflow_ports, fault):
+    ports = capture_workflow_ports
+    ports.fault = fault
+    if fault == "references":
+        ports.env["CAPTURE_BINDING_URI"] = "gs://unqualified-bucket/private"
+    elif fault == "metadata_schema":
+        ports.document["records"][0]["account_scope_matches"] = False
+    elif fault == "key_secret":
+        ports.env["SCHWAB_API_KEY_SECRET_NAME"] = "synthetic-key"
+    code, receipt = ports.execute()
+    assert code == 2 and receipt["status"] == "blocked" and receipt["request_attempts"] == 0
+    assert not ports.requests and "capture_cli" not in ports.events
+    if fault == "references":
+        assert ports.events == []
+
+
+def test_capture_workflow_named_existing_key_is_private_and_has_no_failed_read_fallback(capture_workflow_ports):
+    ports = capture_workflow_ports
+    ports.env["SCHWAB_API_KEY_SECRET_NAME"] = "synthetic-key"
+    code, receipt = ports.execute()
+    assert code == 0 and receipt["request_attempts"] == 1, (receipt, ports.events, ports.cli_receipts)
+    assert ports.events.index("capture.started") < ports.events.index("key_secret") < ports.events.index("token_loader")
+
+
+@pytest.mark.parametrize("fault", ["cli_unknown", "response.body", "capture.receipt", "storage.receipt"])
+def test_capture_workflow_uncertain_or_save_failure_never_retries_capture(capture_workflow_ports, fault):
+    ports = capture_workflow_ports
+    ports.fault = fault
+    code, receipt = ports.execute()
+    assert code == 2 and receipt["status"] == "blocked"
+    assert receipt["request_attempts"] == (None if fault == "cli_unknown" else 1)
+    assert ports.events.count("capture_cli") == 1 and len(ports.requests) == (0 if fault == "cli_unknown" else 1)
+    assert ports.prefix + "result/capture.started" in ports.objects
+
+
+def test_capture_workflow_binding_failure_keeps_known_zero_without_fabricating_response(capture_workflow_ports):
+    ports = capture_workflow_ports
+    ports.env["SCHWAB_ACCOUNT_FACTS_TARGET_ID"] = "different-synthetic-target"
+    code, receipt = ports.execute()
+    assert code == 2 and receipt["request_attempts"] == 0 and not ports.requests
+    assert ports.cli_receipts[0]["reason"] == "binding_mismatch"
+    assert ports.prefix + "result/response.body" not in ports.objects
+
+
+def test_capture_workflow_http_error_is_private_and_not_retried(capture_workflow_ports):
+    ports = capture_workflow_ports
+    ports.status, ports.body = 503, b"SYNTHETIC_PRIVATE_ERROR_BODY"
+    code, receipt = ports.execute()
+    assert code == 2 and receipt["reason"] == "http_error" and receipt["request_attempts"] == 1
+    assert len(ports.requests) == 1
+    assert ports.objects[ports.prefix + "result/response.body"] == ports.body
+    assert receipt["private_files_saved"] == 2
+
+
+@pytest.mark.parametrize("fault,confirmed_count", [
+    ("capture.receipt", None), ("storage.receipt", 2),
+    ("response.body.committed", None), ("capture.receipt.committed", None),
+])
+def test_capture_workflow_save_receipt_preserves_confirmed_or_unknown_writes(capture_workflow_ports, fault, confirmed_count):
+    ports = capture_workflow_ports
+    ports.fault = fault
+    code, receipt = ports.execute()
+    assert code == 2 and receipt["request_attempts"] == 1
+    assert receipt["private_files_saved"] == confirmed_count
+    assert len(ports.requests) == 1 and ports.events.count("capture_cli") == 1
+    assert ports.prefix + "result/capture.started" in ports.objects
+    if fault in {"storage.receipt", "capture.receipt.committed"}:
+        assert ports.prefix + "result/response.body" in ports.objects
+        assert ports.prefix + "result/capture.receipt" in ports.objects
+
+
+@pytest.mark.parametrize("fault", [
+    "off", "valid", "PUBLISH", "DIAGNOSE_SOURCE_ACCESS", "VERIFY_NATIVE_IDENTITY",
+    "CHECK_TOKEN_LOAD", "EMIT_DIGEST_CANDIDATES", "CAPTURE_ARTIFACT", "binding_uri",
+    "output_prefix", "generation_empty", "generation_zero", "generation_text", "generation_long",
+])
+def test_capture_workflow_exact_shell_preflight_rejects_conflicts_or_unbound_references(fault):
+    import subprocess
+    import textwrap
+
+    workflow = (ROOT / ".github/workflows/runtime-daily-sync.yml").read_text()
+    step = workflow.split("- name: Reject conflicting operation inputs\n", 1)[1].split("      - name:", 1)[0]
+    script = textwrap.dedent(step.split("        run: |\n", 1)[1])
+    base = "gs://qsl-runtime-logs-shared/digest-candidates/schwab/_transactions_once/window-20261015-20261016/"
+    env = {"CAPTURE_TRANSACTIONS_ONCE": "true", "CAPTURE_BINDING_URI": base + "identity.input",
+           "CAPTURE_BINDING_GENERATION": "17", "CAPTURE_OUTPUT_PREFIX": base + "result/"}
+    if fault == "off":
+        env = {"CAPTURE_TRANSACTIONS_ONCE": "false"}
+    elif fault.isupper():
+        env[fault] = "true"
+    elif fault == "binding_uri":
+        env["CAPTURE_BINDING_URI"] = "gs://unqualified-bucket/private"
+    elif fault == "output_prefix":
+        env["CAPTURE_OUTPUT_PREFIX"] = base + "unapproved/"
+    elif fault.startswith("generation_"):
+        env["CAPTURE_BINDING_GENERATION"] = {"empty": "", "zero": "0", "text": "PRIVATE", "long": "1" * 21}[fault[11:]]
+    result = subprocess.run(["/bin/bash", "--noprofile", "--norc", "-c", script],
+                            cwd=ROOT, env=env, timeout=5, capture_output=True, text=True, check=False)
+    assert result.stderr == ""
+    if fault in {"off", "valid"}:
+        assert result.returncode == 0 and result.stdout == ""
+    else:
+        assert result.returncode == 2
+        reason = "conflicting_operation_inputs" if fault.isupper() else "capture_private_references_required"
+        assert result.stdout == "skipped:" + reason + "\n"

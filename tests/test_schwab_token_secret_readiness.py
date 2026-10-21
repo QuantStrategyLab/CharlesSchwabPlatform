@@ -373,4 +373,35 @@ def test_diagnostic_input_is_default_off_and_excludes_prepare_and_publish():
     assert "SCHWAB_APP_SECRET" not in token_step
     assert "EXECUTION_EVIDENCE_SYNC_TOKEN" not in diagnostic
     assert "SCHWAB_APP_SECRET" not in workflow
-    assert "SCHWAB_API_KEY" not in workflow
+    # The original diagnostic/default modes remain entirely key-free.
+    name = "      - name: Capture fixed Schwab transactions once\n"
+    assert workflow.count(name) == 1
+    start = workflow.index(name)
+    end = workflow.index("      - name:", start + len(name))
+    capture = workflow[start:end]
+    assert "SCHWAB_API_KEY" not in workflow[:start] + workflow[end:]
+
+    modes = (
+        "publish", "diagnose_source_access", "verify_native_identity",
+        "check_token_load", "emit_digest_candidates", "capture_digest_candidates_artifact",
+    )
+    expected_gate = (
+        "if: ${{ inputs.capture_transactions_once && "
+        + " && ".join(f"!inputs.{mode}" for mode in modes) + " }}"
+    )
+    assert [line.strip() for line in capture.splitlines()
+            if line.startswith("        if: ")] == [expected_gate]
+    capture_input = workflow.split("      capture_transactions_once:\n", 1)[1].split("      publish:", 1)[0]
+    assert [line.strip() for line in capture_input.splitlines()
+            if line.strip().startswith("default:")] == ["default: false"]
+    assert "type: boolean" in capture_input
+
+    # Reuse only the original deployment's declared secret references.
+    refs = [
+        "SCHWAB_API_KEY: ${{ secrets.SCHWAB_API_KEY }}",
+        "SCHWAB_API_KEY_SECRET_NAME: ${{ vars.SCHWAB_API_KEY_SECRET_NAME }}",
+    ]
+    assert [line.strip() for line in capture.splitlines()
+            if line.startswith("          SCHWAB_API_KEY")] == refs
+    deploy = (ROOT / ".github/workflows/sync-cloud-run-env.yml").read_text()
+    assert all(ref in deploy for ref in refs)
