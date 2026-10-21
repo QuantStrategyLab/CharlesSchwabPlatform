@@ -77,6 +77,7 @@ jobs:
         env:
           CAPTURE_TRANSACTIONS_ONCE: ${{ inputs.capture_transactions_once }}
           CAPTURE_ARTIFACT: ${{ inputs.capture_digest_candidates_artifact }}
+          CAPTURE_BUCKET: ${{ vars.SCHWAB_CAPTURE_BUCKET }}
           CAPTURE_BINDING_URI: ${{ vars.SCHWAB_CAPTURE_BINDING_URI }}
           CAPTURE_BINDING_GENERATION: ${{ vars.SCHWAB_CAPTURE_BINDING_GENERATION }}
           CAPTURE_OUTPUT_PREFIX: ${{ vars.SCHWAB_CAPTURE_OUTPUT_PREFIX }}
@@ -93,7 +94,11 @@ jobs:
             fi
             # References are empty by default. They are not proof of privacy:
             # root must accept the existing readers/retention before setting them.
-            prefix="gs://qsl-runtime-logs-shared/digest-candidates/schwab/_transactions_once/window-20261015-20261016/"
+            if [[ ! "$CAPTURE_BUCKET" =~ ^[a-z][a-z0-9-]{1,61}[a-z0-9]$ || "$CAPTURE_BUCKET" == "qsl-runtime-logs-shared" ]]; then
+              echo "skipped:capture_private_references_required"
+              exit 2
+            fi
+            prefix="gs://${CAPTURE_BUCKET}/digest-candidates/schwab/_transactions_once/window-20261015-20261016/"
             if [[ "$CAPTURE_BINDING_URI" != "${prefix}identity.input" || ! "$CAPTURE_BINDING_GENERATION" =~ ^[1-9][0-9]{0,19}$ || "$CAPTURE_OUTPUT_PREFIX" != "${prefix}result/" ]]; then
               echo "skipped:capture_private_references_required"
               exit 2
@@ -122,6 +127,7 @@ jobs:
       - name: Capture fixed Schwab transactions once
         if: ${{ inputs.capture_transactions_once && !inputs.publish && !inputs.diagnose_source_access && !inputs.verify_native_identity && !inputs.check_token_load && !inputs.emit_digest_candidates && !inputs.capture_digest_candidates_artifact }}
         env:
+          CAPTURE_BUCKET: ${{ vars.SCHWAB_CAPTURE_BUCKET }}
           CAPTURE_BINDING_URI: ${{ vars.SCHWAB_CAPTURE_BINDING_URI }}
           CAPTURE_BINDING_GENERATION: ${{ vars.SCHWAB_CAPTURE_BINDING_GENERATION }}
           CAPTURE_OUTPUT_PREFIX: ${{ vars.SCHWAB_CAPTURE_OUTPUT_PREFIX }}
@@ -146,7 +152,6 @@ jobs:
           # No input/body/identity/exception text goes to this public job log.
           # This is a fixed private transport, not an IAM or retention assertion.
           prefix = "digest-candidates/schwab/_transactions_once/window-20261015-20261016/"
-          base = "gs://qsl-runtime-logs-shared/" + prefix
           public = {"status": "blocked", "reason": "capture_workflow_failed",
                     "request_attempts": 0, "source_complete": False,
                     "private_files_saved": 0}
@@ -156,6 +161,11 @@ jobs:
           exit_code = 2
           try:
               with capture_module._private_call_output():
+                  bucket_name = os.environ.get("CAPTURE_BUCKET", "")
+                  if (not re.fullmatch(r"[a-z][a-z0-9-]{1,61}[a-z0-9]", bucket_name)
+                      or bucket_name == "qsl-runtime-logs-shared"):
+                      raise ValueError("private references unavailable")
+                  base = "gs://" + bucket_name + "/" + prefix
                   generation = os.environ.get("CAPTURE_BINDING_GENERATION", "")
                   if (os.environ.get("CAPTURE_BINDING_URI") != base + "identity.input"
                       or os.environ.get("CAPTURE_OUTPUT_PREFIX") != base + "result/"
@@ -166,7 +176,7 @@ jobs:
                       or not key_secret and not os.environ.get("SCHWAB_API_KEY")):
                       raise ValueError("original API-key reference unavailable")
                   client = storage.Client(project="charlesschwabquant")
-                  bucket = client.bucket("qsl-runtime-logs-shared")
+                  bucket = client.bucket(bucket_name)
                   # No explicit cleanup of a failed/uncertain local capture.
                   # Runner staging is ephemeral; only completed private uploads are durable.
                   directory = Path(tempfile.mkdtemp(prefix="schwab-capture-", dir=os.environ["RUNNER_TEMP"]))
