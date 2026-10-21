@@ -1442,7 +1442,8 @@ def capture_workflow_ports(tmp_path, monkeypatch, capsys):
     from scripts.publish_account_facts_from_reports import _binding_id
 
     prefix = "digest-candidates/schwab/_transactions_once/window-20261015-20261016/"
-    base = "gs://qsl-runtime-logs-shared/" + prefix
+    bucket_name = "schwab-private-evidence-test"
+    base = "gs://" + bucket_name + "/" + prefix
     account = "SYNTHETIC_PRIVATE_ACCOUNT"
     document = {
         "ok": True, "projection": "identity", "target_id": "synthetic-target",
@@ -1457,7 +1458,7 @@ def capture_workflow_ports(tmp_path, monkeypatch, capsys):
     }
     env = {
         "RUNNER_TEMP": str(tmp_path), "GCP_PROJECT_ID": "charlesschwabquant",
-        "CAPTURE_BINDING_URI": base + "identity.input",
+        "CAPTURE_BUCKET": bucket_name, "CAPTURE_BINDING_URI": base + "identity.input",
         "CAPTURE_BINDING_GENERATION": "17", "CAPTURE_OUTPUT_PREFIX": base + "result/",
         "SCHWAB_API_KEY": "SYNTHETIC_PRIVATE_KEY",
         "SCHWAB_ACCOUNT_FACTS_TARGET_ID": document["target_id"],
@@ -1469,7 +1470,7 @@ def capture_workflow_ports(tmp_path, monkeypatch, capsys):
     }
     state = SimpleNamespace(document=document, events=[], objects={}, requests=[],
                             fault=None, env=env, cli_receipts=[], prefix=prefix,
-                            status=200, body=b"[]")
+                            status=200, body=b"[]", bucket_name=bucket_name, bucket_names=[])
 
     def deny(*_args, **_kwargs):
         raise AssertionError("unconfigured external capability forbidden")
@@ -1524,7 +1525,8 @@ def capture_workflow_ports(tmp_path, monkeypatch, capsys):
             state.events.append("storage_client")
 
         def bucket(self, name):
-            assert name == "qsl-runtime-logs-shared"
+            assert name == state.bucket_name
+            state.bucket_names.append(name)
             return Bucket()
 
     class Secrets:
@@ -1678,6 +1680,7 @@ def test_capture_workflow_save_receipt_preserves_confirmed_or_unknown_writes(cap
     "off", "valid", "PUBLISH", "DIAGNOSE_SOURCE_ACCESS", "VERIFY_NATIVE_IDENTITY",
     "CHECK_TOKEN_LOAD", "EMIT_DIGEST_CANDIDATES", "CAPTURE_ARTIFACT", "binding_uri",
     "output_prefix", "generation_empty", "generation_zero", "generation_text", "generation_long",
+    "bucket_missing", "bucket_shared", "bucket_invalid", "binding_other_bucket", "output_other_bucket",
 ])
 def test_capture_workflow_exact_shell_preflight_rejects_conflicts_or_unbound_references(fault):
     import subprocess
@@ -1686,8 +1689,9 @@ def test_capture_workflow_exact_shell_preflight_rejects_conflicts_or_unbound_ref
     workflow = (ROOT / ".github/workflows/runtime-daily-sync.yml").read_text()
     step = workflow.split("- name: Reject conflicting operation inputs\n", 1)[1].split("      - name:", 1)[0]
     script = textwrap.dedent(step.split("        run: |\n", 1)[1])
-    base = "gs://qsl-runtime-logs-shared/digest-candidates/schwab/_transactions_once/window-20261015-20261016/"
-    env = {"CAPTURE_TRANSACTIONS_ONCE": "true", "CAPTURE_BINDING_URI": base + "identity.input",
+    base = "gs://schwab-private-evidence-test/digest-candidates/schwab/_transactions_once/window-20261015-20261016/"
+    env = {"CAPTURE_TRANSACTIONS_ONCE": "true", "CAPTURE_BUCKET": "schwab-private-evidence-test",
+           "CAPTURE_BINDING_URI": base + "identity.input",
            "CAPTURE_BINDING_GENERATION": "17", "CAPTURE_OUTPUT_PREFIX": base + "result/"}
     if fault == "off":
         env = {"CAPTURE_TRANSACTIONS_ONCE": "false"}
@@ -1699,6 +1703,18 @@ def test_capture_workflow_exact_shell_preflight_rejects_conflicts_or_unbound_ref
         env["CAPTURE_OUTPUT_PREFIX"] = base + "unapproved/"
     elif fault.startswith("generation_"):
         env["CAPTURE_BINDING_GENERATION"] = {"empty": "", "zero": "0", "text": "PRIVATE", "long": "1" * 21}[fault[11:]]
+    elif fault == "bucket_missing":
+        env.pop("CAPTURE_BUCKET")
+    elif fault in {"bucket_shared", "bucket_invalid"}:
+        name = "qsl-runtime-logs-shared" if fault == "bucket_shared" else "bad/bucket"
+        env["CAPTURE_BUCKET"] = name
+        changed = base.replace("schwab-private-evidence-test", name)
+        env["CAPTURE_BINDING_URI"] = changed + "identity.input"
+        env["CAPTURE_OUTPUT_PREFIX"] = changed + "result/"
+    elif fault == "binding_other_bucket":
+        env["CAPTURE_BINDING_URI"] = base.replace("schwab-private-evidence-test", "another-private-bucket") + "identity.input"
+    elif fault == "output_other_bucket":
+        env["CAPTURE_OUTPUT_PREFIX"] = base.replace("schwab-private-evidence-test", "another-private-bucket") + "result/"
     result = subprocess.run(["/bin/bash", "--noprofile", "--norc", "-c", script],
                             cwd=ROOT, env=env, timeout=5, capture_output=True, text=True, check=False)
     assert result.stderr == ""
@@ -1708,3 +1724,38 @@ def test_capture_workflow_exact_shell_preflight_rejects_conflicts_or_unbound_ref
         assert result.returncode == 2
         reason = "conflicting_operation_inputs" if fault.isupper() else "capture_private_references_required"
         assert result.stdout == "skipped:" + reason + "\n"
+
+
+@pytest.mark.parametrize("name", ["schwab-private-evidence-test", "schwab-private-evidence-alt"])
+def test_capture_workflow_uses_the_configured_private_bucket(capture_workflow_ports, name):
+    ports = capture_workflow_ports
+    ports.bucket_name = name
+    ports.env["CAPTURE_BUCKET"] = name
+    base = "gs://" + name + "/" + ports.prefix
+    ports.env["CAPTURE_BINDING_URI"] = base + "identity.input"
+    ports.env["CAPTURE_OUTPUT_PREFIX"] = base + "result/"
+    code, receipt = ports.execute()
+    assert code == 0 and receipt["private_files_saved"] == 2
+    assert ports.bucket_names == [name]
+    assert len(ports.requests) == 1
+    assert ports.events.index("capture.started") < ports.events.index("capture_cli")
+
+
+@pytest.mark.parametrize("fault", ["missing", "shared", "invalid", "binding_other_bucket", "output_other_bucket"])
+def test_capture_workflow_bucket_failures_precede_storage_and_credentials(capture_workflow_ports, fault):
+    ports = capture_workflow_ports
+    if fault == "missing":
+        ports.env.pop("CAPTURE_BUCKET")
+    elif fault in {"shared", "invalid"}:
+        name = "qsl-runtime-logs-shared" if fault == "shared" else "bad/bucket"
+        ports.env["CAPTURE_BUCKET"] = name
+        base = "gs://" + name + "/" + ports.prefix
+        ports.env["CAPTURE_BINDING_URI"] = base + "identity.input"
+        ports.env["CAPTURE_OUTPUT_PREFIX"] = base + "result/"
+    elif fault == "binding_other_bucket":
+        ports.env["CAPTURE_BINDING_URI"] = "gs://another-private-bucket/" + ports.prefix + "identity.input"
+    else:
+        ports.env["CAPTURE_OUTPUT_PREFIX"] = "gs://another-private-bucket/" + ports.prefix + "result/"
+    code, receipt = ports.execute()
+    assert code == 2 and receipt["request_attempts"] == 0 and receipt["private_files_saved"] == 0
+    assert ports.events == [] and not ports.requests and not ports.objects
