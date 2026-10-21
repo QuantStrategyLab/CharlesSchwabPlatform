@@ -23,6 +23,18 @@ RESOURCE = f"projects/charlesschwabquant/locations/us-central1/services/{SERVICE
 SERVICE_URI = "https://synthetic-service.us-central1.run.app"
 
 
+def test_transactions_once_dispatch_is_exclusive(monkeypatch):
+    from scripts import capture_schwab_transactions_once
+
+    capture_main = Mock(return_value=2)
+    monkeypatch.setattr(capture_schwab_transactions_once, "main", capture_main)
+    operation = Mock(side_effect=AssertionError("daily operation must not run"))
+    assert runner.main(["--capture-transactions-once", "--binding-metadata", "private-input",
+                        "--output-dir", "private-output"], environ={}, operation=operation) == 2
+    capture_main.assert_called_once_with(["--binding-metadata", "private-input", "--output-dir", "private-output"], environ={})
+    operation.assert_not_called()
+
+
 @pytest.fixture(autouse=True)
 def forbid_uninjected_cloud_or_network(monkeypatch):
     def denied(*_args, **_kwargs):
