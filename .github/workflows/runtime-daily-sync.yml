@@ -172,8 +172,7 @@ jobs:
                       or not re.fullmatch(r"[1-9][0-9]{0,19}", generation)):
                       raise ValueError("private references unavailable")
                   key_secret = os.environ.get("SCHWAB_API_KEY_SECRET_NAME", "")
-                  if (key_secret and not re.fullmatch(r"[A-Za-z0-9_-]{1,255}", key_secret)
-                      or not key_secret and not os.environ.get("SCHWAB_API_KEY")):
+                  if key_secret != "charles-schwab-api-key":
                       raise ValueError("original API-key reference unavailable")
                   client = storage.Client(project="charlesschwabquant")
                   bucket = client.bucket(bucket_name)
@@ -191,15 +190,21 @@ jobs:
                       handle.flush()
                       os.fsync(handle.fileno())
                   capture_module._read_metadata(metadata_path)
-                  # Persistent fixed-key reservation precedes credential/CLI use.
-                  # Existing/uncertain attempts are never deleted or auto-retried.
-                  reservation = bucket.blob(prefix + "result/capture.started")
+                  # Root accepted run39569939360's reviewed zero-request receipt.
+                  # Marker metadata alone never establishes that request count.
+                  # Preserve the old live claim and allow only one fixed continuation.
+                  predecessor = bucket.blob(prefix + "result/capture.started")
+                  predecessor.reload(timeout=15, retry=None)
+                  if (str(predecessor.generation) != "1792571512420941"
+                      or type(predecessor.size) is not int or predecessor.size != 38):
+                      raise ValueError("predecessor reservation changed")
+                  reservation = bucket.blob(prefix + "result/capture.after-zero-39569939360.started")
                   reservation.upload_from_string(b"one-shot reserved; no automatic retry\n",
                       if_generation_match=0, timeout=15, retry=None)
                   environ = dict(os.environ)
                   if key_secret:
                       payload = secretmanager.SecretManagerServiceClient().access_secret_version(
-                          request={"name": f"projects/charlesschwabquant/secrets/{key_secret}/versions/latest"},
+                          request={"name": f"projects/401309731911/secrets/{key_secret}/versions/1"},
                           retry=None, timeout=15)
                       environ["SCHWAB_API_KEY"] = payload.payload.data.decode("utf-8")
                   output_dir = directory / "capture"

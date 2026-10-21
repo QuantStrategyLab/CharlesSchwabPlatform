@@ -1429,6 +1429,9 @@ def _capture_workflow_python():
                    "<actual capture workflow Python>", "exec")
 
 
+_CAPTURE_CONTINUATION_MARKER = "capture.after-zero-39569939360.started"
+
+
 @pytest.fixture
 def capture_workflow_ports(tmp_path, monkeypatch, capsys):
     """Execute the workflow's exact body and real runner/SDK/collector; fake external ports only."""
@@ -1461,6 +1464,7 @@ def capture_workflow_ports(tmp_path, monkeypatch, capsys):
         "CAPTURE_BUCKET": bucket_name, "CAPTURE_BINDING_URI": base + "identity.input",
         "CAPTURE_BINDING_GENERATION": "17", "CAPTURE_OUTPUT_PREFIX": base + "result/",
         "SCHWAB_API_KEY": "SYNTHETIC_PRIVATE_KEY",
+        "SCHWAB_API_KEY_SECRET_NAME": "charles-schwab-api-key",
         "SCHWAB_ACCOUNT_FACTS_TARGET_ID": document["target_id"],
         "RUNTIME_TARGET_JSON": json.dumps({
             **caller.TARGET, "account_selector": ["live"],
@@ -1468,9 +1472,14 @@ def capture_workflow_ports(tmp_path, monkeypatch, capsys):
             "market_calendar": "NYSE", "market_timezone": "America/New_York",
         }),
     }
-    state = SimpleNamespace(document=document, events=[], objects={}, requests=[],
+    predecessor_key = prefix + "result/capture.started"
+    predecessor_body = b"one-shot reserved; no automatic retry\n"
+    state = SimpleNamespace(document=document, events=[],
+                            objects={predecessor_key: predecessor_body}, requests=[],
                             fault=None, env=env, cli_receipts=[], prefix=prefix,
-                            status=200, body=b"[]", bucket_name=bucket_name, bucket_names=[])
+                            status=200, body=b"[]", bucket_name=bucket_name, bucket_names=[],
+                            predecessor_key=predecessor_key, predecessor_body=predecessor_body,
+                            peer_timing=None, peer_results=[], key_requests=[])
 
     def deny(*_args, **_kwargs):
         raise AssertionError("unconfigured external capability forbidden")
@@ -1480,12 +1489,39 @@ def capture_workflow_ports(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr("subprocess.Popen", deny)
     monkeypatch.setattr("scripts.schwab_native_identity._load_existing_token", deny)
 
+    def run_peer():
+        """Interleave a second real workflow at the fake atomic storage boundary."""
+        from contextlib import redirect_stderr, redirect_stdout
+        import io
+
+        state.peer_timing = None
+        previous = env.get("GITHUB_RUN_ID")
+        env["GITHUB_RUN_ID"] = "synthetic-second-worker"
+        stdout, stderr = io.StringIO(), io.StringIO()
+        try:
+            with redirect_stdout(stdout), redirect_stderr(stderr), pytest.raises(SystemExit) as stopped:
+                exec(_capture_workflow_python(), {})
+            assert stderr.getvalue() == "" and "SYNTHETIC_PRIVATE" not in stdout.getvalue()
+            state.peer_results.append((stopped.value.code, json.loads(stdout.getvalue())))
+        finally:
+            if previous is None:
+                env.pop("GITHUB_RUN_ID")
+            else:
+                env["GITHUB_RUN_ID"] = previous
+
     class Blob:
         def __init__(self, name, generation=None):
             self.name, self.generation, self.size = name, generation, None
 
         def reload(self, **options):
             assert options == {"timeout": 15, "retry": None}
+            if self.name == predecessor_key:
+                state.events.append("predecessor_reload")
+                if state.fault == "predecessor_missing":
+                    raise FileNotFoundError("SYNTHETIC_PRIVATE predecessor")
+                self.generation = 1792571512420942 if state.fault == "predecessor_generation" else 1792571512420941
+                self.size = 39 if state.fault == "predecessor_size" else len(state.objects[predecessor_key])
+                return
             state.events.append("metadata_reload")
             self.size = 65537 if state.fault == "metadata_size" else len(json.dumps(state.document).encode())
             if state.fault == "metadata_generation":
@@ -1500,6 +1536,9 @@ def capture_workflow_ports(tmp_path, monkeypatch, capsys):
             assert options == {"timeout": 15, "retry": None, "if_generation_match": 0}
             assert self.name.startswith(prefix + "result/")
             state.events.append(self.name.rsplit("/", 1)[-1])
+            is_claim = self.name == prefix + "result/" + _CAPTURE_CONTINUATION_MARKER
+            if is_claim and state.peer_timing == "before_claim":
+                run_peer()
             if self.name in state.objects:
                 raise RuntimeError("SYNTHETIC_PRIVATE_STORAGE collision")
             if state.fault == self.name.rsplit("/", 1)[-1]:
@@ -1508,6 +1547,8 @@ def capture_workflow_ports(tmp_path, monkeypatch, capsys):
             self.generation = "23"
             if state.fault == self.name.rsplit("/", 1)[-1] + ".committed":
                 raise RuntimeError("SYNTHETIC_PRIVATE_STORAGE committed before lost acknowledgement")
+            if is_claim and state.peer_timing == "after_commit":
+                run_peer()
 
         def upload_from_filename(self, path, **options):
             self.upload_from_string(Path(path).read_bytes(), **options)
@@ -1516,7 +1557,8 @@ def capture_workflow_ports(tmp_path, monkeypatch, capsys):
         def blob(self, name, generation=None):
             assert name in {prefix + value for value in (
                 "identity.input", "result/capture.started", "result/response.body",
-                "result/capture.receipt", "result/storage.receipt")}
+                "result/capture.receipt", "result/storage.receipt",
+                "result/" + _CAPTURE_CONTINUATION_MARKER)}
             return Blob(name, generation)
 
     class Storage:
@@ -1531,7 +1573,8 @@ def capture_workflow_ports(tmp_path, monkeypatch, capsys):
 
     class Secrets:
         def access_secret_version(self, **options):
-            assert options == {"request": {"name": "projects/charlesschwabquant/secrets/synthetic-key/versions/latest"},
+            state.key_requests.append(options)
+            assert options == {"request": {"name": "projects/401309731911/secrets/charles-schwab-api-key/versions/1"},
                                "retry": None, "timeout": 15}
             state.events.append("key_secret")
             if state.fault == "key_secret":
@@ -1584,8 +1627,8 @@ def test_capture_workflow_real_sdk_and_collector_one_request_private_save_and_re
     code, receipt = ports.execute()
     assert code == 0 and receipt == {"status": "captured_incomplete", "reason": None,
         "request_attempts": 1, "source_complete": False, "private_files_saved": 2}, (receipt, ports.events, ports.cli_receipts)
-    assert ports.events == ["storage_client", "metadata_reload", "metadata_download", "capture.started",
-                            "capture_cli", "token_loader", "broker_get", "response.body",
+    assert ports.events == ["storage_client", "metadata_reload", "metadata_download", "predecessor_reload",
+                            _CAPTURE_CONTINUATION_MARKER, "key_secret", "capture_cli", "token_loader", "broker_get", "response.body",
                             "capture.receipt", "storage.receipt"]
     assert len(ports.requests) == 1
     request = ports.requests[0]
@@ -1597,14 +1640,14 @@ def test_capture_workflow_real_sdk_and_collector_one_request_private_save_and_re
     manifest = json.loads(ports.objects[ports.prefix + "result/storage.receipt"])
     assert {row["name"] for row in manifest["files"]} == {"response.body", "capture.receipt"}
     assert all(row["generation"] == "23" for row in manifest["files"])
-    # A separate workflow attempt cannot reinterpret a previous reservation as unsent.
+    # Both the archived predecessor and the continuation claim remain reserved.
     code, receipt = ports.execute()
     assert code == 2 and receipt["request_attempts"] == 0
     assert ports.events.count("capture_cli") == ports.events.count("broker_get") == 1
 
 
 @pytest.mark.parametrize("fault", ["references", "metadata_size", "metadata_generation", "metadata_schema",
-                                       "capture.started", "key_secret"])
+                                       _CAPTURE_CONTINUATION_MARKER, "key_secret"])
 def test_capture_workflow_pre_request_failures_never_enter_collector(capture_workflow_ports, fault):
     ports = capture_workflow_ports
     ports.fault = fault
@@ -1613,7 +1656,7 @@ def test_capture_workflow_pre_request_failures_never_enter_collector(capture_wor
     elif fault == "metadata_schema":
         ports.document["records"][0]["account_scope_matches"] = False
     elif fault == "key_secret":
-        ports.env["SCHWAB_API_KEY_SECRET_NAME"] = "synthetic-key"
+        ports.env["SCHWAB_API_KEY_SECRET_NAME"] = "charles-schwab-api-key"
     code, receipt = ports.execute()
     assert code == 2 and receipt["status"] == "blocked" and receipt["request_attempts"] == 0
     assert not ports.requests and "capture_cli" not in ports.events
@@ -1623,10 +1666,10 @@ def test_capture_workflow_pre_request_failures_never_enter_collector(capture_wor
 
 def test_capture_workflow_named_existing_key_is_private_and_has_no_failed_read_fallback(capture_workflow_ports):
     ports = capture_workflow_ports
-    ports.env["SCHWAB_API_KEY_SECRET_NAME"] = "synthetic-key"
+    ports.env["SCHWAB_API_KEY_SECRET_NAME"] = "charles-schwab-api-key"
     code, receipt = ports.execute()
     assert code == 0 and receipt["request_attempts"] == 1, (receipt, ports.events, ports.cli_receipts)
-    assert ports.events.index("capture.started") < ports.events.index("key_secret") < ports.events.index("token_loader")
+    assert ports.events.index(_CAPTURE_CONTINUATION_MARKER) < ports.events.index("key_secret") < ports.events.index("token_loader")
 
 
 @pytest.mark.parametrize("fault", ["cli_unknown", "response.body", "capture.receipt", "storage.receipt"])
@@ -1637,7 +1680,7 @@ def test_capture_workflow_uncertain_or_save_failure_never_retries_capture(captur
     assert code == 2 and receipt["status"] == "blocked"
     assert receipt["request_attempts"] == (None if fault == "cli_unknown" else 1)
     assert ports.events.count("capture_cli") == 1 and len(ports.requests) == (0 if fault == "cli_unknown" else 1)
-    assert ports.prefix + "result/capture.started" in ports.objects
+    assert ports.prefix + "result/" + _CAPTURE_CONTINUATION_MARKER in ports.objects
 
 
 def test_capture_workflow_binding_failure_keeps_known_zero_without_fabricating_response(capture_workflow_ports):
@@ -1670,7 +1713,7 @@ def test_capture_workflow_save_receipt_preserves_confirmed_or_unknown_writes(cap
     assert code == 2 and receipt["request_attempts"] == 1
     assert receipt["private_files_saved"] == confirmed_count
     assert len(ports.requests) == 1 and ports.events.count("capture_cli") == 1
-    assert ports.prefix + "result/capture.started" in ports.objects
+    assert ports.prefix + "result/" + _CAPTURE_CONTINUATION_MARKER in ports.objects
     if fault in {"storage.receipt", "capture.receipt.committed"}:
         assert ports.prefix + "result/response.body" in ports.objects
         assert ports.prefix + "result/capture.receipt" in ports.objects
@@ -1738,7 +1781,7 @@ def test_capture_workflow_uses_the_configured_private_bucket(capture_workflow_po
     assert code == 0 and receipt["private_files_saved"] == 2
     assert ports.bucket_names == [name]
     assert len(ports.requests) == 1
-    assert ports.events.index("capture.started") < ports.events.index("capture_cli")
+    assert ports.events.index(_CAPTURE_CONTINUATION_MARKER) < ports.events.index("capture_cli")
 
 
 @pytest.mark.parametrize("fault", ["missing", "shared", "invalid", "binding_other_bucket", "output_other_bucket"])
@@ -1758,4 +1801,78 @@ def test_capture_workflow_bucket_failures_precede_storage_and_credentials(captur
         ports.env["CAPTURE_OUTPUT_PREFIX"] = "gs://another-private-bucket/" + ports.prefix + "result/"
     code, receipt = ports.execute()
     assert code == 2 and receipt["request_attempts"] == 0 and receipt["private_files_saved"] == 0
-    assert ports.events == [] and not ports.requests and not ports.objects
+    assert ports.events == [] and not ports.requests
+    assert ports.objects == {ports.predecessor_key: ports.predecessor_body}
+
+
+def test_capture_continuation_keeps_old_claim_and_has_one_new_fixed_claim(capture_workflow_ports):
+    ports = capture_workflow_ports
+    code, receipt = ports.execute()
+    assert code == 0 and receipt["request_attempts"] == 1
+    assert ports.objects[ports.predecessor_key] == ports.predecessor_body
+    assert ports.events.count("capture.started") == 0
+    assert ports.prefix + "result/" + _CAPTURE_CONTINUATION_MARKER in ports.objects
+    assert ports.events.index("predecessor_reload") < ports.events.index(_CAPTURE_CONTINUATION_MARKER)
+    assert ports.events.index(_CAPTURE_CONTINUATION_MARKER) < ports.events.index("key_secret")
+    assert ports.key_requests == [{"request": {
+        "name": "projects/401309731911/secrets/charles-schwab-api-key/versions/1"},
+        "timeout": 15, "retry": None}]
+    code, receipt = ports.execute()
+    assert code == 2 and receipt["request_attempts"] == 0
+    assert len(ports.requests) == len(ports.key_requests) == 1
+    assert ports.objects[ports.predecessor_key] == ports.predecessor_body
+
+
+@pytest.mark.parametrize("fault", ["predecessor_missing", "predecessor_generation", "predecessor_size"])
+def test_capture_continuation_rejects_unmatched_live_predecessor(capture_workflow_ports, fault):
+    ports = capture_workflow_ports
+    ports.fault = fault
+    code, receipt = ports.execute()
+    assert code == 2 and receipt["request_attempts"] == 0
+    assert "predecessor_reload" in ports.events
+    assert _CAPTURE_CONTINUATION_MARKER not in ports.events
+    assert not ports.key_requests and not ports.requests and "capture_cli" not in ports.events
+    assert ports.objects == {ports.predecessor_key: ports.predecessor_body}
+
+
+@pytest.mark.parametrize("timing", ["before_claim", "after_commit"])
+def test_capture_continuation_interleaved_workers_share_one_atomic_claim(capture_workflow_ports, timing):
+    ports = capture_workflow_ports
+    ports.env["GITHUB_RUN_ID"] = "synthetic-first-worker"
+    ports.peer_timing = timing
+    result = ports.execute()
+    assert len(ports.peer_results) == 1
+    outcomes = [result, ports.peer_results[0]]
+    assert sorted(code for code, _ in outcomes) == [0, 2]
+    assert sorted(receipt["request_attempts"] for _, receipt in outcomes) == [0, 1]
+    assert len(ports.requests) == len(ports.key_requests) == 1
+    assert ports.events.count("capture_cli") == ports.events.count("broker_get") == 1
+    assert ports.objects[ports.predecessor_key] == ports.predecessor_body
+    assert {key for key in ports.objects if key.endswith(".started")} == {
+        ports.predecessor_key, ports.prefix + "result/" + _CAPTURE_CONTINUATION_MARKER}
+
+
+def test_capture_continuation_uncertain_claim_never_reopens_or_calls(capture_workflow_ports):
+    ports = capture_workflow_ports
+    ports.fault = _CAPTURE_CONTINUATION_MARKER + ".committed"
+    code, receipt = ports.execute()
+    assert code == 2 and receipt["request_attempts"] == 0
+    assert ports.prefix + "result/" + _CAPTURE_CONTINUATION_MARKER in ports.objects
+    ports.fault = None
+    code, receipt = ports.execute()
+    assert code == 2 and receipt["request_attempts"] == 0
+    assert not ports.key_requests and not ports.requests and "capture_cli" not in ports.events
+    assert ports.objects[ports.predecessor_key] == ports.predecessor_body
+
+
+@pytest.mark.parametrize("reference", [None, "", "synthetic-other-key", "projects/other/secrets/key"])
+def test_capture_continuation_never_switches_the_selected_key_reference(capture_workflow_ports, reference):
+    ports = capture_workflow_ports
+    if reference is None:
+        ports.env.pop("SCHWAB_API_KEY_SECRET_NAME")
+    else:
+        ports.env["SCHWAB_API_KEY_SECRET_NAME"] = reference
+    code, receipt = ports.execute()
+    assert code == 2 and receipt["request_attempts"] == 0
+    assert not ports.events and not ports.key_requests and not ports.requests
+    assert ports.objects == {ports.predecessor_key: ports.predecessor_body}
