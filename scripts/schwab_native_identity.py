@@ -1,4 +1,4 @@
-"""Verify the configured Schwab account using the existing token, without refresh."""
+"""Read-only Schwab checks and a separate, explicitly enabled one-shot renewal."""
 
 from __future__ import annotations
 
@@ -168,6 +168,193 @@ def _access_token(payload: object, *, now: float) -> tuple[str | None, str]:
     return access_token, "verified"
 
 
+def renew_access_token_once(*, environ, observed_at, secret_client=None, http_transport=None):
+    """Separate opt-in credential mutation, never part of identity/check/capture.
+
+    One token POST and one append invocation per process, not a distributed
+    exactly-once transaction. Unknown POST/write outcomes require operator
+    reconciliation; never redispatch automatically or fall back to login.
+    """
+    import contextlib
+    import io
+    import logging
+
+    class Discard(io.TextIOBase):
+        def write(self, value):
+            return len(value)
+
+    result = dict(status="blocked", reason="renewal_not_enabled", refresh_attempts=0,
+                  secret_write_attempts=0, source_version=None, new_version=None)
+    previous = logging.root.manager.disable
+    with contextlib.redirect_stdout(Discard()), contextlib.redirect_stderr(Discard()):
+        logging.disable(max(previous, 2**31 - 1))
+        try:
+            if environ.get("SCHWAB_RENEW_ACCESS_TOKEN_ONCE") != "true":
+                return result
+            result["reason"] = "configuration_invalid"
+            if (environ.get("GCP_PROJECT_ID") != PROJECT_ID
+                    or not isinstance(observed_at, dt.datetime) or observed_at.tzinfo is None
+                    or observed_at.utcoffset() is None
+                    or not _finite_timestamp(observed_at.timestamp())):
+                result["reason"] = "configuration_invalid"
+                return result
+            result["reason"] = "renewal_dependency_unavailable"
+            _renew_access_token(result, observed_at, secret_client, http_transport)
+        except BaseException:
+            if result["reason"] == "refresh_outcome_unknown" and not result["refresh_attempts"]:
+                result["reason"] = "refresh_not_attempted"
+        finally:
+            logging.disable(previous)
+    return result
+
+
+def _renew_access_token(result, observed_at, secret_client, http_transport):
+    import re
+
+    import httpx
+    from authlib.integrations.base_client.errors import OAuthError
+    from authlib.integrations.httpx_client import OAuth2Client
+    from google.cloud import secretmanager_v1
+    from schwab.auth import TOKEN_ENDPOINT, TokenMetadata
+
+    prefix = "projects/401309731911/secrets/"
+    parent = prefix + SECRET_ID
+    owned = secret_client is None
+    client = secretmanager_v1.SecretManagerServiceClient() if owned else secret_client
+    started = time.monotonic()
+    observed = observed_at.timestamp()
+
+    def now():
+        if time.monotonic() - started >= 60:
+            raise TimeoutError
+        return observed + time.monotonic() - started
+
+    def version_number(name):
+        match = re.fullmatch(re.escape(parent) + r"/versions/([1-9][0-9]{0,18})", name or "")
+        if match is None:
+            raise ValueError
+        return int(match[1])
+
+    def read(name):
+        now()
+        response = client.access_secret_version(request={"name": name}, retry=None, timeout=15)
+        data = response.payload.data
+        if not isinstance(data, bytes) or len(data) > MAX_TOKEN_BYTES:
+            raise ValueError
+        return response.name, data.decode("utf-8")
+
+    def unique(items):
+        values = {}
+        for key, value in items:
+            if key in values:
+                raise ValueError
+            values[key] = value
+        return values
+
+    try:
+        result["reason"] = "secret_read_failed"
+        source, payload = read(parent + "/versions/latest")
+        result["source_version"] = version_number(source)
+        result["reason"] = "token_invalid"
+        wrapper = json.loads(payload, object_pairs_hook=unique)
+        token, status = _access_token(payload, now=now())
+        if token is not None:
+            result.update(status="not_needed", reason="token_payload_valid")
+            return
+        if status != "token_expired":
+            return
+        refresh = wrapper["token"].get("refresh_token")
+        if (not isinstance(refresh, str) or not refresh or len(refresh) > 8192
+                or not refresh.isascii() or any(ord(c) < 33 or ord(c) > 126 for c in refresh)):
+            result["reason"] = "refresh_credential_missing"
+            return
+        result["reason"] = "persistence_not_permitted"
+        now()
+        permission = client.test_iam_permissions(
+            request={"resource": parent, "permissions": ["secretmanager.versions.add"]},
+            retry=None, timeout=15)
+        if "secretmanager.versions.add" not in permission.permissions:
+            return
+        result["reason"] = "secret_read_failed"
+        credentials = []
+        for name in ("charles-schwab-api-key", "charles-schwab-app-secret"):
+            ref = prefix + name + "/versions/1"
+            actual, value = read(ref)
+            if (actual != ref or not value or len(value) > 8192 or not value.isascii()
+                    or any(ord(c) < 33 or ord(c) > 126 for c in value)):
+                raise ValueError
+            credentials.append(value)
+
+        def persist(updated, **_metadata):
+            result["reason"] = "refresh_response_invalid"
+            data = json.dumps(updated, allow_nan=False).encode("utf-8")
+            if len(data) > MAX_TOKEN_BYTES or _access_token(data.decode(), now=now())[0] is None:
+                raise ValueError
+            new_refresh = updated["token"].get("refresh_token")
+            if (updated["creation_timestamp"] != wrapper["creation_timestamp"]
+                    or not isinstance(new_refresh, str) or not new_refresh
+                    or len(new_refresh) > 8192 or not new_refresh.isascii()
+                    or any(ord(c) < 33 or ord(c) > 126 for c in new_refresh)):
+                raise ValueError
+            if result["secret_write_attempts"]:
+                raise ValueError
+            now()
+            result.update(reason="persistence_outcome_unknown", secret_write_attempts=1)
+            saved = client.add_secret_version(
+                request={"parent": parent, "payload": {"data": data}}, retry=None, timeout=15)
+            number = version_number(saved.name)
+            if number <= result["source_version"]:
+                raise ValueError
+            result.update(status="renewed", reason="token_persisted", new_version=number)
+
+        metadata = TokenMetadata.from_loaded_token(wrapper, persist)
+        downstream = http_transport if http_transport is not None else httpx.HTTPTransport(
+            retries=0, trust_env=False)
+
+        class Once(httpx.BaseTransport):
+            def handle_request(self, request):
+                now()
+                if (result["refresh_attempts"] or request.method != "POST"
+                        or str(request.url) != TOKEN_ENDPOINT):
+                    raise ValueError
+                result["refresh_attempts"] = 1
+                response = downstream.handle_request(request)
+                try:
+                    if response.headers.get("content-encoding", "identity").lower() not in ("", "identity"):
+                        raise ValueError
+                    body = bytearray()
+                    chunks = [response.content] if response.is_stream_consumed else response.iter_raw()
+                    for chunk in chunks:
+                        now()
+                        if not isinstance(chunk, bytes) or len(body) + len(chunk) > MAX_TOKEN_BYTES:
+                            raise ValueError
+                        body.extend(chunk)
+                    return httpx.Response(response.status_code, content=bytes(body), headers={"content-type": "application/json"})
+                finally:
+                    response.close()
+
+            def close(self):
+                downstream.close()
+
+        result["reason"] = "refresh_outcome_unknown"
+        try:
+            with OAuth2Client(credentials[0], client_secret=credentials[1], token=metadata.token,
+                              token_endpoint=TOKEN_ENDPOINT, update_token=metadata.wrapped_token_write_func(),
+                              transport=Once(), trust_env=False, follow_redirects=False,
+                              timeout=15, headers={"Accept-Encoding": "identity"}) as oauth:
+                oauth.refresh_token(TOKEN_ENDPOINT)
+        except OAuthError as error:
+            if error.error in ("invalid_grant", "invalid_client") and not result["secret_write_attempts"]:
+                result["reason"] = "refresh_rejected" if error.error == "invalid_grant" else "client_rejected"
+            raise
+    finally:
+        if owned:
+            try:
+                client.transport.close()
+            except BaseException:
+                pass
+
+
 def _read_response_json(response: Any, *, deadline: float) -> object | None:
     if getattr(response, "status_code", None) != 200:
         return None
@@ -272,3 +459,23 @@ def verify_native_identity(
                 session.close()
             except Exception:
                 pass
+
+
+def main(argv=None):
+    """Only the explicit renewal CLI mutates credentials; existing APIs stay read-only."""
+    import os
+    import sys
+
+    args = sys.argv[1:] if argv is None else argv
+    if args != ["--renew-access-token-once"]:
+        result = dict(status="blocked", reason="arguments_invalid", refresh_attempts=0,
+                      secret_write_attempts=0, source_version=None, new_version=None)
+    else:
+        result = renew_access_token_once(environ=os.environ,
+                                        observed_at=dt.datetime.now(dt.timezone.utc))
+    print(json.dumps(result, sort_keys=True))
+    return 0 if result["status"] in ("renewed", "not_needed") else 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

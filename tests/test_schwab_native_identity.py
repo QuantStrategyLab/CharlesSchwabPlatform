@@ -16,6 +16,262 @@ EXPECTED_HASH = "synthetic-account-hash"
 ENV = {"GCP_PROJECT_ID": identity.PROJECT_ID}
 
 
+@pytest.fixture
+def standard_refresh_ports(monkeypatch, capsys):
+    """Real Authlib/Schwab metadata; synthetic HTTP and Secret Manager only."""
+    import socket
+    import subprocess
+    from types import SimpleNamespace
+
+    import google.auth
+    import httpx
+    from google.cloud import secretmanager_v1
+
+    state = SimpleNamespace(events=[], writes=[], requests=[], fault=None, denials=[],
+                            rotated=True, fresh=False, bad_input=False, now=NOW)
+    parent = "projects/401309731911/secrets/"
+    original = "SYNTHETIC_REFRESH_SECRET"
+
+    def deny(*_args, **_kwargs):
+        state.denials.append("forbidden_external_capability")
+        raise AssertionError("forbidden_external_capability")
+
+    monkeypatch.setattr(socket, "socket", deny)
+    monkeypatch.setattr(subprocess, "Popen", deny)
+    monkeypatch.setattr(google.auth, "default", deny)
+    monkeypatch.setattr(secretmanager_v1, "SecretManagerServiceClient", deny)
+
+    class Secrets:
+        def access_secret_version(self, *, request, retry, timeout):
+            assert retry is None and timeout == 15
+            name = request["name"]
+            state.events.append(("read", name))
+            if state.fault == "read":
+                raise PermissionError("SYNTHETIC_REFRESH_SECRET")
+            if name == parent + "schwab_token/versions/latest":
+                token = json.loads(token_payload(expires_at=NOW.timestamp() + (600 if state.fresh else -1),
+                                                 token_fields={"refresh_token": original}))
+                token["creation_timestamp"] = state.now.timestamp() - 120
+                token["token"]["expires_at"] = state.now.timestamp() + (600 if state.fresh else -1)
+                if state.bad_input:
+                    token["token"].pop("refresh_token")
+                data = json.dumps(token).encode()
+                return SimpleNamespace(name=parent + "schwab_token/versions/77",
+                                       payload=SimpleNamespace(data=data))
+            assert name in (parent + "charles-schwab-api-key/versions/1",
+                            parent + "charles-schwab-app-secret/versions/1")
+            return SimpleNamespace(name=name, payload=SimpleNamespace(data=b"SYNTHETIC_APP_CREDENTIAL"))
+
+        def test_iam_permissions(self, *, request, retry, timeout):
+            assert request == {"resource": parent + "schwab_token",
+                               "permissions": ["secretmanager.versions.add"]}
+            assert retry is None and timeout == 15
+            state.events.append(("write_permission", request["resource"]))
+            return SimpleNamespace(permissions=[] if state.fault == "no_write_permission"
+                                   else ["secretmanager.versions.add"])
+
+        def add_secret_version(self, *, request, retry, timeout):
+            assert retry is None and timeout == 15
+            assert request["parent"] == parent + "schwab_token"
+            state.events.append(("persist", request["parent"]))
+            state.writes.append(json.loads(request["payload"]["data"]))
+            if state.fault == "persist":
+                raise TimeoutError("SYNTHETIC_REFRESH_SECRET uncertain write")
+            if state.fault in ("persist_interrupt", "persist_exit"):
+                raise KeyboardInterrupt() if state.fault == "persist_interrupt" else SystemExit()
+            return SimpleNamespace(name=parent + "schwab_token/versions/" + ("77" if state.fault == "write_ack" else "78"))
+
+    def handle(request):
+        from urllib.parse import parse_qs
+
+        state.events.append(("post", str(request.url)))
+        state.requests.append(request)
+        assert request.method == "POST"
+        assert str(request.url) == "https://api.schwabapi.com/v1/oauth/token"
+        assert parse_qs(request.content.decode()) == {
+            "grant_type": ["refresh_token"], "refresh_token": [original],
+        }
+        assert request.headers["authorization"].startswith("Basic ")
+        assert request.headers["accept-encoding"] == "identity"
+        if state.fault == "network":
+            raise httpx.ReadTimeout("SYNTHETIC_REFRESH_SECRET unknown result")
+        if state.fault in ("interrupt", "exit"):
+            raise KeyboardInterrupt() if state.fault == "interrupt" else SystemExit()
+        if state.fault in ("invalid_grant", "invalid_client"):
+            return httpx.Response(400, json={"error": state.fault, "error_description": original})
+        if state.fault == "redirect":
+            return httpx.Response(302, headers={"location": "https://not-authorized.invalid/"})
+        if state.fault == "encoding":
+            return httpx.Response(200, headers={"content-encoding": "gzip"}, content=b"private")
+        if state.fault == "oversize":
+            return httpx.Response(200, content=b"X" * (64 * 1024 + 1))
+        body = {"access_token": "SYNTHETIC_NEW_ACCESS", "token_type": "Bearer",
+                "expires_at": state.now.timestamp() + 600}
+        if state.rotated:
+            body["refresh_token"] = "SYNTHETIC_NEW_REFRESH"
+        if state.fault == "response":
+            body.pop("access_token")
+        if state.fault == "noisy":
+            import logging
+            import sys
+            print(original)
+            print(original, file=sys.stderr)
+            logging.warning(original)
+        return httpx.Response(200, json=body)
+
+    def run(environ=None):
+        result = identity.renew_access_token_once(
+            environ={**ENV, "SCHWAB_RENEW_ACCESS_TOKEN_ONCE": "true"} if environ is None else environ,
+            observed_at=state.now, secret_client=Secrets(), http_transport=httpx.MockTransport(handle),
+        )
+        captured = capsys.readouterr()
+        assert captured.out == captured.err == ""
+        assert state.denials == []
+        assert "SYNTHETIC" not in json.dumps(result)
+        return result
+
+    state.run = run
+    state.secret_factory = Secrets
+    state.transport = httpx.MockTransport(handle)
+    return state
+
+
+@pytest.mark.parametrize("rotated", [False, True])
+def test_standard_refresh_uses_actual_oauth_grant_and_appends_whole_metadata(standard_refresh_ports, rotated):
+    state = standard_refresh_ports
+    state.rotated = rotated
+    result = state.run()
+    assert result == {"status": "renewed", "reason": "token_persisted",
+                      "refresh_attempts": 1, "secret_write_attempts": 1,
+                      "source_version": 77, "new_version": 78}
+    assert [x[0] for x in state.events] == ["read", "write_permission", "read", "read", "post", "persist"]
+    assert len(state.requests) == len(state.writes) == 1
+    assert state.writes[0]["creation_timestamp"] == NOW.timestamp() - 120
+    assert state.writes[0]["token"]["access_token"] == "SYNTHETIC_NEW_ACCESS"
+    assert state.writes[0]["token"]["refresh_token"] == (
+        "SYNTHETIC_NEW_REFRESH" if rotated else "SYNTHETIC_REFRESH_SECRET")
+
+
+@pytest.mark.parametrize("environ", [{}, ENV, {**ENV, "SCHWAB_RENEW_ACCESS_TOKEN_ONCE": "false"}])
+def test_standard_refresh_is_default_off_before_credentials(standard_refresh_ports, environ):
+    state = standard_refresh_ports
+    result = state.run(environ)
+    assert result["reason"] == "renewal_not_enabled"
+    assert result["refresh_attempts"] == result["secret_write_attempts"] == 0
+    assert state.events == []
+
+
+def test_standard_refresh_valid_cache_needs_no_credentials_post_or_write(standard_refresh_ports):
+    state = standard_refresh_ports
+    state.fresh = True
+    result = state.run()
+    assert result["status"] == "not_needed"
+    assert result["refresh_attempts"] == result["secret_write_attempts"] == 0
+    assert len(state.events) == 1 and state.writes == []
+
+
+def test_standard_refresh_missing_refresh_credential_stops_before_post(standard_refresh_ports):
+    state = standard_refresh_ports
+    state.bad_input = True
+    result = state.run()
+    assert result["reason"] == "refresh_credential_missing"
+    assert result["refresh_attempts"] == result["secret_write_attempts"] == 0
+    assert len(state.events) == 1
+
+
+@pytest.mark.parametrize("fault,reason,writes", [
+    ("network", "refresh_outcome_unknown", 0),
+    ("interrupt", "refresh_outcome_unknown", 0),
+    ("exit", "refresh_outcome_unknown", 0),
+    ("invalid_grant", "refresh_rejected", 0),
+    ("invalid_client", "client_rejected", 0),
+    ("redirect", "refresh_outcome_unknown", 0),
+    ("encoding", "refresh_outcome_unknown", 0),
+    ("oversize", "refresh_outcome_unknown", 0),
+    ("response", "refresh_response_invalid", 0),
+    ("persist", "persistence_outcome_unknown", 1),
+    ("persist_interrupt", "persistence_outcome_unknown", 1),
+    ("persist_exit", "persistence_outcome_unknown", 1),
+    ("write_ack", "persistence_outcome_unknown", 1),
+])
+def test_standard_refresh_uncertain_results_stop_without_retry_or_login(standard_refresh_ports, fault, reason, writes):
+    state = standard_refresh_ports
+    state.fault = fault
+    result = state.run()
+    assert result["status"] == "blocked" and result["reason"] == reason
+    assert result["refresh_attempts"] == 1
+    assert result["secret_write_attempts"] == writes
+    assert result["new_version"] is None
+    assert len(state.requests) == 1 and len(state.writes) == writes
+
+
+def test_standard_refresh_suppresses_sensitive_dependency_output(standard_refresh_ports):
+    state = standard_refresh_ports
+    state.fault = "noisy"
+    assert state.run()["status"] == "renewed"
+
+
+@pytest.mark.parametrize("fault,reason", [("read", "secret_read_failed"),
+                                         ("no_write_permission", "persistence_not_permitted")])
+def test_standard_refresh_credential_or_write_preflight_failure_is_truly_not_attempted(
+    standard_refresh_ports, fault, reason,
+):
+    state = standard_refresh_ports
+    state.fault = fault
+    result = state.run()
+    assert result["reason"] == reason
+    assert result["refresh_attempts"] == result["secret_write_attempts"] == 0
+    assert state.requests == state.writes == []
+
+
+def test_standard_refresh_exact_cli_uses_real_core_with_only_external_ports_replaced(
+    standard_refresh_ports, monkeypatch, capsys,
+):
+    import httpx
+    from google.cloud import secretmanager_v1
+
+    state = standard_refresh_ports
+    state.now = dt.datetime.now(dt.timezone.utc)
+    monkeypatch.setenv("GCP_PROJECT_ID", identity.PROJECT_ID)
+    monkeypatch.setenv("SCHWAB_RENEW_ACCESS_TOKEN_ONCE", "true")
+    monkeypatch.setattr(secretmanager_v1, "SecretManagerServiceClient", state.secret_factory)
+
+    def fake_transport(**options):
+        assert options == {"retries": 0, "trust_env": False}
+        return state.transport
+
+    monkeypatch.setattr(httpx, "HTTPTransport", fake_transport)
+    assert identity.main(["--renew-access-token-once"]) == 0
+    captured = capsys.readouterr()
+    receipt = json.loads(captured.out)
+    assert captured.err == "" and "SYNTHETIC" not in captured.out
+    assert receipt["status"] == "renewed" and receipt["new_version"] == 78
+    assert len(state.requests) == len(state.writes) == 1 and state.denials == []
+
+
+@pytest.mark.parametrize("argv", [[], ["SYNTHETIC_PRIVATE_ARGUMENT"]])
+def test_standard_refresh_cli_rejects_other_arguments_without_echoing_them(
+    standard_refresh_ports, argv, capsys,
+):
+    assert identity.main(argv) == 2
+    captured = capsys.readouterr()
+    assert json.loads(captured.out)["reason"] == "arguments_invalid"
+    assert captured.err == "" and "SYNTHETIC" not in captured.out
+    assert standard_refresh_ports.events == standard_refresh_ports.denials == []
+
+
+@pytest.mark.parametrize("observed", [None, NOW.replace(tzinfo=None)])
+def test_standard_refresh_invalid_clock_never_initializes_credentials(standard_refresh_ports, observed):
+    state = standard_refresh_ports
+    result = identity.renew_access_token_once(
+        environ={**ENV, "SCHWAB_RENEW_ACCESS_TOKEN_ONCE": "true"}, observed_at=observed,
+        secret_client=state.secret_factory(), http_transport=state.transport,
+    )
+    assert result["reason"] == "configuration_invalid"
+    assert result["refresh_attempts"] == result["secret_write_attempts"] == 0
+    assert state.events == state.denials == []
+
+
 class Response:
     def __init__(self, payload=None, *, status=200, raw=None):
         self.status_code = status
