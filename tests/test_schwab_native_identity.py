@@ -28,7 +28,7 @@ def standard_refresh_ports(monkeypatch, capsys):
     from google.cloud import secretmanager_v1
 
     state = SimpleNamespace(events=[], writes=[], requests=[], fault=None, denials=[],
-                            rotated=True, fresh=False, bad_input=False, now=NOW)
+                            rotated=True, fresh=False, bad_input=False, now=NOW, http_status=200)
     parent = "projects/401309731911/secrets/"
     original = "SYNTHETIC_REFRESH_SECRET"
 
@@ -98,7 +98,8 @@ def standard_refresh_ports(monkeypatch, capsys):
         if state.fault in ("interrupt", "exit"):
             raise KeyboardInterrupt() if state.fault == "interrupt" else SystemExit()
         if state.fault in ("invalid_grant", "invalid_client"):
-            return httpx.Response(400, json={"error": state.fault, "error_description": original})
+            return httpx.Response(state.http_status if state.http_status != 200 else 400,
+                                  json={"error": state.fault, "error_description": original})
         if state.fault == "redirect":
             return httpx.Response(302, headers={"location": "https://not-authorized.invalid/"})
         if state.fault == "encoding":
@@ -117,7 +118,8 @@ def standard_refresh_ports(monkeypatch, capsys):
             print(original)
             print(original, file=sys.stderr)
             logging.warning(original)
-        return httpx.Response(200, json=body)
+        return httpx.Response(state.http_status, json=body, headers={
+            "location": "https://not-authorized.invalid/"} if state.http_status == 302 else {})
 
     def run(environ=None):
         result = identity.renew_access_token_once(
@@ -203,6 +205,31 @@ def test_standard_refresh_uncertain_results_stop_without_retry_or_login(standard
     assert result["secret_write_attempts"] == writes
     assert result["new_version"] is None
     assert len(state.requests) == 1 and len(state.writes) == writes
+
+
+@pytest.mark.parametrize("status", [201, 302, 401, 503])
+def test_standard_refresh_non_200_token_body_never_reaches_persistence(standard_refresh_ports, status):
+    state = standard_refresh_ports
+    state.http_status = status
+    result = state.run()
+    assert result["status"] == "blocked"
+    assert result["reason"] == "refresh_outcome_unknown"
+    assert result["refresh_attempts"] == len(state.requests) == 1
+    assert result["secret_write_attempts"] == 0 and state.writes == []
+    assert result["new_version"] is None
+    assert [event[0] for event in state.events] == ["read", "write_permission", "read", "read", "post"]
+
+
+@pytest.mark.parametrize("error,reason", [("invalid_grant", "refresh_rejected"),
+                                         ("invalid_client", "client_rejected")])
+def test_standard_refresh_http_401_oauth_error_stays_rejected(standard_refresh_ports, error, reason):
+    state = standard_refresh_ports
+    state.http_status = 401
+    state.fault = error
+    result = state.run()
+    assert result["status"] == "blocked" and result["reason"] == reason
+    assert result["refresh_attempts"] == len(state.requests) == 1
+    assert result["secret_write_attempts"] == 0 and state.writes == []
 
 
 def test_standard_refresh_suppresses_sensitive_dependency_output(standard_refresh_ports):

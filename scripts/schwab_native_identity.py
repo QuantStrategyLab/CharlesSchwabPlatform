@@ -171,7 +171,7 @@ def _access_token(payload: object, *, now: float) -> tuple[str | None, str]:
 def renew_access_token_once(*, environ, observed_at, secret_client=None, http_transport=None):
     """Separate opt-in credential mutation, never part of identity/check/capture.
 
-    One token POST and one append invocation per process, not a distributed
+    One token POST and one append per invocation, not a distributed
     exactly-once transaction. Unknown POST/write outcomes require operator
     reconciliation; never redispatch automatically or fall back to login.
     """
@@ -329,7 +329,15 @@ def _renew_access_token(result, observed_at, secret_client, http_transport):
                         if not isinstance(chunk, bytes) or len(body) + len(chunk) > MAX_TOKEN_BYTES:
                             raise ValueError
                         body.extend(chunk)
-                    return httpx.Response(response.status_code, content=bytes(body), headers={"content-type": "application/json"})
+                    # Authlib can accept token-shaped JSON on non-success HTTP
+                    # statuses. Only an explicit 200 may reach its token writer.
+                    if response.status_code != 200:
+                        if response.status_code in (400, 401):
+                            rejected = json.loads(bytes(body), object_pairs_hook=unique)
+                            if isinstance(rejected, dict) and rejected.get("error") in ("invalid_grant", "invalid_client"):
+                                raise OAuthError(error=rejected["error"])
+                        raise ValueError
+                    return httpx.Response(200, content=bytes(body), headers={"content-type": "application/json"})
                 finally:
                     response.close()
 
