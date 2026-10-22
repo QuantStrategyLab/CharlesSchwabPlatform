@@ -18,7 +18,7 @@ spec.loader.exec_module(admission)
 
 
 @pytest.fixture
-def recovery():
+def recovery(monkeypatch):
     from quant_platform_kit.common.live_continuity import runtime_target_fingerprint
 
     target = {
@@ -37,7 +37,7 @@ def recovery():
     old["live_continuity"]["baseline_target_sha256"] = "0" * 64
     old["live_continuity"]["state"] = "ACTIVE_LKG"
     service = {
-        "metadata": {"name": "synthetic-service", "generation": 1},
+        "metadata": {"name": "synthetic-service", "uid": "synthetic-uid", "generation": 1},
         "spec": {"traffic": [{"latestRevision": True, "percent": 100}], "template": {"spec": {"containers": [{
             "image": "synthetic/image@sha256:" + "b" * 64,
             "startupProbe": {"tcpSocket": {"port": 8080}},
@@ -55,6 +55,19 @@ def recovery():
     plan = {"targets": [{"service_name": "synthetic-service", "env": {
         "RUNTIME_TARGET_JSON": json.dumps(target), "UNCHANGED": "private-sentinel",
     }, "remove_env_vars": ["ABSENT"]}]}
+    def read_reference(command):
+        assert command[:5] == ["gcloud", "run", "revisions", "describe", "synthetic-old"]
+        return json.dumps({
+            "metadata": {"name": "synthetic-old", "generation": 1, "labels": {
+                "serving.knative.dev/service": "synthetic-service",
+                "serving.knative.dev/serviceUid": "synthetic-uid",
+            }},
+            "spec": dict(copy.deepcopy(service["spec"]["template"]["spec"]), containers=[
+                dict(copy.deepcopy(service["spec"]["template"]["spec"]["containers"][0]), name="traced-container"),
+            ]),
+            "status": {"observedGeneration": 1, "conditions": [{"type": "Ready", "status": "True"}]},
+        })
+    monkeypatch.setattr(admission, "_run", read_reference)
     return service, plan
 
 
@@ -237,11 +250,24 @@ def test_capture_and_immediate_preapply_compare_the_admitted_snapshot(recovery, 
     ("service_metadata", "service_identity"), ("template_metadata", "revision_projection"),
     ("revision_metadata", "revision_projection"), ("pending_generation", "reconciliation_pending"),
     ("pending_traffic", "traffic_readback"),
+    ("system_metadata", None), ("unnamed_candidate", None), ("wrong_uid", "revision_identity"),
+    ("missing_uid", "revision_identity"), ("wrong_owner", "revision_identity"),
+    ("service_uid_missing", "revision_identity"),
+    ("untraced_name", "revision_projection"), ("multi_container", "revision_projection"),
+    ("dependencies", "revision_projection"), ("depends_on", "revision_projection"),
+    ("explicit_name", "revision_projection"), ("explicit_name_equal", None),
+    ("missing_provenance", "revision_projection"), ("nonce", "revision_projection"),
+    ("env", "revision_projection"), ("secret", "revision_projection"),
+    ("continuity_baseline", "revision_projection"), ("probe", "revision_projection"),
+    ("unknown_metadata", "revision_projection"),
+    ("bad_template_uid", "revision_identity"),
 ])
 def test_exact_revision_readback(recovery, tmp_path, monkeypatch, capsys, mutation, category):
     from types import SimpleNamespace
 
     service, plan = recovery
+    if mutation in {"explicit_name", "explicit_name_equal"}:
+        service["spec"]["template"]["spec"]["containers"][0]["name"] = "explicit-container"
     projected, _result = project(service, plan)
     args = SimpleNamespace(
         service="synthetic-service", project="synthetic", region="synthetic", no_traffic=True,
@@ -254,11 +280,58 @@ def test_exact_revision_readback(recovery, tmp_path, monkeypatch, capsys, mutati
     admission._paused_operation(args, service)
     args.verify_paused_revision = "synthetic-service-paused-123-1"
     revision = {
-        "metadata": {"name": args.verify_paused_revision, "generation": 1},
+        "metadata": {"name": args.verify_paused_revision, "generation": 1, "labels": {
+            "serving.knative.dev/service": "synthetic-service",
+            "serving.knative.dev/serviceUid": "synthetic-uid",
+        }},
         "spec": copy.deepcopy(projected["spec"]["template"]["spec"]),
         "status": {"observedGeneration": 1, "conditions": [{"type": "Ready", "status": "True"}], "imageDigest": "sha256:" + "b" * 64},
     }
-    if mutation == "image":
+    container = revision["spec"]["containers"][0]
+    if mutation != "unnamed_candidate" and "name" not in container:
+        container["name"] = "traced-container"
+    if mutation == "system_metadata":
+        # A validated serviceUid may also appear on the template.
+        projected["spec"]["template"]["metadata"] = {"labels": {"serving.knative.dev/serviceUid": "synthetic-uid"}}
+    elif mutation == "bad_template_uid":
+        projected["spec"]["template"]["metadata"] = {"labels": {"serving.knative.dev/serviceUid": "private-other-uid"}}
+    elif mutation == "wrong_uid":
+        revision["metadata"]["labels"]["serving.knative.dev/serviceUid"] = "private-other-uid"
+    elif mutation == "missing_uid":
+        del revision["metadata"]["labels"]["serving.knative.dev/serviceUid"]
+    elif mutation == "wrong_owner":
+        revision["metadata"]["labels"]["serving.knative.dev/service"] = "private-other-service"
+    elif mutation == "service_uid_missing":
+        del projected["metadata"]["uid"]
+    elif mutation == "untraced_name":
+        container["name"] = "private-untraced-container"
+    elif mutation == "multi_container":
+        revision["spec"]["containers"].append(copy.deepcopy(container))
+    elif mutation == "dependencies":
+        revision["metadata"]["annotations"] = {"run.googleapis.com/container-dependencies": "{}"}
+    elif mutation == "depends_on":
+        container["dependsOn"] = []
+    elif mutation == "explicit_name":
+        container["name"] = "changed-container"
+    elif mutation == "missing_provenance":
+        baseline = json.loads(args.baseline_file.read_text())
+        baseline.pop("container_name_provenance", None)
+        args.baseline_file.write_text(json.dumps(baseline))
+    elif mutation == "nonce":
+        revision["metadata"]["labels"]["client.knative.dev/nonce"] = "private-nonce"
+    elif mutation == "env":
+        container["env"][4]["value"] = "private-changed"
+    elif mutation == "secret":
+        container["env"][5]["valueFrom"]["secretKeyRef"]["key"] = "2"
+    elif mutation == "continuity_baseline":
+        target = json.loads(container["env"][0]["value"])
+        target["live_continuity"]["baseline_target_sha256"] = "1" * 64
+        container["env"][0]["value"] = json.dumps(target)
+    elif mutation == "probe":
+        container["startupProbe"]["tcpSocket"]["port"] = 9999
+    elif mutation == "unknown_metadata":
+        revision["metadata"]["labels"]["unknown.example/field"] = "private-value"
+    elif mutation == "image":
         revision["spec"]["containers"][0]["image"] = "synthetic/image@sha256:" + "c" * 64
     elif mutation == "resolved_image":
         revision["status"]["imageDigest"] = "sha256:" + "c" * 64
@@ -418,3 +491,136 @@ def test_pending_or_different_desired_traffic_is_rejected(recovery, mutation):
         service["status"].pop("latestReadyRevisionName")
     with pytest.raises(admission.AdmissionError, match="reconciliation_pending|traffic_readback"):
         admission._traffic(service)
+
+
+@pytest.mark.parametrize("mutation,category", [
+    ("valid", None), ("explicit_template", None), ("template_dependencies", None),
+    ("service_dependencies", None), ("template_depends_on", None),
+    ("wrong_uid", "revision_identity"), ("wrong_service", "revision_identity"),
+    ("wrong_revision", "revision_identity"), ("unresolved", "revision_identity"),
+    ("pending", "reconciliation_pending"),
+    ("wrong_image", None), ("source_dependencies", None), ("source_depends_on", None),
+    ("multi_source", None), ("missing_name", None), ("invalid_name", None),
+    ("not_ready", None),
+])
+def test_container_name_source_is_owned_and_unambiguous(recovery, monkeypatch, mutation, category):
+    from types import SimpleNamespace
+
+    service, _plan = recovery
+    args = SimpleNamespace(project="synthetic", region="synthetic")
+    original = copy.deepcopy(service)
+    read_reference = admission._run
+    calls = []
+
+    def read(command):
+        calls.append(command)
+        source = json.loads(read_reference(command))
+        container = source["spec"]["containers"][0]
+        if mutation == "wrong_uid":
+            source["metadata"]["labels"]["serving.knative.dev/serviceUid"] = "private-other-uid"
+        elif mutation == "wrong_service":
+            source["metadata"]["labels"]["serving.knative.dev/service"] = "private-other-service"
+        elif mutation == "wrong_revision":
+            source["metadata"]["name"] = "private-other-revision"
+        elif mutation == "pending":
+            source["status"]["observedGeneration"] = 0
+        elif mutation == "wrong_image":
+            container["image"] = "synthetic/image@sha256:" + "c" * 64
+        elif mutation == "source_dependencies":
+            source["metadata"]["annotations"] = {"run.googleapis.com/container-dependencies": "{}"}
+        elif mutation == "source_depends_on":
+            container["dependsOn"] = []
+        elif mutation == "multi_source":
+            source["spec"]["containers"].append(copy.deepcopy(container))
+        elif mutation == "missing_name":
+            del container["name"]
+        elif mutation == "invalid_name":
+            container["name"] = ""
+        elif mutation == "not_ready":
+            source["status"]["conditions"] = []
+        return json.dumps(source)
+
+    monkeypatch.setattr(admission, "_run", read)
+    template = service["spec"]["template"]
+    if mutation == "explicit_template":
+        template["spec"]["containers"][0]["name"] = "explicit-name"
+    elif mutation == "template_dependencies":
+        template["metadata"] = {"annotations": {"run.googleapis.com/container-dependencies": "{}"}}
+    elif mutation == "service_dependencies":
+        service["metadata"]["annotations"] = {"run.googleapis.com/container-dependencies": "{}"}
+    elif mutation == "template_depends_on":
+        template["spec"]["containers"][0]["dependsOn"] = []
+    elif mutation == "unresolved":
+        service["status"].pop("latestReadyRevisionName")
+    if category:
+        with pytest.raises(admission.AdmissionError, match=category) as caught:
+            admission._container_name_provenance(args, service)
+        assert "private-" not in str(caught.value)
+    else:
+        result = admission._container_name_provenance(args, service)
+        if mutation == "valid":
+            assert result == {"source_revision": "synthetic-old", "name_sha256": admission._digest("traced-container")}
+            assert service == original
+        else:
+            assert result is None
+    if mutation in {"explicit_template", "template_dependencies", "service_dependencies", "template_depends_on", "unresolved"}:
+        assert not calls
+    else:
+        assert len(calls) == 1
+        assert calls[0][-3:] == ["--project=synthetic", "--region=synthetic", "--format=json"]
+
+
+@pytest.mark.parametrize("change", ["equal", "add", "remove", "change"])
+def test_nonce_is_always_protected_without_historical_evidence(recovery, change):
+    service, _plan = recovery
+    original = copy.deepcopy(service)
+    metadata = service["spec"]["template"].setdefault("metadata", {})
+    metadata["labels"] = {"client.knative.dev/nonce": "synthetic-nonce"}
+    other = copy.deepcopy(service)
+    if change == "add":
+        other = original
+    elif change == "remove":
+        del other["spec"]["template"]["metadata"]["labels"]["client.knative.dev/nonce"]
+    elif change == "change":
+        other["spec"]["template"]["metadata"]["labels"]["client.knative.dev/nonce"] = "changed-nonce"
+    assert (admission._paused_spec_digest(service) == admission._paused_spec_digest(other)) == (change == "equal")
+
+
+def test_paused_uid_normalization_does_not_change_shared_comparison(recovery):
+    service, _plan = recovery
+    other = copy.deepcopy(service)
+    other["spec"]["template"]["metadata"] = {"labels": {"serving.knative.dev/serviceUid": "synthetic-uid"}}
+    assert admission._spec_digest(service) != admission._spec_digest(other)
+    assert admission._paused_spec_digest(service) == admission._paused_spec_digest(other)
+
+
+
+def test_preapply_does_not_rewrite_baseline_when_name_source_changes(recovery, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    service, plan = recovery
+    args = SimpleNamespace(
+        service="synthetic-service", project="synthetic", region="synthetic", no_traffic=True,
+        baseline_file=tmp_path / "baseline.json", verify_paused_revision=None, check_before_apply=False,
+    )
+    monkeypatch.setenv("APPROVE_ENV_SECRET_SYNC", "true")
+    monkeypatch.setenv("SYNC_PLAN_JSON", json.dumps(plan))
+    for name in ("APPROVE_IMAGE_DEPLOY", "APPROVE_TRAFFIC_SHIFT", "APPROVE_SCHEDULER_IAM_SYNC", "APPROVE_CLEANUP"):
+        monkeypatch.setenv(name, "false")
+    admission._paused_operation(args, service)
+    original_baseline = args.baseline_file.read_bytes()
+    baseline = json.loads(original_baseline)
+    assert baseline["container_name_provenance"]["source_revision"] == "synthetic-old"
+    assert "traced-container" not in original_baseline.decode()
+    read_reference = admission._run
+
+    def changed(command):
+        source = json.loads(read_reference(command))
+        source["spec"]["containers"][0]["name"] = "different-source-name"
+        return json.dumps(source)
+
+    monkeypatch.setattr(admission, "_run", changed)
+    args.check_before_apply = True
+    with pytest.raises(admission.AdmissionError, match="baseline_changed"):
+        admission._paused_operation(args, service)
+    assert args.baseline_file.read_bytes() == original_baseline

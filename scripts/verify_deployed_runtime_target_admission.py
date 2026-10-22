@@ -272,6 +272,90 @@ def _service_identity_digest(service_json: Mapping[str, Any]) -> str:
     return _digest({"identity": {key: metadata.get(key) for key in ("name", "namespace", "uid")}, "configuration": _protected_metadata(metadata)})
 
 
+def _revision_owner(service_json: Mapping[str, Any], revision: Mapping[str, Any], name: str) -> None:
+    metadata = service_json["metadata"]
+    labels = revision.get("metadata", {}).get("labels", {})
+    uid = metadata.get("uid")
+    if (
+        not isinstance(uid, str) or not uid
+        or revision.get("metadata", {}).get("name") != name
+        or labels.get("serving.knative.dev/serviceUid") != uid
+        or labels.get("serving.knative.dev/service") != metadata.get("name")
+    ):
+        raise AdmissionError("[revision_identity] Revision ownership is missing or does not match the service")
+
+
+def _paused_spec_digest(service_json: Mapping[str, Any]) -> str:
+    # Local to PAUSED admission: do not widen the shared output-field allowlist.
+    projected = copy.deepcopy(service_json)
+    labels = projected["spec"]["template"].get("metadata", {}).get("labels", {})
+    key = "serving.knative.dev/serviceUid"
+    if key in labels:
+        uid = service_json["metadata"].get("uid")
+        if not isinstance(uid, str) or not uid or labels[key] != uid:
+            raise AdmissionError("[revision_identity] Template service UID does not match the service")
+        del labels[key]
+    return _spec_digest(projected)
+
+
+def _unnamed_single_container(template: Mapping[str, Any]) -> bool:
+    containers = template["spec"]["containers"]
+    return (
+        len(containers) == 1 and "name" not in containers[0]
+        and "dependsOn" not in containers[0]
+        and "run.googleapis.com/container-dependencies" not in template.get("metadata", {}).get("annotations", {})
+    )
+
+
+def _container_name_provenance(args: argparse.Namespace, service_json: Mapping[str, Any]) -> dict[str, str] | None:
+    template = service_json["spec"]["template"]
+    if not _unnamed_single_container(template) or "run.googleapis.com/container-dependencies" in service_json["metadata"].get("annotations", {}):
+        return None
+    # Capture a name from an existing owned revision, never from the new candidate.
+    name = service_json.get("status", {}).get("latestReadyRevisionName")
+    if not isinstance(name, str) or not name:
+        raise AdmissionError("[revision_identity] Container name source revision is unresolved")
+    revision = json.loads(_run([
+        "gcloud", "run", "revisions", "describe", name,
+        f"--project={args.project}", f"--region={args.region}", "--format=json",
+    ]))
+    _revision_owner(service_json, revision, name)
+    _require_reconciled(revision)
+    source = copy.deepcopy(revision)
+    containers = source["spec"]["containers"]
+    if len(containers) != 1:
+        return None
+    container_name = containers[0].pop("name", None)
+    if (
+        not isinstance(container_name, str) or not re.fullmatch(r"[a-z][a-z0-9-]{0,62}", container_name)
+        or not _unnamed_single_container(source)
+        or containers[0].get("image") != _immutable_image(service_json)
+        or not any(item.get("type") == "Ready" and item.get("status") == "True" for item in revision.get("status", {}).get("conditions", []))
+    ):
+        return None
+    return {"source_revision": name, "name_sha256": _digest(container_name)}
+
+
+def _paused_revision_projection(service_json: Mapping[str, Any], revision: Mapping[str, Any], baseline: Mapping[str, Any]) -> dict[str, Any]:
+    projected = {"metadata": service_json["metadata"], "spec": {"template": copy.deepcopy(revision)}}
+    template = projected["spec"]["template"]
+    containers = template["spec"]["containers"]
+    provenance = baseline.get("container_name_provenance")
+    if (
+        _unnamed_single_container(service_json["spec"]["template"])
+        and "run.googleapis.com/container-dependencies" not in service_json["metadata"].get("annotations", {})
+        and len(containers) == 1 and "name" in containers[0]
+        and isinstance(provenance, dict) and isinstance(provenance.get("source_revision"), str)
+        and provenance["source_revision"] and provenance["source_revision"] != revision["metadata"]["name"]
+        and _digest(containers[0]["name"]) == provenance.get("name_sha256")
+    ):
+        without_name = copy.deepcopy(template)
+        del without_name["spec"]["containers"][0]["name"]
+        if _unnamed_single_container(without_name):
+            del containers[0]["name"]
+    return projected
+
+
 def _require_reconciled(payload: Mapping[str, Any]) -> None:
     generation = payload.get("metadata", {}).get("generation")
     observed = payload.get("status", {}).get("observedGeneration")
@@ -327,15 +411,14 @@ def _paused_operation(args: argparse.Namespace, service_json: Mapping[str, Any])
             "gcloud", "run", "revisions", "describe", args.verify_paused_revision,
             f"--project={args.project}", f"--region={args.region}", "--format=json",
         ]))
-        if revision.get("metadata", {}).get("name") != args.verify_paused_revision:
-            raise AdmissionError("[revision_identity] Candidate revision identity does not match")
+        _revision_owner(service_json, revision, args.verify_paused_revision)
         _require_reconciled(revision)
-        observed = {"spec": {"template": {"spec": revision["spec"], "metadata": revision.get("metadata", {})}}}
+        observed = _paused_revision_projection(service_json, revision, baseline)
         if any(item.get("status") != "True" for item in revision.get("status", {}).get("conditions", []) if item.get("type") in {"Ready", "ContainerHealthy"}) or not any(
             item.get("type") == "Ready" and item.get("status") == "True" for item in revision.get("status", {}).get("conditions", [])
         ):
             raise AdmissionError("[revision_readiness] Candidate revision is not ready")
-        if _spec_digest(observed) != baseline["projected_spec"] or _spec_digest(service_json) != baseline["projected_spec"]:
+        if _paused_spec_digest(observed) != baseline["projected_spec"] or _paused_spec_digest(service_json) != baseline["projected_spec"]:
             raise AdmissionError("[revision_projection] Candidate or service configuration differs from admitted projection")
         if _service_identity_digest(service_json) != baseline["service_identity"]:
             raise AdmissionError("[service_identity] Protected service metadata changed")
@@ -351,7 +434,7 @@ def _paused_operation(args: argparse.Namespace, service_json: Mapping[str, Any])
         print(f"Verified PAUSED candidate: revision={args.verify_paused_revision}, target_sha256={_digest({key: value for key, value in target.items() if key != 'live_continuity'})}, image_digest={baseline['image'].split('@')[-1]}, risk_binding_matches=true, traffic_unchanged=true")
         return result
     projected, result = project_paused_env(service=args.service, service_json=service_json, plan=plan, repository=repository)
-    baseline = {"current_spec": _spec_digest(service_json), "projected_spec": _spec_digest(projected), "traffic": _traffic(service_json), "image": _immutable_image(service_json), "service_identity": _service_identity_digest(service_json)}
+    baseline = {"current_spec": _paused_spec_digest(service_json), "projected_spec": _paused_spec_digest(projected), "traffic": _traffic(service_json), "image": _immutable_image(service_json), "service_identity": _service_identity_digest(service_json), "container_name_provenance": _container_name_provenance(args, service_json)}
     if args.check_before_apply:
         if json.loads(args.baseline_file.read_text()) != baseline:
             raise AdmissionError("[baseline_changed] Service, image, traffic or plan changed since admission")
