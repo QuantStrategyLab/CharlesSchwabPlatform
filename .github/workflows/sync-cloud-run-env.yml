@@ -487,6 +487,7 @@ jobs:
         id: deploy
         if: steps.config.outputs.deploy_enabled == 'true' && inputs.notification_only != true
         env:
+          SCHWAB_ARTIFACT_REGISTRY_ROLLBACK_MANIFEST_JSON: ${{ vars.SCHWAB_ARTIFACT_REGISTRY_ROLLBACK_MANIFEST_JSON }}
           SYNC_PLAN_JSON: ${{ steps.strategy_requirements.outputs.sync_plan_json }}
         run: |
           set -euo pipefail
@@ -513,6 +514,12 @@ jobs:
           if [ -n "${SCHWAB_CASH_CURRENCY:-}" ]; then
             cash_deploy_env_args+=(--update-env-vars="SCHWAB_CASH_CURRENCY=${SCHWAB_CASH_CURRENCY}")
           fi
+
+          python3 scripts/refresh_artifact_registry_keep.py \
+            --project="${GCP_PROJECT_ID}" --region="${CLOUD_RUN_REGION}" \
+            --repository="${GCP_ARTIFACT_REGISTRY_REPOSITORY}" \
+            --service="${CLOUD_RUN_SERVICE}" --image-repo="${image_repo}" \
+            --candidate="${immutable_image}"
 
           gcloud run deploy "${CLOUD_RUN_SERVICE}" \
             --project="${GCP_PROJECT_ID}" \
@@ -628,10 +635,19 @@ jobs:
       - name: Publish one native notification revision and wait for its TCP startup
         if: steps.config.outputs.notification_only == 'true' && steps.config.outputs.deploy_enabled == 'true'
         env:
+          SCHWAB_ARTIFACT_REGISTRY_ROLLBACK_MANIFEST_JSON: ${{ vars.SCHWAB_ARTIFACT_REGISTRY_ROLLBACK_MANIFEST_JSON }}
           NOTIFICATION_IMAGE: ${{ steps.notification_image.outputs.immutable_image }}
           NOTIFICATION_CANDIDATE_REVISION: ${{ inputs.notification_candidate_revision }}
         run: |
           set -euo pipefail
+          image_repo="${NOTIFICATION_IMAGE%@*}"
+          immutable_image="${NOTIFICATION_IMAGE}"
+          python3 scripts/refresh_artifact_registry_keep.py \
+            --project="${GCP_PROJECT_ID}" --region="${CLOUD_RUN_REGION}" \
+            --repository="${GCP_ARTIFACT_REGISTRY_REPOSITORY}" \
+            --service="${CLOUD_RUN_SERVICE}" --image-repo="${image_repo}" \
+            --candidate="${immutable_image}"
+
           # Reuse setup-gcloud's authentication libraries; no dependency sync.
           sdk_root="$(gcloud info --format='value(installation.sdk_root)')"
           PYTHONPATH="${sdk_root}/lib:${sdk_root}/lib/third_party${PYTHONPATH:+:${PYTHONPATH}}" \
@@ -1402,75 +1418,21 @@ jobs:
           set -euo pipefail
           python3 scripts/reconcile_cloud_runtime.py cleanup-schedulers
 
-      - name: Prune old Cloud Run revisions
+      - name: Refresh KEEP and prune revisions retaining designated R1 and R2
         if: steps.config.outputs.cleanup_enabled == 'true'
+        env:
+          SCHWAB_ARTIFACT_REGISTRY_ROLLBACK_MANIFEST_JSON: ${{ vars.SCHWAB_ARTIFACT_REGISTRY_ROLLBACK_MANIFEST_JSON }}
+          DEPLOYED_IMAGE_DIGEST: ${{ steps.deploy.outputs.image_digest }}
         run: |
           set -euo pipefail
-
-          keep_revisions="$(
-            gcloud run services describe "${CLOUD_RUN_SERVICE}" \
-              --project="${GCP_PROJECT_ID}" \
-              --region="${CLOUD_RUN_REGION}" \
-              --format=json \
-            | python -c '
-          import json
-          import sys
-          service = json.load(sys.stdin)
-          revisions = {
-              item.get("revisionName")
-              for item in service.get("status", {}).get("traffic", [])
-              if item.get("revisionName") and int(item.get("percent") or 0) > 0
-          }
-          latest_ready = service.get("status", {}).get("latestReadyRevisionName")
-          if latest_ready:
-              revisions.add(latest_ready)
-          for revision in sorted(revisions):
-              print(revision)
-          '
-          )"
-
-          if [ -z "${keep_revisions}" ]; then
-            echo "No active Cloud Run revision found for ${CLOUD_RUN_SERVICE}; skipping revision prune." >&2
-            exit 0
-          fi
-
-          mapfile -t revisions_to_delete < <(
-            gcloud run revisions list \
-              --project="${GCP_PROJECT_ID}" \
-              --service "${CLOUD_RUN_SERVICE}" \
-              --region "${CLOUD_RUN_REGION}" \
-              --format='value(metadata.name)' \
-            | grep -Fvx -f <(printf '%s\n' "${keep_revisions}") || true
-          )
-
-          for revision in "${revisions_to_delete[@]}"; do
-            echo "Deleting old Cloud Run revision ${revision} for ${CLOUD_RUN_SERVICE}."
-            gcloud run revisions delete "${revision}" \
-              --project="${GCP_PROJECT_ID}" \
-              --region="${CLOUD_RUN_REGION}" \
-              --quiet 2>&1 || true
-          done
-
-      - name: Clean up old Cloud Run images
-        if: steps.config.outputs.cleanup_enabled == 'true'
-        run: |
-          set -euo pipefail
-
           artifact_registry_hostname="${GCP_ARTIFACT_REGISTRY_HOSTNAME:-${CLOUD_RUN_REGION}-docker.pkg.dev}"
           image_repo="${artifact_registry_hostname}/${GCP_PROJECT_ID}/${GCP_ARTIFACT_REGISTRY_REPOSITORY}/charlesschwabplatform/${CLOUD_RUN_SERVICE}"
-          old_digests="$(gcloud artifacts docker images list "${image_repo}" \
-            --project="${GCP_PROJECT_ID}" \
-            --include-tags \
-            --format=json \
-            | python -c 'import json,os,sys; keep=os.environ["GITHUB_SHA"]; rows=json.load(sys.stdin); print("\n".join(row["version"] for row in rows if keep not in set(row.get("tags") or [])))')"
-
-          while IFS= read -r digest; do
-            if [ -z "${digest}" ]; then
-              continue
-            fi
-            gcloud artifacts docker images delete "${image_repo}@${digest}" \
-              --project="${GCP_PROJECT_ID}" \
-              --delete-tags \
-              --async \
-              --quiet
-          done <<< "${old_digests}"
+          immutable_image="${image_repo}@${DEPLOYED_IMAGE_DIGEST}"
+          # Explicit image deletion bypasses KEEP. Images are managed only by
+          # the existing repository policies, which must remain in dry-run.
+          python3 scripts/refresh_artifact_registry_keep.py \
+            --project="${GCP_PROJECT_ID}" --region="${CLOUD_RUN_REGION}" \
+            --repository="${GCP_ARTIFACT_REGISTRY_REPOSITORY}" \
+            --service="${CLOUD_RUN_SERVICE}" --image-repo="${image_repo}" \
+            --candidate="${immutable_image}" \
+            --prune-revisions
