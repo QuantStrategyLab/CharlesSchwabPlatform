@@ -31,6 +31,11 @@ on:
         default: false
         required: true
         type: boolean
+      paused_env_recovery:
+        description: Validate and apply only a PAUSED continuity correction without image, Secret, probe or traffic changes.
+        default: false
+        required: true
+        type: boolean
       approve_scheduler_iam_sync:
         description: Apply Cloud Scheduler and Cloud Run IAM changes.
         default: false
@@ -180,6 +185,7 @@ jobs:
         env:
           NOTIFICATION_ONLY: ${{ inputs.notification_only }}
           NOTIFICATION_CANDIDATE_REVISION: ${{ inputs.notification_candidate_revision }}
+          PAUSED_ENV_RECOVERY: ${{ inputs.paused_env_recovery }}
         run: |
           set -euo pipefail
 
@@ -192,6 +198,19 @@ jobs:
           scheduler_iam_sync_enabled=false
           traffic_shift_enabled=false
           cleanup_enabled=false
+
+          if [ "${PAUSED_ENV_RECOVERY:-false}" = "true" ]; then
+            if [ "${APPROVE_ENV_SECRET_SYNC:-false}" != "true" ] || [ "${ENABLE_GITHUB_ENV_SYNC:-false}" != "true" ] || [ "${NOTIFICATION_ONLY:-false}" != "false" ]; then
+              echo "PAUSED recovery requires enabled env-only sync and cannot use notification-only." >&2
+              exit 1
+            fi
+            for approval in APPROVE_IMAGE_DEPLOY APPROVE_SCHEDULER_IAM_SYNC APPROVE_TRAFFIC_SHIFT APPROVE_CLEANUP; do
+              if [ "${!approval:-false}" != "false" ]; then
+                echo "PAUSED recovery cannot combine image, IAM, traffic or cleanup approvals." >&2
+                exit 1
+              fi
+            done
+          fi
 
           # QSL_ENABLE_CLOUD_RUN_AUTOMATION overrides ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION
           ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION="${QSL_ENABLE_CLOUD_RUN_AUTOMATION:-$ENABLE_MAIN_PUSH_CLOUD_RUN_AUTOMATION}"
@@ -447,12 +466,21 @@ jobs:
 
       - name: Verify deployed runtime target admission before traffic shift
         if: inputs.notification_only != true && (steps.config.outputs.deploy_enabled == 'true' || steps.config.outputs.env_sync_enabled == 'true' || steps.config.outputs.traffic_shift_enabled == 'true')
+        env:
+          SYNC_PLAN_JSON: ${{ steps.strategy_requirements.outputs.sync_plan_json }}
+          PAUSED_ENV_RECOVERY: ${{ inputs.paused_env_recovery }}
+          PAUSED_ENV_BASELINE: ${{ runner.temp }}/paused-env-baseline.json
         run: |
           set -euo pipefail
+          projection_args=()
+          if [ "${PAUSED_ENV_RECOVERY}" = "true" ]; then
+            projection_args+=(--paused-env-only --no-traffic --baseline-file="${PAUSED_ENV_BASELINE}")
+          fi
           uv run --no-sync python scripts/verify_deployed_runtime_target_admission.py \
             --project="${GCP_PROJECT_ID}" \
             --region="${CLOUD_RUN_REGION}" \
-            --service="${CLOUD_RUN_SERVICE}"
+            --service="${CLOUD_RUN_SERVICE}" \
+            "${projection_args[@]}"
 
 
       - name: Build, push, and deploy Cloud Run image
@@ -614,8 +642,41 @@ jobs:
             --candidate-revision="${NOTIFICATION_CANDIDATE_REVISION}" \
             --candidate-image="${NOTIFICATION_IMAGE}" --candidate-run="${GITHUB_RUN_ID}"
 
+      - name: Apply PAUSED env-only recovery
+        if: steps.config.outputs.env_sync_enabled == 'true' && inputs.paused_env_recovery == true
+        env:
+          SYNC_PLAN_JSON: ${{ steps.strategy_requirements.outputs.sync_plan_json }}
+          PAUSED_ENV_BASELINE: ${{ runner.temp }}/paused-env-baseline.json
+        run: |
+          set -euo pipefail
+          umask 077
+          uv run --no-sync python scripts/verify_deployed_runtime_target_admission.py \
+            --project="${GCP_PROJECT_ID}" --region="${CLOUD_RUN_REGION}" --service="${CLOUD_RUN_SERVICE}" \
+            --paused-env-only --no-traffic --baseline-file="${PAUSED_ENV_BASELINE}" --check-before-apply
+          uv run --no-sync python - <<'PY' > "${RUNNER_TEMP}/paused-env-updates"
+          import json
+          import os
+          from scripts.reconcile_cloud_runtime import select_sync_target
+          selected = select_sync_target(json.loads(os.environ["SYNC_PLAN_JSON"]), os.environ["CLOUD_RUN_SERVICE"])
+          print("^|^" + "|".join(f"{name}={value}" for name, value in sorted(selected["env"].items())))
+          PY
+          candidate_revision="${CLOUD_RUN_SERVICE}-paused-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          if ! gcloud run services update "${CLOUD_RUN_SERVICE}" \
+            --project="${GCP_PROJECT_ID}" --region="${CLOUD_RUN_REGION}" \
+            --no-traffic --deploy-health-check \
+            --revision-suffix="paused-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --update-env-vars="$(cat "${RUNNER_TEMP}/paused-env-updates")" \
+            --quiet > "${RUNNER_TEMP}/paused-env-apply.out" 2> "${RUNNER_TEMP}/paused-env-apply.err"; then
+            echo "PAUSED env apply failed; raw diagnostics withheld. No retry or traffic shift." >&2
+            exit 1
+          fi
+          uv run --no-sync python scripts/verify_deployed_runtime_target_admission.py \
+            --project="${GCP_PROJECT_ID}" --region="${CLOUD_RUN_REGION}" --service="${CLOUD_RUN_SERVICE}" \
+            --paused-env-only --no-traffic --baseline-file="${PAUSED_ENV_BASELINE}" \
+            --verify-paused-revision="${candidate_revision}"
+
       - name: Sync Cloud Run environment
-        if: steps.config.outputs.env_sync_enabled == 'true'
+        if: steps.config.outputs.env_sync_enabled == 'true' && inputs.paused_env_recovery != true
         env:
           SYNC_PLAN_JSON: ${{ steps.strategy_requirements.outputs.sync_plan_json }}
         run: |
@@ -988,7 +1049,7 @@ jobs:
           uv run --no-sync python scripts/reconcile_cloud_runtime.py reconcile-traffic
 
       - name: Verify strategy plugin mounts
-        if: steps.config.outputs.env_sync_enabled == 'true'
+        if: steps.config.outputs.env_sync_enabled == 'true' && inputs.paused_env_recovery != true
         env:
           STRATEGY_PLUGIN_MOUNT_ENV_NAMES: SCHWAB_STRATEGY_PLUGIN_MOUNTS_JSON
         run: |
