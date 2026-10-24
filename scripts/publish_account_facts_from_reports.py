@@ -671,6 +671,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--latest-scheduled-report", action="store_true")
+    mode.add_argument("--latest-report", action="store_true")
     mode.add_argument("--report-uri")
     parser.add_argument("--expected-runtime-revision")
     args = parser.parse_args(argv)
@@ -681,9 +682,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.latest_scheduled_report and os.getenv("GITHUB_EVENT_NAME") != "schedule":
         print("skipped:schedule_context_required")
         return 2
+    if args.latest_report and os.getenv("GITHUB_EVENT_NAME") != "workflow_dispatch":
+        print("skipped:dispatch_context_required")
+        return 2
+    latest_report = args.latest_scheduled_report or args.latest_report
     if (
-        (args.latest_scheduled_report and args.expected_runtime_revision is not None)
-        or (not args.latest_scheduled_report and not args.expected_runtime_revision)
+        (latest_report and args.expected_runtime_revision is not None)
+        or (not latest_report and not args.expected_runtime_revision)
     ):
         print("skipped:runtime_revision_invalid")
         return 2
@@ -711,7 +716,7 @@ def main(argv: list[str] | None = None) -> int:
     now = datetime.now(timezone.utc)
     report_uri = args.report_uri
     expected_revision = args.expected_runtime_revision
-    if args.latest_scheduled_report:
+    if latest_report:
         expected_revision = _current_serving_revision(service_name)
         if not isinstance(expected_revision, str) or _REVISION.fullmatch(expected_revision) is None:
             print("skipped:runtime_revision_readback_mismatch")
