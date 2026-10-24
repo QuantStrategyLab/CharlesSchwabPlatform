@@ -8,14 +8,10 @@ from quant_platform_kit.common.operational_notification_localization import reso
 
 import re
 
-try:
-    from quant_platform_kit.common.notification_localization import (
-        merge_strategy_plugin_i18n as _merge_strategy_plugin_i18n,
-        translator_uses_zh,
-    )
-except ImportError:  # pragma: no cover - compatibility with older pinned shared wheels
-    _merge_strategy_plugin_i18n = None
-    translator_uses_zh = None
+from quant_platform_kit.common.notification_localization import (
+    merge_strategy_plugin_i18n as _merge_strategy_plugin_i18n,
+    translator_uses_zh,
+)
 
 _TELEGRAM_MARKET_SYMBOL_LINK_RE = re.compile(r"(?<![A-Za-z0-9_])([A-Z0-9]{1,12})\.([A-Z]{2,4})(?![A-Za-z0-9_])")
 _TELEGRAM_MARKET_SYMBOL_LINK_JOINER = "\u2060"
@@ -377,14 +373,7 @@ I18N = {
     },
 }
 
-if _merge_strategy_plugin_i18n is not None:
-    _PLATFORM_I18N = {locale: dict(values) for locale, values in I18N.items()}
-    try:
-        I18N = _merge_strategy_plugin_i18n(I18N, shared_wins=False)
-    except TypeError:
-        I18N = _merge_strategy_plugin_i18n(I18N)
-        for locale, values in _PLATFORM_I18N.items():
-            I18N.setdefault(locale, {}).update(values)
+I18N = _merge_strategy_plugin_i18n(I18N, shared_wins=False)
 
 
 def build_translator(lang):
