@@ -447,12 +447,69 @@ def test_scheduled_mode_is_rejected_outside_actions_without_remote_calls():
     run.assert_not_called()
 
 
-def test_latest_invalid_report_is_not_replaced_by_an_older_report(capsys):
+@pytest.mark.parametrize("event", ["schedule", "push", "pull_request", ""])
+def test_manual_latest_requires_dispatch_without_remote_calls(event, capsys):
+    with (
+        patch.dict("os.environ", {"GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": event}, clear=True),
+        patch.object(publisher.subprocess, "run") as run,
+    ):
+        assert publisher.main(["--latest-report"]) == 2
+    run.assert_not_called()
+    assert capsys.readouterr().out == "skipped:dispatch_context_required\n"
+
+
+def test_manual_latest_verifies_current_source_and_publishes_once(capsys):
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    stamp = now.isoformat().replace("+00:00", "Z")
+    run_id = now.strftime("%Y%m%dT%H%M%SZ")
+    prefix = "gs://example-bucket/execution-reports/charles_schwab/soxl_soxx_trend_income/"
+    uri = prefix + now.strftime("%Y-%m/") + run_id + ".json"
+    env = {
+        "GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": "workflow_dispatch",
+        "SCHWAB_ACCOUNT_FACTS_SYNC_TOKEN": "TOKEN_CANARY",
+        "ACCOUNT_FACTS_SYNC_URL": publisher.SYNC_URL,
+        "SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX": prefix,
+        "SCHWAB_ACCOUNT_FACTS_SERVICE_NAME": "synthetic-service",
+        "SCHWAB_NET_ASSETS_CURRENCY": "USD",
+        "SCHWAB_ACCOUNT_FACTS_TARGET_ID": "synthetic-target",
+    }
+    report = _valid_report(observed_at=stamp, run_id=run_id, started_at=stamp, finished_at=stamp)
+    with (
+        patch.dict("os.environ", env, clear=True),
+        patch.object(publisher, "_current_serving_revision", return_value="service-00007-abc") as serving,
+        patch.object(publisher, "_latest_recent_report_uri", return_value=uri),
+        patch.object(publisher, "_service_revision_matches", return_value=True) as verify,
+        patch.object(publisher, "_read_report", return_value=report) as read,
+        patch.object(publisher, "_publish_once", return_value={"status": "published"}) as publish,
+    ):
+        assert publisher.main(["--latest-report"]) == 0
+    serving.assert_called_once_with("synthetic-service")
+    verify.assert_called_once_with("service-00007-abc", "synthetic-service")
+    read.assert_called_once_with(uri)
+    publish.assert_called_once()
+    assert capsys.readouterr().out == "published\n"
+
+
+def test_manual_latest_rejects_explicit_revision_before_remote_calls(capsys):
+    with (
+        patch.dict("os.environ", {"GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": "workflow_dispatch"}, clear=True),
+        patch.object(publisher.subprocess, "run") as run,
+    ):
+        assert publisher.main(["--latest-report", "--expected-runtime-revision", "service-00007-abc"]) == 2
+    run.assert_not_called()
+    assert capsys.readouterr().out == "skipped:runtime_revision_invalid\n"
+
+
+@pytest.mark.parametrize("mode,event", [
+    ("--latest-scheduled-report", "schedule"),
+    ("--latest-report", "workflow_dispatch"),
+])
+def test_latest_invalid_report_is_not_replaced_by_an_older_report(capsys, mode, event):
     prefix = "gs://example-bucket/execution-reports/charles_schwab/soxl_soxx_trend_income/"
     latest_uri = prefix + "2026-09/20260930T222000Z.json"
     env = {
         "GITHUB_ACTIONS": "true",
-        "GITHUB_EVENT_NAME": "schedule",
+        "GITHUB_EVENT_NAME": event,
         "SCHWAB_ACCOUNT_FACTS_SYNC_TOKEN": "synthetic-token",
         "ACCOUNT_FACTS_SYNC_URL": publisher.SYNC_URL,
         "SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX": prefix,
@@ -468,7 +525,7 @@ def test_latest_invalid_report_is_not_replaced_by_an_older_report(capsys):
         patch.object(publisher, "_read_report", return_value={"status": "error"}) as read,
         patch.object(publisher, "_publish_once") as publish,
     ):
-        assert publisher.main(["--latest-scheduled-report"]) == 2
+        assert publisher.main([mode]) == 2
 
     read.assert_called_once_with(latest_uri)
     publish.assert_not_called()

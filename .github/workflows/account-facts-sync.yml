@@ -3,13 +3,18 @@ name: Schwab Account Facts Sync
 on:
   workflow_dispatch:
     inputs:
+      latest_report:
+        description: Select the latest private report and verify its exact serving revision.
+        required: false
+        default: false
+        type: boolean
       report_uri:
         description: Exact archived Schwab runtime report URI under the fixed SOXL prefix.
-        required: true
+        required: false
         type: string
       expected_runtime_revision:
         description: Exact Cloud Run revision name expected in the report and service readback.
-        required: true
+        required: false
         type: string
 
 permissions:
@@ -21,10 +26,10 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  GCP_PROJECT_ID: charlesschwabquant
-  GCP_REGION: us-central1
-  GCP_WORKLOAD_IDENTITY_PROVIDER: projects/401309731911/locations/global/workloadIdentityPools/github-actions/providers/github-main
-  GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: schwab-platform-deploy@charlesschwabquant.iam.gserviceaccount.com
+  GCP_PROJECT_ID: ${{ secrets.SCHWAB_ACCOUNT_FACTS_GCP_PROJECT_ID }}
+  GCP_REGION: ${{ secrets.SCHWAB_ACCOUNT_FACTS_GCP_REGION }}
+  GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.SCHWAB_ACCOUNT_FACTS_GCP_WORKLOAD_IDENTITY_PROVIDER }}
+  GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ secrets.SCHWAB_ACCOUNT_FACTS_GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
 
 jobs:
   publish:
@@ -32,6 +37,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Require protected cloud configuration
+        shell: bash
+        run: |
+          set -euo pipefail
+          for name in GCP_PROJECT_ID GCP_REGION GCP_WORKLOAD_IDENTITY_PROVIDER GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT; do
+            if [[ -z "${!name:-}" ]]; then
+              echo "::error::$name is required"
+              exit 2
+            fi
+          done
+
       - name: Checkout repository
         uses: actions/checkout@v6
 
@@ -48,6 +64,7 @@ jobs:
 
       - name: Project and publish the selected archived report
         env:
+          LATEST_REPORT: ${{ inputs.latest_report }}
           REPORT_URI: ${{ inputs.report_uri }}
           EXPECTED_RUNTIME_REVISION: ${{ inputs.expected_runtime_revision }}
           ACCOUNT_FACTS_SYNC_URL: ${{ vars.ACCOUNT_FACTS_SYNC_URL }}
@@ -57,7 +74,17 @@ jobs:
           SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX: ${{ secrets.SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX }}
           SCHWAB_ACCOUNT_FACTS_SERVICE_NAME: ${{ secrets.SCHWAB_ACCOUNT_FACTS_SERVICE_NAME }}
           SCHWAB_ACCOUNT_FACTS_SYNC_TOKEN: ${{ secrets.SCHWAB_ACCOUNT_FACTS_SYNC_TOKEN }}
-        run: >-
-          python3 scripts/publish_account_facts_from_reports.py
-          --report-uri "$REPORT_URI"
-          --expected-runtime-revision "$EXPECTED_RUNTIME_REVISION"
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$LATEST_REPORT" == "true" ]]; then
+            if [[ -n "$REPORT_URI" || -n "$EXPECTED_RUNTIME_REVISION" ]]; then
+              echo "skipped:conflicting_source_selection"
+              exit 2
+            fi
+            python3 scripts/publish_account_facts_from_reports.py --latest-report
+          else
+            python3 scripts/publish_account_facts_from_reports.py \
+              --report-uri "$REPORT_URI" \
+              --expected-runtime-revision "$EXPECTED_RUNTIME_REVISION"
+          fi
