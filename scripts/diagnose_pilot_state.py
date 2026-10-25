@@ -34,6 +34,15 @@ _LOCAL_REASONS = frozenset({
     "owner_record_invalid", "ledger_result_invalid",
     "ledger_window_changed", "ledger_classification_incomplete",
 })
+_INVALID_RECORD_REASONS = (
+    "json", "payload_structure", "payload_schema", "metadata_structure",
+    "key_shape_or_arity", "uri_mismatch", "identity_fields", "mode", "date_key",
+    "claim_state", "outcome_shape", "pending_count", "duplicate_record", "unclassifiable",
+)
+
+
+class _InvalidRecord(ValueError):
+    """A code-defined first failure; never an upstream field or error body."""
 
 
 def _classification_projection() -> dict[str, Any]:
@@ -45,6 +54,7 @@ def _classification_projection() -> dict[str, Any]:
         "explicit_unknown_outcomes_count": None, "pending_reconciliation_outcomes_count": None,
         "recorded_no_pending_outcomes_count": None, "unclassified_outcomes_count": None,
         "invalid_records_count": None,
+        "invalid_first_failure_counts": None,
     }
 
 
@@ -69,37 +79,49 @@ def _record_classification(store: Any, *, namespace: str, uri: str, content: str
                            prefix: str, account: str, profile: str, outcome: bool) -> tuple[str, str]:
     from quant_platform_kit.common.execution_state import _clean_key_part, _clean_relative_key
 
-    payload = metadata._json(content)
-    record = payload.get("metadata") if isinstance(payload, dict) else None
-    key = payload.get("marker_key") if isinstance(payload, dict) else None
-    if (
-        not isinstance(record, dict) or not isinstance(key, str) or not key.startswith(prefix + "/")
-        or len(key.split("/")) != 8 or _clean_relative_key(key) != key
-        or store._cloud_uri_for_namespace(key, namespace) != uri
-        or payload.get("schema_version") != ("execution_outcome.v1" if outcome else "execution_claim.v1")
-        or record.get("strategy_profile") != profile or record.get("account_scope") != account
-        or record.get("dry_run_only") is not False
-    ):
-        raise ValueError
+    try:
+        payload = metadata._json(content)
+    except (ValueError, TypeError):
+        raise _InvalidRecord("json") from None
+    if not isinstance(payload, dict):
+        raise _InvalidRecord("payload_structure")
+    if payload.get("schema_version") != ("execution_outcome.v1" if outcome else "execution_claim.v1"):
+        raise _InvalidRecord("payload_schema")
+    record, key = payload.get("metadata"), payload.get("marker_key")
+    if not isinstance(record, dict):
+        raise _InvalidRecord("metadata_structure")
+    if (not isinstance(key, str) or not key.startswith(prefix + "/")
+            or len(key.split("/")) != 8 or _clean_relative_key(key) != key):
+        raise _InvalidRecord("key_shape_or_arity")
+    if store._cloud_uri_for_namespace(key, namespace) != uri:
+        raise _InvalidRecord("uri_mismatch")
+    if record.get("strategy_profile") != profile or record.get("account_scope") != account:
+        raise _InvalidRecord("identity_fields")
+    if record.get("dry_run_only") is not False:
+        raise _InvalidRecord("mode")
     for index, field in ((5, "signal_date"), (6, "effective_date")):
         value = record.get(field)
         fallback = "signal" if index == 5 else "effective"
         if not isinstance(value, str) or key.split("/")[index] != _clean_key_part(value or f"no-{fallback}-date", fallback=fallback):
-            raise ValueError
+            raise _InvalidRecord("date_key")
     if not outcome:
         if payload.get("state") != "claimed":
-            raise ValueError
+            raise _InvalidRecord("claim_state")
         return key, "claim"
     count, orders, status = record.get("orders_pending_count"), record.get("submitted_orders"), record.get("execution_status")
     if (type(count) is not int or count < 0 or not isinstance(orders, list)
             or not all(isinstance(order, dict) for order in orders) or not isinstance(status, str)
             or type(record.get("broker_submission_done")) is not bool):
-        raise ValueError
+        raise _InvalidRecord("outcome_shape")
     # Keep the original _recorded_execution_replay semantics. These are recorded
     # intent states, never an inference that the broker has finished an order.
     if status == "pending_reconciliation":
-        if count < sum(order.get("status") in {"accepted", "unknown"} for order in orders):
-            raise ValueError
+        try:
+            pending = sum(order.get("status") in {"accepted", "unknown"} for order in orders)
+        except TypeError:
+            raise _InvalidRecord("outcome_shape") from None
+        if count < pending:
+            raise _InvalidRecord("pending_count")
         return key, "explicit_unknown" if any(order.get("status") == "unknown" for order in orders) else "pending_reconciliation"
     if status in {"completed", "no_action", "no_op"} and count == 0 and not orders:
         return key, "recorded_no_pending"
@@ -138,6 +160,7 @@ def _classify_ledger(store: Any, *, account: str, profile: str, expected_digest:
     keys: dict[str, set[str]] = {store.namespace: set(), store.outcome_namespace: set()}
     counts = {"explicit_unknown": 0, "pending_reconciliation": 0, "recorded_no_pending": 0, "unclassified": 0}
     invalid = 0
+    failures = dict.fromkeys(_INVALID_RECORD_REASONS, 0)
     for namespace, values in entries.items():
         for uri, content in values:
             try:
@@ -146,13 +169,19 @@ def _classify_ledger(store: Any, *, account: str, profile: str, expected_digest:
                     account=account, profile=profile, outcome=namespace == store.outcome_namespace,
                 )
                 if key in keys[namespace]:
-                    raise ValueError
+                    raise _InvalidRecord("duplicate_record")
                 keys[namespace].add(key)
                 if category != "claim":
                     counts[category] += 1
+            except _InvalidRecord as exc:
+                invalid += 1
+                reason = str(exc)
+                failures[reason if reason in failures else "unclassifiable"] += 1
             except (ValueError, TypeError, KeyError):
                 invalid += 1
+                failures["unclassifiable"] += 1
     projection["invalid_records_count"] = invalid
+    projection["invalid_first_failure_counts"] = failures
     if invalid:
         # Invalid records may contain a counterpart or an UNKNOWN outcome;
         # do not report exact pairing/semantic totals from a valid subset.
