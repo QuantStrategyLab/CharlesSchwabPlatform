@@ -62,8 +62,8 @@ env:
   GCP_RUNTIME_SERVICE_ACCOUNT: schwab-platform-runtime@charlesschwabquant.iam.gserviceaccount.com
   GCP_SCHEDULER_SERVICE_ACCOUNT: schwab-platform-scheduler@charlesschwabquant.iam.gserviceaccount.com
   GCP_ARTIFACT_REGISTRY_REPOSITORY: cloud-run-source-deploy
-  WEBSITE_OBSERVATION_SOURCE: b5632510d4f05173001e052ada30039d4bed14b7
-  WEBSITE_OBSERVATION_TREE: ded9a7fa01b2512022e1257a9a47f8bff6640ceb
+  WEBSITE_OBSERVATION_SOURCE: 4843141d42337b644e6f594d2c0da5421e146c6c
+  WEBSITE_OBSERVATION_TREE: 40961a49c1886df4d3ba55758c83290e8adfe692
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
