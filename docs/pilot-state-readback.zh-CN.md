@@ -20,6 +20,14 @@
 
 这些类别区分严格 JSON 无法解码、对象结构、schema/键/metadata 等合同不符，但不自动证明数据损坏。例如七段键不符合当前八段键合同，历史 schema 不匹配也不能直接当成损坏；本入口不新增兼容读取、终态映射或自动修复。first-failure 不是该记录全部问题，也不是暂停原因。需要一次实际读回后才能知道真实记录落在哪类；合成回归不能代替实际原因。存在无效记录时原配对/UNKNOWN 精确总数仍为 null，`partial_state` 与所有资格 false 不变。
 
+`identity_failure_field_counts` 只进一步解释首个失败为 `identity_fields` 的记录，分别统计
+`account_scope`、`strategy_profile` 的固定状态：`missing`（缺字段）、`not_string`（含 null）、
+`blank`、`exact_match`、`key_match_only`、`mismatch`。每个字段的计数和分别等于身份失败记录数，
+不是额外的订单数；稳定窗口中没有身份失败则均为零，尚未完成稳定读取则为 null。
+`key_match_only` 表示记录值和当前预期仅在原 QPK 有损键规范化后与路径对应段相同，
+不能证明原始账户或策略身份相同，更不能作为兼容读取的许可。两个身份字段始终要求原值精确相等；
+前置 schema/键等失败不检查这些字段。不输出原值、规范化值或其哈希，不改变配对、恢复或暂停判断。
+
 ## 对账 namespace 修正与证据边界
 
 原执行器按券商原生账户 hash 写 execution claim/outcome，但对账候选曾用控制面 `account_scope`（常为 `live`）读账本，可能错误看到空范围。现在只在观察身份明确匹配且原生 hash 有效时读取正确范围，缺失或不匹配就拒绝，不回退 `live`。控制面身份及 broker evidence 的账户摘要合同不变。回归覆盖了旧 scope 为 0、原生 hash 下有 UNKNOWN 提交结果时旧空基线必须不匹配；不消除原有 UNKNOWN、partial 或缺失成交覆盖。

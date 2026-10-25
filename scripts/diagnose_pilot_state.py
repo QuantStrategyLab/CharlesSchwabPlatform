@@ -39,10 +39,15 @@ _INVALID_RECORD_REASONS = (
     "key_shape_or_arity", "uri_mismatch", "identity_fields", "mode", "date_key",
     "claim_state", "outcome_shape", "pending_count", "duplicate_record", "unclassifiable",
 )
+_IDENTITY_STATES = ("missing", "not_string", "blank", "exact_match", "key_match_only", "mismatch")
 
 
 class _InvalidRecord(ValueError):
     """A code-defined first failure; never an upstream field or error body."""
+
+    def __init__(self, reason: str, *, identity_states: dict[str, str] | None = None):
+        super().__init__(reason)
+        self.identity_states = identity_states
 
 
 def _classification_projection() -> dict[str, Any]:
@@ -55,7 +60,33 @@ def _classification_projection() -> dict[str, Any]:
         "recorded_no_pending_outcomes_count": None, "unclassified_outcomes_count": None,
         "invalid_records_count": None,
         "invalid_first_failure_counts": None,
+        "identity_failure_field_counts": None,
     }
+
+
+def _identity_states(record: dict, key: str, *, account: str, profile: str) -> dict[str, str]:
+    """Explain a rejected record; lossy key equality never grants acceptance."""
+    from quant_platform_kit.common.execution_state import _clean_key_part
+
+    states = {}
+    for field, expected, index, fallback in (("account_scope", account, 2, "account"),
+                                             ("strategy_profile", profile, 3, "strategy")):
+        value = record.get(field)
+        if field not in record:
+            state = "missing"
+        elif not isinstance(value, str):
+            state = "not_string"
+        elif not value.strip():
+            state = "blank"
+        elif value == expected:
+            state = "exact_match"
+        elif (_clean_key_part(value, fallback=fallback)
+              == _clean_key_part(expected, fallback=fallback) == key.split("/")[index]):
+            state = "key_match_only"
+        else:
+            state = "mismatch"
+        states[field] = state
+    return states
 
 
 def _entries_digest(entries: Mapping[str, list[tuple[str, str]]]) -> str:
@@ -96,7 +127,8 @@ def _record_classification(store: Any, *, namespace: str, uri: str, content: str
     if store._cloud_uri_for_namespace(key, namespace) != uri:
         raise _InvalidRecord("uri_mismatch")
     if record.get("strategy_profile") != profile or record.get("account_scope") != account:
-        raise _InvalidRecord("identity_fields")
+        raise _InvalidRecord("identity_fields", identity_states=_identity_states(
+            record, key, account=account, profile=profile))
     if record.get("dry_run_only") is not False:
         raise _InvalidRecord("mode")
     for index, field in ((5, "signal_date"), (6, "effective_date")):
@@ -161,6 +193,8 @@ def _classify_ledger(store: Any, *, account: str, profile: str, expected_digest:
     counts = {"explicit_unknown": 0, "pending_reconciliation": 0, "recorded_no_pending": 0, "unclassified": 0}
     invalid = 0
     failures = dict.fromkeys(_INVALID_RECORD_REASONS, 0)
+    identity_counts = {field: dict.fromkeys(_IDENTITY_STATES, 0)
+                       for field in ("account_scope", "strategy_profile")}
     for namespace, values in entries.items():
         for uri, content in values:
             try:
@@ -177,11 +211,15 @@ def _classify_ledger(store: Any, *, account: str, profile: str, expected_digest:
                 invalid += 1
                 reason = str(exc)
                 failures[reason if reason in failures else "unclassifiable"] += 1
+                if reason == "identity_fields" and exc.identity_states is not None:
+                    for field, state in exc.identity_states.items():
+                        identity_counts[field][state] += 1
             except (ValueError, TypeError, KeyError):
                 invalid += 1
                 failures["unclassifiable"] += 1
     projection["invalid_records_count"] = invalid
     projection["invalid_first_failure_counts"] = failures
+    projection["identity_failure_field_counts"] = identity_counts
     if invalid:
         # Invalid records may contain a counterpart or an UNKNOWN outcome;
         # do not report exact pairing/semantic totals from a valid subset.

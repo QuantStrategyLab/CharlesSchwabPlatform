@@ -146,6 +146,69 @@ def _no_authority(result):
     assert result["ledger"]["broker_complete"] is False
 
 
+@pytest.mark.parametrize("field", ["account_scope", "strategy_profile"])
+@pytest.mark.parametrize("fault,state", [
+    ("missing", "missing"), ("null", "not_string"), ("boolean", "not_string"),
+    ("object", "not_string"), ("blank", "blank"),
+    ("key_only", "key_match_only"), ("different", "mismatch"),
+])
+def test_identity_failure_reports_both_fields_without_relaxing_acceptance(source, target, field, fault, state):
+    class ChangedStore(Store):
+        def _entries(self):
+            values = super()._entries()
+            uri, content = values[self.namespace][0]
+            payload = json.loads(content)
+            original = payload["metadata"][field]
+            if fault == "missing":
+                del payload["metadata"][field]
+            else:
+                payload["metadata"][field] = {
+                    "null": None, "boolean": False, "object": {}, "blank": "  ",
+                    "key_only": original.swapcase(), "different": "private-unrelated-identity-canary",
+                }[fault]
+            values[self.namespace] = [(uri, json.dumps(payload))]
+            return values
+
+    result, _, _ = _probe(source, target, store=ChangedStore())
+    counts = result["ledger"]["classification"]
+    details = counts["identity_failure_field_counts"]
+    other = "strategy_profile" if field == "account_scope" else "account_scope"
+    assert counts["invalid_first_failure_counts"]["identity_fields"] == 1
+    assert details[field][state] == 1 and sum(details[field].values()) == 1
+    assert details[other]["exact_match"] == 1 and sum(details[other].values()) == 1
+    assert result["status"] == "partial_state" and counts["paired_count"] is None
+    assert counts["explicit_unknown_outcomes_count"] is None
+    assert "private-unrelated-identity-canary" not in json.dumps(result)
+    _no_authority(result)
+
+
+def test_identity_detail_counts_are_empty_for_valid_records_and_unknown_before_stable_read(source, target):
+    result, _, _ = _probe(source, target)
+    fields = result["ledger"]["classification"]["identity_failure_field_counts"]
+    assert set(fields) == {"account_scope", "strategy_profile"}
+    assert all(sum(counts.values()) == 0 for counts in fields.values())
+    result, _, _ = _probe(source, target, store=Store(error="ledger"))
+    assert result["ledger"]["classification"]["identity_failure_field_counts"] is None
+
+
+def test_prior_schema_failure_does_not_inspect_or_count_identity_fields(source, target):
+    class ChangedStore(Store):
+        def _entries(self):
+            values = super()._entries()
+            uri, content = values[self.namespace][0]
+            payload = json.loads(content)
+            payload["schema_version"] = "old-private-schema-canary"
+            payload["metadata"] = {}
+            values[self.namespace] = [(uri, json.dumps(payload))]
+            return values
+
+    result, _, _ = _probe(source, target, store=ChangedStore())
+    counts = result["ledger"]["classification"]
+    assert counts["invalid_first_failure_counts"]["payload_schema"] == 1
+    assert all(sum(row.values()) == 0 for row in counts["identity_failure_field_counts"].values())
+    _no_authority(result)
+
+
 def test_actual_serving_identity_and_native_namespace_gate_storage(source, target, capsys):
     result, events, store = _probe(source, target)
     assert result["status"] == "observed_state" and result["reason"] == "observed"
