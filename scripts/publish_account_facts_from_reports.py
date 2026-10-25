@@ -73,24 +73,26 @@ _REVISION = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 POSITIONS_SCOPE = "strategy_symbols_only"
 # QRS accepts these optional fields. Upload requires an explicit opt-in;
 # archived projections remain available to existing offline consumers.
-POSITIONS_KEYS = ("broker_reported_positions", "broker_reported_positions_scope")
+POSITIONS_KEYS = ("broker_reported_positions", "broker_reported_positions_scope", "broker_reported_positions_complete")
 _POSITION_SYMBOL = re.compile(r"[A-Z0-9][A-Z0-9./ -]{0,31}\Z", re.ASCII)
 _MAX_POSITIONS = 64
 
 
-def _project_positions(observation: Mapping[str, Any]) -> list[dict[str, str]] | None:
+def _project_positions(observation: Mapping[str, Any]) -> list[dict[str, Any]] | None:
     """Validate runtime ``broker_reported_positions``; None (omit) on any doubt."""
     raw = observation.get("broker_reported_positions")
-    if observation.get("broker_reported_positions_scope") != POSITIONS_SCOPE:
+    scope = observation.get("broker_reported_positions_scope")
+    native_stocks = scope == "stocks_only" and observation.get("broker_reported_positions_complete") is True
+    if scope != POSITIONS_SCOPE and not native_stocks:
         return None
-    if not isinstance(raw, list) or not raw or len(raw) > _MAX_POSITIONS:
+    if not isinstance(raw, list) or (not raw and not native_stocks) or len(raw) > _MAX_POSITIONS:
         return None
-    rows: list[dict[str, str]] = []
+    rows: list[dict[str, Any]] = []
     seen: set[str] = set()
     for item in raw:
         if not isinstance(item, Mapping):
             return None
-        if set(item) - {"symbol", "quantity", "market_value", "currency", "avg_cost"}:
+        if set(item) - {"symbol", "quantity", "market_value", "currency", "avg_cost", "currency_source"}:
             return None
         symbol = item.get("symbol")
         if (
@@ -102,9 +104,12 @@ def _project_positions(observation: Mapping[str, Any]) -> list[dict[str, str]] |
         seen.add(symbol)
         if item.get("currency") not in (None, "USD"):
             return None
+        if "currency_source" in item and item["currency_source"] != "owner_confirmed":
+            return None
         try:
             quantity = _money_text(item.get("quantity"))
-            market_value = _money_text(item.get("market_value"))
+            market_value = (None if native_stocks and item.get("market_value") is None
+                            else _money_text(item.get("market_value")))
         except _ProjectionError:
             return None
         rows.append(
@@ -395,9 +400,20 @@ def project_schwab_account_facts_history(
         if broker_account_type is not None:
             return_body["broker_account_type"] = broker_account_type
         positions = _project_positions(observation)
+        positions_observed_at = None
+        if positions is not None and observation.get("broker_reported_positions_scope") == "stocks_only":
+            try:
+                positions_observed_at = _instant(observation.get("broker_reported_positions_observed_at"))
+                if not observed_at <= positions_observed_at <= finished_at:
+                    positions = None
+            except _ProjectionError:
+                positions = None
         if positions is not None:
             return_body["broker_reported_positions"] = positions
-            return_body["broker_reported_positions_scope"] = POSITIONS_SCOPE
+            return_body["broker_reported_positions_scope"] = observation["broker_reported_positions_scope"]
+            if positions_observed_at is not None:
+                return_body["broker_reported_positions_complete"] = True
+                return_body["observed_finished_at"] = observation["broker_reported_positions_observed_at"]
         if external_flow_enabled is True:
             from application.external_flow_snapshot import attach_external_flow_snapshot
             try:
