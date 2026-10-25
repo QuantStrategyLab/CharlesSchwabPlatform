@@ -32,7 +32,140 @@ _LOCAL_REASONS = frozenset({
     "storage_source_unavailable", "storage_source_secret_reference",
     "storage_source_invalid", "storage_provider_unavailable",
     "owner_record_invalid", "ledger_result_invalid",
+    "ledger_window_changed", "ledger_classification_incomplete",
 })
+
+
+def _classification_projection() -> dict[str, Any]:
+    return {
+        "read_status": "unavailable", "window_stable": None, "complete": False,
+        "claim_records_count": None, "outcome_records_count": None,
+        "paired_count": None, "claims_without_outcome_in_window_count": None,
+        "outcomes_without_claim_in_window_count": None,
+        "explicit_unknown_outcomes_count": None, "pending_reconciliation_outcomes_count": None,
+        "recorded_no_pending_outcomes_count": None, "unclassified_outcomes_count": None,
+        "invalid_records_count": None,
+    }
+
+
+def _entries_digest(entries: Mapping[str, list[tuple[str, str]]]) -> str:
+    # Exact representation in the frozen QPK 2d6626f2 ledger digest contract.
+    from quant_platform_kit.common.execution_state import EXECUTION_LEDGER_DIGEST_SCHEMA_VERSION
+
+    records = [
+        {"namespace": namespace, "object_sha256": hashlib.sha256(uri.encode()).hexdigest(),
+         "content_sha256": hashlib.sha256(content.encode()).hexdigest()}
+        for namespace, values in entries.items() for uri, content in values
+    ]
+    encoded = json.dumps(
+        {"schema_version": EXECUTION_LEDGER_DIGEST_SCHEMA_VERSION,
+         "records": sorted(records, key=lambda value: (value["namespace"], value["object_sha256"], value["content_sha256"]))},
+        ensure_ascii=True, sort_keys=True, separators=(",", ":"), allow_nan=False,
+    )
+    return hashlib.sha256(encoded.encode()).hexdigest()
+
+
+def _record_classification(store: Any, *, namespace: str, uri: str, content: str,
+                           prefix: str, account: str, profile: str, outcome: bool) -> tuple[str, str]:
+    from quant_platform_kit.common.execution_state import _clean_key_part, _clean_relative_key
+
+    payload = metadata._json(content)
+    record = payload.get("metadata") if isinstance(payload, dict) else None
+    key = payload.get("marker_key") if isinstance(payload, dict) else None
+    if (
+        not isinstance(record, dict) or not isinstance(key, str) or not key.startswith(prefix + "/")
+        or len(key.split("/")) != 8 or _clean_relative_key(key) != key
+        or store._cloud_uri_for_namespace(key, namespace) != uri
+        or payload.get("schema_version") != ("execution_outcome.v1" if outcome else "execution_claim.v1")
+        or record.get("strategy_profile") != profile or record.get("account_scope") != account
+        or record.get("dry_run_only") is not False
+    ):
+        raise ValueError
+    for index, field in ((5, "signal_date"), (6, "effective_date")):
+        value = record.get(field)
+        fallback = "signal" if index == 5 else "effective"
+        if not isinstance(value, str) or key.split("/")[index] != _clean_key_part(value or f"no-{fallback}-date", fallback=fallback):
+            raise ValueError
+    if not outcome:
+        if payload.get("state") != "claimed":
+            raise ValueError
+        return key, "claim"
+    count, orders, status = record.get("orders_pending_count"), record.get("submitted_orders"), record.get("execution_status")
+    if (type(count) is not int or count < 0 or not isinstance(orders, list)
+            or not all(isinstance(order, dict) for order in orders) or not isinstance(status, str)
+            or type(record.get("broker_submission_done")) is not bool):
+        raise ValueError
+    # Keep the original _recorded_execution_replay semantics. These are recorded
+    # intent states, never an inference that the broker has finished an order.
+    if status == "pending_reconciliation":
+        if count < sum(order.get("status") in {"accepted", "unknown"} for order in orders):
+            raise ValueError
+        return key, "explicit_unknown" if any(order.get("status") == "unknown" for order in orders) else "pending_reconciliation"
+    if status in {"completed", "no_action", "no_op"} and count == 0 and not orders:
+        return key, "recorded_no_pending"
+    return key, "unclassified"
+
+
+def _classify_ledger(store: Any, *, account: str, profile: str, expected_digest: str,
+                     expected_count: int, projection: dict[str, Any]) -> None:
+    from quant_platform_kit.common.execution_state import _clean_key_part
+
+    prefix = "/".join(("v1", "schwab", _clean_key_part(account, fallback="account"),
+                       _clean_key_part(profile, fallback="strategy"), "live"))
+    entries = {}
+    projection["read_status"] = "partial"
+    for namespace, field in ((store.namespace, "claim_records_count"), (store.outcome_namespace, "outcome_records_count")):
+        # Private reader behavior is intentionally tied to the existing frozen
+        # QPK pin: newest by key, bounded bodies, potentially unbounded listing.
+        values = store._recent_ledger_entries(namespace=namespace, relative_prefix=prefix, record_limit=_LIMIT)
+        if not isinstance(values, list) or len(values) > _LIMIT or any(
+            not isinstance(value, tuple) or len(value) != 2 or not all(isinstance(part, str) for part in value)
+            for value in values
+        ):
+            raise metadata._Unavailable("ledger_result_invalid")
+        entries[namespace] = values
+        projection[field] = len(values)
+    after_digest, after_count = store.calculate_recent_ledger_digest(
+        platform="schwab", strategy_profile=profile, account_scope=account,
+        execution_mode="live", record_limit=_LIMIT,
+    )
+    projection["window_stable"] = (
+        after_digest == expected_digest == _entries_digest(entries)
+        and type(after_count) is int and after_count == expected_count == sum(map(len, entries.values()))
+    )
+    if not projection["window_stable"]:
+        raise metadata._Unavailable("ledger_window_changed")
+    keys: dict[str, set[str]] = {store.namespace: set(), store.outcome_namespace: set()}
+    counts = {"explicit_unknown": 0, "pending_reconciliation": 0, "recorded_no_pending": 0, "unclassified": 0}
+    invalid = 0
+    for namespace, values in entries.items():
+        for uri, content in values:
+            try:
+                key, category = _record_classification(
+                    store, namespace=namespace, uri=uri, content=content, prefix=prefix,
+                    account=account, profile=profile, outcome=namespace == store.outcome_namespace,
+                )
+                if key in keys[namespace]:
+                    raise ValueError
+                keys[namespace].add(key)
+                if category != "claim":
+                    counts[category] += 1
+            except (ValueError, TypeError, KeyError):
+                invalid += 1
+    projection["invalid_records_count"] = invalid
+    if invalid:
+        # Invalid records may contain a counterpart or an UNKNOWN outcome;
+        # do not report exact pairing/semantic totals from a valid subset.
+        return
+    claims, outcomes = keys[store.namespace], keys[store.outcome_namespace]
+    projection.update(
+        paired_count=len(claims & outcomes),
+        claims_without_outcome_in_window_count=len(claims - outcomes),
+        outcomes_without_claim_in_window_count=len(outcomes - claims),
+        **{category + "_outcomes_count": count for category, count in counts.items()},
+    )
+    projection["complete"] = counts["unclassified"] == 0
+    projection["read_status"] = "observed" if projection["complete"] else "partial"
 
 
 @contextlib.contextmanager
@@ -129,8 +262,10 @@ def diagnose_state(
         "continuity": {},
         "owner": {"read_status": "unavailable", "present": None, "record_valid": None, "owner_matches_strategy_profile": None},
         "ledger": {"read_status": "unavailable", "sha256": None, "records_count": None,
-                   "body_record_limit_per_namespace": _LIMIT, "full_history_verified": False,
-                   "unresolved_claims_verified": False, "broker_complete": False},
+                   "body_record_limit_per_namespace": _LIMIT, "body_read_passes": 3,
+                   "full_history_verified": False,
+                   "unresolved_claims_verified": False, "broker_complete": False,
+                   "classification": _classification_projection()},
         "broker_requested": False, "token_read": False, "reports_read": False,
         "cloud_write_attempted": False, "claims_changed": False, "breaker_reset": False,
         "trading_state_changed": False, "grant_exclusivity_verified": False,
@@ -174,12 +309,20 @@ def diagnose_state(
             )
             if not isinstance(digest, str) or not re.fullmatch("[0-9a-f]{64}", digest) or type(count) is not int or not 0 <= count <= 2 * _LIMIT:
                 raise metadata._Unavailable("ledger_result_invalid")
-            result["ledger"].update(read_status="observed", sha256=digest, records_count=count)
+            result["ledger"].update(read_status="partial", sha256=digest, records_count=count)
+            _classify_ledger(store, account=account, profile=target["strategy_profile"],
+                             expected_digest=digest, expected_count=count,
+                             projection=result["ledger"]["classification"])
+            if result["ledger"]["classification"]["complete"]:
+                result["ledger"]["read_status"] = "observed"
         stage = "metadata"
         result["serving_stable_after_storage"] = metadata._serving(read("services", service, project, region), service) == revision
         if not result["serving_stable_after_storage"]:
             raise metadata._Unavailable("serving_changed_after_storage")
-        result.update(status="observed_state", reason="observed")
+        if result["ledger"]["classification"]["complete"]:
+            result.update(status="observed_state", reason="observed")
+        else:
+            result["reason"] = "ledger_classification_incomplete"
     except metadata._Unavailable as exc:
         reason = str(exc)
         result["reason"] = reason if reason in metadata._REASONS | _LOCAL_REASONS else "state_read_unavailable"

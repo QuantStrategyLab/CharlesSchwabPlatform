@@ -66,7 +66,7 @@ class Store:
     def __init__(self, *, present=True, owner=None, digest=None, error=None):
         self.present = present
         self.owner = _owner() if owner is None else owner
-        self.digest = ("a" * 64, 2) if digest is None else digest
+        self.digest = digest
         self.error = error
         self.events = []
 
@@ -84,7 +84,38 @@ class Store:
         self.events.append(("ledger", kwargs))
         if self.error == "ledger":
             raise PermissionError("private-storage-error-canary")
-        return self.digest
+        entries = self._entries()
+        return self.digest if self.digest is not None else (reader._entries_digest(entries), sum(map(len, entries.values())))
+
+    def _cloud_uri_for_namespace(self, key, namespace):
+        return URI + "/" + namespace + "/" + key + ".json"
+
+    namespace = "execution_markers"
+    outcome_namespace = "execution_outcomes"
+
+    def _entries(self):
+        key, claim, outcome = _records()
+        return {self.namespace: [(self._cloud_uri_for_namespace(key, self.namespace), json.dumps(claim))],
+                self.outcome_namespace: [(self._cloud_uri_for_namespace(key, self.outcome_namespace), json.dumps(outcome))]}
+
+    def _recent_ledger_entries(self, *, namespace, relative_prefix, record_limit):
+        self.events.append(("entries", {"namespace": namespace, "relative_prefix": relative_prefix, "record_limit": record_limit}))
+        return self._entries()[namespace]
+
+
+def _records(*, status="pending_reconciliation", order_status="unknown", signal="2026-10-24", effective="2026-10-25"):
+    from quant_platform_kit.common.execution_state import build_execution_marker_key
+
+    key = build_execution_marker_key(platform="schwab", strategy_profile=PROFILE, account_scope=ACCOUNT,
+        execution_mode="live", signal_date=signal, effective_date=effective)
+    common = {"strategy_profile": PROFILE, "account_scope": ACCOUNT, "dry_run_only": False,
+              "signal_date": signal, "effective_date": effective}
+    claim = {"schema_version": "execution_claim.v1", "marker_key": key, "state": "claimed", "metadata": dict(common)}
+    outcome = {"schema_version": "execution_outcome.v1", "marker_key": key, "metadata": {
+        **common, "execution_status": status, "broker_submission_done": False,
+        "orders_pending_count": 1, "submitted_orders": [{"status": order_status, "private_amount": 123456.78}],
+    }}
+    return key, claim, outcome
 
 
 def _probe(source, target, *, store=None, replies=None, env=None, factory=None):
@@ -285,15 +316,14 @@ def test_original_cloud_only_store_reads_owner_and_native_scoped_bounded_ledger(
     import socket
 
     import quant_platform_kit.cloud as cloud
-    from quant_platform_kit.common.execution_state import ExecutionMarkerStore, build_execution_marker_key
+    from quant_platform_kit.common.execution_state import ExecutionMarkerStore
 
     original = ExecutionMarkerStore(local_dir=None, cloud_prefix_uri=URI)
     objects = {original._cloud_uri(_owner()["marker_key"]): json.dumps(_owner())}
     for index in range(records):
-        key = build_execution_marker_key(platform="schwab", strategy_profile=PROFILE, account_scope=ACCOUNT,
-            execution_mode="live", signal_date=f"{index:04d}", effective_date="2026-10-25")
-        objects[original._cloud_uri(key)] = json.dumps({"private_amount": 123456.78, "state": "claimed"})
-        objects[original._outcome_cloud_uri(key)] = json.dumps({"execution_status": "UNKNOWN", "private_amount": 123456.78})
+        key, claim, outcome = _records(signal=f"{index:04d}")
+        objects[original._cloud_uri(key)] = json.dumps(claim)
+        objects[original._outcome_cloud_uri(key)] = json.dumps(outcome)
     # A wrong control-plane namespace must not leak into this account's digest.
     objects[URI + "/execution_markers/v1/schwab/private-scope-canary/other.json"] = "unrelated"
     calls = []
@@ -322,8 +352,12 @@ def test_original_cloud_only_store_reads_owner_and_native_scoped_bounded_ledger(
     result, _, _ = _probe(source, target, factory=reader._existing_store)
     assert result["status"] == "observed_state"
     assert result["ledger"]["records_count"] == 2 * min(256, records)
-    assert sum(call[0] == "list" for call in calls) == 2
-    assert sum(call[0] == "read" for call in calls) == 1 + 2 * min(256, records)
+    assert sum(call[0] == "list" for call in calls) == 6
+    assert sum(call[0] == "read" for call in calls) == 1 + 6 * min(256, records)
+    classification = result["ledger"]["classification"]
+    assert classification["claim_records_count"] == classification["outcome_records_count"] == min(256, records)
+    assert classification["paired_count"] == classification["explicit_unknown_outcomes_count"] == min(256, records)
+    assert classification["complete"] is True
     _no_authority(result)
     assert "private_amount" not in json.dumps(result) and "UNKNOWN" not in json.dumps(result)
 
@@ -337,6 +371,138 @@ def test_original_factory_disables_local_fallback_and_rejects_runner_provider(mo
     monkeypatch.setattr(cloud, "_PROVIDER", "local")
     with pytest.raises(reader.metadata._Unavailable, match="storage_provider_unavailable"):
         reader._existing_store(source="SCHWAB_EXECUTION_STATE_CLOUD_URI", uri=URI, project="synthetic-project")
+
+
+def _entry_store(records):
+    store = Store()
+    entries = {store.namespace: [], store.outcome_namespace: []}
+    for namespace, key, payload in records:
+        entries[namespace].append((store._cloud_uri_for_namespace(key, namespace),
+                                   payload if isinstance(payload, str) else json.dumps(payload)))
+    store._entries = lambda: entries
+    return store
+
+
+def test_pairing_counts_are_only_within_recent_window_and_unknown_is_not_resolved(source, target):
+    first, claim, unknown = _records()
+    second, claim2, _ = _records(signal="2026-10-23")
+    third, _, orphan = _records(signal="2026-10-22", order_status="accepted")
+    store = _entry_store([(Store.namespace, first, claim), (Store.namespace, second, claim2),
+                          (Store.outcome_namespace, first, unknown), (Store.outcome_namespace, third, orphan)])
+    result, _, _ = _probe(source, target, store=store)
+    counts = result["ledger"]["classification"]
+    assert result["status"] == "observed_state" and counts["complete"] is True
+    assert counts["claim_records_count"] == counts["outcome_records_count"] == 2
+    assert counts["paired_count"] == 1
+    assert counts["claims_without_outcome_in_window_count"] == counts["outcomes_without_claim_in_window_count"] == 1
+    assert counts["explicit_unknown_outcomes_count"] == counts["pending_reconciliation_outcomes_count"] == 1
+    assert counts["recorded_no_pending_outcomes_count"] == counts["invalid_records_count"] == 0
+    _no_authority(result)
+    assert first not in json.dumps(result) and second not in json.dumps(result)
+
+
+@pytest.mark.parametrize("status", ["completed", "no_action", "no_op"])
+@pytest.mark.parametrize("signal,effective", [("2026-10-24", "2026-10-25"), ("", "2026-10-25"), ("2026-10-24", "")])
+def test_only_original_replay_empty_no_pending_contract_is_classified(source, target, status, signal, effective):
+    key, claim, outcome = _records(status=status, signal=signal, effective=effective)
+    outcome["metadata"].update(orders_pending_count=0, submitted_orders=[])
+    result, _, _ = _probe(source, target, store=_entry_store([
+        (Store.namespace, key, claim), (Store.outcome_namespace, key, outcome)]))
+    counts = result["ledger"]["classification"]
+    assert counts["recorded_no_pending_outcomes_count"] == 1 and counts["complete"] is True
+    _no_authority(result)
+
+
+@pytest.mark.parametrize("status,orders", [("executed", []), ("submitted", []), ("UNKNOWN", []),
+    ("private-unrecognized-status-canary", []), ("completed", [{"status": "accepted"}])])
+def test_unrecognized_or_nonempty_terminal_states_remain_unclassified_partial(source, target, status, orders):
+    key, claim, outcome = _records(status=status)
+    outcome["metadata"].update(orders_pending_count=0, submitted_orders=orders)
+    result, events, _ = _probe(source, target, store=_entry_store([
+        (Store.namespace, key, claim), (Store.outcome_namespace, key, outcome)]))
+    counts = result["ledger"]["classification"]
+    assert result["status"] == "partial_state" and result["reason"] == "ledger_classification_incomplete"
+    assert counts["unclassified_outcomes_count"] == 1 and counts["complete"] is False
+    assert counts["recorded_no_pending_outcomes_count"] == 0 and len(events) == 5
+    assert status not in json.dumps(result) if "private" in status else True
+    _no_authority(result)
+
+
+@pytest.mark.parametrize("fault", ["json", "duplicate_json", "wrong_key", "wrong_account", "wrong_profile", "dry_run", "invalid_count", "invalid_pending", "wrong_dates", "legacy_schema", "duplicate_entry"])
+def test_invalid_records_do_not_turn_subset_pairing_or_unknown_into_exact_counts(source, target, fault):
+    key, claim, outcome = _records()
+    if fault == "wrong_key":
+        outcome["marker_key"] += "/other"
+    elif fault == "wrong_account":
+        outcome["metadata"]["account_scope"] = "other-account-canary"
+    elif fault == "wrong_profile":
+        outcome["metadata"]["strategy_profile"] = "other-profile"
+    elif fault == "dry_run":
+        outcome["metadata"]["dry_run_only"] = True
+    elif fault == "invalid_count":
+        outcome["metadata"]["orders_pending_count"] = True
+    elif fault == "invalid_pending":
+        outcome["metadata"]["orders_pending_count"] = 0
+    elif fault == "wrong_dates":
+        outcome["metadata"]["signal_date"] = "wrong-date-canary"
+    elif fault == "legacy_schema":
+        outcome["schema_version"] = "execution_marker.v1"
+    elif fault in {"json", "duplicate_json"}:
+        outcome = "private-malformed-canary" if fault == "json" else '{"marker_key":"private-a","marker_key":"private-b"}'
+    values = [(Store.namespace, key, claim), (Store.outcome_namespace, key, outcome)]
+    if fault == "duplicate_entry":
+        values.append((Store.outcome_namespace, key, outcome))
+    result, _, _ = _probe(source, target, store=_entry_store(values))
+    counts = result["ledger"]["classification"]
+    assert result["status"] == "partial_state" and counts["invalid_records_count"] == 1
+    assert counts["paired_count"] is None and counts["explicit_unknown_outcomes_count"] is None
+    assert counts["complete"] is False and "canary" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("change", ["before_after", "middle_only"])
+def test_changed_window_is_partial_even_when_endpoint_digests_match(source, target, change):
+    store = Store()
+    original = store.calculate_recent_ledger_digest(platform="schwab")
+    if change == "middle_only":
+        changed = copy.deepcopy(store._entries())
+        namespace = Store.outcome_namespace
+        uri, content = changed[namespace][0]
+        changed[namespace][0] = (uri, content + " ")
+        store._entries = lambda: changed
+        store.digest = original
+    else:
+        original_method = store.calculate_recent_ledger_digest
+        calls = []
+
+        def digest(**kwargs):
+            calls.append(1)
+            return original_method(**kwargs) if len(calls) == 1 else ("f" * 64, 2)
+
+        store.calculate_recent_ledger_digest = digest
+    result, _, _ = _probe(source, target, store=store)
+    counts = result["ledger"]["classification"]
+    assert result["reason"] == "ledger_window_changed" and result["status"] == "partial_state"
+    assert counts["window_stable"] is False and counts["complete"] is False
+    assert counts["paired_count"] is None and counts["invalid_records_count"] is None
+    _no_authority(result)
+
+
+def test_second_namespace_failure_keeps_first_count_and_other_fields_unknown(source, target):
+    store = Store()
+    original = store._recent_ledger_entries
+
+    def entries(**kwargs):
+        if kwargs["namespace"] == store.outcome_namespace:
+            raise PermissionError("private-ledger-read-canary")
+        return original(**kwargs)
+
+    store._recent_ledger_entries = entries
+    result, _, _ = _probe(source, target, store=store)
+    counts = result["ledger"]["classification"]
+    assert result["reason"] == "ledger_read_failed" and result["status"] == "partial_state"
+    assert counts["claim_records_count"] == 1 and counts["outcome_records_count"] is None
+    assert counts["paired_count"] is None and counts["explicit_unknown_outcomes_count"] is None
+    assert "canary" not in json.dumps(result)
 
 
 def test_safe_artifact_is_exclusive_private_and_arguments_cannot_select_sources(source, target, monkeypatch, tmp_path, capsys):
