@@ -60,6 +60,10 @@ uv run --no-sync python scripts/check_qpk_pin_consistency.py
 - 讨论、issue 和 review 请遵守 [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)。
 - 涉及密钥、自动化、券商/交易所或云资源的漏洞请按 [SECURITY.md](SECURITY.md) 私密报告；不要为 secret 或实盘风险开公开 issue。
 
+## 参与贡献
+
+见 [CONTRIBUTING.md](CONTRIBUTING.md)。AI 助手与维护者遵循 [AGENTS.md](AGENTS.md)。
+
 ## 许可证
 
 详见 [LICENSE](LICENSE)。
