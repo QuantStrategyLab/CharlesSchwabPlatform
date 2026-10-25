@@ -62,6 +62,8 @@ env:
   GCP_RUNTIME_SERVICE_ACCOUNT: schwab-platform-runtime@charlesschwabquant.iam.gserviceaccount.com
   GCP_SCHEDULER_SERVICE_ACCOUNT: schwab-platform-scheduler@charlesschwabquant.iam.gserviceaccount.com
   GCP_ARTIFACT_REGISTRY_REPOSITORY: cloud-run-source-deploy
+  WEBSITE_OBSERVATION_SOURCE: f685856e41c82e90afe6a02436d00e70a32bf071
+  WEBSITE_OBSERVATION_TREE: 6f8b0e7123e68d4846897cb0c99b6c60c238775b
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
@@ -284,6 +286,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ github.sha }}
+          fetch-depth: 0
 
       - name: Verify approved source
         if: steps.config.outputs.enabled == 'true'
@@ -483,6 +486,22 @@ jobs:
             "${projection_args[@]}"
 
 
+      - name: Checkout reviewed website observation source
+        if: steps.config.outputs.deploy_enabled == 'true' && inputs.notification_only != true
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.WEBSITE_OBSERVATION_SOURCE }}
+          path: website-observation-source
+
+      - name: Verify reviewed website observation source
+        if: steps.config.outputs.deploy_enabled == 'true' && inputs.notification_only != true
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = "refs/heads/main"
+          test "$(git -C website-observation-source rev-parse HEAD)" = "$WEBSITE_OBSERVATION_SOURCE"
+          test "$(git -C website-observation-source rev-parse 'HEAD^{tree}')" = "$WEBSITE_OBSERVATION_TREE"
+          git merge-base --is-ancestor "$WEBSITE_OBSERVATION_SOURCE" HEAD
+
       - name: Build, push, and deploy Cloud Run image
         id: deploy
         if: steps.config.outputs.deploy_enabled == 'true' && inputs.notification_only != true
@@ -496,10 +515,10 @@ jobs:
           image="${image_repo}:${GITHUB_SHA}"
 
           gcloud auth configure-docker "${artifact_registry_hostname}" --quiet
-          git archive HEAD | docker build --pull -t "${image}" -
+          git -C website-observation-source archive HEAD | docker build --pull -t "${image}" -
           # RS-08 guard: block the deploy if the image's installed UES revision differs from
           # strategy_release / runtime-risk binding (live would reject every SOXL rebalance).
-          python3 scripts/verify_image_ues_release_binding.py --image "${image}" --lockfile uv.lock
+          python3 scripts/verify_image_ues_release_binding.py --image "${image}" --lockfile website-observation-source/uv.lock
           docker push "${image}"
           image_digest="$(gcloud artifacts docker images describe "${image}" --project="${GCP_PROJECT_ID}" --format='value(image_summary.digest)')"
           if [[ ! "${image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
@@ -527,7 +546,7 @@ jobs:
             --memory=512Mi \
             --cpu=1 \
             --timeout=300s \
-            --labels="managed-by=github-actions,commit-sha=${GITHUB_SHA},github-run-id=${GITHUB_RUN_ID}" \
+            --labels="managed-by=github-actions,commit-sha=${WEBSITE_OBSERVATION_SOURCE},github-run-id=${GITHUB_RUN_ID}" \
             --no-traffic \
             --deploy-health-check \
             --startup-probe="httpGet.path=/health,httpGet.port=8080,periodSeconds=10,timeoutSeconds=5,failureThreshold=24" \
@@ -552,7 +571,7 @@ jobs:
             --scheduler-location="${CLOUD_SCHEDULER_LOCATION:-${CLOUD_RUN_REGION}}" \
             "${cash_currency_args[@]}" \
             --before="${DEPLOY_READBACK_FILE}" \
-            --expected-sha="${EXPECTED_SHA}" \
+            --expected-sha="${WEBSITE_OBSERVATION_SOURCE}" \
             --expected-image-digest="${EXPECTED_IMAGE_DIGEST}"
 
       - name: Checkout reviewed notification source

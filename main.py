@@ -20,6 +20,7 @@ from application.account_observation import (
     declare_net_assets_currency,
     expected_account_hash_from_selector,
 )
+from application.stock_inventory import collect_stock_inventory
 from application.broker_reconciliation import (
     SchwabReconciliationReadError,
     build_reconciliation_candidate,
@@ -1147,6 +1148,23 @@ def _handle_schwab_probe(*, response_body: str = "Probe OK"):
             cash_currency=os.getenv("SCHWAB_CASH_CURRENCY"),
         )
         if account_observation is not None:
+            # A reporting-only read must not replace the strategy's filtered
+            # snapshot or turn an unavailable inventory into a claimed empty set.
+            try:
+                inventory = collect_stock_inventory(
+                    client,
+                    account_hash=account_observation["account_hash"],
+                    currency=account_observation.get("net_assets_currency"),
+                )
+                if inventory is not None:
+                    account_observation.update(inventory)
+            except Exception as exc:
+                log_runtime_event(
+                    log_context,
+                    "stock_inventory_read_failed",
+                    message="Optional read-only stock inventory unavailable",
+                    error_type=type(exc).__name__,
+                )
             summary["account_observation"] = account_observation
             if external_flow_enabled(os.environ) and account_observation.get("net_assets_currency") == "USD":
                 try:

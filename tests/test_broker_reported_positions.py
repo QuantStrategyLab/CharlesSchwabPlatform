@@ -348,3 +348,44 @@ def test_invalid_archive_cost_retains_holding_without_inventing_cost(cost):
     }]))
     assert body["broker_reported_positions"][0]["quantity"] == "4"
     assert "avg_cost" not in body["broker_reported_positions"][0]
+
+
+def _native_stock_report(rows):
+    report = _report_with_positions(rows, scope="stocks_only")
+    report["summary"]["account_observation"].update({
+        "broker_reported_positions_complete": True,
+        "broker_reported_positions_observed_at": "2026-09-30T22:22:00Z",
+    })
+    return report
+
+
+@pytest.mark.parametrize("rows", [[], [{"symbol": "OUTSIDE", "quantity": "-2",
+    "market_value": None, "currency": "USD", "currency_source": "owner_confirmed"}]])
+def test_native_inventory_projection_preserves_known_empty_missing_price_and_window(rows):
+    body = _project(_native_stock_report(rows))
+    assert body["broker_reported_positions"] == rows
+    assert body["broker_reported_positions_scope"] == "stocks_only"
+    assert body["broker_reported_positions_complete"] is True
+    assert body["observed_started_at"] == "2026-09-30T22:21:00Z"
+    assert body["observed_finished_at"] == "2026-09-30T22:22:00Z"
+    assert body["snapshot_atomic"] is False
+    assert publisher.prepare_sync_payload(body, include_positions=True)["broker_reported_positions_complete"] is True
+    assert all(not key.startswith("broker_reported_positions") for key in publisher.prepare_sync_payload(body))
+    assert "broker_reported_positions_observed_at" not in publisher.prepare_sync_payload(body, include_positions=True)
+
+
+@pytest.mark.parametrize("patch", [
+    {"broker_reported_positions_complete": False},
+    {"broker_reported_positions_complete": None},
+    {"broker_reported_positions_observed_at": None},
+    {"broker_reported_positions_observed_at": "2026-09-30T22:20:59Z"},
+    {"broker_reported_positions_observed_at": "2026-09-30T22:25:01Z"},
+])
+def test_bad_native_inventory_does_not_erase_valid_balances_or_claim_empty(patch):
+    report = _native_stock_report([])
+    report["summary"]["account_observation"].update(patch)
+    body = _project(report)
+    assert "status" not in body and body["broker_reported_balances"]
+    assert "broker_reported_positions_complete" not in body
+    assert "broker_reported_positions" not in body
+    assert body["observed_finished_at"] == "2026-09-30T22:21:00Z"

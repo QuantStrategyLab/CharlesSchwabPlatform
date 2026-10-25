@@ -144,6 +144,7 @@ jobs:
             tests/test_schwab_token_secret_readiness.py \
             tests/test_publish_account_facts_from_reports.py \
             tests/test_account_observation.py \
+            tests/test_schwab_stock_inventory.py \
             tests/test_runtime_monitor_workflows.py \
             tests/test_rebalance_service.py
 

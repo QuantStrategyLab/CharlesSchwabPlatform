@@ -64,7 +64,9 @@ import tempfile
 build_command = next(line.strip() for line in Path(sys.argv[1]).read_text().splitlines() if "docker build --pull" in line)
 with tempfile.TemporaryDirectory() as directory:
     root = Path(directory)
-    checkout = root / "checkout"
+    control = root / "checkout"
+    control.mkdir()
+    checkout = control / "website-observation-source"
     checkout.mkdir()
     env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
     def git(*args):
@@ -75,6 +77,8 @@ with tempfile.TemporaryDirectory() as directory:
     git("add", "Dockerfile", "tracked.txt")
     git("-c", "user.name=synthetic", "-c", "user.email=synthetic@example.invalid", "-c", "commit.gpgSign=false", "commit", "-qm", "synthetic")
     (checkout / "gha-creds-synthetic.json").write_text('{"synthetic":true}\n')
+    (control / "gha-creds-control.json").write_text('{"synthetic":true}\n')
+    (control / "tracked-maintenance-only.txt").write_text("not the approved runtime source\n")
     bin_dir = root / "bin"
     bin_dir.mkdir()
     docker = bin_dir / "docker"
@@ -88,11 +92,45 @@ if names != {"Dockerfile", "tracked.txt"}:
 ''')
     docker.chmod(0o700)
     env.update(PATH=f"{bin_dir}:{os.environ['PATH']}", image="synthetic:test")
-    result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + build_command], cwd=checkout, env=env, capture_output=True)
+    result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + build_command], cwd=control, env=env, capture_output=True)
     if result.returncode:
         raise SystemExit("FAIL: generated authentication file is not excluded by the build boundary")
 print("PASS: tracked-source container build excludes generated authentication files")
 PY
+
+# Exercise the real frozen-source guard: branch, commit, tree and ancestry.
+python3 - "$workflow" <<'PY_GUARD'
+import json, os, subprocess, sys, tempfile
+from pathlib import Path
+wf = json.loads(subprocess.check_output(["ruby", "-rjson", "-ryaml", "-e", "puts JSON.generate(YAML.load_file(ARGV[0]))", sys.argv[1]]))
+guard = next(s["run"] for s in wf["jobs"]["sync-cloud-run-env"]["steps"] if s.get("name") == "Verify reviewed website observation source")
+with tempfile.TemporaryDirectory() as directory:
+    root = Path(directory)
+    env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+    def git(*args, cwd=root):
+        return subprocess.check_output(["git", *args], cwd=cwd, env=env, stderr=subprocess.DEVNULL, text=True).strip()
+    git("init", "-q")
+    git("config", "user.name", "synthetic")
+    git("config", "user.email", "synthetic@example.invalid")
+    (root / "runtime.txt").write_text("reviewed source\n")
+    git("add", "runtime.txt"); git("-c", "commit.gpgSign=false", "commit", "-qm", "source")
+    source = git("rev-parse", "HEAD"); tree = git("rev-parse", "HEAD^{tree}")
+    git("clone", "-q", ".", "website-observation-source")
+    (root / "control.txt").write_text("approved control\n")
+    git("add", "control.txt"); git("-c", "commit.gpgSign=false", "commit", "-qm", "control")
+    baseline = dict(env, GITHUB_REF="refs/heads/main", WEBSITE_OBSERVATION_SOURCE=source, WEBSITE_OBSERVATION_TREE=tree)
+    def run(changes=None):
+        return subprocess.run(["bash", "-c", guard], cwd=root, env={**baseline, **(changes or {})}, capture_output=True).returncode
+    assert run() == 0
+    for changes in ({"GITHUB_REF": "refs/heads/unapproved"}, {"WEBSITE_OBSERVATION_SOURCE": "0" * 40}, {"WEBSITE_OBSERVATION_TREE": "0" * 40}):
+        assert run(changes) != 0
+    nested = root / "website-observation-source"
+    git("config", "user.name", "synthetic", cwd=nested); git("config", "user.email", "synthetic@example.invalid", cwd=nested)
+    (nested / "unadopted.txt").write_text("not an ancestor\n")
+    git("add", "unadopted.txt", cwd=nested); git("-c", "commit.gpgSign=false", "commit", "-qm", "unadopted", cwd=nested)
+    assert run({"WEBSITE_OBSERVATION_SOURCE": git("rev-parse", "HEAD", cwd=nested), "WEBSITE_OBSERVATION_TREE": git("rev-parse", "HEAD^{tree}", cwd=nested)}) != 0
+print("PASS: frozen runtime source rejects wrong branch, commit, tree and unadopted ancestry")
+PY_GUARD
 
 # Execute the actual mode selector with no connected services. Mixed-operation
 # approvals must stop before checkout/auth; default HTTP remains available.
