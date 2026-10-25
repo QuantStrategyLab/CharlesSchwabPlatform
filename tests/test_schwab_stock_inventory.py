@@ -73,6 +73,50 @@ def test_missing_identity_or_currency_does_not_request_and_failure_not_empty():
         collect_stock_inventory(client, account_hash="synthetic-bound-hash", currency="USD")
 
 
+@pytest.mark.parametrize("positions", [[], [stock()]])
+def test_missing_field_can_use_explicit_inventory_for_the_single_verified_linked_account(positions):
+    client = Mock()
+    client.get_account.return_value.json.return_value = {"securitiesAccount": {}}
+    client.get_account_numbers.return_value.json.return_value = [
+        {"accountNumber": "synthetic-account", "hashValue": "synthetic-bound-hash"}]
+    client.get_accounts.return_value.json.return_value = [
+        {"securitiesAccount": {"accountNumber": "synthetic-account", "positions": positions}}]
+    result = collect_stock_inventory(client, account_hash="synthetic-bound-hash", currency="USD")
+    assert result["broker_reported_positions_complete"] is True
+    assert len(result["broker_reported_positions"]) == len(positions)
+    client.get_account_numbers.assert_called_once_with()
+    client.get_accounts.assert_called_once_with(fields=client.get_account.call_args.kwargs["fields"])
+
+
+@pytest.mark.parametrize("mapping", [[], [
+    {"accountNumber": "synthetic-account", "hashValue": "wrong-bound-hash"}], [
+    {"accountNumber": "synthetic-account", "hashValue": "synthetic-bound-hash"},
+    {"accountNumber": "other-account", "hashValue": "other-hash"}]])
+def test_missing_inventory_never_broadens_the_authorized_account_scope(mapping):
+    client = Mock()
+    client.get_account.return_value.json.return_value = {"securitiesAccount": {}}
+    client.get_account_numbers.return_value.json.return_value = mapping
+    result = collect_stock_inventory(client, account_hash="synthetic-bound-hash", currency="USD")
+    assert result["broker_stock_inventory_status"] == "unknown"
+    assert "broker_reported_positions_complete" not in result
+    client.get_accounts.assert_not_called()
+
+
+@pytest.mark.parametrize("linked", [[], [
+    {"securitiesAccount": {"accountNumber": "other-account", "positions": []}}], [
+    {"securitiesAccount": {"accountNumber": "synthetic-account"}}], [
+    {"securitiesAccount": {"accountNumber": "synthetic-account", "positions": None}}]])
+def test_linked_account_omission_or_identity_mismatch_remains_unknown(linked):
+    client = Mock()
+    client.get_account.return_value.json.return_value = {"securitiesAccount": {}}
+    client.get_account_numbers.return_value.json.return_value = [
+        {"accountNumber": "synthetic-account", "hashValue": "synthetic-bound-hash"}]
+    client.get_accounts.return_value.json.return_value = linked
+    result = collect_stock_inventory(client, account_hash="synthetic-bound-hash", currency="USD")
+    assert result["broker_stock_inventory_status"] == "unknown"
+    assert "broker_reported_positions_complete" not in result
+
+
 @pytest.mark.parametrize("read_fails", [False, True])
 def test_probe_attaches_inventory_without_changing_strategy_snapshot_or_health(read_fails):
     from types import SimpleNamespace
