@@ -1158,7 +1158,19 @@ def _handle_schwab_probe(*, response_body: str = "Probe OK"):
                 )
                 if inventory is not None:
                     account_observation.update(inventory)
+                    inventory_diagnostics = inventory.get("broker_stock_inventory_diagnostics", {})
+                    log_runtime_event(
+                        log_context,
+                        "stock_inventory_observed",
+                        message="Read-only stock inventory coverage",
+                        inventory_status=inventory.get("broker_stock_inventory_status"),
+                        inventory_reason=inventory_diagnostics.get("reason"),
+                        native_positions_present=inventory_diagnostics.get("positions_field_present"),
+                        native_positions_count=inventory_diagnostics.get("native_positions_count"),
+                        projected_stock_count=inventory_diagnostics.get("projected_stock_count"),
+                    )
             except Exception as exc:
+                account_observation["broker_stock_inventory_status"] = "read_failed"
                 log_runtime_event(
                     log_context,
                     "stock_inventory_read_failed",

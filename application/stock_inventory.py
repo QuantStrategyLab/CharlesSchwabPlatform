@@ -29,36 +29,48 @@ def _decimal(value: Any) -> Decimal | None:
     return amount
 
 
-def project_stock_inventory(payload: Any, *, currency: str | None) -> list[dict[str, Any]] | None:
+def project_stock_inventory(
+    payload: Any, *, currency: str | None, diagnostics: dict[str, Any] | None = None,
+) -> list[dict[str, Any]] | None:
     """None means unknown; an explicit valid list can prove an empty stock scope."""
-    if currency != "USD" or not isinstance(payload, Mapping):
+    def unknown(reason: str) -> None:
+        if diagnostics is not None:
+            diagnostics["reason"] = reason
         return None
+
+    if currency != "USD" or not isinstance(payload, Mapping):
+        return unknown("currency_or_payload_unusable")
     account = payload.get("securitiesAccount")
     if not isinstance(account, Mapping):
-        return None
+        return unknown("account_object_missing")
     native = account.get("positions")
+    if diagnostics is not None:
+        diagnostics["positions_field_present"] = "positions" in account
+        diagnostics["native_positions_count"] = len(native) if isinstance(native, list) else None
+    if "positions" not in account:
+        return unknown("positions_field_missing")
     if not isinstance(native, list) or len(native) > 512:
-        return None
+        return unknown("positions_list_unusable")
     rows = []
     seen: set[str] = set()
     for position in native:
         if not isinstance(position, Mapping) or not isinstance(position.get("instrument"), Mapping):
-            return None
+            return unknown("position_instrument_unusable")
         instrument = position["instrument"]
         asset_type = instrument.get("assetType")
         if not isinstance(asset_type, str):
-            return None
+            return unknown("instrument_type_missing")
         if asset_type in _NON_STOCK_TYPES:
             continue
         if asset_type != "EQUITY":
-            return None
+            return unknown("instrument_type_unsupported")
         symbol = instrument.get("symbol")
         if not isinstance(symbol, str) or _SYMBOL.fullmatch(symbol) is None or symbol in seen:
-            return None
+            return unknown("stock_symbol_unusable_or_duplicate")
         long_quantity = _decimal(position.get("longQuantity"))
         short_quantity = _decimal(position.get("shortQuantity"))
         if long_quantity is None or short_quantity is None or min(long_quantity, short_quantity) < 0:
-            return None
+            return unknown("stock_quantity_unusable")
         seen.add(symbol)
         market_value = _decimal(position.get("marketValue"))
         rows.append({
@@ -69,7 +81,10 @@ def project_stock_inventory(payload: Any, *, currency: str | None) -> list[dict[
             "currency_source": "owner_confirmed",
         })
         if len(rows) > 64:
-            return None
+            return unknown("stock_inventory_too_large")
+    if diagnostics is not None:
+        diagnostics["projected_stock_count"] = len(rows)
+        diagnostics["reason"] = "available"
     return sorted(rows, key=lambda row: row["symbol"])
 
 
@@ -81,10 +96,16 @@ def collect_stock_inventory(client: Any, *, account_hash: str, currency: str | N
 
     response = client.get_account(account_hash, fields=Client.Account.Fields.POSITIONS)
     response.raise_for_status()
-    rows = project_stock_inventory(response.json(), currency=currency)
+    diagnostics: dict[str, Any] = {}
+    rows = project_stock_inventory(response.json(), currency=currency, diagnostics=diagnostics)
+    state = {
+        "broker_stock_inventory_status": "available" if rows is not None else "unknown",
+        "broker_stock_inventory_diagnostics": diagnostics,
+    }
     if rows is None:
-        return None
+        return state
     return {
+        **state,
         "broker_reported_positions": rows,
         "broker_reported_positions_scope": "stocks_only",
         "broker_reported_positions_complete": True,

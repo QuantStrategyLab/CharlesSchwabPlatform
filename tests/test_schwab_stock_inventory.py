@@ -106,3 +106,19 @@ def test_probe_attaches_inventory_without_changing_strategy_snapshot_or_health(r
     assert ("broker_reported_positions_complete" in recorded) is not read_fails
     if not read_fails:
         assert recorded["broker_reported_positions"] == []
+
+
+@pytest.mark.parametrize("native,reason,present,count", [
+    ({"securitiesAccount": {}}, "positions_field_missing", False, None),
+    (payload([]), "available", True, 0),
+    (payload([stock(shortQuantity=None)]), "stock_quantity_unusable", True, 1),
+])
+def test_native_shape_diagnostics_distinguish_missing_empty_and_malformed_without_values(native, reason, present, count):
+    client = Mock(); client.get_account.return_value.json.return_value = native
+    result = collect_stock_inventory(client, account_hash="synthetic-bound-hash", currency="USD")
+    info = result["broker_stock_inventory_diagnostics"]
+    assert info["reason"] == reason and info["positions_field_present"] is present
+    assert info["native_positions_count"] == count
+    assert set(info) <= {"reason", "positions_field_present", "native_positions_count", "projected_stock_count"}
+    assert (result["broker_stock_inventory_status"] == "available") is (reason == "available")
+    assert ("broker_reported_positions_complete" in result) is (reason == "available")
