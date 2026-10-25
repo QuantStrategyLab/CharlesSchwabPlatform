@@ -1,5 +1,6 @@
 """Synthetic current holdings from the read-only native account endpoint."""
 from copy import deepcopy
+import json
 from unittest.mock import Mock
 
 import pytest
@@ -61,6 +62,10 @@ def test_native_read_uses_only_selected_account_and_requests_positions():
     assert client.get_account.call_args.args == ("synthetic-bound-hash",)
     assert client.mock_calls[0].args == ("synthetic-bound-hash",)
     assert response.raise_for_status.call_count == 1
+    diagnostics = result["broker_stock_inventory_diagnostics"]
+    assert diagnostics["fallback_attempted"] is False
+    assert diagnostics["fallback_reason"] == "not_needed"
+    assert diagnostics["linked_positions_field_present"] is None
 
 
 def test_missing_identity_or_currency_does_not_request_and_failure_not_empty():
@@ -84,29 +89,38 @@ def test_missing_field_can_use_explicit_inventory_for_the_single_verified_linked
     result = collect_stock_inventory(client, account_hash="synthetic-bound-hash", currency="USD")
     assert result["broker_reported_positions_complete"] is True
     assert len(result["broker_reported_positions"]) == len(positions)
+    diagnostics = result["broker_stock_inventory_diagnostics"]
+    assert diagnostics["fallback_attempted"] is True
+    assert diagnostics["fallback_reason"] == "linked_read_completed"
+    assert diagnostics["linked_positions_field_present"] is True
     client.get_account_numbers.assert_called_once_with()
     client.get_accounts.assert_called_once_with(fields=client.get_account.call_args.kwargs["fields"])
 
 
-@pytest.mark.parametrize("mapping", [[], [
-    {"accountNumber": "synthetic-account", "hashValue": "wrong-bound-hash"}], [
+@pytest.mark.parametrize("mapping,reason", [(None, "mapping_unusable"), ([], "mapping_not_single"), ([
+    {"accountNumber": "synthetic-account", "hashValue": "wrong-bound-hash"}], "mapping_unverified"), ([
     {"accountNumber": "synthetic-account", "hashValue": "synthetic-bound-hash"},
-    {"accountNumber": "other-account", "hashValue": "other-hash"}]])
-def test_missing_inventory_never_broadens_the_authorized_account_scope(mapping):
+    {"accountNumber": "other-account", "hashValue": "other-hash"}], "mapping_not_single")])
+def test_missing_inventory_never_broadens_the_authorized_account_scope(mapping, reason):
     client = Mock()
     client.get_account.return_value.json.return_value = {"securitiesAccount": {}}
     client.get_account_numbers.return_value.json.return_value = mapping
     result = collect_stock_inventory(client, account_hash="synthetic-bound-hash", currency="USD")
     assert result["broker_stock_inventory_status"] == "unknown"
     assert "broker_reported_positions_complete" not in result
+    diagnostics = result["broker_stock_inventory_diagnostics"]
+    assert diagnostics["reason"] == "positions_field_missing"
+    assert diagnostics["fallback_attempted"] is False
+    assert diagnostics["fallback_reason"] == reason
+    assert diagnostics["linked_positions_field_present"] is None
     client.get_accounts.assert_not_called()
 
 
-@pytest.mark.parametrize("linked", [[], [
-    {"securitiesAccount": {"accountNumber": "other-account", "positions": []}}], [
-    {"securitiesAccount": {"accountNumber": "synthetic-account"}}], [
-    {"securitiesAccount": {"accountNumber": "synthetic-account", "positions": None}}]])
-def test_linked_account_omission_or_identity_mismatch_remains_unknown(linked):
+@pytest.mark.parametrize("linked,reason,present", [([], "linked_payload_unusable", None), ([
+    {"securitiesAccount": {"accountNumber": "other-account", "positions": []}}], "linked_identity_unverified", None), ([
+    {"securitiesAccount": {"accountNumber": "synthetic-account"}}], "linked_read_completed", False), ([
+    {"securitiesAccount": {"accountNumber": "synthetic-account", "positions": None}}], "linked_read_completed", True)])
+def test_linked_account_omission_or_identity_mismatch_remains_unknown(linked, reason, present):
     client = Mock()
     client.get_account.return_value.json.return_value = {"securitiesAccount": {}}
     client.get_account_numbers.return_value.json.return_value = [
@@ -115,6 +129,48 @@ def test_linked_account_omission_or_identity_mismatch_remains_unknown(linked):
     result = collect_stock_inventory(client, account_hash="synthetic-bound-hash", currency="USD")
     assert result["broker_stock_inventory_status"] == "unknown"
     assert "broker_reported_positions_complete" not in result
+    diagnostics = result["broker_stock_inventory_diagnostics"]
+    assert diagnostics["fallback_attempted"] is True
+    assert diagnostics["fallback_reason"] == reason
+    assert diagnostics["linked_positions_field_present"] is present
+    safe = json.dumps(diagnostics)
+    for private in ("synthetic-account", "other-account", "synthetic-bound-hash"):
+        assert private not in safe
+
+
+@pytest.mark.parametrize("missing_method", ["get_account_numbers", "get_accounts"])
+def test_unavailable_fallback_method_is_distinct_from_a_missing_linked_field(missing_method):
+    client = Mock()
+    client.get_account.return_value.json.return_value = {"securitiesAccount": {}}
+    setattr(client, missing_method, None)
+    diagnostics = collect_stock_inventory(client, account_hash="synthetic-bound-hash", currency="USD")["broker_stock_inventory_diagnostics"]
+    assert diagnostics["fallback_attempted"] is False
+    assert diagnostics["fallback_reason"] == "reader_unavailable"
+    assert diagnostics["linked_positions_field_present"] is None
+
+
+def test_real_sdk_requests_positions_for_selected_and_linked_reads_without_network():
+    from schwab.client import Client
+
+    client = Client("synthetic-api-key", Mock())
+    replies = [
+        {"securitiesAccount": {}},
+        [{"accountNumber": "synthetic-account", "hashValue": "synthetic-bound-hash"}],
+        [{"securitiesAccount": {"accountNumber": "synthetic-account"}}],
+    ]
+    def response(_path, _params):
+        result = Mock()
+        result.json.return_value = replies.pop(0)
+        return result
+    client._get_request = Mock(side_effect=response)
+    result = collect_stock_inventory(client, account_hash="synthetic-bound-hash", currency="USD")
+    assert [call.args for call in client._get_request.call_args_list] == [
+        ("/trader/v1/accounts/synthetic-bound-hash", {"fields": "positions"}),
+        ("/trader/v1/accounts/accountNumbers", {}),
+        ("/trader/v1/accounts", {"fields": "positions"}),
+    ]
+    assert result["broker_stock_inventory_diagnostics"]["fallback_attempted"] is True
+    assert result["broker_stock_inventory_diagnostics"]["linked_positions_field_present"] is False
 
 
 @pytest.mark.parametrize("read_fails", [False, True])
@@ -129,13 +185,15 @@ def test_probe_attaches_inventory_without_changing_strategy_snapshot_or_health(r
     module.build_account_observation = lambda *args, **kwargs: dict(observation)
     inventory = {"broker_reported_positions": [], "broker_reported_positions_scope": "stocks_only",
                  "broker_reported_positions_complete": True,
-                 "broker_reported_positions_observed_at": "2026-10-25T05:00:00Z"}
+                 "broker_reported_positions_observed_at": "2026-10-25T05:00:00Z",
+                 "broker_stock_inventory_diagnostics": {"fallback_attempted": True,
+                     "fallback_reason": "linked_read_completed", "linked_positions_field_present": True}}
     module.collect_stock_inventory = Mock(side_effect=RuntimeError("synthetic failure")) if read_fails else Mock(return_value=inventory)
     saved = {}
     module.build_execution_report = lambda *args, **kwargs: {"status": "pending"}
     module.persist_execution_report = lambda report, **kwargs: saved.update(report) or "/synthetic/report.json"
     module.emit_runtime_log = lambda *args, **kwargs: None
-    module.log_runtime_event = lambda *args, **kwargs: None
+    module.log_runtime_event = Mock()
     client = object()
     module.build_composer = lambda: SimpleNamespace(
         build_client=lambda: client,
@@ -150,6 +208,13 @@ def test_probe_attaches_inventory_without_changing_strategy_snapshot_or_health(r
     assert ("broker_reported_positions_complete" in recorded) is not read_fails
     if not read_fails:
         assert recorded["broker_reported_positions"] == []
+        events = [call.kwargs for call in module.log_runtime_event.call_args_list
+                  if call.args[1] == "stock_inventory_observed"]
+        assert len(events) == 1
+        assert events[0]["inventory_fallback_attempted"] is True
+        assert events[0]["inventory_fallback_reason"] == "linked_read_completed"
+        assert events[0]["linked_positions_present"] is True
+        assert "synthetic-bound-hash" not in json.dumps(events)
 
 
 @pytest.mark.parametrize("native,reason,present,count", [
@@ -163,6 +228,7 @@ def test_native_shape_diagnostics_distinguish_missing_empty_and_malformed_withou
     info = result["broker_stock_inventory_diagnostics"]
     assert info["reason"] == reason and info["positions_field_present"] is present
     assert info["native_positions_count"] == count
-    assert set(info) <= {"reason", "positions_field_present", "native_positions_count", "projected_stock_count"}
+    assert set(info) <= {"reason", "positions_field_present", "native_positions_count", "projected_stock_count",
+                        "fallback_attempted", "fallback_reason", "linked_positions_field_present"}
     assert (result["broker_stock_inventory_status"] == "available") is (reason == "available")
     assert ("broker_reported_positions_complete" in result) is (reason == "available")
