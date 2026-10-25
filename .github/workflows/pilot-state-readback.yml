@@ -1,0 +1,24 @@
+name: Schwab Pilot State Readback
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: schwab-pilot-state-readback
+  cancel-in-progress: false
+
+jobs:
+  read_state:
+    if: github.repository == 'QuantStrategyLab/CharlesSchwabPlatform' && github.ref == 'refs/heads/main' && github.run_attempt == 1
+    uses: ./.github/workflows/pilot-state-readback-protected.yml
+    # Original sources become named secrets before any runner step header.
+    secrets:
+      inventory: ${{ vars.CLOUD_RUN_SERVICE_TARGETS_JSON || secrets.CLOUD_RUN_SERVICE_TARGETS_JSON }}
+      runtime_target: ${{ vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}
+      service: ${{ secrets.CLOUD_RUN_SERVICE }}
+      services: ${{ secrets.CLOUD_RUN_SERVICES }}
+      region: ${{ vars.CLOUD_RUN_REGION }}
