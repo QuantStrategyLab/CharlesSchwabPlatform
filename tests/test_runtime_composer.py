@@ -3,6 +3,8 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -12,7 +14,11 @@ from quant_platform_kit.common import build_runtime_target  # noqa: E402
 from application.runtime_composer import SchwabRuntimeComposer
 
 
-def test_runtime_composer_builds_runtime_and_config_from_local_builders():
+@pytest.mark.parametrize("resource_case", [
+    "complete", "missing_proof", "missing_long_quantity", "missing_sellable_quantity",
+    "missing_original_obligations", "missing_plan_quantity",
+])
+def test_runtime_composer_builds_runtime_and_config_from_local_builders(tmp_path, resource_case):
     observed = {}
 
     def fake_notification_builder(**kwargs):
@@ -99,6 +105,70 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders():
         strategy_plugin_signals=("plugin-line",),
         strategy_plugin_error="bad config",
     )
+    # Exercise the real composer carrier with explicit synthetic enrollment.
+    # None leaves legacy unselected and does not construct a command provider.
+    assert config.intent_continuity is None
+    from test_rebalance_service import continuity_case, qualify_synthetic_sell, run_strategy_core
+    c = continuity_case(tmp_path)
+    # Offline single-proposal assumption, validated by the native contract;
+    # this is not evidence of a production resource producer or main adoption.
+    qualify_synthetic_sell(c)
+    if resource_case == "missing_proof":
+        c.context = replace(c.context, resource_facts=None)
+    elif resource_case in {"missing_long_quantity", "missing_sellable_quantity"}:
+        key = "long_quantities" if resource_case == "missing_long_quantity" else "sellable_quantities"
+        facts = dict(c.context.resource_facts)
+        facts[key] = {}
+        c.context = replace(c.context, resource_facts=facts)
+    elif resource_case == "missing_original_obligations":
+        facts = dict(c.context.resource_facts)
+        del facts["complete_original_obligations"]
+        c.context = replace(c.context, resource_facts=facts)
+    elif resource_case == "missing_plan_quantity":
+        # Positive market value must not reconstruct a missing sell quantity,
+        # even with the separately supplied native resource proof.
+        del c.plan["portfolio"]["quantities"]["SOXL"]
+    managed = replace(composer, strategy_profile=c.scope.profile_id, dry_run_only=False,
+        runtime_target=c.context.runtime_target, intent_continuity=replace(c.context, runtime_target=None),
+        env_reader=lambda name, default="": {"SCHWAB_EXECUTION_STATE_CLOUD_URI": "gs://synthetic/cycle"}.get(name, default))
+    selected = managed.build_rebalance_config()
+    assert selected.intent_continuity.runtime_target is managed.runtime_target
+    assert selected.intent_continuity.locator is c.locator
+    wired = replace(managed, broker_adapters=SimpleNamespace(
+        build_market_data_port=lambda _: c.runtime.market_data_port,
+        build_portfolio_port=lambda _: c.runtime.portfolio_port,
+        build_execution_port=lambda _, account: c.runtime.execution_port_factory(account),
+        build_order_status_fetcher=lambda *_: None),
+        strategy_adapters=SimpleNamespace(fetch_reference_history=lambda _: None,
+            resolve_rebalance_plan=c.runtime.resolve_rebalance_plan),
+        notification_builder=lambda **_: SimpleNamespace(notification_port=c.runtime.notifications))
+    actual_runtime = wired.build_rebalance_runtime(object())
+    result = run_strategy_core(runtime=actual_runtime, config=replace(selected,
+        execution_state_store=c.config.execution_state_store, translator=c.config.translator))
+    if resource_case == "complete":
+        assert len(c.calls) == 1
+        assert c.calls[0].symbol == "SOXL" and c.calls[0].quantity == 4
+        assert result.execution["continuity_coverage"] == "managed_new_cohort"
+        assert result.execution["execution_status"] == "pending_reconciliation"
+        assert result.submitted_orders[0]["broker_order_id"] == "SYNTH_ACK"
+        from application.execution_intent_continuity import _IntentSession
+        recorded = _IntentSession(c.context, snapshot=c.snapshot, profile_id=c.scope.profile_id)
+        assert recorded.fatal_reason is None
+        assert len(recorded.originals) == 1
+        command, events = recorded.originals[0]
+        assert command.intent["routing_account_hash"] == c.scope.account_hash
+        assert command.intent["order"]["quantity"] == 4
+        assert [event.state.value for event in events] == ["claimed", "submitted", "accepted"]
+    else:
+        assert c.calls == []
+        assert result.submitted_orders == ()
+        if resource_case == "missing_plan_quantity":
+            import json
+            assert c.plan["portfolio"]["market_values"]["SOXL"] == 400
+            assert json.loads(c.locator.read_registered().payload_json)["references"] == []
+        else:
+            assert result.execution["broker_submission_done"] is False
+            assert "sell_resource_evidence_required" in result.execution["continuity_reason_codes"]
     reporting_adapters = composer.build_reporting_adapters()
     built_client = composer.build_client()
 
@@ -179,3 +249,7 @@ def test_runtime_composer_parks_live_without_durable_execution_claim_backend():
         assert "requires a gs:// execution state URI" in str(exc)
     else:
         raise AssertionError("live execution must fail closed without durable atomic claims")
+
+
+# Reuse explicit test-only external ports under ordinary pytest as well.
+from test_rebalance_service import _offline_caller_external_ports

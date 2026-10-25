@@ -17,7 +17,7 @@ from application.execution_service import execute_rebalance_cycle
 from application.rebalance_service import run_strategy_core
 from application.runtime_dependencies import SchwabRebalanceConfig, SchwabRebalanceRuntime
 from notifications.telegram import build_translator
-from quant_platform_kit.common.models import ExecutionReport, PortfolioSnapshot, Position, QuoteSnapshot
+from quant_platform_kit.common.models import ExecutionReport, OrderIntent, PortfolioSnapshot, Position, QuoteSnapshot
 from quant_platform_kit.common.port_adapters import CallableExecutionPort, CallableMarketDataPort, CallableNotificationPort, CallablePortfolioPort
 
 HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT = {
@@ -227,8 +227,10 @@ class RebalanceServiceTests(unittest.TestCase):
             },
         }
 
+        native, session = synthetic_sell_session(self.native_test_root, plan, OrderIntent("SOXL", "sell", 3))
         result = execute_rebalance_cycle(
             client=object(),
+            intent_continuity=session,
             plan=plan,
             portfolio=plan["portfolio"],
             execution=plan["execution"],
@@ -590,8 +592,10 @@ class RebalanceServiceTests(unittest.TestCase):
         }
         prices = {"TQQQ": 77.33, "QQQM": 297.19}
 
+        native, session = synthetic_sell_session(self.native_test_root, plan, OrderIntent("TQQQ", "sell", 6))
         result = execute_rebalance_cycle(
             client=object(),
+            intent_continuity=session,
             plan=plan,
             portfolio=plan["portfolio"],
             execution=plan["execution"],
@@ -1431,7 +1435,7 @@ class RebalanceServiceTests(unittest.TestCase):
         }
 
         def fetch_snapshot(_client):
-            return snapshots.pop(0)
+            return native_test_snapshot(snapshots.pop(0))
 
         def resolve_plan(*, qqq_history, snapshot):
             self.assertEqual(len(qqq_history), 1)
@@ -1447,9 +1451,16 @@ class RebalanceServiceTests(unittest.TestCase):
                 raw_payload={},
             )
 
+        native, _session = synthetic_sell_session(
+            self.native_test_root, initial_plan, OrderIntent("BOXX", "sell", 10), snapshot=snapshots[0])
+        native_config = replace(native.config, execution_dedup_enabled=False,
+            translator=lambda key, **kwargs: translations.get(key, key).format(**kwargs)
+            if kwargs else translations.get(key, key),
+            strategy_display_name="TQQQ Growth Income")
         run_strategy_core(
             object(),
             None,
+            config=native_config,
             fetch_reference_history=lambda client: [{"close": 1.0, "high": 1.0, "low": 1.0}],
             fetch_managed_snapshot=fetch_snapshot,
             fetch_managed_quotes=lambda client: quote_snapshots,
@@ -1872,7 +1883,7 @@ class RebalanceServiceTests(unittest.TestCase):
         }
 
         def fetch_snapshot(_client):
-            return snapshots.pop(0)
+            return native_test_snapshot(snapshots.pop(0))
 
         def resolve_plan(*, qqq_history, snapshot):
             self.assertEqual(len(qqq_history), 1)
@@ -1891,9 +1902,17 @@ class RebalanceServiceTests(unittest.TestCase):
                 raw_payload={},
             )
 
+        native, _session = synthetic_sell_session(
+            self.native_test_root, initial_plan, OrderIntent("BOXX", "sell", 10), snapshot=snapshots[0])
+        native_config = replace(native.config, execution_dedup_enabled=False,
+            translator=lambda key, **kwargs: translations.get(key, key).format(**kwargs)
+            if kwargs else translations.get(key, key),
+            strategy_display_name="TQQQ Growth Income")
+        native_config = replace(native_config, post_sell_refresh_attempts=2)
         run_strategy_core(
             object(),
             None,
+            config=native_config,
             fetch_reference_history=lambda client: [{"close": 1.0, "high": 1.0, "low": 1.0}],
             fetch_managed_snapshot=fetch_snapshot,
             fetch_managed_quotes=lambda client: quote_snapshots,
@@ -2016,7 +2035,7 @@ class RebalanceServiceTests(unittest.TestCase):
         }
 
         def fetch_snapshot(_client):
-            return snapshots.pop(0)
+            return native_test_snapshot(snapshots.pop(0))
 
         def resolve_plan(*, qqq_history, snapshot):
             self.assertEqual(len(qqq_history), 1)
@@ -2037,9 +2056,16 @@ class RebalanceServiceTests(unittest.TestCase):
                 return None
             return {"status": "FILLED", "executed_qty": 8.0, "executed_price": 100.0}
 
+        native, _session = synthetic_sell_session(
+            self.native_test_root, initial_plan, OrderIntent("BOXX", "sell", 10), snapshot=snapshots[0])
+        native_config = replace(native.config, execution_dedup_enabled=False,
+            translator=lambda key, **kwargs: translations.get(key, key).format(**kwargs)
+            if kwargs else translations.get(key, key),
+            strategy_display_name="TQQQ Growth Income")
         run_strategy_core(
             object(),
             None,
+            config=native_config,
             fetch_reference_history=lambda client: [{"close": 1.0, "high": 1.0, "low": 1.0}],
             fetch_managed_snapshot=fetch_snapshot,
             fetch_managed_quotes=lambda client: quote_snapshots,
@@ -2357,7 +2383,7 @@ class RebalanceServiceTests(unittest.TestCase):
         self.assertEqual(observed_orders, [])
 
 
-if __name__ == "__main__":
+if __name__ == "__main__" and "--continuity-worker" not in sys.argv:
     unittest.main()
 
 
@@ -2394,3 +2420,988 @@ def test_cycle_notification_quiets_successful_preview_but_keeps_real_and_rejecte
     for status in ("rejected", "unknown"):
         result = SimpleNamespace(execution={}, submitted_orders=({"status": status},))
         assert _should_publish_cycle_notification(result, config=config)
+
+
+# Explicit synthetic admission inputs; no prebuilt command or replay relation.
+def continuity_case(root, day="2026-09-30", *, kind="SELL", branch="port", selected=True,
+                    fault=None, resource_facts=None, strategy_revision="synthetic-revision",
+                    account_hash="SYNTH_HASH", profile_id="SYNTH_PROFILE"):
+    import json
+    from dataclasses import replace
+    from application import execution_intent_continuity as ci
+    from quant_platform_kit.common.execution_commands import ExecutionCommandStore
+    from quant_platform_kit.common.strategy_release import StrategyReleaseIdentity, build_runtime_loaded_receipt
+    from quant_platform_kit.common.runtime_target import RuntimeTarget
+    from test_execution_intent_continuity import MultiFileClient
+
+    root = Path(root)
+    client = MultiFileClient(root / "objects")
+    scope = ci._RecoveryScope(account_hash, profile_id, "SYNTH_RELEASE", "SYNTH_COHORT")
+    release = StrategyReleaseIdentity("SYNTH_RELEASE", "a"*64, strategy_revision, "b"*64,
+                                      "c"*64, "d"*64, "e"*64, "2026-09-01")
+    target = RuntimeTarget("schwab", scope.profile_id, False, market_timezone="America/New_York",
+                           strategy_release=release)
+    enrollment = {"schema_version": "schwab_intent_enrollment.v1", "scope": ci.asdict(scope),
+                  "authority_sha256": "f"*64, "managed_writers": "native_create_only.v1",
+                  "complete_event_reads": True, "strategy_release": release.to_dict()}
+    locator = ci._RecoveryLocatorStore(client, locator_uri="gs://synthetic-offline-bucket/cohort/locator.json", scope=scope)
+    if not client.owner("cohort/locator.json").path.exists():
+        locator.initialize_new_cohort(json.dumps({"enrollment_sha256": ci._digest(ci._canonical_json(enrollment)), "references": []}))
+    driver_type = getattr(ci, "_ScopedCommandObjectStore", None)
+    driver = driver_type(client, prefix_uri="gs://synthetic-offline-bucket/cohort/commands") if driver_type else None
+    store = ExecutionCommandStore(cloud_prefix_uri="gs://synthetic-offline-bucket/cohort/commands", object_store=driver)
+    values = dict(scope=scope, enrollment=enrollment, locator=locator, command_store=store,
+                  consumption_clock=lambda: datetime.fromisoformat(day+"T15:00:00+00:00"),
+                  session_timezone="America/New_York", runtime_target=target,
+                  runtime_release_receipt=build_runtime_loaded_receipt(strategy_release=release, loaded_at=day+"T14:00:00Z"),
+                  resource_facts=resource_facts)
+    context_type = getattr(ci, "_IntentContinuityContext", SimpleNamespace)
+    context = context_type(**values)
+    qty = 4.0 if kind == "SELL" else 0.0
+    snapshot = PortfolioSnapshot(as_of=datetime.fromisoformat(day+"T14:00:00+00:00"), total_equity=50000,
+        cash_balance=50000, buying_power=50000,
+        positions=(Position("SOXL", qty, qty*100),), metadata={"account_hash": scope.account_hash})
+    portfolio = {"market_values": {"SOXL": qty*100}, "quantities": {"SOXL": qty}, "total_equity": 50000,
+                 "liquid_cash": 50000, "cash_sweep_symbol": "SOXL" if kind == "BUY_MARKET" else None,
+                 "portfolio_rows": ()}
+    execution = {"trade_threshold_value": 10, "reserved_cash": 0, "signal_date": day, "effective_date": day,
+                 "execution_timing_contract": "same_session", "signal_display": "synthetic",
+                 "dashboard_text": "", "separator": "---", "account_new_risk_snapshot": {
+                     **HEALTHY_ACCOUNT_NEW_RISK_SNAPSHOT, "production_drift_status": "healthy"}}
+    allocation = {"target_mode": "value", "strategy_symbols": ("SOXL",), "risk_symbols": ("SOXL",),
+                  "income_symbols": (), "safe_haven_symbols": (), "targets": {"SOXL": 0 if qty or kind == "BUY_MARKET" else 400}}
+    plan = {"account_hash": scope.account_hash, "portfolio": portfolio, "execution": execution,
+            "allocation": allocation}
+    calls = []
+    def submit(intent):
+        calls.append(intent)
+        counter = root / "transport_calls.jsonl"
+        with counter.open("a") as stream:
+            stream.write(json.dumps(ci.asdict(intent))+"\n")
+        if fault:
+            return fault(intent)
+        return ExecutionReport(intent.symbol, intent.side, intent.quantity, "accepted", broker_order_id="SYNTH_ACK")
+    runtime = SchwabRebalanceRuntime(fetch_reference_history=lambda: None,
+        portfolio_port=CallablePortfolioPort(lambda: snapshot),
+        market_data_port=CallableMarketDataPort(quote_loader=lambda symbol: QuoteSnapshot(symbol, day, 100, ask_price=100)),
+        resolve_rebalance_plan=lambda **_: plan, notifications=CallableNotificationPort(lambda _: True),
+        execution_port_factory=(lambda _: CallableExecutionPort(submit)) if branch == "port" else None,
+        submit_equity_order=(lambda _, intent: submit(intent)) if branch == "fallback" else None)
+    config = SchwabRebalanceConfig(translator=build_translator("en"), strategy_display_name="synthetic",
+        limit_buy_premium=1, sell_settle_delay_sec=0, strategy_profile=scope.profile_id,
+        execution_dedup_enabled=True, execution_state_store=__import__(
+            "quant_platform_kit.common.execution_state", fromlist=["ExecutionMarkerStore"]).ExecutionMarkerStore(
+                local_dir=str(root / "cycle")), execution_state_account_scope="LIVE",
+        notional_buy_execution=kind == "BUY_NOTIONAL", notify_no_trade_cycles=False)
+    if selected:
+        object.__setattr__(config, "intent_continuity", context)
+    return SimpleNamespace(root=root, client=client, scope=scope, context=context, config=config, runtime=runtime,
+                           plan=plan, snapshot=snapshot, calls=calls, store=store, locator=locator)
+
+
+def test_actual_caller_cross_month_does_not_replay_unknown(tmp_path):
+    def lost(_):
+        raise TimeoutError("synthetic response loss")
+    first = continuity_case(tmp_path, fault=lost)
+    qualify_synthetic_sell(first)
+    result1 = run_strategy_core(runtime=first.runtime, config=first.config)
+    second = continuity_case(tmp_path, "2026-10-01", fault=lost)
+    result2 = run_strategy_core(runtime=second.runtime, config=second.config)
+    assert len(first.calls) == 1
+    assert second.calls == []
+    assert result1.submitted_orders[0]["status"] == "unknown"
+    assert result2.submitted_orders == ()
+    assert result2.execution["broker_submission_done"] is False
+
+
+import pytest
+from dataclasses import replace
+
+
+@pytest.mark.parametrize("kind", ["SELL", "BUY_LIMIT", "BUY_MARKET", "BUY_NOTIONAL"])
+@pytest.mark.parametrize("branch", ["port", "fallback"])
+def test_managed_caller_all_final_orders_and_both_transports(tmp_path, kind, branch):
+    import json
+    c = continuity_case(tmp_path, kind=kind, branch=branch)
+    if kind == "SELL":
+        qualify_synthetic_sell(c)
+    result = run_strategy_core(runtime=c.runtime, config=c.config)
+    assert len(c.calls) == 1
+    ref = json.loads(c.locator.read_registered().payload_json)["references"][0]
+    raw = json.loads(c.store.object_store.read_text(ref["descriptor_uri"]))
+    assert raw["intent"]["order"] == __import__("dataclasses").asdict(c.calls[0])
+    assert raw["intent"]["routing_account_hash"] == c.scope.account_hash
+    assert raw["intent"]["action_type"] == kind
+    assert raw["effective_date"] == "2026-09-30"
+    if kind == "BUY_NOTIONAL":
+        assert c.calls[0].quantity == 0 and c.calls[0].metadata["notional_usd"] > 0
+    replay = continuity_case(tmp_path, "2026-10-01", kind=kind, branch=branch)
+    result2 = run_strategy_core(runtime=replay.runtime, config=replay.config)
+    assert replay.calls == []
+    assert result2.submitted_orders == ()
+    assert result2.execution["broker_submission_done"] is False
+    assert result2.execution["continuity_prior_orders"][0]["broker_order_id"] == "SYNTH_ACK"
+    assert result.execution["execution_status"] == "pending_reconciliation"
+
+
+@pytest.mark.parametrize("invalid", ["account", "profile", "release", "cohort", "enrollment", "provider", "missing_locator", "clock", "receipt", "route"])
+def test_selected_invalid_context_stops_actual_caller(tmp_path, invalid):
+    c = continuity_case(tmp_path)
+    ctx = c.context
+    if invalid in {"account", "profile", "release", "cohort"}:
+        names = {"account": "account_hash", "profile": "profile_id", "release": "release_id", "cohort": "cohort_id"}
+        ctx = replace(ctx, scope=replace(ctx.scope, **{names[invalid]: "WRONG"}))
+    elif invalid == "enrollment":
+        ctx = replace(ctx, enrollment={})
+    elif invalid == "provider":
+        ctx = replace(ctx, command_store=replace(ctx.command_store, object_store=None))
+    elif invalid == "missing_locator":
+        c.client.owner("cohort/locator.json").path.unlink()
+    elif invalid == "clock":
+        ctx = replace(ctx, consumption_clock=lambda: datetime(2026, 9, 30))
+    elif invalid == "receipt":
+        ctx = replace(ctx, runtime_release_receipt=None)
+    else:
+        c.plan["account_hash"] = "WRONG_ROUTE"
+    result = run_strategy_core(runtime=c.runtime, config=replace(c.config, intent_continuity=ctx))
+    assert c.calls == []
+    assert result.submitted_orders == ()
+    assert result.execution["broker_submission_done"] is False
+    assert result.execution["continuity_coverage"] == "evidence_required"
+
+
+def test_legacy_unselected_retains_behavior_and_dry_run_has_no_native_writes(tmp_path):
+    legacy = continuity_case(tmp_path / "legacy", selected=False, kind="BUY_LIMIT")
+    result = run_strategy_core(runtime=legacy.runtime, config=legacy.config)
+    assert len(legacy.calls) == 1 and "continuity_coverage" not in result.execution
+    c = continuity_case(tmp_path / "preview")
+    result = run_strategy_core(runtime=c.runtime, config=replace(c.config, dry_run_only=True))
+    assert c.calls == []
+    assert len(list((c.root / "objects").glob("*/object.json"))) == 1 # upstream enrollment only
+    assert "continuity_coverage" not in result.execution
+
+
+def test_original_not_backdated_to_effective_session(tmp_path):
+    c = continuity_case(tmp_path)
+    ctx = replace(c.context, consumption_clock=lambda: datetime(2026, 10, 1, 15, tzinfo=timezone.utc))
+    result = run_strategy_core(runtime=c.runtime, config=replace(c.config, intent_continuity=ctx))
+    assert c.calls == []
+    assert "original_claim_unavailable_or_not_due" in result.execution["continuity_reason_codes"]
+    assert not any("events" in __import__("json").loads(p.read_text()) for p in (c.root/"objects").glob("*/key.json"))
+
+
+def test_restore_happens_before_first_plan_and_refresh_retains_originals(tmp_path):
+    from application.execution_intent_continuity import _IntentSession
+    c = continuity_case(tmp_path)
+    run_strategy_core(runtime=c.runtime, config=c.config)
+    second = continuity_case(tmp_path, "2026-10-01")
+    trace = []
+    original_restore = _IntentSession._restore
+    from unittest.mock import patch
+    def restore(self, *args):
+        original_restore(self, *args)
+        trace.append(("restore", len(self.originals)))
+    def plan(**_):
+        trace.append(("plan", None))
+        return second.plan
+    with patch.object(_IntentSession, "_restore", restore):
+        run_strategy_core(runtime=replace(second.runtime, resolve_rebalance_plan=plan), config=second.config)
+    assert trace[:2] == [("restore", 1), ("plan", None)]
+
+
+def continuity_process_worker(root, day, kind, branch, fault):
+    """Launched by the outer guarded evidence runner as a fresh interpreter."""
+    import json
+    from unittest.mock import patch
+    from application import account_new_risk_gate_support, daily_loss_fact_producer
+    def response(_):
+        if fault == "crash":
+            raise SystemExit(73) # after durable claim, before any broker receipt
+        if fault == "lost":
+            raise TimeoutError("synthetic lost reply")
+        return ExecutionReport(_.symbol, _.side, _.quantity, "accepted", broker_order_id="SYNTH_ACK")
+    c = continuity_case(root, day, kind=kind, branch=branch, fault=response)
+    from contextlib import ExitStack
+    with ExitStack() as faults, patch.object(rebalance_service, "try_record_platform_execution", return_value=False), \
+         patch.object(account_new_risk_gate_support, "resolve_production_drift_status_from_store", return_value=None), \
+         patch.object(daily_loss_fact_producer, "load_recent_runtime_reports_from_gcs", return_value=()):
+        if fault == "claim_crash":
+            from application.execution_intent_continuity import _IntentSession
+            original_prepare = _IntentSession.prepare
+            def claim_then_crash(self, **kwargs):
+                ticket = original_prepare(self, **kwargs)
+                if ticket is not None:
+                    raise SystemExit(74)
+                return ticket
+            faults.enter_context(patch.object(_IntentSession, "prepare", claim_then_crash))
+        elif fault == "ack_event_loss":
+            original_create = c.store.object_store.create_text
+            def create(uri, *args):
+                if uri.endswith("00000002.json"):
+                    raise TimeoutError("synthetic ACK event loss")
+                return original_create(uri, *args)
+            faults.enter_context(patch.object(c.store.object_store, "create_text", create))
+        elif fault == "final_outcome_loss":
+            faults.enter_context(patch.object(type(c.config.execution_state_store), "record_outcome", side_effect=OSError("synthetic")))
+        result = run_strategy_core(runtime=c.runtime, config=c.config)
+    value = {"day": day, "kind": kind, "branch": branch, "calls": len(c.calls),
+             "submitted_orders": list(result.submitted_orders), "execution": result.execution}
+    (Path(root) / (day+"-result.json")).write_text(json.dumps(value, default=str, indent=2)+"\n")
+
+
+if __name__ == "__main__" and "--continuity-worker" in sys.argv:
+    sys.path.insert(0, str(Path(__file__).parent))
+    continuity_process_worker(*sys.argv[2:])
+
+
+def test_runtime_release_change_preserves_old_reference_without_new_attempt(tmp_path):
+    import json
+    from quant_platform_kit.common.strategy_release import build_runtime_loaded_receipt
+    first = continuity_case(tmp_path)
+    run_strategy_core(runtime=first.runtime, config=first.config)
+    before = json.loads(first.locator.read_registered().payload_json)["references"]
+    later = continuity_case(tmp_path, "2026-10-01")
+    release = replace(later.context.runtime_target.strategy_release, release_id="SYNTH_RELEASE_NEW")
+    ctx = replace(later.context, runtime_target=replace(later.context.runtime_target, strategy_release=release),
+                  runtime_release_receipt=build_runtime_loaded_receipt(strategy_release=release))
+    result = run_strategy_core(runtime=later.runtime, config=replace(later.config, intent_continuity=ctx))
+    assert later.calls == [] and result.submitted_orders == ()
+    assert json.loads(later.locator.read_registered().payload_json)["references"] == before
+    assert result.execution["continuity_prior_orders"][0]["command_id"] == before[0]["command_id"]
+
+
+def test_plan_refresh_route_change_cannot_bypass_bound_lineage(tmp_path):
+    from copy import deepcopy
+    c = continuity_case(tmp_path)
+    qualify_synthetic_sell(c)
+    trace = []
+    refreshed = deepcopy(c.plan)
+    refreshed["account_hash"] = "WRONG_ROUTE"
+    refreshed["portfolio"].update(market_values={"SOXL": 0}, quantities={"SOXL": 0})
+    refreshed["allocation"]["targets"] = {"SOXL": 400}
+    def resolve(**_):
+        trace.append("plan")
+        return c.plan if len(trace) == 1 else refreshed
+    result = run_strategy_core(runtime=replace(c.runtime, resolve_rebalance_plan=resolve), config=c.config)
+    assert len(trace) == 2 # real post-ACK refresh traversed the same session
+    assert len(c.calls) == 1 and c.calls[0].side == "sell"
+    assert result.execution["broker_submission_done"] is False
+    assert result.execution["continuity_coverage"] == "evidence_required"
+
+
+def test_selected_same_cycle_keeps_existing_replay_reason_and_current_submission_split(tmp_path):
+    first = continuity_case(tmp_path)
+    qualify_synthetic_sell(first)
+    run_strategy_core(runtime=first.runtime, config=first.config)
+    replay = continuity_case(tmp_path)
+    result = run_strategy_core(runtime=replay.runtime, config=replay.config)
+    assert replay.calls == [] and result.submitted_orders == ()
+    assert result.execution["no_op_reason"] == "recorded_pending_reconciliation"
+    assert result.execution["broker_submission_done"] is False
+    assert result.execution["continuity_prior_orders"][0]["broker_order_id"] == "SYNTH_ACK"
+
+
+@pytest.fixture(autouse=True)
+def _offline_caller_external_ports(monkeypatch, request, tmp_path):
+    """Isolate external reads/telemetry; keep actual admission policy and math."""
+    import socket
+    if request.instance is not None:
+        request.instance.native_test_root = tmp_path
+    monkeypatch.setattr(socket, "has_ipv6", False)
+    from application import account_new_risk_gate_support, daily_loss_fact_producer
+    monkeypatch.setattr(rebalance_service, "try_record_platform_execution", lambda *args, **kwargs: False)
+    monkeypatch.setattr(daily_loss_fact_producer, "load_recent_runtime_reports_from_gcs", lambda **kwargs: ())
+    monkeypatch.setattr(account_new_risk_gate_support, "resolve_production_drift_status_from_store", lambda **kwargs: None)
+
+
+@pytest.mark.parametrize("refresh_attempts", [1, 2])
+def test_final_buy_uses_the_selected_refreshed_snapshot_source(tmp_path, refresh_attempts):
+    import json
+    from copy import deepcopy
+    from datetime import timedelta
+    from dataclasses import asdict
+    from application.execution_intent_continuity import _canonical_json, _digest
+    c = continuity_case(tmp_path)
+    qualify_synthetic_sell(c)
+    # Lower cash prevents early refresh-loop exit. The best snapshot can be an
+    # earlier one; settled cash remains sufficient for this synthetic BUY.
+    first_refresh = replace(c.snapshot, as_of=c.snapshot.as_of+timedelta(minutes=1),
+                            positions=(), cash_balance=49999, buying_power=49999)
+    last_refresh = replace(first_refresh, as_of=first_refresh.as_of+timedelta(minutes=1),
+                           cash_balance=49998, buying_power=49998)
+    snapshots = [c.snapshot, first_refresh, last_refresh]
+    reads = []
+    def snapshot():
+        value = snapshots[len(reads)]
+        reads.append(value)
+        return value
+    plans = [deepcopy(c.plan) for _ in snapshots]
+    for plan, observed in zip(plans[1:], snapshots[1:]):
+        plan["portfolio"].update(quantities={"SOXL": 0}, market_values={"SOXL": 0}, liquid_cash=observed.cash_balance)
+        plan["allocation"]["targets"] = {"SOXL": 400}
+    # Existing cash-only policy can intentionally defer buys without cash
+    # release. This fixture opts into its existing non-cash-only mode; no new
+    # admission or release rule is introduced by continuity.
+    def resolve(**kwargs):
+        return plans[snapshots.index(kwargs["snapshot"])]
+    runtime = replace(c.runtime, portfolio_port=CallablePortfolioPort(snapshot), resolve_rebalance_plan=resolve)
+    run_strategy_core(runtime=runtime, config=replace(c.config, post_sell_refresh_attempts=refresh_attempts,
+                                                     cash_only_execution=False))
+    assert len(reads) == 1+refresh_attempts
+    assert len(c.calls) == 2 and c.calls[-1].side == "buy"
+    refs = json.loads(c.locator.read_registered().payload_json)["references"]
+    commands = [json.loads(c.store.object_store.read_text(ref["descriptor_uri"])) for ref in refs]
+    buy = next(command for command in commands if command["intent"]["order"]["side"] == "buy")
+    source = asdict(first_refresh)
+    source["as_of"] = first_refresh.as_of.isoformat()
+    assert buy["intent"]["source_plan"]["snapshot_sha256"] == _digest(_canonical_json(source))
+
+
+@pytest.mark.parametrize("context_timezone", ["America/New_York", "UTC"])
+def test_context_timezone_cannot_advance_authoritative_runtime_session(tmp_path, context_timezone):
+    from datetime import timedelta
+    clock = datetime(2026, 10, 1, 1, tzinfo=timezone.utc) # still September 30 in NY
+    c = continuity_case(tmp_path, "2026-10-01")
+    observed = replace(c.snapshot, as_of=clock-timedelta(minutes=10))
+    ctx = replace(c.context, consumption_clock=lambda: clock, session_timezone=context_timezone)
+    result = run_strategy_core(runtime=replace(c.runtime, portfolio_port=CallablePortfolioPort(lambda: observed)),
+                               config=replace(c.config, intent_continuity=ctx))
+    assert c.calls == [] and result.submitted_orders == ()
+    assert result.execution["broker_submission_done"] is False
+    assert result.execution["continuity_coverage"] == "evidence_required"
+
+
+def test_reused_mutable_plan_with_new_snapshot_requires_evidence(tmp_path):
+    from datetime import timedelta
+    c = continuity_case(tmp_path)
+    qualify_synthetic_sell(c)
+    refreshed = replace(c.snapshot, as_of=c.snapshot.as_of+timedelta(minutes=1), positions=())
+    reads = []
+    def snapshot():
+        reads.append(1)
+        return c.snapshot if len(reads) == 1 else refreshed
+    def resolve(**kwargs):
+        if kwargs["snapshot"].as_of != c.snapshot.as_of:
+            c.plan["portfolio"].update(market_values={"SOXL": 0}, quantities={"SOXL": 0}, liquid_cash=50400)
+            c.plan["allocation"]["targets"] = {"SOXL": 400}
+        return c.plan
+    result = run_strategy_core(runtime=replace(c.runtime, portfolio_port=CallablePortfolioPort(snapshot),
+                                              resolve_rebalance_plan=resolve), config=c.config)
+    assert len(c.calls) == 1 and c.calls[0].side == "sell"
+    assert "continuity_plan_source_evidence_required" in result.execution["continuity_reason_codes"]
+    assert result.execution["broker_submission_done"] is False
+
+
+def resolution_material(original, current, *, terminal="FILLED", filled=None, order_id=None):
+    """Synthetic externally-qualified immutable source; no broker parser/auth."""
+    import json
+    from dataclasses import asdict
+    from application.execution_intent_continuity import _canonical_json, _digest
+    from application.execution_event_accounting import ExecutionEventLedger
+    refs=json.loads(original.locator.read_registered().payload_json)["references"]
+    ref=refs[0]
+    command=json.loads(original.store.object_store.read_text(ref["descriptor_uri"]))
+    order=command["intent"]["order"]
+    broker_id=order_id or "SYNTH_ORDER"
+    ledger=ExecutionEventLedger(current.root/"resolution-source-ledger.json")
+    requested="4" if float(order["quantity"])==0 else str(order["quantity"])
+    ledger.record_order_intent(intent_id=command["command_id"],order_id=broker_id,
+        owner_id=current.scope.profile_id,symbol=order["symbol"],side=order["side"].upper(),
+        quantity=requested,reserved_amount="400")
+    filled=requested if filled is None else filled
+    if filled!="0":
+        ledger.record_execution_event({"event_id":"SYNTH_FILL_1","event_type":"FILL","order_id":broker_id,
+          "quantity":filled,"price":"100","fee":"0.40","fee_source":"synthetic_per_fill",
+          "event_time":"2026-09-30T15:01:00Z"})
+    ledger.record_order_update(order_id=broker_id,status=terminal,cumulative_filled_quantity=filled)
+    snapshot=asdict(current.snapshot);snapshot["as_of"]=current.snapshot.as_of.isoformat()
+    body={"schema_version":"schwab_original_resolution.v1","scope":asdict(current.scope),
+          "enrollment_sha256":_digest(_canonical_json(current.context.enrollment)),
+          "strategy_release":command["intent"]["strategy_release"],"original_ref":ref,
+          "original_request_sha256":_digest(_canonical_json(order)),
+          "identity_binding":{"command_id":command["command_id"],"order_id":broker_id,"method":"exact_persisted_source_binding"},
+          "broker_requested_quantity":requested,"broker_requested_notional":order["metadata"].get("notional_usd"),"terminal_observed_at":"2026-09-30T15:02:00Z",
+          "coverage":{"from":command["created_at"],"through":current.snapshot.as_of.isoformat(),
+            "orders_complete":True,"executions_complete":True,"fees_complete":True,"corrections_complete":True},
+          "observed_at":current.snapshot.as_of.isoformat(),"current_snapshot_sha256":_digest(_canonical_json(snapshot)),
+          "ledger":ledger.snapshot()}
+    return body,ledger
+
+
+def with_resolution_source(context, body, *, qualified=True, uri="synthetic-evidence://qualified/receipt"):
+    from dataclasses import replace
+    from application.execution_intent_continuity import _canonical_json,_digest
+    raw=_canonical_json(body)
+    fields={"resolution_sources":{uri:_digest(raw)} if qualified else {},"resolution_receipts":{uri:raw}}
+    if all(name in context.__dataclass_fields__ for name in fields):
+        return replace(context,**fields)
+    # Base behavioral witness: existing caller ignores requested proof inputs.
+    for key,value in fields.items():object.__setattr__(context,key,value)
+    return context
+
+
+@pytest.mark.parametrize("branch",["port","fallback"])
+@pytest.mark.parametrize(("terminal","filled"),[("FILLED",None),("CANCELED","2"),("EXPIRED","0")])
+def test_qualified_exact_original_resolution_allows_only_fresh_replanned_proposal(tmp_path,branch,terminal,filled):
+    def lost(_):raise TimeoutError("synthetic response loss")
+    original=continuity_case(tmp_path,branch=branch,fault=lost)
+    qualify_synthetic_sell(original)
+    first=run_strategy_core(runtime=original.runtime,config=original.config)
+    assert len(original.calls)==1 and first.submitted_orders[0]["status"]=="unknown"
+    current=continuity_case(tmp_path,"2026-10-01",branch=branch,kind="BUY_LIMIT")
+    body,ledger=resolution_material(original,current,terminal=terminal,filled=filled)
+    assert ledger.snapshot()["account"]["reserved_amount"]=="0.00"
+    assert all(item["settlement_status"]=="pending" for item in ledger.snapshot()["account"]["pending_settlement_items"])
+    before_cash=current.plan["portfolio"]["liquid_cash"]
+    result=run_strategy_core(runtime=current.runtime,config=replace(current.config,
+        intent_continuity=with_resolution_source(current.context,body)))
+    assert len(current.calls)==1, "qualified original closure must unblock a genuinely new current plan"
+    assert current.calls[0].side=="buy" and result.submitted_orders[0]["status"]=="accepted"
+    assert current.plan["portfolio"]["liquid_cash"]==before_cash
+
+
+@pytest.mark.parametrize("branch",["port","fallback"])
+def test_late_resolution_does_not_create_orphans_or_permanent_clearance(tmp_path,branch):
+    import json
+    def lost(_):raise TimeoutError("synthetic")
+    original=continuity_case(tmp_path,branch=branch,fault=lost)
+    run_strategy_core(runtime=original.runtime,config=original.config)
+    current=continuity_case(tmp_path,"2026-10-01",branch=branch,kind="BUY_LIMIT")
+    bad,_=resolution_material(original,current)
+    bad["observed_at"]="2026-10-01T13:59:00Z"
+    held=run_strategy_core(runtime=current.runtime,config=replace(current.config,
+        intent_continuity=with_resolution_source(current.context,bad)))
+    assert current.calls==[] and held.submitted_orders==()
+    assert len(json.loads(current.locator.read_registered().payload_json)["references"])==1
+    fresh=continuity_case(tmp_path,"2026-10-02",branch=branch,kind="BUY_LIMIT")
+    complete,_=resolution_material(original,fresh)
+    result=run_strategy_core(runtime=fresh.runtime,config=replace(fresh.config,
+        intent_continuity=with_resolution_source(fresh.context,complete)))
+    assert len(fresh.calls)==1 and fresh.calls[0].side=="buy"
+    assert len(result.submitted_orders)==1
+    # Receipt is not permanently trusted on its own. A fresh same-cycle replay
+    # without source qualification still reports the old obligation held, and
+    # the existing cycle marker prevents current resubmission.
+    replay=continuity_case(tmp_path,"2026-10-02",branch=branch,kind="BUY_LIMIT")
+    replayed=run_strategy_core(runtime=replay.runtime,config=replay.config)
+    assert replay.calls==[] and replayed.submitted_orders==()
+    assert replayed.execution["broker_submission_done"] is False
+
+
+@pytest.mark.parametrize("gate",["cash","new_risk"])
+def test_resolved_original_never_supplies_cash_sellable_or_new_risk_approval(tmp_path,gate):
+    def lost(_):raise TimeoutError("synthetic")
+    original=continuity_case(tmp_path,fault=lost)
+    run_strategy_core(runtime=original.runtime,config=original.config)
+    current=continuity_case(tmp_path,"2026-10-01",kind="BUY_LIMIT")
+    if gate=="cash":
+        current.plan["portfolio"]["liquid_cash"]=0
+        current.snapshot=replace(current.snapshot,cash_balance=0,buying_power=0)
+        current.runtime=replace(current.runtime,portfolio_port=CallablePortfolioPort(lambda:current.snapshot))
+    else:
+        current.plan["portfolio"]["durable_circuit_breaker_state"]="OPEN"
+    body,ledger=resolution_material(original,current)
+    before=dict(current.plan["portfolio"])
+    result=run_strategy_core(runtime=current.runtime,config=replace(current.config,
+        intent_continuity=with_resolution_source(current.context,body)))
+    assert current.calls==[] and result.submitted_orders==()
+    assert current.plan["portfolio"]==before
+    assert result.execution.get("broker_submission_done") is not True
+    assert "sellable_quantities" not in current.plan["portfolio"]
+    assert all(item["settlement_status"]=="pending" for item in ledger.snapshot()["account"]["pending_settlement_items"])
+
+
+@pytest.mark.parametrize("after_commit",[False,True])
+def test_resolution_proof_registration_cas_failure_never_grants_transport(tmp_path,after_commit):
+    from unittest.mock import patch
+    from application.execution_intent_continuity import _IntentSession
+    def lost(_):raise TimeoutError("synthetic")
+    original=continuity_case(tmp_path,fault=lost)
+    run_strategy_core(runtime=original.runtime,config=original.config)
+    current=continuity_case(tmp_path,"2026-10-01",kind="BUY_LIMIT")
+    body,_=resolution_material(original,current)
+    ctx=with_resolution_source(current.context,body)
+    before=_IntentSession(ctx,snapshot=current.snapshot,profile_id=current.scope.profile_id)
+    original_command,original_events=before.originals[0]
+    compare_update=current.locator.compare_update
+    def uncertain(*args,**kwargs):
+        if after_commit:compare_update(*args,**kwargs)
+        raise TimeoutError("synthetic CAS response unavailable")
+    with patch.object(current.locator,"compare_update",uncertain):
+        result=run_strategy_core(runtime=current.runtime,config=replace(current.config,intent_continuity=ctx))
+    assert current.calls==[] and result.submitted_orders==()
+    assert result.execution["broker_submission_done"] is False
+    after=_IntentSession(ctx,snapshot=current.snapshot,profile_id=current.scope.profile_id)
+    assert current.store.events(original_command)==original_events
+    for command,events in after.originals:
+        if command.command_id!=original_command.command_id:assert events==()
+
+
+@pytest.mark.parametrize("branch",["port","fallback"])
+@pytest.mark.parametrize("variant",["consistent","same_intent_second_active_order","same_order_second_intent",
+    "duplicate_order_fact","duplicate_intent_fact","intent_key_identity_mismatch","order_key_identity_mismatch",
+    "cross_account","cross_cohort","repeated_native_fact","unrelated_binding"])
+def test_resolution_identity_component_uniqueness_in_actual_caller(tmp_path,branch,variant):
+    from copy import deepcopy
+    from application.execution_intent_continuity import _IntentSession
+    def lost(_):raise TimeoutError("synthetic")
+    original=continuity_case(tmp_path,branch=branch,fault=lost)
+    run_strategy_core(runtime=original.runtime,config=original.config)
+    current=continuity_case(tmp_path,"2026-10-01",branch=branch,kind="BUY_LIMIT")
+    body,ledger=resolution_material(original,current)
+    cid=body["original_ref"]["command_id"];oid=body["identity_binding"]["order_id"]
+    before=_IntentSession(current.context,snapshot=current.snapshot,profile_id=current.scope.profile_id)
+    old,events=before.originals[0]
+    raw=current.store.object_store.read_text(body["original_ref"]["descriptor_uri"])
+    if variant in {"same_intent_second_active_order","duplicate_order_fact"}:
+        alias=deepcopy(body["ledger"]["orders"][oid])
+        if variant=="same_intent_second_active_order":
+            alias.update(status="WORKING",terminal=False,cumulative_filled_quantity="0",
+                recorded_filled_quantity="0",reservation_status="pending")
+            body["ledger"]["account"]["reserved_amount"]="400.00"
+            body["ledger"]["owners"][current.scope.profile_id]["reserved_amount"]="400.00"
+        body["ledger"]["orders"]["SYNTH_ORDER_ALIAS"]=alias
+    elif variant in {"same_order_second_intent","duplicate_intent_fact"}:
+        alias=deepcopy(body["ledger"]["intents"][cid])
+        if variant=="same_order_second_intent":alias["intent_id"]="SYNTH_OTHER_INTENT"
+        body["ledger"]["intents"]["SYNTH_OTHER_INTENT"]=alias
+    elif variant=="intent_key_identity_mismatch":
+        body["ledger"]["intents"]["SYNTH_WRONG_KEY"]=body["ledger"]["intents"].pop(cid)
+    elif variant=="order_key_identity_mismatch":
+        body["ledger"]["orders"]["SYNTH_WRONG_KEY"]=body["ledger"]["orders"].pop(oid)
+    elif variant=="cross_account":body["scope"]["account_hash"]="OTHER_ACCOUNT"
+    elif variant=="cross_cohort":body["scope"]["cohort_id"]="OTHER_COHORT"
+    elif variant=="repeated_native_fact":
+        intent=body["ledger"]["intents"][cid]
+        ledger.record_order_intent(**{key:intent[key] for key in
+            ("intent_id","order_id","owner_id","symbol","side","quantity","reserved_amount")})
+        assert ledger.snapshot()==body["ledger"]
+    elif variant=="unrelated_binding":
+        ledger.record_order_intent(intent_id="SYNTH_UNRELATED_INTENT",order_id="SYNTH_UNRELATED_ORDER",
+            owner_id=current.scope.profile_id,symbol="TQQQ",side="BUY",quantity="1",reserved_amount="100")
+        body["ledger"]=ledger.snapshot()
+    context=with_resolution_source(current.context,body)
+    config=replace(current.config,intent_continuity=context)
+    result=run_strategy_core(runtime=current.runtime,config=config)
+    expected=int(variant in {"consistent","repeated_native_fact","unrelated_binding"})
+    assert len(current.calls)==expected,variant
+    assert len(result.submitted_orders)==expected
+    assert current.store.object_store.read_text(body["original_ref"]["descriptor_uri"])==raw
+    assert current.store.events(old)==events
+    if not expected:
+        payload=__import__("json").loads(current.locator.read_registered().payload_json)
+        assert len(payload["references"])==1 and not payload.get("resolution_bindings")
+    if expected:
+        run_strategy_core(runtime=current.runtime,config=config)
+        assert len(current.calls)==1 # same facts/proof never duplicate transport
+
+
+@pytest.mark.parametrize("branch",["port","fallback"])
+@pytest.mark.parametrize("known_first_identity",[False,True])
+@pytest.mark.parametrize("conflict",[False,True])
+def test_resolution_receipt_collection_requires_unique_broker_binding(tmp_path,branch,known_first_identity,conflict):
+    import json
+    from application.execution_intent_continuity import _canonical_json,_digest,_IntentSession
+    box={}
+    def first_transport(intent):
+        if len(box["original"].calls)==1:
+            return ExecutionReport(intent.symbol,intent.side,intent.quantity,"accepted",
+                broker_order_id="SYNTH_FIRST_ORDER" if known_first_identity else None)
+        raise TimeoutError("synthetic second response loss")
+    original=continuity_case(tmp_path,branch=branch,fault=first_transport)
+    box["original"]=original
+    original.snapshot=replace(original.snapshot,positions=(Position("SOXL",4,400),Position("TQQQ",4,400)))
+    original.runtime=replace(original.runtime,portfolio_port=CallablePortfolioPort(lambda:original.snapshot))
+    original.plan["portfolio"]["market_values"]["TQQQ"]=400
+    original.plan["portfolio"]["quantities"]["TQQQ"]=4
+    original.plan["allocation"].update(strategy_symbols=("SOXL","TQQQ"),risk_symbols=("SOXL","TQQQ"),targets={"SOXL":0,"TQQQ":0})
+    # Explicit historical native attempts, each with its own validated proposal.
+    # This is not a same-cycle multi-SELL executor witness.
+    seed_synthetic_native_sell(original, OrderIntent("SOXL", "sell", 4),
+                               broker_order_id="SYNTH_FIRST_ORDER" if known_first_identity else None)
+    seed_synthetic_native_sell(original, OrderIntent("TQQQ", "sell", 4), unknown=True)
+    assert len(original.calls)==2
+    version=original.locator.read_registered();payload=json.loads(version.payload_json)
+    assert len(payload["references"])==2
+    current=continuity_case(tmp_path,"2026-10-01",branch=branch,kind="BUY_LIMIT")
+    restored=_IntentSession(current.context,snapshot=current.snapshot,profile_id=current.scope.profile_id)
+    original_bytes={cmd.command_id:current.store.object_store.read_text(str(current.store._command_location(cmd)))
+        for cmd,_ in restored.originals}
+    sources,receipts={},{}
+    for i,ref in enumerate(payload["references"]):
+        one=replace(version,payload_json=_canonical_json({**payload,"references":[ref]}))
+        fixture_original=SimpleNamespace(store=original.store,locator=SimpleNamespace(read_registered=lambda one=one:one))
+        fixture_current=SimpleNamespace(**{**vars(current),"root":tmp_path/f"source{i}"})
+        fixture_current.root.mkdir()
+        broker_id="SYNTH_FIRST_ORDER" if conflict or i==0 else "SYNTH_SECOND_ORDER"
+        body,_=resolution_material(fixture_original,fixture_current,order_id=broker_id)
+        uri=f"synthetic-evidence://qualified/receipt{i}";raw=_canonical_json(body)
+        sources[uri]=_digest(raw);receipts[uri]=raw
+    context=replace(current.context,resolution_sources=sources,resolution_receipts=receipts)
+    result=run_strategy_core(runtime=current.runtime,config=replace(current.config,intent_continuity=context))
+    assert len(current.calls)==int(not conflict)
+    assert len(result.submitted_orders)==int(not conflict)
+    for cmd,events in restored.originals:
+        assert current.store.object_store.read_text(str(current.store._command_location(cmd)))==original_bytes[cmd.command_id]
+        assert current.store.events(cmd)==events
+    if conflict:
+        held=json.loads(current.locator.read_registered().payload_json)
+        assert len(held["references"])==2 and not held.get("resolution_bindings")
+
+
+@pytest.mark.parametrize("mode", ["immediate", "daily_digest"])
+@pytest.mark.parametrize("routine_orders", [None, "true", "false"])
+def test_A_physical_order_eligibility_is_independent_of_digest(monkeypatch, mode, routine_orders):
+    """Eligibility only: synthetic statuses do not assert real broker fills."""
+    monkeypatch.setenv("QSL_ROUTINE_NOTIFICATION_MODE", mode)
+    if routine_orders is None:
+        monkeypatch.delenv("QSL_DIGEST_ROUTINE_ORDERS", raising=False)
+    else:
+        monkeypatch.setenv("QSL_DIGEST_ROUTINE_ORDERS", routine_orders)
+    config = SimpleNamespace(dry_run_only=False, notify_no_trade_cycles=False,
+                             notification_attention_reason_codes=())
+    states = ("accepted", "pending", "submitted", "new", "working", "partially_filled",
+              "partiallyfilled", "filled", "completed", "executed", "rejected", "unknown",
+              "failed", "error", "canceled", "cancelled")
+    for state in states:
+        result = SimpleNamespace(execution={"execution_status": "executed", "signal_metadata": {}},
+                                 submitted_orders=({"status": state},))
+        assert rebalance_service._should_publish_cycle_notification(result, config=config), (mode, routine_orders, state)
+
+
+def test_A_no_order_dry_run_and_error_controls_keep_existing_policy(monkeypatch):
+    for mode in ("immediate", "daily_digest"):
+        monkeypatch.setenv("QSL_ROUTINE_NOTIFICATION_MODE", mode)
+        for flag in (None, "true", "false"):
+            if flag is None:
+                monkeypatch.delenv("QSL_DIGEST_ROUTINE_ORDERS", raising=False)
+            else:
+                monkeypatch.setenv("QSL_DIGEST_ROUTINE_ORDERS", flag)
+            config = SimpleNamespace(dry_run_only=False, notify_no_trade_cycles=False,
+                                     notification_attention_reason_codes=())
+            empty = SimpleNamespace(execution={"execution_status": "no_action", "signal_metadata": {}},
+                                    submitted_orders=())
+            assert not rebalance_service._should_publish_cycle_notification(empty, config=config)
+            config.notify_no_trade_cycles = True
+            assert rebalance_service._should_publish_cycle_notification(empty, config=config) is (mode == "immediate")
+            config.dry_run_only = True
+            preview = SimpleNamespace(execution={"execution_status": "dry_run", "signal_metadata": {}},
+                                      submitted_orders=({"status": "dry_run"},))
+            assert not rebalance_service._should_publish_cycle_notification(preview, config=config)
+            rejected = SimpleNamespace(execution={"execution_status": "dry_run", "signal_metadata": {}},
+                                       submitted_orders=({"status": "rejected"},))
+            assert rebalance_service._should_publish_cycle_notification(rejected, config=config)
+            error = SimpleNamespace(execution={"notification_error": "synthetic_error"}, submitted_orders=())
+            assert rebalance_service._should_publish_cycle_notification(error, config=config)
+
+
+def test_A_native_pending_sender_and_complete_raw9_remain_stable(tmp_path, monkeypatch):
+    """Real engine/old notification route/renderer/adapter, fake external ports.
+
+    The producer actually returns accepted, pending reconciliation. Other status
+    shapes belong to the eligibility test, not a claimed real fill producer.
+    """
+    import copy
+    import hashlib
+    import json
+    import os
+    from dataclasses import asdict, replace
+    from unittest.mock import patch
+    from application.execution_receipt_adapter import attach_cycle_execution_receipt
+    from notifications import unified
+    from quant_platform_kit.common import execution_receipts
+
+    class CAS:
+        def __init__(self):
+            self.rows = {}
+
+        def read(self, key):
+            return copy.deepcopy(self.rows.get(key, (None, None)))
+
+        def compare_and_set(self, key, version, value):
+            prior = self.rows.get(key, (None, None))[0]
+            if prior != version:
+                return False
+            self.rows[key] = ((prior or 0) + 1, copy.deepcopy(value))
+            return True
+
+        def persist(self, *_):
+            return True
+
+    fixed = datetime(2026, 9, 30, 15, tzinfo=timezone.utc)
+
+    class FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed.astimezone(tz) if tz else fixed.replace(tzinfo=None)
+
+    monkeypatch.setattr(execution_receipts, "datetime", FixedDatetime)
+    monkeypatch.setenv("DIGEST_OPAQUE_ACCOUNT_UID", "synthetic-A-opaque")
+    monkeypatch.setenv("DIGEST_TARGET_ID", "synthetic-A-target")
+    outputs, attempts = [], []
+    for unified_flag in ("false", "true"):
+        monkeypatch.setenv(unified.FLAG, unified_flag)
+        for mode in ("immediate", "daily_digest"):
+            monkeypatch.setenv("QSL_ROUTINE_NOTIFICATION_MODE", mode)
+            for flag in (None, "true", "false"):
+                if flag is None:
+                    monkeypatch.delenv("QSL_DIGEST_ROUTINE_ORDERS", raising=False)
+                else:
+                    monkeypatch.setenv("QSL_DIGEST_ROUTINE_ORDERS", flag)
+                label = f"{unified_flag}-{mode}-{flag}"
+                case = continuity_case(tmp_path / label, kind="BUY_LIMIT", strategy_revision="1" * 40)
+                sent = []
+                runtime = replace(case.runtime, notifications=CallableNotificationPort(lambda text: sent.append(text) or True))
+                store = CAS()
+                monkeypatch.setattr(unified, "GCSNotificationStore", lambda *a, **kw: store)
+                with patch("application.signal_snapshot._utcnow", return_value=fixed), unified.notification_context(
+                        {"started_at": fixed.isoformat(), "run_id": "synthetic-A-fixed-run"}):
+                    result = run_strategy_core(runtime=runtime, config=case.config)
+                assert len(sent) == 1, label
+                assert len(case.calls) == len(result.submitted_orders) == 1
+                assert result.submitted_orders[0]["status"] == "accepted"
+                assert result.execution["execution_status"] == "pending_reconciliation"
+                assert "submitted; fill not confirmed" in sent[0].lower()
+                if unified_flag == "true":
+                    markers = [value for _, value in store.rows.values()
+                               if value.get("schema_version") == "qsl.notification_incident.v1"]
+                    assert len(markers) == 1 and markers[0]["delivery_status"] == "uncertain"
+                    assert markers[0]["receipt_id"] is None
+                report = {"platform": "schwab", "strategy_profile": case.scope.profile_id, "dry_run": False,
+                          "runtime_target": case.context.runtime_target.to_dict(),
+                          "runtime_release_receipt": case.context.runtime_release_receipt}
+                attach_cycle_execution_receipt(report, result)
+                raw9 = report["execution_receipt"]
+                assert set(raw9) == {"receipt_id", "schema_version", "platform", "strategy_profile", "strategy_revision",
+                                     "execution_mode", "outcome", "broker_confirmation", "observed_at"}
+                assert raw9["outcome"] == raw9["broker_confirmation"] == "reconciliation_required"
+                economic = {k: v for k, v in result.execution.items()
+                            if k not in {"notification_events", "notification_delivery_summary"}}
+                refs = json.loads(case.locator.read_registered().payload_json)["references"]
+                commands = [json.loads(case.store.object_store.read_text(ref["descriptor_uri"])) for ref in refs]
+                outputs.append(json.dumps({"economic": economic, "orders": [asdict(x) for x in case.calls],
+                                           "commands": commands, "report": report, "raw9": raw9,
+                                           "receipt_digest": execution_receipts.calculate_execution_receipt_sha256(raw9)},
+                                          sort_keys=True, separators=(",", ":")))
+                attempts.append({"unified": unified_flag, "mode": mode, "routine_orders": flag,
+                                 "fake_sender_attempts": len(sent), "actual_delivered": "UNKNOWN"})
+    assert len(set(outputs)) == 1
+    # Only code-output hashes/attempt counts leave memory. Raw9 includes
+    # receipt_id in the compared bytes; this is not the eight-field digest alone.
+    if os.environ.get("DP01_A_ORACLE_OUTPUT"):
+        Path(os.environ["DP01_A_ORACLE_OUTPUT"]).write_text(json.dumps({
+            "same_head_comparison_equal": True, "complete_output_sha256": hashlib.sha256(outputs[0].encode()).hexdigest(),
+            "combinations": attempts, "scope": "Synthetic pending producer; real engine+old route+renderer+adapter, no full handler or actual delivery."},
+            indent=2) + "\n")
+
+
+@pytest.mark.parametrize("branch", ["port", "fallback"])
+@pytest.mark.parametrize("selected", [False, True])
+def test_unproven_sell_resources_cannot_be_reused_across_cycles(tmp_path, branch, selected):
+    from concurrent.futures import ThreadPoolExecutor
+    def invoke(day):
+        c = continuity_case(tmp_path / day, day=day, selected=selected, branch=branch)
+        c.plan["portfolio"]["unknown_pending_orders"] = True
+        result = run_strategy_core(runtime=c.runtime, config=c.config)
+        assert result.submitted_orders == ()
+        assert "sell_resource_evidence_required" in result.execution["notification_attention_reason_codes"]
+        return c.calls
+    # Separate cycles/instances with identical holdings cannot each spend them.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        calls = list(pool.map(invoke, ["2026-09-30", "2026-10-01"]))
+    assert calls == [[], []]
+
+
+@pytest.mark.parametrize("state", ["unknown", "accepted", "partially_filled", "cancel_pending"])
+@pytest.mark.parametrize("branch", ["port", "fallback"])
+@pytest.mark.parametrize("invalid_target", [False, True])
+def test_resource_refusal_keeps_native_old_sell_obligation_and_known_identity(tmp_path, state, branch, invalid_target):
+    from application.execution_intent_continuity import _IntentSession
+    from quant_platform_kit.common.execution_commands import ExecutionCommandState
+    from quant_platform_kit.common.models import OrderIntent
+    old = continuity_case(tmp_path, branch=branch)
+    session = _IntentSession(old.context, snapshot=old.snapshot, profile_id=old.scope.profile_id)
+    ticket = session.prepare(order=OrderIntent("SOXL", "sell", 4), plan=old.plan, action_type="SELL")
+    assert ticket is not None
+    assert session.record_outcome(ticket, accepted=None if state == "unknown" else True,
+                                  broker_order_id=None if state == "unknown" else "SYNTH_OLD_ACK")
+    if state == "partially_filled":
+        assert old.store.append_event(ticket.command, next_state=ExecutionCommandState.PARTIALLY_FILLED,
+                                      details={"filled_quantity": 2, "broker_order_id": "SYNTH_OLD_ACK"}) is not None
+    # Cancel requested is still an accepted, potentially fillable order; there
+    # is deliberately no CANCELLED event or resource release.
+    before = old.store.events(ticket.command)
+    for day in ("2026-10-01", "2026-10-02"):
+        current = continuity_case(tmp_path, day, branch=branch)
+        if invalid_target:
+            current.plan["allocation"]["targets"] = {"SOXL": -1}
+        result = run_strategy_core(runtime=current.runtime, config=current.config)
+        assert current.calls == [] and result.submitted_orders == ()
+        prior = result.execution["continuity_prior_orders"][0]
+        assert prior["command_id"] == ticket.command.command_id
+        assert prior["order"]["quantity"] == 4
+        assert prior["broker_order_id"] == (None if state == "unknown" else "SYNTH_OLD_ACK")
+        assert result.execution["broker_submission_done"] is False
+        assert current.store.events(ticket.command) == before
+
+
+def qualify_synthetic_sell(case, order=None, *, context=None):
+    """Offline assumption, never a producer/adoption receipt or admission mock.
+
+    One immutable fact bundle authorizes one exact proposal only. Existing
+    native admission, immutable descriptors, claims and CAS still execute.
+    """
+    from dataclasses import asdict
+    from application.execution_intent_continuity import _IntentSession, _canonical_json, _digest
+    from quant_platform_kit.common.long_only_reduce import validate_long_only_reduce_only_order
+    from quant_platform_kit.common.models import OrderIntent
+    if order is None:
+        order = OrderIntent("SOXL", "sell", 4)
+    context = context or case.context
+    session = _IntentSession(context, snapshot=case.snapshot, profile_id=case.scope.profile_id)
+    assert session.fatal_reason is None
+    resolved = session._resolved_originals()
+    obligations = [{"command_id": cmd.command_id,
+                    "descriptor_sha256": _digest(_canonical_json(cmd.to_dict())),
+                    "order": cmd.intent["order"], "routing_account_hash": cmd.intent["routing_account_hash"]}
+                   for cmd, _ in session.originals if cmd.command_id not in resolved]
+    longs = dict(case.plan["portfolio"]["quantities"])
+    shorts = dict.fromkeys(longs, 0)
+    # This fixture explicitly assumes no unlisted broker writers/orders. A
+    # same-symbol native obligation still refuses through the real contract.
+    sellable = dict(longs)
+    for command, _events in session.originals:
+        if command.command_id not in resolved:
+            symbol = command.intent["order"]["symbol"]
+            quantity = command.intent["order"].get("quantity")
+            if isinstance(quantity, bool) or not isinstance(quantity, (int, float)):
+                sellable.pop(symbol, None)  # unknown is not zero
+            else:
+                sellable[symbol] = 0  # conservative whole-symbol reservation
+    source = {"origin": "explicit_offline_synthetic_resource_assumption",
+              "long": longs, "short": shorts, "sellable": sellable, "obligations": obligations}
+    facts = {"scope": asdict(case.scope), "session": session.session,
+             "complete_original_obligations": obligations, "resource_reconciliation": "verified_complete",
+             "snapshot_sha256": session.snapshot_sha256, "source_sha256": _digest(_canonical_json(source)),
+             "proposal_order_sha256": _digest(_canonical_json(asdict(order))),
+             "strategy_release": context.runtime_target.strategy_release.to_dict(),
+             "long_quantities": longs, "short_quantities": shorts,
+             "sellable_quantities": sellable, "allowed_symbols": tuple(longs)}
+    case.synthetic_quantity_validation = validate_long_only_reduce_only_order(
+        order, long_quantities=longs, short_quantities=shorts,
+        sellable_quantities=sellable, allowed_symbols=tuple(longs))
+    case.context = replace(context, resource_facts=facts)
+    case.config = replace(case.config, intent_continuity=case.context)
+    return case
+
+
+def synthetic_sell_session(root, plan, order, *, snapshot=None, profile_id="SYNTH_PROFILE"):
+    """Native context for old sizing/legacy tests, with explicit synthetic facts."""
+    from application.execution_intent_continuity import _IntentSession
+    day = plan["execution"].get("effective_date", "2026-09-30")
+    case = continuity_case(root, day, account_hash=plan["account_hash"], profile_id=profile_id)
+    if snapshot is None:
+        p = plan["portfolio"]
+        snapshot = PortfolioSnapshot(
+            as_of=datetime.fromisoformat(day+"T14:00:00+00:00"),
+            total_equity=p.get("total_equity", sum(p["market_values"].values())+p["liquid_cash"]),
+            cash_balance=p["liquid_cash"], buying_power=p["liquid_cash"],
+            positions=tuple(Position(s, q, p["market_values"].get(s, 0)) for s, q in p["quantities"].items()),
+            metadata={"account_hash": plan["account_hash"]},
+        )
+    snapshot = native_test_snapshot(snapshot)
+    for key, value in {"signal_date": day, "effective_date": day,
+                       "execution_timing_contract": "same_session"}.items():
+        plan["execution"].setdefault(key, value)
+    case.plan, case.snapshot = plan, snapshot
+    qualify_synthetic_sell(case, order)
+    session = _IntentSession(case.context, snapshot=snapshot, profile_id=case.scope.profile_id)
+    session.register_plan_source(plan, snapshot)
+    return case, session
+
+
+def native_test_snapshot(snapshot):
+    """Preserve synthetic quantities/cash/phase while using the native model."""
+    if isinstance(snapshot, PortfolioSnapshot):
+        return snapshot
+    return PortfolioSnapshot(
+        as_of=getattr(snapshot, "as_of", datetime(2026, 9, 30, 14, tzinfo=timezone.utc)),
+        total_equity=snapshot.total_equity, buying_power=snapshot.buying_power,
+        cash_balance=getattr(snapshot, "cash_balance", snapshot.buying_power),
+        positions=tuple(Position(p.symbol, p.quantity, p.market_value) for p in snapshot.positions),
+        metadata=snapshot.metadata,
+    )
+
+
+@pytest.mark.parametrize("qualification", ["closed", "pending", "partial", "cancel_pending", "wrong_identity", "missing_sellable", "unknown_sellable"])
+@pytest.mark.parametrize("branch", ["port", "fallback"])
+def test_verified_original_closure_does_not_reenter_sell_resource_obligations(tmp_path, qualification, branch):
+    from quant_platform_kit.common.models import OrderIntent
+    original = qualify_synthetic_sell(continuity_case(tmp_path, branch=branch))
+    first = run_strategy_core(runtime=original.runtime, config=original.config)
+    assert len(original.calls) == 1 and first.submitted_orders[0]["broker_order_id"] == "SYNTH_ACK"
+    from application.execution_intent_continuity import _IntentSession
+    from quant_platform_kit.common.execution_commands import ExecutionCommandState
+    current = continuity_case(tmp_path, "2026-10-01", branch=branch)
+    quantity = 4
+    if qualification == "partial":
+        old = _IntentSession(original.context, snapshot=original.snapshot, profile_id=original.scope.profile_id)
+        assert original.store.append_event(old.originals[0][0], next_state=ExecutionCommandState.PARTIALLY_FILLED,
+            details={"broker_order_id": "SYNTH_ACK", "filled_quantity": 2}) is not None
+        quantity = 2
+        current.snapshot = replace(current.snapshot, positions=(Position("SOXL", 2, 200),))
+        current.plan["portfolio"].update(quantities={"SOXL": 2}, market_values={"SOXL": 200})
+        current.runtime = replace(current.runtime, portfolio_port=CallablePortfolioPort(lambda: current.snapshot))
+    context = current.context
+    if qualification not in {"pending", "partial"}:
+        terminal = "PENDING_CANCEL" if qualification == "cancel_pending" else "CANCELED"
+        body, _ = resolution_material(original, current, terminal=terminal, filled="0", order_id="SYNTH_ACK")
+        if qualification == "wrong_identity":
+            body["identity_binding"]["order_id"] = "OTHER_SYNTHETIC_ORDER"
+        context = with_resolution_source(current.context, body)
+    qualify_synthetic_sell(current, OrderIntent("SOXL", "sell", quantity), context=context)
+    if qualification == "missing_sellable":
+        facts = dict(current.context.resource_facts)
+        facts.pop("sellable_quantities")
+        current.config = replace(current.config, intent_continuity=replace(current.context, resource_facts=facts))
+    if qualification == "unknown_sellable":
+        facts = dict(current.context.resource_facts)
+        facts["sellable_quantities"] = {"SOXL": None}
+        current.config = replace(current.config, intent_continuity=replace(current.context, resource_facts=facts))
+    old_session = _IntentSession(original.context, snapshot=original.snapshot, profile_id=original.scope.profile_id)
+    old_events = old_session.originals[0][1]
+    result = run_strategy_core(runtime=current.runtime, config=current.config)
+    assert len(current.calls) == int(qualification == "closed")
+    assert len(result.submitted_orders) == int(qualification == "closed")
+    assert result.execution["continuity_prior_orders"][0]["broker_order_id"] == "SYNTH_ACK"
+    restored = _IntentSession(original.context, snapshot=original.snapshot, profile_id=original.scope.profile_id)
+    assert restored.originals[0][1] == old_events
+
+
+def seed_synthetic_native_sell(case, order, *, unknown=False, broker_order_id=None):
+    """Explicit historical attempt, per-proposal native validation and real events.
+
+    This does not exercise current execute_rebalance_cycle multi-SELL. Never
+    mutate a flat proof to pretend it authorized multiple concurrent proposals.
+    """
+    from application.execution_intent_continuity import _IntentSession
+    qualified = qualify_synthetic_sell(case, order)
+    session = _IntentSession(qualified.context, snapshot=case.snapshot, profile_id=case.scope.profile_id)
+    session.register_plan_source(case.plan, case.snapshot)
+    ticket = session.prepare(order=order, plan=case.plan, action_type="SELL")
+    assert ticket is not None
+    assert session._independent_reduction(order, ticket.command)
+    # Really call the fake transport; do not hand-fill a broker outcome.
+    try:
+        if case.runtime.execution_port_factory is not None:
+            report = case.runtime.execution_port_factory(case.scope.account_hash).submit_order(order)
+        else:
+            report = case.runtime.submit_equity_order(case.scope.account_hash, order)
+    except TimeoutError:
+        assert unknown
+        assert session.record_outcome(ticket)
+    else:
+        assert not unknown and report.status == "accepted"
+        assert report.broker_order_id == broker_order_id
+        assert session.record_outcome(ticket, accepted=True, broker_order_id=report.broker_order_id)
+    return ticket

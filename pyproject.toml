@@ -19,7 +19,7 @@ dependencies = [
     "google-cloud-storage",
     "google-auth",
     "numpy",
-    "quant-platform-kit @ git+https://github.com/QuantStrategyLab/QuantPlatformKit.git@bfe55791adcd8867790e15dba6fd35304e4093c0",
+    "quant-platform-kit @ git+https://github.com/QuantStrategyLab/QuantPlatformKit.git@2d6626f2ae2852cd74c0ac050b62968a4e06d074",
     "us-equity-strategies @ git+https://github.com/QuantStrategyLab/UsEquityStrategies.git@9d1544d1476dd19b1da61b16f37cee7f9126caf4",
 ]
 
@@ -29,6 +29,9 @@ test = [
     "pytest-cov",
     "ruff",
 ]
+
+[project.scripts]
+schwab-d1-no-order-acceptance = "scripts.run_d1_no_order_acceptance:main"
 
 [tool.coverage.run]
 branch = true
@@ -61,5 +64,5 @@ include = [
 
 [tool.uv]
 override-dependencies = [
-  "quant-platform-kit @ git+https://github.com/QuantStrategyLab/QuantPlatformKit.git@bfe55791adcd8867790e15dba6fd35304e4093c0",
+  "quant-platform-kit @ git+https://github.com/QuantStrategyLab/QuantPlatformKit.git@2d6626f2ae2852cd74c0ac050b62968a4e06d074",
 ]

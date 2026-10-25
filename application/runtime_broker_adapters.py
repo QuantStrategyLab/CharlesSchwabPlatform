@@ -201,6 +201,19 @@ class SchwabRuntimeBrokerAdapters:
                         close=float(candle["close"]),
                     )
                 )
+            # Daily labels must be ordered and no later than the observation
+            # session before applying the existing intraday quote overlay.
+            # This date boundary does not establish availability time or PIT.
+            observation_date = _market_date(self.clock())
+            points = sorted(
+                (point for point in points if _market_date(point.as_of) <= observation_date),
+                key=lambda point: (
+                    point.as_of if point.as_of.tzinfo is not None
+                    else point.as_of.replace(tzinfo=timezone.utc)
+                ),
+            )
+            if not points:
+                raise ValueError(f"Price history unavailable at observation for {normalized_symbol}")
             series = PriceSeries(
                 symbol=normalized_symbol,
                 currency="USD",

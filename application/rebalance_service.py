@@ -9,6 +9,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 
 from application.account_observation import build_account_observation
+from application.execution_intent_continuity import _IntentSession
 from application.execution_service import execute_rebalance_cycle, ExecutionCycleResult
 from application.execution_claim import claim_execution_marker
 from application.execution_kernel_adapter import (
@@ -19,7 +20,9 @@ from application.runtime_dependencies import SchwabRebalanceConfig, SchwabRebala
 from application.signal_snapshot import build_signal_snapshot
 from notifications.events import NotificationPublisher, RenderedNotification
 from notifications import renderers as notification_renderers
-from quant_platform_kit.common.execution_state import build_execution_marker_key, claim_account_owner
+from quant_platform_kit.common.execution_state import (
+    ExecutionMarkerStore, build_execution_marker_key, claim_account_owner,
+)
 from quant_platform_kit.common.models import QuoteSnapshot
 from quant_platform_kit.common.notification_localization import (
     localize_notification_text as _base_localize_notification_text,
@@ -373,9 +376,76 @@ def _has_submitted_orders(result: ExecutionCycleResult) -> bool:
     return bool(tuple(getattr(result, "submitted_orders", ()) or ()))
 
 
+def _recorded_execution_replay(*, config, marker_key: str, plan: dict, execution: dict) -> dict:
+    """Project a same-key outcome for display; never submit or resolve its claim."""
+    unresolved = {
+        **execution,
+        "execution_status": "pending_reconciliation",
+        "broker_submission_done": False,
+        "orders_pending_count": 0,
+        "no_op_reason": "execution_outcome_unavailable",
+    }
+    try:
+        store = config.execution_state_store
+        if not isinstance(store, ExecutionMarkerStore):
+            return unresolved
+        # Reuse the store's existing read API in its existing outcome namespace.
+        payload = replace(store, namespace=store.outcome_namespace).read_marker(marker_key)
+        if not isinstance(payload, dict) or payload.get("schema_version") != "execution_outcome.v1":
+            return unresolved
+        if payload.get("marker_key") != marker_key:
+            return unresolved
+        metadata = payload.get("metadata")
+        if not isinstance(metadata, dict):
+            return unresolved
+        expected = {
+            "strategy_profile": config.strategy_profile,
+            "account_scope": _resolve_execution_account_scope(config=config, plan=plan),
+            "signal_date": str(execution.get("signal_date") or ""),
+            "effective_date": str(execution.get("effective_date") or ""),
+        }
+        if any(metadata.get(key) != value for key, value in expected.items()):
+            return unresolved
+        if metadata.get("dry_run_only") is not False:
+            return unresolved
+        count = metadata.get("orders_pending_count")
+        orders = metadata.get("submitted_orders")
+        status = metadata.get("execution_status")
+        if (type(count) is not int or count < 0 or not isinstance(orders, list)
+                or not all(isinstance(order, dict) for order in orders)
+                or not isinstance(status, str)
+                or type(metadata.get("broker_submission_done")) is not bool):
+            return unresolved
+        pending_orders = [order for order in orders if order.get("status") in {"accepted", "unknown"}]
+        if status != "pending_reconciliation":
+            if status in {"completed", "no_action", "no_op"} and count == 0 and not orders:
+                return dict(execution)
+            return unresolved
+        if count < len(pending_orders):
+            return unresolved
+        fields = ("symbol", "side", "quantity", "order_type", "status", "price",
+                  "limit_price", "notional_usd", "broker_order_id")
+        return {
+            **unresolved,
+            "orders_pending_count": count,
+            "no_op_reason": (
+                "recorded_submission_unknown"
+                if any(order.get("status") == "unknown" for order in orders)
+                else "recorded_pending_reconciliation"
+            ),
+            "recorded_submitted_orders": [
+                {key: order[key] for key in fields if key in order} for order in orders
+            ],
+            "recorded_broker_submission_done": metadata["broker_submission_done"],
+        }
+    except Exception:
+        # A missing/invalid/unreadable outcome cannot turn an unresolved claim into success.
+        return unresolved
+
+
 
 def _should_publish_cycle_notification(result: ExecutionCycleResult, *, config) -> bool:
-    from quant_platform_kit.notifications.digest_routing import defer_routine_cycle_to_digest
+    from notifications.digest_snapshot.digest_routing import defer_routine_cycle_to_digest
 
     if getattr(config, "notification_attention_reason_codes", ()):
         return True
@@ -403,7 +473,11 @@ def _should_publish_cycle_notification(result: ExecutionCycleResult, *, config) 
             return True
     if bool(getattr(config, "dry_run_only", False)):
         return False
-    if defer_routine_cycle_to_digest(execution, submitted_order_count=len(submitted_orders)):
+    # A digest may summarize a physical order, but cannot suppress its
+    # immediate notification eligibility. Existing routing/state stays intact.
+    if submitted_orders:
+        return True
+    if defer_routine_cycle_to_digest(execution, submitted_order_count=len(submitted_orders), submitted_orders=submitted_orders):
         return False
     return bool(submitted_orders) or bool(getattr(config, "notify_no_trade_cycles", False))
 
@@ -542,6 +616,8 @@ def run_strategy_core(
             extra_notification_lines=tuple(extra_notification_lines),
             notify_no_trade_cycles=bool(notify_no_trade_cycles),
         )
+    from notifications.unified import publish_incident
+
     sleeper_fn = config.sleeper or _noop_sleep
     notification_publisher = NotificationPublisher(
         log_message=lambda message: print(message, flush=True),
@@ -559,6 +635,8 @@ def run_strategy_core(
             qqq_history=reference_history,
             snapshot=current_snapshot,
         )
+        if continuity is not None:
+            continuity.register_plan_source(current_plan, current_snapshot)
         current_portfolio = _plan_portfolio(current_plan)
         current_execution = _plan_execution(current_plan)
         current_allocation = _plan_allocation(current_plan)
@@ -567,6 +645,9 @@ def run_strategy_core(
         return current_plan, current_portfolio, current_execution, current_allocation
 
     snapshot = runtime.portfolio_port.get_portfolio_snapshot()
+    continuity_context = getattr(config, "intent_continuity", None)
+    continuity = (_IntentSession(continuity_context, snapshot=snapshot, profile_id=config.strategy_profile)
+                  if continuity_context is not None and not config.dry_run_only else None)
     account_observation = build_account_observation(snapshot)
     plan, portfolio, execution, allocation = load_plan(snapshot)
     execution_port = (
@@ -582,6 +663,7 @@ def run_strategy_core(
     execution_marker_key = _build_execution_marker_key(config=config, execution=execution, plan=plan)
     execution_state_store = getattr(config, "execution_state_store", None)
     execution_already_recorded = False
+    same_key_live_replay = False
     notification_attention_reason_codes = []
     execution_claim_acquired = False
     dry_run_bypass_marker = _dry_run_bypasses_execution_marker(config)
@@ -631,6 +713,7 @@ def run_strategy_core(
         try:
             if not execution_already_recorded:
                 execution_already_recorded = bool(execution_state_store.has_marker(execution_marker_key))
+                same_key_live_replay = execution_already_recorded and not bool(config.dry_run_only)
         except Exception as exc:
             raise RuntimeError(
                 f"Execution marker read failed before broker submission: {type(exc).__name__}"
@@ -664,6 +747,7 @@ def run_strategy_core(
                 },
             )
             execution_already_recorded = not execution_claim_acquired
+            same_key_live_replay = execution_already_recorded and not bool(config.dry_run_only)
 
     # N13 ADR-B: always consult T1 (shadow). Enforce only behind flag + dedup-on.
     # Never forge identity_held=True for dedup-off.
@@ -732,11 +816,10 @@ def run_strategy_core(
             safe_haven_cash_substitute_threshold_usd=config.safe_haven_cash_substitute_threshold_usd,
             cash_only_execution=getattr(config, "cash_only_execution", True),
             notional_buy_execution=getattr(config, "notional_buy_execution", False),
-            publish_order_issue=lambda message: notification_publisher.publish(
-                RenderedNotification(
-                    detailed_text=message,
-                    compact_text=message,
-                )
+            intent_continuity=continuity,
+            publish_order_issue=lambda message: publish_incident(
+                lambda: notification_publisher.publish(RenderedNotification(detailed_text=message, compact_text=message)),
+                reason="order_integrity_issue", profile=config.strategy_profile, kind="order_status_unknown",
             ),
         )
         if execution_claim_acquired:
@@ -745,13 +828,23 @@ def run_strategy_core(
                 marker_key=execution_marker_key,
                 result=execution_result,
                 plan=plan,
-                notify_issue=lambda title, detail: notification_publisher.publish(
-                    RenderedNotification(
-                        detailed_text=f"{title}\n{detail}",
-                        compact_text=f"{title}\n{detail}",
-                    )
+                notify_issue=lambda title, detail: publish_incident(
+                    lambda: notification_publisher.publish(RenderedNotification(
+                        detailed_text=f"{title}\n{detail}", compact_text=f"{title}\n{detail}")),
+                    reason="execution_outcome_persistence_failed", profile=config.strategy_profile,
                 ),
             )
+    if same_key_live_replay:
+        execution_result = replace(
+            execution_result,
+            execution=_recorded_execution_replay(
+                config=config, marker_key=execution_marker_key, plan=plan,
+                execution=execution_result.execution,
+            ),
+        )
+    if continuity is not None:
+        execution_result = replace(execution_result, execution=continuity.present(
+            execution_result.execution, current_submitted=execution_result.submitted_orders))
     portfolio = execution_result.portfolio
     execution = execution_result.execution
     if notification_attention_reason_codes:
@@ -771,41 +864,49 @@ def run_strategy_core(
     )
     trade_logs = list(execution_result.trade_logs)
 
-    publish_cycle_notification = _should_publish_cycle_notification(execution_result, config=config)
-    if _has_submitted_orders(execution_result) and publish_cycle_notification:
-        try:
-            notification_publisher.publish(
-                notification_renderers.render_trade_notification(
+    from notifications.unified import enabled as unified_enabled, publish_cycle
+
+    publish_direct = _should_publish_cycle_notification(execution_result, config=config)
+    if unified_enabled() and not config.dry_run_only:
+        publish_direct = True
+
+    def publish_existing_cycle():
+        if _has_submitted_orders(execution_result) and publish_direct:
+            try:
+                return notification_publisher.publish(
+                    notification_renderers.render_trade_notification(
+                        translator=config.translator,
+                        strategy_display_name=config.strategy_display_name,
+                        dry_run_only=config.dry_run_only,
+                        extra_notification_lines=config.extra_notification_lines,
+                        execution=execution,
+                        trade_logs=trade_logs,
+                        account_label=plan.get("account_hash", ""),
+                    )
+                )
+            except Exception:
+                print("pending_order_notification_failed", flush=True)
+        elif publish_direct:
+            return notification_publisher.publish(
+                notification_renderers.render_heartbeat_notification(
                     translator=config.translator,
                     strategy_display_name=config.strategy_display_name,
                     dry_run_only=config.dry_run_only,
                     extra_notification_lines=config.extra_notification_lines,
                     execution=execution,
-                    trade_logs=trade_logs,
+                    portfolio=portfolio,
                     account_label=plan.get("account_hash", ""),
+                    account_snapshot=_heartbeat_account_snapshot(snapshot),
                 )
             )
-        except Exception:
-            print("pending_order_notification_failed", flush=True)
-    elif publish_cycle_notification:
-        notification_publisher.publish(
-            notification_renderers.render_heartbeat_notification(
-                translator=config.translator,
-                strategy_display_name=config.strategy_display_name,
-                dry_run_only=config.dry_run_only,
-                extra_notification_lines=config.extra_notification_lines,
-                execution=execution,
-                portfolio=portfolio,
-                account_label=plan.get("account_hash", ""),
-                account_snapshot=_heartbeat_account_snapshot(snapshot),
+        else:
+            print(
+                "notification_suppressed "
+                + json.dumps({"reason": "no_trade_or_error", "trade_logs_count": len(trade_logs)}, ensure_ascii=False),
+                flush=True,
             )
-        )
-    else:
-        print(
-            "notification_suppressed "
-            + json.dumps({"reason": "no_trade_or_error", "trade_logs_count": len(trade_logs)}, ensure_ascii=False),
-            flush=True,
-        )
+
+    publish_cycle(execution_result, config=config, legacy=publish_existing_cycle)
     notification_delivery_summary = _build_notification_delivery_summary(
         getattr(runtime, "notification_delivery_events", []) or []
     )

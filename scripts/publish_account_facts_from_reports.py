@@ -71,10 +71,9 @@ _REVISION = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 
 
 POSITIONS_SCOPE = "strategy_symbols_only"
-# Archive-projection-only keys: the console /api/account-facts/sync contract is
-# exact-key, so these are carried for offline consumers (digest emit) and are
-# stripped before any publish.
-ARCHIVE_ONLY_KEYS = ("broker_reported_positions", "broker_reported_positions_scope")
+# QRS accepts these optional fields. Upload requires an explicit opt-in;
+# archived projections remain available to existing offline consumers.
+POSITIONS_KEYS = ("broker_reported_positions", "broker_reported_positions_scope")
 _POSITION_SYMBOL = re.compile(r"[A-Z0-9][A-Z0-9./ -]{0,31}\Z", re.ASCII)
 _MAX_POSITIONS = 64
 
@@ -91,7 +90,7 @@ def _project_positions(observation: Mapping[str, Any]) -> list[dict[str, str]] |
     for item in raw:
         if not isinstance(item, Mapping):
             return None
-        if set(item) - {"symbol", "quantity", "market_value", "currency"}:
+        if set(item) - {"symbol", "quantity", "market_value", "currency", "avg_cost"}:
             return None
         symbol = item.get("symbol")
         if (
@@ -117,11 +116,29 @@ def _project_positions(observation: Mapping[str, Any]) -> list[dict[str, str]] |
                 "currency_source": "owner_confirmed",
             }
         )
+        if item.get("avg_cost") is not None:
+            try:
+                rows[-1]["avg_cost"] = _money_text(item["avg_cost"])
+            except _ProjectionError:
+                pass  # Unknown optional cost; retain the validated holding.
     return rows
 
 
-def strip_archive_only_keys(body: Mapping[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in body.items() if key not in ARCHIVE_ONLY_KEYS}
+def prepare_sync_payload(
+    body: Mapping[str, Any], *, include_positions: bool = False, include_external_flow: bool = False,
+) -> dict[str, Any]:
+    """Keep only receiver fields from an already validated archive projection."""
+    allowed = {
+        "schema_version", "snapshot_schema_version", "account_scope", "target_id",
+        "source_binding", "observed_started_at", "observed_finished_at",
+        "snapshot_atomic", "observation_date", "broker_reported_balances", "cash",
+        "account_hash", "broker_account_type",
+    }
+    if include_positions is True:
+        allowed.update(POSITIONS_KEYS)
+    if include_external_flow is True:
+        allowed.add("externalFlow")
+    return {key: value for key, value in body.items() if key in allowed}
 
 
 class _ProjectionError(ValueError):
@@ -232,6 +249,7 @@ def project_schwab_account_facts_history(
     expected_runtime_revision: str,
     expected_target_id: str,
     expected_cash_currency: str | None = None,
+    external_flow_enabled: bool = False,
     now: datetime,
 ) -> dict[str, Any]:
     """Return the strict Schwab history body or an amount-free skip reason."""
@@ -380,6 +398,14 @@ def project_schwab_account_facts_history(
         if positions is not None:
             return_body["broker_reported_positions"] = positions
             return_body["broker_reported_positions_scope"] = POSITIONS_SCOPE
+        if external_flow_enabled is True:
+            from application.external_flow_snapshot import attach_external_flow_snapshot
+            try:
+                return_body = attach_external_flow_snapshot(
+                    return_body, report.get("account_external_flows"), enabled=True,
+                )
+            except (TypeError, ValueError, AttributeError):
+                raise _ProjectionError("external_flow_invalid") from None
         return return_body
     except _ProjectionError as exc:
         return {"status": "skipped", "reason": exc.reason}
@@ -623,6 +649,13 @@ def _safe_result_text(result: Mapping[str, Any]) -> str:
         return "published"
     if status == "unchanged" and reason == "observation_unchanged":
         return "unchanged:observation_unchanged"
+    if status == "skipped" and isinstance(reason, str):
+        prefix, _, scope_kind = reason.partition(":")
+        if prefix == "runtime_target_scope_mismatch" and scope_kind in {
+            "non_string", "market_code", "looks_like_target_id",
+            "hash_shaped", "mode_token", "other_token",
+        }:
+            return f"skipped:{reason}"
     if status == "skipped" and isinstance(reason, str) and re.fullmatch(r"[a-z_]+", reason):
         http_status = result.get("http_status")
         if isinstance(http_status, int) and not isinstance(http_status, bool) and 100 <= http_status <= 599:
@@ -638,6 +671,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--latest-scheduled-report", action="store_true")
+    mode.add_argument("--latest-report", action="store_true")
     mode.add_argument("--report-uri")
     parser.add_argument("--expected-runtime-revision")
     args = parser.parse_args(argv)
@@ -648,9 +682,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.latest_scheduled_report and os.getenv("GITHUB_EVENT_NAME") != "schedule":
         print("skipped:schedule_context_required")
         return 2
+    if args.latest_report and os.getenv("GITHUB_EVENT_NAME") != "workflow_dispatch":
+        print("skipped:dispatch_context_required")
+        return 2
+    latest_report = args.latest_scheduled_report or args.latest_report
     if (
-        (args.latest_scheduled_report and args.expected_runtime_revision is not None)
-        or (not args.latest_scheduled_report and not args.expected_runtime_revision)
+        (latest_report and args.expected_runtime_revision is not None)
+        or (not latest_report and not args.expected_runtime_revision)
     ):
         print("skipped:runtime_revision_invalid")
         return 2
@@ -678,7 +716,7 @@ def main(argv: list[str] | None = None) -> int:
     now = datetime.now(timezone.utc)
     report_uri = args.report_uri
     expected_revision = args.expected_runtime_revision
-    if args.latest_scheduled_report:
+    if latest_report:
         expected_revision = _current_serving_revision(service_name)
         if not isinstance(expected_revision, str) or _REVISION.fullmatch(expected_revision) is None:
             print("skipped:runtime_revision_readback_mismatch")
@@ -705,6 +743,7 @@ def main(argv: list[str] | None = None) -> int:
     if report is None:
         print("skipped:report_unavailable")
         return 2
+    include_external_flow = os.environ.get("SCHWAB_EXTERNAL_FLOW_EXPORT_ENABLED") == "true"
     projected = project_schwab_account_facts_history(
         report,
         source_report_uri=report_uri,
@@ -713,13 +752,16 @@ def main(argv: list[str] | None = None) -> int:
         expected_runtime_revision=expected_revision,
         expected_target_id=target_id,
         expected_cash_currency=cash_currency,
+        external_flow_enabled=include_external_flow,
         now=now,
     )
     if projected.get("status") == "skipped":
         print(_safe_result_text(projected))
         return 2
-    history = strip_archive_only_keys(
-        {key: value for key, value in projected.items() if key != "status"}
+    history = prepare_sync_payload(
+        projected,
+        include_positions=os.environ.get("SCHWAB_ACCOUNT_FACTS_INCLUDE_POSITIONS", "").strip().lower() == "true",
+        include_external_flow=include_external_flow,
     )
     result = _publish_once(
         history,

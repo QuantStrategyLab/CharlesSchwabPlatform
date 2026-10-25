@@ -34,8 +34,13 @@ def test_urgent_and_unknown_states_still_publish(monkeypatch, evidence):
     assert _publish(evidence)
 
 
-def test_real_order_activity_stays_immediate(monkeypatch):
+@pytest.mark.parametrize("include_orders", [None, "true", "false"])
+def test_physical_orders_remain_immediate_in_digest_mode(monkeypatch, include_orders):
     monkeypatch.setenv("QSL_ROUTINE_NOTIFICATION_MODE", "daily_digest")
+    if include_orders is None:
+        monkeypatch.delenv("QSL_DIGEST_ROUTINE_ORDERS", raising=False)
+    else:
+        monkeypatch.setenv("QSL_DIGEST_ROUTINE_ORDERS", include_orders)
     assert _publish({"execution_status": "completed"}, orders=({"status": "filled"},))
 
 

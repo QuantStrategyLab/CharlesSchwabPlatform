@@ -14,6 +14,13 @@ import urllib.request
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from notifications.receipt_alerts import render_receipt_alert
+from notifications.unified import enabled as unified_enabled, publish_receipt, publish_approved_receipts
+from notifications.approved_gates import report_gate_reasons
 from quant_platform_kit.common.execution_receipts import validate_execution_receipt
 from quant_platform_kit.common.operational_notification_localization import (
     format_operational_alert,
@@ -744,7 +751,13 @@ def _send_telegram(message: str) -> bool:
     return ok
 
 
-def _send_normal_heartbeat(name: str, detail: str, *, quiet_eligible: bool = True) -> int:
+def _workflow_run_url() -> str:
+    if all(os.environ.get(key) for key in ("GITHUB_SERVER_URL", "GITHUB_REPOSITORY", "GITHUB_RUN_ID")):
+        return f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+    return ""
+
+
+def _send_normal_heartbeat_legacy(name: str, detail: str, *, quiet_eligible: bool = True) -> int:
     if quiet_eligible and not _env_bool("RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS", False):
         return 0
     if quiet_eligible:
@@ -758,7 +771,36 @@ def _send_normal_heartbeat(name: str, detail: str, *, quiet_eligible: bool = Tru
             technical_details=[detail],
         )
     print(message)
-    return 0 if _send_telegram(message[:3900]) else 1
+    delivered_message = message if quiet_eligible else render_receipt_alert(
+        locale=_notification_locale(), unconfirmed=True, workflow_url=_workflow_run_url(),
+    )
+    return 0 if _send_telegram(delivered_message[:3900]) else 1
+
+
+def _send_normal_heartbeat(name: str, detail: str, *, quiet_eligible: bool = True,
+                           recovery_at=None, attention_reason="", source_reports=()) -> int:
+    def legacy():
+        return _send_normal_heartbeat_legacy(name, detail, quiet_eligible=quiet_eligible)
+    if not unified_enabled():
+        return legacy()
+    healthy = quiet_eligible and not attention_reason
+    if healthy and source_reports and any(not report.get("execution_receipt") for report in source_reports):
+        healthy = False
+        attention_reason = "receipt_missing"
+    message = render_receipt_alert(locale=_notification_locale(), unconfirmed=True, workflow_url=_workflow_run_url())
+    if healthy and source_reports:
+        results = [publish_receipt(legacy, kind="healthy_heartbeat", reason="receipt_evidence_observed",
+            recovered=recovery_at is not None, observed_at=recovery_at, source_report=report)
+            for report in source_reports]
+        return next((value for value in results if type(value) is int and value), 0)
+    result = publish_receipt(
+        legacy if healthy else lambda: _send_telegram(message),
+        kind="healthy_heartbeat" if healthy else (attention_reason if attention_reason in {"order_status_unknown", "receipt_missing"} else "receipt_unacceptable"),
+        reason=attention_reason or "receipt_evidence_unconfirmed",
+        recovered=healthy and recovery_at is not None, observed_at=recovery_at,
+    )
+    # Receipt acceptance and workflow disposition are unchanged by routing.
+    return result if type(result) is int else 0
 
 
 def main(now: dt.datetime | None = None) -> int:
@@ -807,7 +849,10 @@ def main(now: dt.datetime | None = None) -> int:
             technical_details=[str(exc)],
         )
         print(message)
-        _send_telegram(message)
+        delivered_message = render_receipt_alert(
+            locale=_notification_locale(), scheduler_error=True, workflow_url=_workflow_run_url(),
+        )
+        publish_receipt(lambda: _send_telegram(delivered_message), kind="real_error", reason="scheduler_policy_unavailable")
         return 1 if fail_workflow else 0
     publication_grace_minutes = float(
         os.environ.get("RUNTIME_HEARTBEAT_PUBLICATION_GRACE_MINUTES") or "30"
@@ -898,11 +943,18 @@ def main(now: dt.datetime | None = None) -> int:
     latest_services_seen = set()
     unreadable_objects = []
     latest_report_issues = []
+    observations = []
+    recovery_times = []
+    notification_attention = []
+    latest_block_reason = ""
+    approved_latest = {}
+    source_reports = []
     for uri, updated in sorted_objects[:max_reports]:
         payload = _cat_gcs_json(uri, project=project)
         if payload is None:
             unreadable_objects.append(updated)
             inspected.append(f"- {updated.isoformat()} {uri} unreadable")
+            observations.append({"category": "unreadable", "updated": updated})
             continue
         matches, service_name, filter_reason = _payload_matches(
             payload,
@@ -916,9 +968,11 @@ def main(now: dt.datetime | None = None) -> int:
                 latest_services_seen.add(raw_service)
                 latest_report_issues.append(f"{raw_service}: conflicting report identity ({filter_reason})")
             inspected.append(f"- {updated.isoformat()} {uri} skipped {filter_reason}")
+            observations.append({"category": "identity_skipped", "updated": updated})
             continue
         if updated < due_since:
             inspected.append(f"- {updated.isoformat()} {uri} skipped predates current heartbeat window")
+            observations.append({"category": "time_skipped", "updated": updated})
             continue
         latest_due_at = required_due_at.get(service_name)
         if latest_due_at is not None and updated < latest_due_at:
@@ -926,16 +980,33 @@ def main(now: dt.datetime | None = None) -> int:
                 f"- {updated.isoformat()} {uri} skipped "
                 f"predates latest due schedule {latest_due_at.isoformat()}"
             )
+            observations.append({"category": "time_skipped", "updated": updated})
             continue
         ok, reason = _is_accepted_report(payload)
+        observations.append({
+            "category": "accepted" if ok else (
+                "blocked" if _report_execution_status(payload).lower() in {"blocked", "risk_blocked", "strategy_risk_rejected"}
+                else "rejected"
+            ),
+            "updated": updated,
+        })
         latest_services_seen.add(_payload_service_name(payload))
         is_latest_report = service_name not in latest_report_seen
         if is_latest_report:
             latest_report_seen.add(service_name)
             if not ok:
+                if unified_enabled() and reason == "rejected inner execution status" and report_gate_reasons(payload, observed_at=now):
+                    approved_latest[service_name] = payload
                 latest_report_issues.append(f"{service_name or name}: {reason}")
+                if _report_execution_status(payload).lower() in {"blocked", "risk_blocked"}:
+                    summary = payload.get("summary") or {}
+                    latest_block_reason = str(summary.get("no_op_reason") or "blocked_run") if isinstance(summary, dict) else "blocked_run"
         inspected.append(f"- {updated.isoformat()} {uri} {reason}")
         if ok and is_latest_report:
+            source_reports.append(payload)
+            execution_status = _report_execution_status(payload).lower()
+            if execution_status in {"unknown", "pending", "submitted", "broker_acknowledged", "partially_filled", "pending_reconciliation", "reconciliation_required"}:
+                notification_attention.append("order_status_unknown")
             quiet = _is_quiet_report(payload, now=now)
             freshness_detail = ""
             if quiet and latest_due_at is not None:
@@ -947,6 +1018,10 @@ def main(now: dt.datetime | None = None) -> int:
                 visible_report_details.append(
                     f"{service_name or name}: execution_status={_report_execution_status(payload) or 'unconfirmed'}; {reason}{freshness_detail}"
                 )
+            else:
+                finished_at = _parse_timestamp(payload.get("finished_at"), require_timezone=True)
+                if finished_at is not None:
+                    recovery_times.append(finished_at)
             if required_keys:
                 quiet_by_service.setdefault(service_name, quiet)
                 accepted_by_service.setdefault(service_name, (uri, updated, reason))
@@ -976,6 +1051,9 @@ def main(now: dt.datetime | None = None) -> int:
             return _send_normal_heartbeat(
                 name, _notice("heartbeat_accepted_report", detail=details) if all(quiet_by_service[key] for key in required_keys) else details,
                 quiet_eligible=all(quiet_by_service[key] for key in required_keys),
+                recovery_at=min(recovery_times) if recovery_times else None,
+                attention_reason="order_status_unknown" if notification_attention else "",
+                source_reports=source_reports,
             )
     if accepted and not list_errors and not read_incomplete and not latest_report_issues:
         uri, updated, reason = accepted[0]
@@ -986,6 +1064,9 @@ def main(now: dt.datetime | None = None) -> int:
             name,
             _notice("heartbeat_accepted_report", detail=f"{reason}, {updated.isoformat()}") if all(quiet_reports) else "; ".join(visible_report_details),
             quiet_eligible=all(quiet_reports),
+            recovery_at=min(recovery_times) if recovery_times else None,
+            attention_reason="order_status_unknown" if notification_attention else "",
+            source_reports=source_reports,
         )
 
     issues = []
@@ -1030,7 +1111,22 @@ def main(now: dt.datetime | None = None) -> int:
         workflow_url=run_url,
     )
     print(message)
-    _send_telegram(message[:3900])
+    delivered_message = render_receipt_alert(
+        locale=_notification_locale(), observations=observations,
+        workflow_url=run_url, list_failed=bool(list_errors), missing=True,
+        due_at=max(required_due_at.values()) if required_due_at else None,
+    )[:3900]
+    # A verified approved block is still rejected by the execution heartbeat.
+    # Only its notification is deferred, after durable candidate publication.
+    approved_only = (unified_enabled() and approved_latest and not list_errors and not read_incomplete
+        and len(latest_report_issues) == len(approved_latest) and not notification_attention
+        and (set(required_keys) <= set(approved_latest) | set(accepted_by_service) if required_keys
+             else len(approved_latest) + len(accepted) == len(latest_report_seen))
+        and (all(quiet_by_service.values()) if required_keys else all(quiet_reports)))
+    if not approved_only or not publish_approved_receipts(list(approved_latest.values())):
+        publish_receipt(lambda: _send_telegram(delivered_message),
+            kind="receipt_unacceptable" if sorted_objects else "receipt_missing",
+            reason=latest_block_reason or "execution_receipt_unacceptable")
     return 1 if fail_workflow else 0
 
 

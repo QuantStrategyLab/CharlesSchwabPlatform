@@ -3,6 +3,11 @@ name: Schwab Runtime Daily Manual
 on:
   workflow_dispatch:
     inputs:
+      capture_transactions_once:
+        description: Capture the fixed historical window once into an operator-qualified private store. Disabled until all private references are bound.
+        required: false
+        type: boolean
+        default: false
       publish:
         description: Explicitly publish the incomplete prepared daily projection once.
         required: false
@@ -20,6 +25,11 @@ on:
         default: false
       check_token_load:
         description: Read the existing Schwab token in memory and report only fixed load/expiry status; no broker request or publication.
+        required: false
+        type: boolean
+        default: false
+      renew_access_token_once:
+        description: Separately authorized one-shot refresh-token grant and append-only token Secret update. No login, broker data request or automatic retry.
         required: false
         type: boolean
         default: false
@@ -70,12 +80,40 @@ jobs:
 
       - name: Reject conflicting operation inputs
         env:
+          CAPTURE_TRANSACTIONS_ONCE: ${{ inputs.capture_transactions_once }}
+          CAPTURE_ARTIFACT: ${{ inputs.capture_digest_candidates_artifact }}
+          CAPTURE_BUCKET: ${{ vars.SCHWAB_CAPTURE_BUCKET }}
+          CAPTURE_BINDING_URI: ${{ vars.SCHWAB_CAPTURE_BINDING_URI }}
+          CAPTURE_BINDING_GENERATION: ${{ vars.SCHWAB_CAPTURE_BINDING_GENERATION }}
+          CAPTURE_OUTPUT_PREFIX: ${{ vars.SCHWAB_CAPTURE_OUTPUT_PREFIX }}
           PUBLISH: ${{ inputs.publish }}
           DIAGNOSE_SOURCE_ACCESS: ${{ inputs.diagnose_source_access }}
           VERIFY_NATIVE_IDENTITY: ${{ inputs.verify_native_identity }}
           CHECK_TOKEN_LOAD: ${{ inputs.check_token_load }}
+          RENEW_ACCESS_TOKEN_ONCE: ${{ inputs.renew_access_token_once }}
           EMIT_DIGEST_CANDIDATES: ${{ inputs.emit_digest_candidates }}
         run: |
+          if [[ "$RENEW_ACCESS_TOKEN_ONCE" == "true" && ( "$CAPTURE_TRANSACTIONS_ONCE" == "true" || "$PUBLISH" == "true" || "$DIAGNOSE_SOURCE_ACCESS" == "true" || "$VERIFY_NATIVE_IDENTITY" == "true" || "$CHECK_TOKEN_LOAD" == "true" || "$EMIT_DIGEST_CANDIDATES" == "true" || "$CAPTURE_ARTIFACT" == "true" ) ]]; then
+            echo "skipped:conflicting_operation_inputs"
+            exit 2
+          fi
+          if [[ "$CAPTURE_TRANSACTIONS_ONCE" == "true" ]]; then
+            if [[ "$PUBLISH" == "true" || "$DIAGNOSE_SOURCE_ACCESS" == "true" || "$VERIFY_NATIVE_IDENTITY" == "true" || "$CHECK_TOKEN_LOAD" == "true" || "$EMIT_DIGEST_CANDIDATES" == "true" || "$CAPTURE_ARTIFACT" == "true" ]]; then
+              echo "skipped:conflicting_operation_inputs"
+              exit 2
+            fi
+            # References are empty by default. They are not proof of privacy:
+            # root must accept the existing readers/retention before setting them.
+            if [[ ! "$CAPTURE_BUCKET" =~ ^[a-z][a-z0-9-]{1,61}[a-z0-9]$ || "$CAPTURE_BUCKET" == "qsl-runtime-logs-shared" ]]; then
+              echo "skipped:capture_private_references_required"
+              exit 2
+            fi
+            prefix="gs://${CAPTURE_BUCKET}/digest-candidates/schwab/_transactions_once/window-20261015-20261016/"
+            if [[ "$CAPTURE_BINDING_URI" != "${prefix}identity.input" || ! "$CAPTURE_BINDING_GENERATION" =~ ^[1-9][0-9]{0,19}$ || "$CAPTURE_OUTPUT_PREFIX" != "${prefix}result/" ]]; then
+              echo "skipped:capture_private_references_required"
+              exit 2
+            fi
+          fi
           if [[ "$PUBLISH" == "true" && ( "$DIAGNOSE_SOURCE_ACCESS" == "true" || "$VERIFY_NATIVE_IDENTITY" == "true" || "$CHECK_TOKEN_LOAD" == "true" ) ]] || \
              [[ "$DIAGNOSE_SOURCE_ACCESS" == "true" && ( "$VERIFY_NATIVE_IDENTITY" == "true" || "$CHECK_TOKEN_LOAD" == "true" ) ]] || \
              [[ "$VERIFY_NATIVE_IDENTITY" == "true" && "$CHECK_TOKEN_LOAD" == "true" ]] || \
@@ -96,31 +134,174 @@ jobs:
           workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
 
+      - name: Renew cached Schwab access token once
+        if: ${{ inputs.renew_access_token_once && !inputs.capture_transactions_once && !inputs.publish && !inputs.diagnose_source_access && !inputs.verify_native_identity && !inputs.check_token_load && !inputs.emit_digest_candidates && !inputs.capture_digest_candidates_artifact }}
+        env:
+          SCHWAB_RENEW_ACCESS_TOKEN_ONCE: "true"
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: uv run --no-sync python -m scripts.schwab_native_identity --renew-access-token-once
+
+      - name: Capture fixed Schwab transactions once
+        if: ${{ inputs.capture_transactions_once && !inputs.publish && !inputs.diagnose_source_access && !inputs.verify_native_identity && !inputs.check_token_load && !inputs.emit_digest_candidates && !inputs.capture_digest_candidates_artifact }}
+        env:
+          CAPTURE_BUCKET: ${{ vars.SCHWAB_CAPTURE_BUCKET }}
+          CAPTURE_BINDING_URI: ${{ vars.SCHWAB_CAPTURE_BINDING_URI }}
+          CAPTURE_BINDING_GENERATION: ${{ vars.SCHWAB_CAPTURE_BINDING_GENERATION }}
+          CAPTURE_OUTPUT_PREFIX: ${{ vars.SCHWAB_CAPTURE_OUTPUT_PREFIX }}
+          SCHWAB_ACCOUNT_FACTS_TARGET_ID: ${{ secrets.SCHWAB_ACCOUNT_FACTS_TARGET_ID }}
+          SCHWAB_API_KEY: ${{ secrets.SCHWAB_API_KEY }}
+          SCHWAB_API_KEY_SECRET_NAME: ${{ vars.SCHWAB_API_KEY_SECRET_NAME }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          uv run --no-sync python - <<'PY'
+          import contextlib
+          import hashlib
+          import io
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import tempfile
+          from google.cloud import storage, secretmanager
+          from scripts import capture_schwab_transactions_once as capture_module
+          from scripts import run_runtime_daily_from_reports as runner
+
+          # No input/body/identity/exception text goes to this public job log.
+          # This is a fixed private transport, not an IAM or retention assertion.
+          prefix = "digest-candidates/schwab/_transactions_once/window-20261015-20261016/"
+          public = {"status": "blocked", "reason": "capture_workflow_failed",
+                    "request_attempts": 0, "source_complete": False,
+                    "private_files_saved": 0}
+          cli_started = False
+          receipt_known = False
+          data_file_inflight = False
+          exit_code = 2
+          try:
+              with capture_module._private_call_output():
+                  bucket_name = os.environ.get("CAPTURE_BUCKET", "")
+                  if (not re.fullmatch(r"[a-z][a-z0-9-]{1,61}[a-z0-9]", bucket_name)
+                      or bucket_name == "qsl-runtime-logs-shared"):
+                      raise ValueError("private references unavailable")
+                  base = "gs://" + bucket_name + "/" + prefix
+                  generation = os.environ.get("CAPTURE_BINDING_GENERATION", "")
+                  if (os.environ.get("CAPTURE_BINDING_URI") != base + "identity.input"
+                      or os.environ.get("CAPTURE_OUTPUT_PREFIX") != base + "result/"
+                      or not re.fullmatch(r"[1-9][0-9]{0,19}", generation)):
+                      raise ValueError("private references unavailable")
+                  key_secret = os.environ.get("SCHWAB_API_KEY_SECRET_NAME", "")
+                  if key_secret != "charles-schwab-api-key":
+                      raise ValueError("original API-key reference unavailable")
+                  client = storage.Client(project="charlesschwabquant")
+                  bucket = client.bucket(bucket_name)
+                  # No explicit cleanup of a failed/uncertain local capture.
+                  # Runner staging is ephemeral; only completed private uploads are durable.
+                  directory = Path(tempfile.mkdtemp(prefix="schwab-capture-", dir=os.environ["RUNNER_TEMP"]))
+                  metadata_path = directory / "identity.input"
+                  metadata = bucket.blob(prefix + "identity.input", generation=int(generation))
+                  metadata.reload(timeout=15, retry=None)
+                  if type(metadata.size) is not int or not 0 < metadata.size <= 65536 or str(metadata.generation) != generation:
+                      raise ValueError("metadata size invalid")
+                  fd = os.open(metadata_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                  with os.fdopen(fd, "wb") as handle:
+                      metadata.download_to_file(handle, timeout=15, retry=None, if_generation_match=int(generation))
+                      handle.flush()
+                      os.fsync(handle.fileno())
+                  capture_module._read_metadata(metadata_path)
+                  # Root accepted run39569939360's reviewed zero-request receipt.
+                  # Marker metadata alone never establishes that request count.
+                  # Preserve the old live claim and allow only one fixed continuation.
+                  predecessor = bucket.blob(prefix + "result/capture.started")
+                  predecessor.reload(timeout=15, retry=None)
+                  if (str(predecessor.generation) != "1792571512420941"
+                      or type(predecessor.size) is not int or predecessor.size != 38):
+                      raise ValueError("predecessor reservation changed")
+                  reservation = bucket.blob(prefix + "result/capture.after-zero-39569939360.started")
+                  reservation.upload_from_string(b"one-shot reserved; no automatic retry\n",
+                      if_generation_match=0, timeout=15, retry=None)
+                  environ = dict(os.environ)
+                  if key_secret:
+                      payload = secretmanager.SecretManagerServiceClient().access_secret_version(
+                          request={"name": f"projects/401309731911/secrets/{key_secret}/versions/1"},
+                          retry=None, timeout=15)
+                      environ["SCHWAB_API_KEY"] = payload.payload.data.decode("utf-8")
+                  output_dir = directory / "capture"
+                  captured_stdout = io.StringIO()
+                  cli_started = True
+                  with contextlib.redirect_stdout(captured_stdout):
+                      exit_code = runner.main(["--capture-transactions-once", "--binding-metadata",
+                          str(metadata_path), "--output-dir", str(output_dir)], environ=environ)
+                  receipt = json.loads(captured_stdout.getvalue())
+                  attempts = receipt.get("request_attempts")
+                  if type(attempts) is not int or attempts not in (0, 1) or receipt.get("source_complete") is not False:
+                      raise ValueError("unexpected capture receipt")
+                  public["request_attempts"] = attempts
+                  receipt_known = True
+                  if receipt.get("status") not in {"blocked", "captured_incomplete"} or (exit_code == 0) != (receipt["status"] == "captured_incomplete"):
+                      raise ValueError("unexpected capture status")
+                  reason = receipt.get("reason")
+                  if reason is not None and reason not in capture_module._CODES:
+                      raise ValueError("unexpected capture reason")
+                  public.update(status="captured_incomplete" if exit_code == 0 else "blocked", reason=reason)
+                  private_records = []
+                  for local_name, remote_name in [("response.body", "response.body"), ("receipt.json", "capture.receipt")]:
+                      path = output_dir / local_name
+                      if not path.is_file():
+                          continue
+                      if path.is_symlink() or path.stat().st_uid != os.getuid() or path.stat().st_mode & 0o077:
+                          raise ValueError("private capture file invalid")
+                      blob = bucket.blob(prefix + "result/" + remote_name)
+                      data_file_inflight = True
+                      blob.upload_from_filename(str(path), if_generation_match=0, timeout=15, retry=None)
+                      if not re.fullmatch(r"[1-9][0-9]{0,19}", str(blob.generation)):
+                          raise ValueError("private upload generation unavailable")
+                      # Count only confirmed response/receipt files, not the manifest.
+                      public["private_files_saved"] += 1
+                      data_file_inflight = False
+                      private_records.append({"name": remote_name, "generation": blob.generation,
+                          "size": path.stat().st_size, "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
+                  if exit_code == 0 and {x["name"] for x in private_records} != {"response.body", "capture.receipt"}:
+                      raise ValueError("private capture files missing")
+                  manifest = bucket.blob(prefix + "result/storage.receipt")
+                  manifest.upload_from_string(json.dumps({"files": private_records}).encode(),
+                      if_generation_match=0, timeout=15, retry=None)
+          except BaseException:
+              # CLI or private upload failure never issues a second broker request.
+              # An unparseable CLI outcome remains unknown, not a fabricated zero.
+              if cli_started and not receipt_known:
+                  public["request_attempts"] = None
+              if data_file_inflight:
+                  public["private_files_saved"] = None
+              public.update(status="blocked", reason="capture_workflow_failed")
+              exit_code = 2
+          print(json.dumps(public, sort_keys=True))
+          raise SystemExit(exit_code)
+          PY
+
       - name: Prepare runtime daily
-        if: ${{ !inputs.publish && !inputs.diagnose_source_access && !inputs.verify_native_identity && !inputs.check_token_load }}
+        if: ${{ !inputs.capture_transactions_once && !inputs.publish && !inputs.diagnose_source_access && !inputs.verify_native_identity && !inputs.check_token_load && !inputs.renew_access_token_once }}
         run: uv run --no-sync python scripts/run_runtime_daily_from_reports.py
 
       - name: Verify native Schwab account identity
-        if: ${{ inputs.verify_native_identity && !inputs.publish && !inputs.diagnose_source_access && !inputs.check_token_load }}
+        if: ${{ !inputs.capture_transactions_once && inputs.verify_native_identity && !inputs.publish && !inputs.diagnose_source_access && !inputs.check_token_load && !inputs.renew_access_token_once }}
         run: uv run --no-sync python scripts/run_runtime_daily_from_reports.py --verify-native-identity
 
       - name: Check existing Schwab token load status
-        if: ${{ inputs.check_token_load && !inputs.publish && !inputs.diagnose_source_access && !inputs.verify_native_identity }}
+        if: ${{ !inputs.capture_transactions_once && inputs.check_token_load && !inputs.publish && !inputs.diagnose_source_access && !inputs.verify_native_identity && !inputs.renew_access_token_once }}
         run: uv run --no-sync python scripts/run_runtime_daily_from_reports.py --check-token-load
 
       - name: Check Schwab token Secret metadata and read permission
-        if: ${{ inputs.diagnose_source_access && !inputs.publish && !inputs.verify_native_identity && !inputs.check_token_load }}
+        if: ${{ !inputs.capture_transactions_once && inputs.diagnose_source_access && !inputs.publish && !inputs.verify_native_identity && !inputs.check_token_load && !inputs.renew_access_token_once }}
         run: uv run --no-sync python scripts/inspect_schwab_token_secret_readiness.py --metadata-only
 
       - name: Publish runtime daily
-        if: ${{ inputs.publish && !inputs.diagnose_source_access && !inputs.verify_native_identity && !inputs.check_token_load }}
+        if: ${{ !inputs.capture_transactions_once && inputs.publish && !inputs.diagnose_source_access && !inputs.verify_native_identity && !inputs.check_token_load && !inputs.renew_access_token_once }}
         env:
           EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
           SCHWAB_RUNTIME_DAILY_TARGET_JSON: ${{ secrets.SCHWAB_RUNTIME_DAILY_TARGET_JSON }}
         run: uv run --no-sync python scripts/run_runtime_daily_from_reports.py --publish
 
       - name: Emit DIGEST_CANDIDATES (ephemeral, no artifact)
-        if: ${{ inputs.emit_digest_candidates && !inputs.diagnose_source_access && !inputs.verify_native_identity && !inputs.check_token_load }}
+        if: ${{ !inputs.capture_transactions_once && inputs.emit_digest_candidates && !inputs.diagnose_source_access && !inputs.verify_native_identity && !inputs.check_token_load && !inputs.renew_access_token_once }}
         env:
           SCHWAB_DIGEST_CANDIDATES_OUTPUT_PATH: ${{ runner.temp }}/schwab-digest-candidates.json
           SCHWAB_DIGEST_ACCOUNT_FACTS_OUTPUT_PATH: ${{ runner.temp }}/schwab-digest-account-facts.json
@@ -140,7 +321,7 @@ jobs:
           python3 -c 'import json,os; p=os.environ["SCHWAB_DIGEST_CANDIDATES_OUTPUT_PATH"]; d=json.load(open(p,encoding="utf-8")); r=d.get("runs") or []; print(json.dumps({"ephemeral_path_present":True,"schema_version":d.get("schema_version"),"producer_status":d.get("producer_status"),"runs":len(r),"fill_count_null":all(x.get("fill_count") is None for x in r),"equity_present":any(x.get("equity") is not None for x in r),"holdings_omitted":all("holdings" not in x for x in r)},sort_keys=True))'
 
       - name: Capture DIGEST_CANDIDATES private artifact (opt-in)
-        if: ${{ inputs.emit_digest_candidates && inputs.capture_digest_candidates_artifact && !inputs.diagnose_source_access && !inputs.verify_native_identity && !inputs.check_token_load }}
+        if: ${{ !inputs.capture_transactions_once && inputs.emit_digest_candidates && inputs.capture_digest_candidates_artifact && !inputs.diagnose_source_access && !inputs.verify_native_identity && !inputs.check_token_load && !inputs.renew_access_token_once }}
         uses: actions/upload-artifact@v4
         with:
           name: schwab-digest-candidates

@@ -18,6 +18,7 @@ from quant_platform_kit.common.runtime_inputs import build_account_state_from_po
 from us_equity_strategies.cash_only_equity import (
     normalize_account_state_from_snapshot,
 )
+from notifications.block_reason import decision_block_reason
 
 
 def required_trend_ma_window(config: Mapping[str, Any]) -> int:
@@ -243,12 +244,23 @@ class SchwabRuntimeStrategyAdapters:
             "reserved_cash_ratio": float(self.reserved_cash_ratio or 0.0),
             "cash_only_execution": bool(self.cash_only_execution),
         }
-        return self.map_strategy_decision_to_plan_fn(
+        plan = self.map_strategy_decision_to_plan_fn(
             evaluation.decision,
             snapshot=snapshot,
             strategy_profile=self.strategy_profile,
             runtime_metadata=runtime_metadata,
         )
+        # Append presentation facts only after the existing plan is complete.
+        reason = decision_block_reason(evaluation.decision)
+        if reason:
+            plan.setdefault("execution", {})["notification_block_reason"] = reason
+        from notifications.unified import enabled
+        if enabled():
+            from notifications.approved_gates import decision_gate_reasons
+            approved = decision_gate_reasons(evaluation.decision)
+            if approved:
+                plan.setdefault("execution", {})["notification_approved_gates"] = approved
+        return plan
 
 
 def build_runtime_strategy_adapters(

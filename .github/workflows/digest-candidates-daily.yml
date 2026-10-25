@@ -51,6 +51,7 @@ jobs:
       RUNTIME_HEARTBEAT_SCHEDULER_LOCATION: ${{ vars.RUNTIME_HEARTBEAT_SCHEDULER_LOCATION || vars.CLOUD_RUN_REGION || 'us-central1' }}
       CLOUD_SCHEDULER_MAIN_TIME: ${{ vars.CLOUD_SCHEDULER_MAIN_TIME }}
       DIGEST_CANDIDATES_GCS_URI: ${{ vars.DIGEST_CANDIDATES_GCS_URI || '' }}
+      SCHWAB_UNIFIED_NOTIFICATION_ENABLED: ${{ vars.SCHWAB_UNIFIED_NOTIFICATION_ENABLED || 'false' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -60,6 +61,16 @@ jobs:
 
       - name: Install locked runtime dependencies
         run: uv sync --frozen --no-dev
+
+      - name: Select the legacy candidate producer
+        id: candidate_mode
+        run: |
+          uv run --no-sync python - <<'PY'
+          import os
+          from notifications.unified import enabled
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('legacy=' + ('false' if enabled(os.environ) else 'true') + '\n')
+          PY
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v3
@@ -71,6 +82,7 @@ jobs:
         uses: google-github-actions/setup-gcloud@v3
 
       - name: Emit DIGEST_CANDIDATES (runner temp only)
+        if: steps.candidate_mode.outputs.legacy == 'true'
         env:
           SCHWAB_DIGEST_CANDIDATES_OUTPUT_PATH: ${{ runner.temp }}/schwab-digest-candidates.json
           SCHWAB_DIGEST_ACCOUNT_FACTS_OUTPUT_PATH: ${{ runner.temp }}/schwab-digest-account-facts.json
@@ -88,6 +100,7 @@ jobs:
           uv run --no-sync python scripts/digest_candidates_store.py summarize --path "$SCHWAB_DIGEST_CANDIDATES_OUTPUT_PATH"
 
       - name: Upload to private digest store (only when configured)
+        if: steps.candidate_mode.outputs.legacy == 'true'
         env:
           CANDIDATES_PATH: ${{ runner.temp }}/schwab-digest-candidates.json
         run: |

@@ -3,6 +3,7 @@ import importlib
 import os
 import tempfile
 import time
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from flask import Flask
@@ -28,6 +29,7 @@ from application.broker_reconciliation import (
     validate_reconciliation_preconditions,
 )
 from application import signal_provenance
+from application.external_flow_snapshot import collect_external_flow_snapshot, external_flow_enabled
 from application.runtime_broker_adapters import build_runtime_broker_adapters
 from application.runtime_report_summary import summarize_execution_cycle_result
 from application.runtime_composer import build_runtime_composer
@@ -520,7 +522,7 @@ def _notify_runtime_error(exc: Exception, *, route_label: str) -> bool:
     return bool(outcomes) and all(outcomes)
 
 
-def _publish_runtime_failure_notification(*, detailed_text: str, compact_text: str, exc: Exception) -> bool:
+def _publish_runtime_failure_notification_legacy(*, detailed_text: str, compact_text: str, exc: Exception) -> bool:
     try:
         if publish_notification(detailed_text=detailed_text, compact_text=compact_text):
             return True
@@ -530,9 +532,26 @@ def _publish_runtime_failure_notification(*, detailed_text: str, compact_text: s
         return _notify_runtime_error(exc, route_label="strategy_cycle")
 
 
+def _publish_runtime_failure_notification(*, detailed_text: str, compact_text: str, exc: Exception) -> bool:
+    from notifications.unified import enabled as unified_enabled, publish_incident
+
+    if not unified_enabled():
+        return _publish_runtime_failure_notification_legacy(detailed_text=detailed_text, compact_text=compact_text, exc=exc)
+
+    return publish_incident(
+        lambda: publish_notification(detailed_text=detailed_text, compact_text=compact_text),
+        reason="runtime_failure:" + type(exc).__name__, profile=STRATEGY_PROFILE,
+        kind="auth_failure" if "auth" in type(exc).__name__.lower() else "real_error",
+    )
+
+
 def _handle_route_runtime_error(exc: Exception, *, route_label: str):
+    from notifications.unified import publish_incident
+
     print(t("runtime_failure_log"), flush=True)
-    _notify_runtime_error(exc, route_label=route_label)
+    publish_incident(lambda: _notify_runtime_error(exc, route_label=route_label),
+        reason="route_runtime_failure:" + route_label + ":" + type(exc).__name__, profile=STRATEGY_PROFILE,
+        kind="auth_failure" if "auth" in type(exc).__name__.lower() else "real_error")
     return "Error", 500
 
 
@@ -593,8 +612,9 @@ def build_strategy_plugin_alert_context_label() -> str:
 
 
 def publish_strategy_plugin_alerts(signals, *, report=None):
+    from notifications.digest_snapshot.digest_routing import immediate_plugin_signals
     result = dispatch_strategy_plugin_alerts(
-        signals,
+        immediate_plugin_signals(signals),
         notification_settings=RUNTIME_SETTINGS,
         translator=t,
         strategy_label=STRATEGY_PROFILE,
@@ -846,13 +866,16 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
         )
         if dry_run_only_override is None:
             publish_strategy_plugin_alerts(strategy_plugin_signals, report=report)
-        execution_result = run_strategy_core(
-            client,
-            None,
-            strategy_plugin_signals=strategy_plugin_signals,
-            strategy_plugin_error=strategy_plugin_error,
-            dry_run_only_override=dry_run_only_override,
-        )
+        from notifications.unified import notification_context
+
+        with notification_context(report):
+            execution_result = run_strategy_core(
+                client,
+                None,
+                strategy_plugin_signals=strategy_plugin_signals,
+                strategy_plugin_error=strategy_plugin_error,
+                dry_run_only_override=dry_run_only_override,
+            )
         signal_diagnostics = _signal_diagnostics_from_result(execution_result)
         execution_payload = getattr(execution_result, "execution", None)
         signal_snapshot = (
@@ -946,11 +969,14 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
             error_message="strategy_cycle_failed",
         )
         error_message = _runtime_error_notification_message(exc, route_label="strategy_cycle")
-        _publish_runtime_failure_notification(
-            detailed_text=error_message,
-            compact_text=error_message,
-            exc=exc,
-        )
+        from notifications.unified import notification_context
+
+        with notification_context(report):
+            _publish_runtime_failure_notification(
+                detailed_text=error_message,
+                compact_text=error_message,
+                exc=exc,
+            )
         return "Error", 500
     finally:
         attach_signal_data_provenance(report)
@@ -1140,6 +1166,23 @@ def _handle_schwab_probe(*, response_body: str = "Probe OK"):
                     error_type=type(exc).__name__,
                 )
             summary["account_observation"] = account_observation
+            if external_flow_enabled(os.environ) and account_observation.get("net_assets_currency") == "USD":
+                try:
+                    observed_at = datetime.fromisoformat(account_observation["observed_at"].replace("Z", "+00:00"))
+                    report["account_external_flows"] = collect_external_flow_snapshot(
+                        client,
+                        account_hash=account_observation["account_hash"],
+                        period_start=(observed_at - timedelta(days=1)).isoformat(),
+                        period_end=account_observation["observed_at"],
+                        currency=account_observation["net_assets_currency"],
+                        enabled=True,
+                    )
+                except Exception as flow_exc:
+                    log_runtime_event(
+                        log_context, "external_flow_capture_failed",
+                        message="Optional external flow capture failed",
+                        error_type=type(flow_exc).__name__,
+                    )
         finalize_runtime_report(
             report,
             status="ok",

@@ -597,7 +597,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
         self.assertEqual(counts.get("sent"), 1)
         self.assertEqual(len(payloads), 1)
         text = payloads[0]
-        self.assertIn("FAKE0002", text)
+        self.assertNotIn("FAKE0002", text)
         self.assertIn("生产偏离严重", text)
         self.assertNotIn("原因：new_risk_prohibited", text)
         self.assertIn("打开管理站处理恢复", text)
@@ -857,7 +857,12 @@ class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
         # Target value path: half envelope scale → half buy size from full target.
         self.assertEqual(submitted_orders[0].quantity, 2)
 
-    def test_execution_cycle_allows_sell_when_buy_prohibited(self) -> None:
+    def _run_synthetic_sell_cycle(self, *, resource_case):
+        from dataclasses import replace
+        from tempfile import TemporaryDirectory
+        from quant_platform_kit.common.models import OrderIntent
+        from test_rebalance_service import synthetic_sell_session
+
         submitted_orders = []
         plan = {
             "account_hash": "demo",
@@ -879,8 +884,30 @@ class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
             "execution": {
                 "trade_threshold_value": 10.0,
                 "reserved_cash": 0.0,
+                "signal_date": "2026-08-24",
+                "effective_date": "2026-08-24",
+                "execution_timing_contract": "same_session",
             },
         }
+        # Explicit offline, single-proposal resource assumption; no production
+        # producer/adoption claim, and no change to the shared fixture default.
+        root = Path(self.enterContext(TemporaryDirectory()))
+        native, session = synthetic_sell_session(root, plan, OrderIntent("SOXL", "sell", 4))
+        if resource_case == "absent_context":
+            session = None
+        elif resource_case == "missing_proof":
+            session.context = replace(session.context, resource_facts=None)
+        elif resource_case in {"missing_sellable", "missing_original_obligations"}:
+            facts = dict(session.context.resource_facts)
+            if resource_case == "missing_sellable":
+                facts["sellable_quantities"] = {}
+            else:
+                del facts["complete_original_obligations"]
+            session.context = replace(session.context, resource_facts=facts)
+        elif resource_case == "missing_plan_quantity":
+            del plan["portfolio"]["quantities"]["SOXL"]
+        else:
+            self.assertEqual(resource_case, "complete")
         result = execute_rebalance_cycle(
             client=object(),
             plan=plan,
@@ -907,9 +934,38 @@ class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
             limit_buy_premium=1.0,
             sell_settle_delay_sec=0,
             publish_order_issue=lambda _message: None,
+            intent_continuity=session,
         )
+        self.assertIn("account_new_risk_gate", result.execution["notification_attention_reason_codes"])
+        self.assertTrue(new_risk_buy_prohibited(evaluate_portfolio_new_risk_admission(plan["portfolio"])))
+        return result, submitted_orders, native, session
+
+    def test_execution_cycle_allows_sell_when_buy_prohibited(self) -> None:
+        result, submitted_orders, native, session = self._run_synthetic_sell_cycle(resource_case="complete")
         self.assertEqual(len(submitted_orders), 1)
         self.assertEqual(str(getattr(submitted_orders[0], "side", "")).lower(), "sell")
+        self.assertEqual(submitted_orders[0].quantity, 4)
+        self.assertEqual(len(session.current), 1)
+        self.assertEqual(session.current[0].intent["routing_account_hash"], "demo")
+        self.assertEqual(native.context.resource_facts["complete_original_obligations"], [])
+        # The original append-only fake returns no ACK. Its one real transport
+        # call therefore remains uncertain, never a fill or released resource.
+        self.assertEqual(result.execution["execution_status"], "pending_reconciliation")
+        self.assertEqual(native.store.events(session.current[0])[-1].state.value, "reconciliation_required")
+
+    def test_execution_cycle_refuses_unproven_sell_when_buy_prohibited(self) -> None:
+        for resource_case in ("absent_context", "missing_proof", "missing_sellable",
+                              "missing_original_obligations", "missing_plan_quantity"):
+            with self.subTest(resource_case=resource_case):
+                result, submitted_orders, native, session = self._run_synthetic_sell_cycle(resource_case=resource_case)
+                self.assertEqual(submitted_orders, [])
+                self.assertEqual(result.submitted_orders, ())
+                if resource_case == "missing_plan_quantity":
+                    self.assertEqual(session.current, [])
+                    self.assertEqual(json.loads(native.locator.read_registered().payload_json)["references"], [])
+                else:
+                    self.assertFalse(result.execution["broker_submission_done"])
+                    self.assertIn("sell_resource_evidence_required", result.execution["notification_attention_reason_codes"])
 
     def test_gate_disabled_via_env_skips_buy_block(self) -> None:
         os.environ[ACCOUNT_NEW_RISK_GATE_ENV] = "0"
