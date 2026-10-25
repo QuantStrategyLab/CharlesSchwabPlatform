@@ -18,6 +18,13 @@ SERVICE = "selected-service"
 REVISION = SERVICE + "-00001-test"
 
 
+@pytest.fixture(autouse=True)
+def isolate_runner_environment(monkeypatch):
+    # Most unit tests exercise a local call. Actions masking and bootstrap tests
+    # select their own runner mode explicitly rather than inheriting the host.
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+
+
 @pytest.fixture
 def target():
     return {
@@ -369,6 +376,24 @@ def test_mask_escapes_workflow_commands_and_only_runs_in_actions(monkeypatch, ca
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     reader._mask("private%\r\ncanary")
     assert capsys.readouterr().out == "::add-mask::private%25%0D%0Acanary\n"
+
+
+@pytest.mark.parametrize("runner_mode", ["false", "true"])
+def test_diagnostic_runner_mode_only_changes_mask_commands(source, target, runner_mode, monkeypatch, capsys):
+    monkeypatch.setenv("GITHUB_ACTIONS", runner_mode)
+    result, calls = _read(source, _revision(target))
+    output = capsys.readouterr()
+    assert result["status"] == "verified_metadata" and len(calls) == 3
+    assert output.err == ""
+    if runner_mode == "true":
+        lines = output.out.splitlines()
+        assert lines and all(line.startswith("::add-mask::") for line in lines)
+        assert f"::add-mask::{ACCOUNT}" in lines
+        assert f"::add-mask::{REVISION}" in lines
+    else:
+        assert output.out == ""
+    assert ACCOUNT not in json.dumps(result) and REVISION not in json.dumps(result)
+    _assert_no_authority(result)
 
 
 def test_cli_safe_artifact_is_private_create_only_and_no_override(monkeypatch, tmp_path, capsys):
