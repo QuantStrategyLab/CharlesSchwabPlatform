@@ -88,31 +88,44 @@ def project_stock_inventory(
     return sorted(rows, key=lambda row: row["symbol"])
 
 
-def _single_linked_account_payload(client: Any, account_hash: str) -> Mapping[str, Any] | None:
+def _single_linked_account_payload(
+    client: Any, account_hash: str, *, diagnostics: dict[str, Any],
+) -> Mapping[str, Any] | None:
     """Bounded alternative read only when the credential links exactly this account."""
     numbers = getattr(client, "get_account_numbers", None)
     accounts = getattr(client, "get_accounts", None)
     if not callable(numbers) or not callable(accounts):
+        diagnostics["fallback_reason"] = "reader_unavailable"
         return None
     response = numbers()
     response.raise_for_status()
     identities = response.json()
-    if not isinstance(identities, list) or len(identities) != 1:
+    if not isinstance(identities, list):
+        diagnostics["fallback_reason"] = "mapping_unusable"
+        return None
+    if len(identities) != 1:
+        diagnostics["fallback_reason"] = "mapping_not_single"
         return None
     identity = identities[0]
     if (not isinstance(identity, Mapping) or identity.get("hashValue") != account_hash
             or not isinstance(identity.get("accountNumber"), str) or not identity["accountNumber"]):
+        diagnostics["fallback_reason"] = "mapping_unverified"
         return None
     from schwab.client import Client
 
+    diagnostics["fallback_attempted"] = True
     response = accounts(fields=Client.Account.Fields.POSITIONS)
     response.raise_for_status()
     linked = response.json()
     if not isinstance(linked, list) or len(linked) != 1 or not isinstance(linked[0], Mapping):
+        diagnostics["fallback_reason"] = "linked_payload_unusable"
         return None
     account = linked[0].get("securitiesAccount")
     if not isinstance(account, Mapping) or account.get("accountNumber") != identity["accountNumber"]:
+        diagnostics["fallback_reason"] = "linked_identity_unverified"
         return None
+    diagnostics["fallback_reason"] = "linked_read_completed"
+    diagnostics["linked_positions_field_present"] = "positions" in account
     return linked[0]
 
 
@@ -124,10 +137,14 @@ def collect_stock_inventory(client: Any, *, account_hash: str, currency: str | N
 
     response = client.get_account(account_hash, fields=Client.Account.Fields.POSITIONS)
     response.raise_for_status()
-    diagnostics: dict[str, Any] = {}
+    diagnostics: dict[str, Any] = {
+        "fallback_attempted": False,
+        "fallback_reason": "not_needed",
+        "linked_positions_field_present": None,
+    }
     rows = project_stock_inventory(response.json(), currency=currency, diagnostics=diagnostics)
     if diagnostics.get("reason") == "positions_field_missing":
-        linked = _single_linked_account_payload(client, account_hash)
+        linked = _single_linked_account_payload(client, account_hash, diagnostics=diagnostics)
         if linked is not None:
             rows = project_stock_inventory(linked, currency=currency, diagnostics=diagnostics)
     state = {

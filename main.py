@@ -1168,6 +1168,9 @@ def _handle_schwab_probe(*, response_body: str = "Probe OK"):
                         native_positions_present=inventory_diagnostics.get("positions_field_present"),
                         native_positions_count=inventory_diagnostics.get("native_positions_count"),
                         projected_stock_count=inventory_diagnostics.get("projected_stock_count"),
+                        inventory_fallback_attempted=inventory_diagnostics.get("fallback_attempted"),
+                        inventory_fallback_reason=inventory_diagnostics.get("fallback_reason"),
+                        linked_positions_present=inventory_diagnostics.get("linked_positions_field_present"),
                     )
             except Exception as exc:
                 account_observation["broker_stock_inventory_status"] = "read_failed"
