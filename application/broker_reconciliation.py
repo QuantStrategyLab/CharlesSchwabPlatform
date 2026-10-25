@@ -370,6 +370,17 @@ def build_reconciliation_candidate(
     account_scope = _text(getattr(runtime_target, "account_scope", ""))
     if not platform_id or not strategy_profile or not account_scope:
         raise SchwabReconciliationReadError("Schwab reconciliation runtime target is incomplete.")
+    # Execution claims use the broker's native account hash. The runtime
+    # account_scope is a control-plane identity (often "live"), not a ledger key.
+    ledger_account = observations.account_scope.get("account_hash") if isinstance(observations.account_scope, Mapping) else None
+    if (
+        observations.account_identity_match is not True
+        or not isinstance(ledger_account, str)
+        or not ledger_account
+        or ledger_account != ledger_account.strip()
+        or len(ledger_account) > 512
+    ):
+        raise SchwabReconciliationReadError("Schwab reconciliation requires a verified native account namespace.")
     baseline_id, baseline_target_sha256, runtime_target_sha256 = _continuity_fields(runtime_target)
     digests = {
         "positions_sha256": calculate_broker_observation_sha256(
@@ -383,7 +394,7 @@ def build_reconciliation_candidate(
     }
     marker_store = build_execution_marker_store_from_env(platform_env_prefix="SCHWAB", env_reader=env_reader, project_id=project_id)
     ledger_digest, records_count = marker_store.calculate_recent_ledger_digest(
-        platform=platform_id, strategy_profile=strategy_profile, account_scope=account_scope, execution_mode="live"
+        platform=platform_id, strategy_profile=strategy_profile, account_scope=ledger_account, execution_mode="live"
     )
     digests["local_execution_ledger_sha256"] = ledger_digest
     timestamp = observed_at or datetime.now(timezone.utc)

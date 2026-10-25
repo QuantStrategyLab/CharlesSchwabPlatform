@@ -19,6 +19,10 @@ from quant_platform_kit.common.broker_reconciliation import (
     BrokerReconciliationFinding,
     calculate_broker_observation_sha256,
 )
+from quant_platform_kit.common.execution_state import (
+    build_execution_marker_key,
+    build_execution_marker_store_from_env,
+)
 from quant_platform_kit.common.live_continuity import runtime_target_fingerprint
 from quant_platform_kit.common.runtime_target import build_runtime_target
 
@@ -321,6 +325,71 @@ def test_candidate_can_pass_only_with_all_matching_private_digests(tmp_path):
         validate_reconciliation_candidate(
             SimpleNamespace(to_safe_dict=lambda: unsafe_payload)
         )
+
+
+def test_native_account_ledger_unknown_blocks_old_empty_scope_baseline(tmp_path):
+    observations = _synthetic_complete_observations()
+    target = _target()
+
+    def env(name, default=None):
+        return str(tmp_path) if name == "SCHWAB_EXECUTION_STATE_DIR" else default
+
+    seed = build_reconciliation_candidate(
+        observations=observations, runtime_target=target, project_id=None, env_reader=env
+    )
+    expected = {key: seed.evidence.to_dict()[key] for key in (
+        "account_scope_sha256", "positions_sha256", "cash_sha256", "open_orders_sha256",
+        "recent_executions_sha256", "local_execution_ledger_sha256",
+    )}
+    store = build_execution_marker_store_from_env(platform_env_prefix="SCHWAB", env_reader=env)
+    marker = build_execution_marker_key(
+        platform="schwab", strategy_profile=target.strategy_profile,
+        account_scope=observations.account_scope["account_hash"], execution_mode="live",
+        signal_date="2026-10-24", effective_date="2026-10-25",
+    )
+    assert store.claim_marker(marker)
+    assert store.record_outcome(marker, metadata={
+        "execution_status": "recorded_submission_unknown", "orders_pending_count": 1,
+        "submitted_orders": [{"status": "unknown", "order_id": "private-order-canary"}],
+    })
+    old_digest, old_count = store.calculate_recent_ledger_digest(
+        platform="schwab", strategy_profile=target.strategy_profile,
+        account_scope=target.account_scope, execution_mode="live",
+    )
+    assert old_count == 0
+    assert old_digest == expected["local_execution_ledger_sha256"]
+
+    def configured(name, default=None):
+        if name == "SCHWAB_RECONCILIATION_EXPECTED_DIGESTS_JSON":
+            return json.dumps(expected)
+        return env(name, default)
+
+    candidate = build_reconciliation_candidate(
+        observations=observations, runtime_target=target, project_id=None, env_reader=configured
+    )
+    assert target.account_scope == "live"  # The control-plane identity stays unchanged.
+    assert candidate.execution_ledger_records_count == 2
+    assert candidate.evidence.account_scope_sha256 == expected["account_scope_sha256"]
+    assert candidate.evidence.local_execution_ledger_sha256 != old_digest
+    assert candidate.recovery_blockers == (BrokerReconciliationFinding.LOCAL_EXECUTION_LEDGER_MISMATCH,)
+    assert candidate.permits_active_lkg is False
+    assert "private-order-canary" not in json.dumps(candidate.to_safe_dict())
+
+
+@pytest.mark.parametrize("identity,scope", [
+    (False, {"account_hash": "acct-hash"}), (None, {"account_hash": "acct-hash"}),
+    (True, {}), (True, None), (True, {"account_hash": ""}),
+    (True, {"account_hash": " acct-hash "}), (True, {"account_hash": False}),
+    (True, {"account_hash": "x" * 513}),
+])
+def test_unverified_native_namespace_never_falls_back_to_control_scope(monkeypatch, identity, scope):
+    monkeypatch.setattr(
+        "application.broker_reconciliation.build_execution_marker_store_from_env",
+        lambda **_kwargs: pytest.fail("unverified namespace must not read any store"),
+    )
+    observations = replace(_synthetic_complete_observations(), account_identity_match=identity, account_scope=scope)
+    with pytest.raises(SchwabReconciliationReadError, match="verified native account namespace"):
+        build_reconciliation_candidate(observations=observations, runtime_target=_target(), project_id=None)
 
 
 def test_candidate_ignores_valuation_only_changes_to_a_matching_baseline(tmp_path):
