@@ -88,8 +88,36 @@ def project_stock_inventory(
     return sorted(rows, key=lambda row: row["symbol"])
 
 
+def _single_linked_account_payload(client: Any, account_hash: str) -> Mapping[str, Any] | None:
+    """Bounded alternative read only when the credential links exactly this account."""
+    numbers = getattr(client, "get_account_numbers", None)
+    accounts = getattr(client, "get_accounts", None)
+    if not callable(numbers) or not callable(accounts):
+        return None
+    response = numbers()
+    response.raise_for_status()
+    identities = response.json()
+    if not isinstance(identities, list) or len(identities) != 1:
+        return None
+    identity = identities[0]
+    if (not isinstance(identity, Mapping) or identity.get("hashValue") != account_hash
+            or not isinstance(identity.get("accountNumber"), str) or not identity["accountNumber"]):
+        return None
+    from schwab.client import Client
+
+    response = accounts(fields=Client.Account.Fields.POSITIONS)
+    response.raise_for_status()
+    linked = response.json()
+    if not isinstance(linked, list) or len(linked) != 1 or not isinstance(linked[0], Mapping):
+        return None
+    account = linked[0].get("securitiesAccount")
+    if not isinstance(account, Mapping) or account.get("accountNumber") != identity["accountNumber"]:
+        return None
+    return linked[0]
+
+
 def collect_stock_inventory(client: Any, *, account_hash: str, currency: str | None) -> dict[str, Any] | None:
-    """One account GET, using the account already verified by the guarded snapshot."""
+    """Read the verified account; try the linked view only for a single-account credential."""
     if not isinstance(account_hash, str) or not account_hash.strip() or currency != "USD":
         return None
     from schwab.client import Client
@@ -98,6 +126,10 @@ def collect_stock_inventory(client: Any, *, account_hash: str, currency: str | N
     response.raise_for_status()
     diagnostics: dict[str, Any] = {}
     rows = project_stock_inventory(response.json(), currency=currency, diagnostics=diagnostics)
+    if diagnostics.get("reason") == "positions_field_missing":
+        linked = _single_linked_account_payload(client, account_hash)
+        if linked is not None:
+            rows = project_stock_inventory(linked, currency=currency, diagnostics=diagnostics)
     state = {
         "broker_stock_inventory_status": "available" if rows is not None else "unknown",
         "broker_stock_inventory_diagnostics": diagnostics,
