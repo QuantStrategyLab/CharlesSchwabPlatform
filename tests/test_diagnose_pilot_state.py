@@ -457,6 +457,118 @@ def test_invalid_records_do_not_turn_subset_pairing_or_unknown_into_exact_counts
     assert result["status"] == "partial_state" and counts["invalid_records_count"] == 1
     assert counts["paired_count"] is None and counts["explicit_unknown_outcomes_count"] is None
     assert counts["complete"] is False and "canary" not in json.dumps(result)
+    reason = {
+        "json": "json", "duplicate_json": "json", "wrong_key": "key_shape_or_arity",
+        "wrong_account": "identity_fields", "wrong_profile": "identity_fields", "dry_run": "mode",
+        "invalid_count": "outcome_shape", "invalid_pending": "pending_count", "wrong_dates": "date_key",
+        "legacy_schema": "payload_schema", "duplicate_entry": "duplicate_record",
+    }[fault]
+    assert counts["invalid_first_failure_counts"] == {
+        name: int(name == reason) for name in reader._INVALID_RECORD_REASONS
+    }
+
+
+@pytest.mark.parametrize("arity", [7, 8])
+def test_current_key_contract_reports_seven_parts_without_accepting_them(source, target, arity):
+    key, claim, outcome = _records()
+    if arity == 7:
+        key = key.rsplit("/", 1)[0]
+        claim["marker_key"] = outcome["marker_key"] = key
+    result, _, _ = _probe(source, target, store=_entry_store([
+        (Store.namespace, key, claim), (Store.outcome_namespace, key, outcome)]))
+    counts = result["ledger"]["classification"]
+    assert counts["invalid_records_count"] == (2 if arity == 7 else 0)
+    assert counts["invalid_first_failure_counts"]["key_shape_or_arity"] == (2 if arity == 7 else 0)
+    assert result["status"] == ("partial_state" if arity == 7 else "observed_state")
+    assert counts["paired_count"] == (None if arity == 7 else 1)
+    _no_authority(result)
+
+
+@pytest.mark.parametrize("fault,reason", [
+    ("payload_list", "payload_structure"), ("schema_missing", "payload_schema"),
+    ("metadata_missing", "metadata_structure"), ("metadata_list", "metadata_structure"),
+    ("metadata_empty", "identity_fields"), ("profile_missing", "identity_fields"),
+    ("mode_missing", "mode"), ("date_missing", "date_key"),
+    ("claim_state", "claim_state"), ("uri", "uri_mismatch"),
+    ("unhashable_order_status", "outcome_shape"),
+])
+def test_fixed_first_failure_for_missing_contract_fields_is_not_a_corruption_claim(source, target, fault, reason):
+    key, claim, outcome = _records()
+    payload = outcome
+    namespace = Store.outcome_namespace
+    if fault == "payload_list":
+        payload = ["private-payload-canary"]
+    elif fault == "schema_missing":
+        payload.pop("schema_version")
+    elif fault == "metadata_missing":
+        payload.pop("metadata")
+    elif fault == "metadata_list":
+        payload["metadata"] = ["private-metadata-canary"]
+    elif fault == "metadata_empty":
+        payload["metadata"] = {}
+    elif fault == "profile_missing":
+        payload["metadata"].pop("strategy_profile")
+    elif fault == "mode_missing":
+        payload["metadata"].pop("dry_run_only")
+    elif fault == "date_missing":
+        payload["metadata"].pop("effective_date")
+    elif fault == "claim_state":
+        payload, namespace = claim, Store.namespace
+        payload["state"] = "private-state-canary"
+    elif fault == "unhashable_order_status":
+        payload["metadata"]["submitted_orders"][0]["status"] = ["private-status-canary"]
+    store = _entry_store([(namespace, key, payload)])
+    if fault == "uri":
+        values = store._entries()[namespace]
+        uri, content = values[0]
+        values[0] = (uri + "-different", content)
+    result, _, _ = _probe(source, target, store=store)
+    counts = result["ledger"]["classification"]
+    assert counts["invalid_records_count"] == 1
+    assert counts["invalid_first_failure_counts"] == {name: int(name == reason) for name in reader._INVALID_RECORD_REASONS}
+    assert counts["paired_count"] is None and counts["explicit_unknown_outcomes_count"] is None
+    assert result["status"] == "partial_state" and "canary" not in json.dumps(result)
+
+
+def test_only_first_failure_is_counted_for_multiple_contract_mismatches(source, target):
+    key, _, outcome = _records()
+    outcome.update(schema_version="private-old-schema-canary", marker_key="private-bad-key-canary", metadata=None)
+    result, _, _ = _probe(source, target, store=_entry_store([(Store.outcome_namespace, key, outcome)]))
+    counts = result["ledger"]["classification"]
+    assert counts["invalid_first_failure_counts"]["payload_schema"] == 1
+    assert sum(counts["invalid_first_failure_counts"].values()) == counts["invalid_records_count"] == 1
+    assert "canary" not in json.dumps(result)
+
+
+def test_synthetic_67_nonconforming_records_remain_partial_with_exact_failure_counts(source, target):
+    values = []
+    for index in range(35):
+        key, claim, outcome = _records(signal=f"{index:04d}")
+        key = key.rsplit("/", 1)[0]
+        claim["marker_key"] = outcome["marker_key"] = key
+        values.append((Store.namespace, key, claim))
+        if index < 32:
+            values.append((Store.outcome_namespace, key, outcome))
+    result, _, _ = _probe(source, target, store=_entry_store(values))
+    counts = result["ledger"]["classification"]
+    assert counts["claim_records_count"] == 35 and counts["outcome_records_count"] == 32
+    assert counts["window_stable"] is True and counts["invalid_records_count"] == 67
+    assert counts["invalid_first_failure_counts"]["key_shape_or_arity"] == 67
+    assert sum(counts["invalid_first_failure_counts"].values()) == 67
+    assert result["status"] == "partial_state" and counts["paired_count"] is None
+    assert counts["explicit_unknown_outcomes_count"] is None
+    _no_authority(result)
+
+
+def test_unexpected_classification_error_uses_fixed_fallback_without_body(source, target, monkeypatch):
+    def fail(*_args, **_kwargs):
+        raise ValueError("private-error-body-canary")
+
+    monkeypatch.setattr(reader, "_record_classification", fail)
+    result, _, _ = _probe(source, target)
+    counts = result["ledger"]["classification"]
+    assert counts["invalid_first_failure_counts"]["unclassifiable"] == 2
+    assert "canary" not in json.dumps(result)
 
 
 @pytest.mark.parametrize("change", ["before_after", "middle_only"])
@@ -484,6 +596,7 @@ def test_changed_window_is_partial_even_when_endpoint_digests_match(source, targ
     assert result["reason"] == "ledger_window_changed" and result["status"] == "partial_state"
     assert counts["window_stable"] is False and counts["complete"] is False
     assert counts["paired_count"] is None and counts["invalid_records_count"] is None
+    assert counts["invalid_first_failure_counts"] is None
     _no_authority(result)
 
 
@@ -502,6 +615,7 @@ def test_second_namespace_failure_keeps_first_count_and_other_fields_unknown(sou
     assert result["reason"] == "ledger_read_failed" and result["status"] == "partial_state"
     assert counts["claim_records_count"] == 1 and counts["outcome_records_count"] is None
     assert counts["paired_count"] is None and counts["explicit_unknown_outcomes_count"] is None
+    assert counts["invalid_first_failure_counts"] is None
     assert "canary" not in json.dumps(result)
 
 

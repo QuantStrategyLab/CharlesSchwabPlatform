@@ -16,6 +16,10 @@
 
 只有窗口稳定、每条结构有效且状态均能按原合同分类时，分类为 observed；无效、无法判定、读失败或变化均保留 `partial_state` 和适用的 null。明确 UNKNOWN 或未配对可被完整计数，这只说明诊断已读全所选窗口，不能证明已解决。恢复、全历史、券商完备和 grant 排他标志始终 false；本包不增加生产门禁、不清 claim，也不改变交易或恢复流程。
 
+`invalid_first_failure_counts` 用代码定义的固定键说明每条记录遇到的第一处不符合当前诊断合同之处。按检查顺序为 `json`、`payload_structure`、`payload_schema`、`metadata_structure`、`key_shape_or_arity`、`uri_mismatch`、`identity_fields`、`mode`、`date_key`、`claim_state`、`outcome_shape`、`pending_count`；重复记录计 `duplicate_record`，其余无法分类的解析失败计 `unclassifiable`。每条无效记录只计一次，固定计数之和等于 `invalid_records_count`；完成前或窗口不稳定时该对象为 null。不输出原字段值、动态字段名、原 schema、键或错误正文。
+
+这些类别区分严格 JSON 无法解码、对象结构、schema/键/metadata 等合同不符，但不自动证明数据损坏。例如七段键不符合当前八段键合同，历史 schema 不匹配也不能直接当成损坏；本入口不新增兼容读取、终态映射或自动修复。first-failure 不是该记录全部问题，也不是暂停原因。需要一次实际读回后才能知道真实记录落在哪类；合成回归不能代替实际原因。存在无效记录时原配对/UNKNOWN 精确总数仍为 null，`partial_state` 与所有资格 false 不变。
+
 ## 对账 namespace 修正与证据边界
 
 原执行器按券商原生账户 hash 写 execution claim/outcome，但对账候选曾用控制面 `account_scope`（常为 `live`）读账本，可能错误看到空范围。现在只在观察身份明确匹配且原生 hash 有效时读取正确范围，缺失或不匹配就拒绝，不回退 `live`。控制面身份及 broker evidence 的账户摘要合同不变。回归覆盖了旧 scope 为 0、原生 hash 下有 UNKNOWN 提交结果时旧空基线必须不匹配；不消除原有 UNKNOWN、partial 或缺失成交覆盖。
