@@ -1,0 +1,25 @@
+name: Schwab Pilot Native Identity
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: schwab-pilot-native-identity
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: github.repository == 'QuantStrategyLab/CharlesSchwabPlatform' && github.ref == 'refs/heads/main' && github.run_attempt == 1
+    uses: ./.github/workflows/pilot-native-identity-protected.yml
+    # Preserve the metadata reader's original priority while masking values
+    # before any runner step header. The separate daily target is not consumed.
+    secrets:
+      inventory: ${{ vars.CLOUD_RUN_SERVICE_TARGETS_JSON || secrets.CLOUD_RUN_SERVICE_TARGETS_JSON }}
+      runtime_target: ${{ vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}
+      service: ${{ secrets.CLOUD_RUN_SERVICE }}
+      services: ${{ secrets.CLOUD_RUN_SERVICES }}
+      region: ${{ vars.CLOUD_RUN_REGION }}
