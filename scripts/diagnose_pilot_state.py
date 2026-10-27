@@ -40,6 +40,7 @@ _INVALID_RECORD_REASONS = (
     "claim_state", "outcome_shape", "pending_count", "duplicate_record", "unclassifiable",
 )
 _IDENTITY_STATES = ("missing", "not_string", "blank", "exact_match", "key_match_only", "mismatch")
+_KEY_DIFFERENCES = ("ascii_case_only", "surrounding_whitespace_only", "whitespace_and_ascii_case", "other_key_collision")
 
 
 class _InvalidRecord(ValueError):
@@ -61,6 +62,7 @@ def _classification_projection() -> dict[str, Any]:
         "invalid_records_count": None,
         "invalid_first_failure_counts": None,
         "identity_failure_field_counts": None,
+        "identity_key_difference_counts": None,
     }
 
 
@@ -87,6 +89,17 @@ def _identity_states(record: dict, key: str, *, account: str, profile: str) -> d
             state = "mismatch"
         states[field] = state
     return states
+
+
+def _key_difference(value: str, expected: str) -> str:
+    """Describe a lossy-key collision without treating it as valid identity."""
+    if value.isascii() and expected.isascii() and value.lower() == expected.lower():
+        return "ascii_case_only"
+    if value.strip() == expected:
+        return "surrounding_whitespace_only"
+    if value.isascii() and expected.isascii() and value.strip().lower() == expected.lower():
+        return "whitespace_and_ascii_case"
+    return "other_key_collision"
 
 
 def _entries_digest(entries: Mapping[str, list[tuple[str, str]]]) -> str:
@@ -195,6 +208,8 @@ def _classify_ledger(store: Any, *, account: str, profile: str, expected_digest:
     failures = dict.fromkeys(_INVALID_RECORD_REASONS, 0)
     identity_counts = {field: dict.fromkeys(_IDENTITY_STATES, 0)
                        for field in ("account_scope", "strategy_profile")}
+    difference_counts = {field: dict.fromkeys(_KEY_DIFFERENCES, 0)
+                         for field in ("account_scope", "strategy_profile")}
     for namespace, values in entries.items():
         for uri, content in values:
             try:
@@ -214,12 +229,20 @@ def _classify_ledger(store: Any, *, account: str, profile: str, expected_digest:
                 if reason == "identity_fields" and exc.identity_states is not None:
                     for field, state in exc.identity_states.items():
                         identity_counts[field][state] += 1
+                        if state == "key_match_only":
+                            # This record has already passed strict JSON/object
+                            # validation. Re-read only in memory; no raw value,
+                            # normalized value or identity hash is projected.
+                            record = metadata._json(content)["metadata"]
+                            expected = account if field == "account_scope" else profile
+                            difference_counts[field][_key_difference(record[field], expected)] += 1
             except (ValueError, TypeError, KeyError):
                 invalid += 1
                 failures["unclassifiable"] += 1
     projection["invalid_records_count"] = invalid
     projection["invalid_first_failure_counts"] = failures
     projection["identity_failure_field_counts"] = identity_counts
+    projection["identity_key_difference_counts"] = difference_counts
     if invalid:
         # Invalid records may contain a counterpart or an UNKNOWN outcome;
         # do not report exact pairing/semantic totals from a valid subset.
