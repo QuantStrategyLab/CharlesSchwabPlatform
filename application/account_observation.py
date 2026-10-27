@@ -144,6 +144,44 @@ def _attach_positions(observation: dict[str, object], snapshot: Any) -> None:
         observation["broker_reported_positions_scope"] = POSITIONS_SCOPE
 
 
+def _attach_native_inventory(observation: dict[str, object], snapshot: Any) -> None:
+    """Project the same account response without making a reporting broker read."""
+    from application.stock_inventory import project_stock_inventory
+
+    native = snapshot.metadata.get("broker_stock_inventory")
+    diagnostics: dict[str, object] = {
+        "fallback_attempted": False,
+        "fallback_reason": "not_requested_same_response",
+        "linked_positions_field_present": None,
+    }
+    observation["broker_stock_inventory_status"] = "unknown"
+    observation["broker_stock_inventory_diagnostics"] = diagnostics
+    if not isinstance(native, Mapping) or not isinstance(native.get("positions_field_present"), bool):
+        diagnostics["reason"] = "snapshot_inventory_unusable"
+        return
+    present = native["positions_field_present"]
+    count = native.get("native_positions_count")
+    diagnostics["positions_field_present"] = present
+    diagnostics["native_positions_count"] = count if isinstance(count, int) and not isinstance(count, bool) and count >= 0 else None
+    account = {"positions": native.get("positions")} if present else {}
+    rows = project_stock_inventory(
+        {"securitiesAccount": account}, currency=observation.get("net_assets_currency"),
+        diagnostics=diagnostics,
+    )
+    # An oversized source list is intentionally not copied into snapshot metadata.
+    if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+        diagnostics["native_positions_count"] = count
+    if rows is None:
+        return
+    observation.update({
+        "broker_stock_inventory_status": "available",
+        "broker_reported_positions": rows,
+        "broker_reported_positions_scope": "stocks_only",
+        "broker_reported_positions_complete": True,
+        "broker_reported_positions_observed_at": observation["observed_at"],
+    })
+
+
 def build_account_observation(
     snapshot: Any,
     *,
@@ -213,11 +251,14 @@ def build_account_observation(
             observation["broker_account_type"] = raw_account_type
             observation["broker_account_type_source"] = "securitiesAccount.type"
         # Optional, fail-soft: any problem omits the positions keys entirely.
-        _attach_positions(observation, snapshot)
+        if "broker_stock_inventory" not in metadata:
+            _attach_positions(observation, snapshot)
         declared_observation = declare_net_assets_currency(
             observation,
             net_assets_currency=net_assets_currency,
         )
+        if declared_observation is not None and "broker_stock_inventory" in metadata:
+            _attach_native_inventory(declared_observation, snapshot)
         return declare_cash_balance_currency(
             declared_observation,
             cash_currency=cash_currency,

@@ -34,8 +34,8 @@ def test_optional_main_cost_fact_normalizes_only_unknown_and_preserves_known_val
     monkeypatch.delenv("SCHWAB_UNIFIED_NOTIFICATION_ENABLED", raising=False)
     original = rebalance_service.build_account_observation
 
-    def observation(snapshot):
-        result = original(snapshot)
+    def observation(snapshot, **kwargs):
+        result = original(snapshot, **kwargs)
         result["broker_reported_positions"][0]["avg_cost"] = cost
         return result
 
