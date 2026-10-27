@@ -897,6 +897,7 @@ def test_workflow_event_branch_and_modes_are_mutually_exclusive(
         expression = (
             expression.replace("inputs.capture_transactions_once", "False")
             .replace("inputs.renew_access_token_once", "False")
+            .replace("inputs.check_renewal_credentials", "False")
             .replace("github.event_name", repr(event))
             .replace("github.ref", repr(ref))
             .replace("inputs.publish", repr(publish))
@@ -1925,12 +1926,12 @@ def test_renewal_job_rejects_conflicts_without_loading_private_inventory(conflic
     renewal_condition = re.search(r"^    if: (.+)$", renewal, re.MULTILINE).group(1)
     for enabled in (False, True):
         bindings = {"github.event_name": "'workflow_dispatch'", "github.ref": "'refs/heads/main'",
-                    "inputs.renew_access_token_once": str(enabled)}
+                    "inputs.renew_access_token_once": str(enabled), "inputs.check_renewal_credentials": "False"}
         conditions = []
         for condition in (daily_condition, renewal_condition):
             for key, value in bindings.items():
                 condition = condition.replace(key, value)
-            conditions.append(eval(condition.replace("&&", " and ").replace("!", "not ")))
+            conditions.append(eval(condition.replace("&&", " and ").replace("||", " or ").replace("!", "not ")))
         assert conditions == [not enabled, enabled]
     # This job must not load inventory, account references, login credentials or artifacts.
     assert not any(x in renewal for x in ("vars.", "secrets.", "upload-artifact", "RUNTIME_TARGET_JSON",
@@ -1945,3 +1946,34 @@ def test_renewal_job_rejects_conflicts_without_loading_private_inventory(conflic
     assert result.returncode == (2 if conflict else 0)
     assert result.stdout == ("skipped:conflicting_operation_inputs\n" if conflict else "")
     assert result.stderr == ""
+
+
+@pytest.mark.parametrize("renew,check", [(False, False), (True, False), (False, True), (True, True)])
+def test_renewal_readiness_mode_cannot_fall_through_to_a_grant(renew, check):
+    import os
+    import subprocess
+
+    workflow = (ROOT / ".github/workflows/runtime-daily-sync.yml").read_text()
+    daily, isolated = workflow.split("  renew-token:\n", 1)
+    assignment = {"github.event_name": "'workflow_dispatch'", "github.ref": "'refs/heads/main'",
+                  "inputs.renew_access_token_once": str(renew), "inputs.check_renewal_credentials": str(check)}
+
+    def evaluate(condition):
+        for key, value in assignment.items():
+            condition = condition.replace(key, value)
+        return eval(condition.replace("${{", "").replace("}}", "").replace("&&", " and ").replace("||", " or ").replace("!", "not "))
+
+    assert evaluate(re.search(r"^    if: (.+)$", daily, re.MULTILINE).group(1)) == (not renew and not check)
+    assert evaluate(re.search(r"^    if: (.+)$", isolated, re.MULTILINE).group(1)) == (renew or check)
+    readiness = isolated.split("      - name: Check fixed renewal credential readiness\n", 1)[1].split("      - name:", 1)[0]
+    renewal = isolated.split("      - name: Renew cached Schwab access token once\n", 1)[1]
+    assert evaluate(re.search(r"^        if: (.+)$", readiness, re.MULTILINE).group(1)) == (check and not renew)
+    assert evaluate(re.search(r"^        if: (.+)$", renewal, re.MULTILINE).group(1)) == (renew and not check)
+    assert "--check-renewal-credentials" in readiness
+    assert "SCHWAB_RENEW_ACCESS_TOKEN_ONCE" not in readiness
+    guard = isolated.split("        run: |\n", 1)[1].split("      - name:", 1)[0]
+    script = "\n".join(line[10:] for line in guard.splitlines())
+    result = subprocess.run(["/bin/bash", "-c", script], capture_output=True, text=True,
+                            env={"PATH": os.environ["PATH"], "RENEW_ACCESS_TOKEN_ONCE": str(renew).lower(),
+                                 "CHECK_RENEWAL_CREDENTIALS": str(check).lower()})
+    assert result.returncode == (2 if renew and check else 0)
