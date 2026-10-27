@@ -60,7 +60,7 @@ env:
 
 jobs:
   daily:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && !inputs.renew_access_token_once
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -133,13 +133,6 @@ jobs:
         with:
           workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
-
-      - name: Renew cached Schwab access token once
-        if: ${{ inputs.renew_access_token_once && !inputs.capture_transactions_once && !inputs.publish && !inputs.diagnose_source_access && !inputs.verify_native_identity && !inputs.check_token_load && !inputs.emit_digest_candidates && !inputs.capture_digest_candidates_artifact }}
-        env:
-          SCHWAB_RENEW_ACCESS_TOKEN_ONCE: "true"
-          PYTHONDONTWRITEBYTECODE: "1"
-        run: uv run --no-sync python -m scripts.schwab_native_identity --renew-access-token-once
 
       - name: Capture fixed Schwab transactions once
         if: ${{ inputs.capture_transactions_once && !inputs.publish && !inputs.diagnose_source_access && !inputs.verify_native_identity && !inputs.check_token_load && !inputs.emit_digest_candidates && !inputs.capture_digest_candidates_artifact }}
@@ -330,4 +323,46 @@ jobs:
             ${{ runner.temp }}/schwab-digest-account-facts.json
           if-no-files-found: error
           retention-days: 1
+
+
+  renew-token:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.renew_access_token_once
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Reject renewal with other operation inputs
+        env:
+          CAPTURE_TRANSACTIONS_ONCE: ${{ inputs.capture_transactions_once }}
+          PUBLISH: ${{ inputs.publish }}
+          DIAGNOSE_SOURCE_ACCESS: ${{ inputs.diagnose_source_access }}
+          VERIFY_NATIVE_IDENTITY: ${{ inputs.verify_native_identity }}
+          CHECK_TOKEN_LOAD: ${{ inputs.check_token_load }}
+          EMIT_DIGEST_CANDIDATES: ${{ inputs.emit_digest_candidates }}
+          CAPTURE_ARTIFACT: ${{ inputs.capture_digest_candidates_artifact }}
+        run: |
+          if [[ "$CAPTURE_TRANSACTIONS_ONCE" == "true" || "$PUBLISH" == "true" || "$DIAGNOSE_SOURCE_ACCESS" == "true" || "$VERIFY_NATIVE_IDENTITY" == "true" || "$CHECK_TOKEN_LOAD" == "true" || "$EMIT_DIGEST_CANDIDATES" == "true" || "$CAPTURE_ARTIFACT" == "true" ]]; then
+            echo "skipped:conflicting_operation_inputs"
+            exit 2
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+
+      - name: Install locked runtime dependencies
+        run: uv sync --frozen --no-dev
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
+
+      - name: Renew cached Schwab access token once
+        env:
+          SCHWAB_RENEW_ACCESS_TOKEN_ONCE: "true"
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: uv run --no-sync python -m scripts.schwab_native_identity --renew-access-token-once
 

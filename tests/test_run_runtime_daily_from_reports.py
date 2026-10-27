@@ -1911,3 +1911,37 @@ def test_standard_refresh_is_separate_default_off_and_has_no_data_or_login_path(
             continue
         conditions = re.findall(r"^        if: (.+)$", other, re.MULTILINE)
         assert all("!inputs.renew_access_token_once" in x for x in conditions)
+
+
+@pytest.mark.parametrize("conflict", [None, "CAPTURE_TRANSACTIONS_ONCE", "PUBLISH", "DIAGNOSE_SOURCE_ACCESS",
+                                       "VERIFY_NATIVE_IDENTITY", "CHECK_TOKEN_LOAD", "EMIT_DIGEST_CANDIDATES", "CAPTURE_ARTIFACT"])
+def test_renewal_job_rejects_conflicts_without_loading_private_inventory(conflict):
+    import os
+    import subprocess
+
+    workflow = (ROOT / ".github/workflows/runtime-daily-sync.yml").read_text()
+    daily, renewal = workflow.split("  renew-token:\n", 1)
+    daily_condition = re.search(r"^    if: (.+)$", daily, re.MULTILINE).group(1)
+    renewal_condition = re.search(r"^    if: (.+)$", renewal, re.MULTILINE).group(1)
+    for enabled in (False, True):
+        bindings = {"github.event_name": "'workflow_dispatch'", "github.ref": "'refs/heads/main'",
+                    "inputs.renew_access_token_once": str(enabled)}
+        conditions = []
+        for condition in (daily_condition, renewal_condition):
+            for key, value in bindings.items():
+                condition = condition.replace(key, value)
+            conditions.append(eval(condition.replace("&&", " and ").replace("!", "not ")))
+        assert conditions == [not enabled, enabled]
+    # This job must not load inventory, account references, login credentials or artifacts.
+    assert not any(x in renewal for x in ("vars.", "secrets.", "upload-artifact", "RUNTIME_TARGET_JSON",
+                                         "CLOUD_RUN_SERVICE", "ACCOUNT_FACTS", "TOTP", "PASSWORD"))
+    assert renewal.index("Reject renewal with other operation inputs") < renewal.index("Authenticate to Google Cloud")
+    guard = renewal.split("        run: |\n", 1)[1].split("      - name:", 1)[0]
+    script = "\n".join(line[10:] for line in guard.splitlines())
+    env = {"PATH": os.environ["PATH"]}
+    if conflict:
+        env[conflict] = "true"
+    result = subprocess.run(["/bin/bash", "-c", script], env=env, capture_output=True, text=True)
+    assert result.returncode == (2 if conflict else 0)
+    assert result.stdout == ("skipped:conflicting_operation_inputs\n" if conflict else "")
+    assert result.stderr == ""
