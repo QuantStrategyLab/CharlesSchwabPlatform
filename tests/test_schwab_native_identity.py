@@ -60,7 +60,12 @@ def standard_refresh_ports(monkeypatch, capsys):
                                        payload=SimpleNamespace(data=data))
             assert name in (parent + "charles-schwab-api-key/versions/1",
                             parent + "charles-schwab-app-secret/versions/1")
-            return SimpleNamespace(name=name, payload=SimpleNamespace(data=b"SYNTHETIC_APP_CREDENTIAL"))
+            fault = getattr(state, "credential_faults", {}).get(name)
+            if isinstance(fault, BaseException):
+                raise fault
+            data = fault if fault is not None else b"SYNTHETIC_APP_CREDENTIAL"
+            actual = getattr(state, "credential_references", {}).get(name, name)
+            return SimpleNamespace(name=actual, payload=SimpleNamespace(data=data))
 
         def test_iam_permissions(self, *, request, retry, timeout):
             assert request == {"resource": parent + "schwab_token",
@@ -136,6 +141,100 @@ def standard_refresh_ports(monkeypatch, capsys):
     state.secret_factory = Secrets
     state.transport = httpx.MockTransport(handle)
     return state
+
+
+def test_readonly_renewal_credentials_never_reads_token_or_consumes_grant(standard_refresh_ports):
+    state = standard_refresh_ports
+    result = identity.check_renewal_credentials(
+        environ={**ENV, "SCHWAB_CHECK_RENEWAL_CREDENTIALS": "true"}, secret_client=state.secret_factory())
+    assert result == {"status": "ready", "reason": "credentials_ready", "api_key_status": "ready",
+                      "app_secret_status": "ready", "refresh_attempts": 0, "secret_write_attempts": 0}
+    assert state.events == [("read", "projects/401309731911/secrets/" + name + "/versions/1")
+                            for name in ("charles-schwab-api-key", "charles-schwab-app-secret")]
+    assert state.writes == state.requests == state.denials == []
+
+
+@pytest.mark.parametrize("environ", [ENV, {**ENV, "SCHWAB_CHECK_RENEWAL_CREDENTIALS": "false"},
+                                      {"GCP_PROJECT_ID": "wrong", "SCHWAB_CHECK_RENEWAL_CREDENTIALS": "true"}])
+def test_renewal_credential_check_is_default_off_and_configuration_bound(standard_refresh_ports, environ):
+    state = standard_refresh_ports
+    result = identity.check_renewal_credentials(environ=environ)
+    assert result["status"] == "blocked" and result["refresh_attempts"] == result["secret_write_attempts"] == 0
+    assert state.events == state.denials == []
+
+
+@pytest.mark.parametrize("field,name", [("api_key", "charles-schwab-api-key"), ("app_secret", "charles-schwab-app-secret")])
+@pytest.mark.parametrize("fault,reason", [("permission", "permission_denied"), ("missing", "not_found"),
+    ("disabled", "version_unavailable"), ("newline", "payload_invalid"), ("unicode", "payload_invalid"),
+    ("empty", "payload_invalid"), ("oversize", "payload_invalid"), ("reference", "reference_mismatch")])
+def test_renewal_credential_failures_are_specific_and_readonly(standard_refresh_ports, field, name, fault, reason):
+    from google.api_core.exceptions import FailedPrecondition, NotFound, PermissionDenied
+
+    state = standard_refresh_ports
+    ref = "projects/401309731911/secrets/" + name + "/versions/1"
+    if fault == "reference":
+        state.credential_references = {ref: ref[:-1] + "2"}
+    else:
+        state.credential_faults = {ref: {"permission": PermissionDenied("SYNTHETIC_PRIVATE_ERROR"),
+            "missing": NotFound("SYNTHETIC_PRIVATE_ERROR"), "disabled": FailedPrecondition("SYNTHETIC_PRIVATE_ERROR"),
+            "newline": b"SYNTHETIC_PRIVATE_VALUE\n", "unicode": b"\xff", "empty": b"", "oversize": b"x" * 8193}[fault]}
+    result = identity.check_renewal_credentials(
+        environ={**ENV, "SCHWAB_CHECK_RENEWAL_CREDENTIALS": "true"}, secret_client=state.secret_factory())
+    assert result["status"] == "blocked" and result["reason"] == "credentials_unavailable"
+    assert result[field + "_status"] == reason
+    other = "app_secret" if field == "api_key" else "api_key"
+    assert result[other + "_status"] == "ready"
+    assert result["refresh_attempts"] == result["secret_write_attempts"] == 0
+    assert state.writes == state.requests == state.denials == []
+    assert len(state.events) == 2
+    assert "SYNTHETIC" not in json.dumps(result)
+
+
+def test_renewal_readiness_cli_does_not_call_renewal(standard_refresh_ports, monkeypatch, capsys):
+    state = standard_refresh_ports
+    from google.cloud import secretmanager_v1
+
+    monkeypatch.setenv("GCP_PROJECT_ID", ENV["GCP_PROJECT_ID"])
+    monkeypatch.setenv("SCHWAB_CHECK_RENEWAL_CREDENTIALS", "true")
+    monkeypatch.setattr(secretmanager_v1, "SecretManagerServiceClient", state.secret_factory)
+    monkeypatch.setattr(identity, "renew_access_token_once", lambda **_: pytest.fail("grant path forbidden"))
+    assert identity.main(["--check-renewal-credentials"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["status"] == "ready"
+    assert result["refresh_attempts"] == result["secret_write_attempts"] == 0
+    assert state.writes == state.requests == state.denials == []
+
+
+def test_renewal_uses_same_credential_diagnosis_before_any_post(standard_refresh_ports):
+    from google.api_core.exceptions import PermissionDenied
+
+    state = standard_refresh_ports
+    state.credential_faults = {"projects/401309731911/secrets/charles-schwab-app-secret/versions/1":
+                              PermissionDenied("SYNTHETIC_PRIVATE_ERROR")}
+    result = state.run()
+    assert result["reason"] == "app_secret_permission_denied"
+    assert result["refresh_attempts"] == result["secret_write_attempts"] == 0
+    assert state.requests == state.writes == []
+
+
+def test_readiness_suppresses_sensitive_dependency_output(standard_refresh_ports, capsys):
+    import logging
+    import sys
+
+    state = standard_refresh_ports
+
+    class Noisy(state.secret_factory):
+        def access_secret_version(self, **kwargs):
+            print("SYNTHETIC_PRIVATE_VALUE")
+            print("SYNTHETIC_PRIVATE_VALUE", file=sys.stderr)
+            logging.error("SYNTHETIC_PRIVATE_VALUE")
+            return super().access_secret_version(**kwargs)
+
+    result = identity.check_renewal_credentials(
+        environ={**ENV, "SCHWAB_CHECK_RENEWAL_CREDENTIALS": "true"}, secret_client=Noisy())
+    captured = capsys.readouterr()
+    assert result["status"] == "ready" and captured.out == captured.err == ""
+    assert state.requests == state.writes == []
 
 
 @pytest.mark.parametrize("rotated", [False, True])

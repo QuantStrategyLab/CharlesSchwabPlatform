@@ -20,6 +20,8 @@ MAX_ACCOUNTS = 100
 REQUEST_TIMEOUT = (5, 15)
 SECRET_READ_TIMEOUT = 15
 _CLOCK_SKEW_SECONDS = 30
+_RENEWAL_APP_PREFIX = "projects/401309731911/secrets/"
+_RENEWAL_APP_SECRETS = (("api_key", "charles-schwab-api-key"), ("app_secret", "charles-schwab-app-secret"))
 
 
 def _load_existing_token(project_id: str, secret_id: str) -> str:
@@ -133,6 +135,70 @@ def _finite_timestamp(value: object) -> bool:
         and isinstance(value, (int, float))
         and (isinstance(value, int) or math.isfinite(value))
     )
+
+
+def _read_renewal_app_credential(client, name):
+    """Return a fixed diagnosis plus an in-memory value, never an exception body."""
+    ref = _RENEWAL_APP_PREFIX + name + "/versions/1"
+    try:
+        response = client.access_secret_version(request={"name": ref}, retry=None, timeout=15)
+    except Exception as error:
+        reason = _classify_token_load_error(error).removeprefix("token_")
+        return reason, None
+    if response.name != ref:
+        return "reference_mismatch", None
+    data = response.payload.data
+    if not isinstance(data, bytes) or not 0 < len(data) <= 8192:
+        return "payload_invalid", None
+    try:
+        value = data.decode("ascii")
+    except UnicodeDecodeError:
+        return "payload_invalid", None
+    if any(ord(c) < 33 or ord(c) > 126 for c in value):
+        return "payload_invalid", None
+    return "ready", value
+
+
+def check_renewal_credentials(*, environ, secret_client=None):
+    """Read only the two fixed app credential versions; no token/grant/write port."""
+    import contextlib
+    import io
+    import logging
+
+    result = dict(status="blocked", reason="credential_check_not_enabled", api_key_status=None,
+                  app_secret_status=None, refresh_attempts=0, secret_write_attempts=0)
+    if environ.get("SCHWAB_CHECK_RENEWAL_CREDENTIALS") != "true":
+        return result
+    result["reason"] = "configuration_invalid"
+    if environ.get("GCP_PROJECT_ID") != PROJECT_ID:
+        return result
+    result["reason"] = "credential_dependency_unavailable"
+    previous = logging.root.manager.disable
+    owned = secret_client is None
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            logging.disable(max(previous, 2**31 - 1))
+            if owned:
+                from google.cloud import secretmanager_v1
+                secret_client = secretmanager_v1.SecretManagerServiceClient()
+            for label, name in _RENEWAL_APP_SECRETS:
+                status, _value = _read_renewal_app_credential(secret_client, name)
+                result[label + "_status"] = status
+            ready = all(result[label + "_status"] == "ready" for label, _ in _RENEWAL_APP_SECRETS)
+            result.update(status="ready" if ready else "blocked",
+                          reason="credentials_ready" if ready else "credentials_unavailable")
+    except BaseException:
+        pass
+    finally:
+        # Client close and dependency output are suppressed as for the reads.
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            if owned and secret_client is not None:
+                try:
+                    secret_client.transport.close()
+                except BaseException:
+                    pass
+        logging.disable(previous)
+    return result
 
 
 def _access_token(payload: object, *, now: float) -> tuple[str | None, str]:
@@ -275,14 +341,14 @@ def _renew_access_token(result, observed_at, secret_client, http_transport):
             retry=None, timeout=15)
         if "secretmanager.versions.add" not in permission.permissions:
             return
-        result["reason"] = "secret_read_failed"
         credentials = []
-        for name in ("charles-schwab-api-key", "charles-schwab-app-secret"):
-            ref = prefix + name + "/versions/1"
-            actual, value = read(ref)
-            if (actual != ref or not value or len(value) > 8192 or not value.isascii()
-                    or any(ord(c) < 33 or ord(c) > 126 for c in value)):
-                raise ValueError
+        for label, name in _RENEWAL_APP_SECRETS:
+            now()
+            result["reason"] = label + "_load_failed"
+            status, value = _read_renewal_app_credential(client, name)
+            if status != "ready":
+                result["reason"] = label + "_" + status
+                return
             credentials.append(value)
 
         def persist(updated, **_metadata):
@@ -475,14 +541,16 @@ def main(argv=None):
     import sys
 
     args = sys.argv[1:] if argv is None else argv
-    if args != ["--renew-access-token-once"]:
+    if args == ["--check-renewal-credentials"]:
+        result = check_renewal_credentials(environ=os.environ)
+    elif args != ["--renew-access-token-once"]:
         result = dict(status="blocked", reason="arguments_invalid", refresh_attempts=0,
                       secret_write_attempts=0, source_version=None, new_version=None)
     else:
         result = renew_access_token_once(environ=os.environ,
                                         observed_at=dt.datetime.now(dt.timezone.utc))
     print(json.dumps(result, sort_keys=True))
-    return 0 if result["status"] in ("renewed", "not_needed") else 2
+    return 0 if result["status"] in ("renewed", "not_needed", "ready") else 2
 
 
 if __name__ == "__main__":

@@ -24,3 +24,21 @@ Schwab accountNumbers GET。不刷新 token、不写 Secret、不重试、不获
 `reason_code`、`reason_codes` 或结构化 `reason` 字段，不输出字段内容，不认定其原因有效。
 原 continuity 合同并未提供经核验的事故原因，`reason_qualified` 始终为 false。身份通过
 也不解除暂停或熔断，不启用真实交易；原因和恢复条件仍需独立核实。
+
+## 续期凭据只读前置检查
+
+`Schwab Runtime Daily Manual` 的 `check_renewal_credentials` 默认关闭，必须单独明确派发。
+该模式与 `renew_access_token_once` 互斥，并拒绝其他 daily、发布、身份或采集操作；互斥检查
+在云认证前执行。两种模式复用原隔离 job 和 WIF，原 daily job 整体跳过，不加载账户清单。
+
+只读检查仅在内存读取续期原本使用的两项固定 app Secret 的 version 1，每项至多一次、
+SDK 不重试，输出 `api_key_status` 和 `app_secret_status` 的固定类别：`ready`、
+`permission_denied`、`not_found`、`version_unavailable`、`adc_unavailable`、
+`network_unavailable`、`dependency_unavailable`、`invalid`、`load_failed`、`reference_mismatch` 或 `payload_invalid`。
+不输出 Secret 值、长度、哈希、异常正文或动态引用；依赖的标准输出、错误输出和日志均抑制。
+失败保持 blocked，不能将凭据读取失败解释为 refresh token 无效。
+
+这个模式不读 token，不检查账户，不调用 OAuth，不写 Secret，也不能自动切换到续期。
+`refresh_attempts` 与 `secret_write_attempts` 固定为 0。标准续期继续显式启用，复用同一
+app 凭据读取与分类逻辑；最多一次 grant 和一次追加，结果不确定时停止，不自动重试或登录。
+检查通过只证明指定版本凭据可读取且格式有效，不能证明 OAuth 接受或实盘恢复条件成立。

@@ -33,6 +33,11 @@ on:
         required: false
         type: boolean
         default: false
+      check_renewal_credentials:
+        description: Read only the fixed app credential versions and emit fixed readiness categories. No token read, OAuth request or Secret write.
+        required: false
+        type: boolean
+        default: false
       emit_digest_candidates:
         description: After prepare/publish path, write ephemeral DIGEST_CANDIDATES JSON under runner temp (no public artifact; does not mutate QRS Environment).
         required: false
@@ -60,7 +65,7 @@ env:
 
 jobs:
   daily:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && !inputs.renew_access_token_once
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && !inputs.renew_access_token_once && !inputs.check_renewal_credentials
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -326,12 +331,14 @@ jobs:
 
 
   renew-token:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.renew_access_token_once
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && (inputs.renew_access_token_once || inputs.check_renewal_credentials)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Reject renewal with other operation inputs
         env:
+          RENEW_ACCESS_TOKEN_ONCE: ${{ inputs.renew_access_token_once }}
+          CHECK_RENEWAL_CREDENTIALS: ${{ inputs.check_renewal_credentials }}
           CAPTURE_TRANSACTIONS_ONCE: ${{ inputs.capture_transactions_once }}
           PUBLISH: ${{ inputs.publish }}
           DIAGNOSE_SOURCE_ACCESS: ${{ inputs.diagnose_source_access }}
@@ -340,6 +347,10 @@ jobs:
           EMIT_DIGEST_CANDIDATES: ${{ inputs.emit_digest_candidates }}
           CAPTURE_ARTIFACT: ${{ inputs.capture_digest_candidates_artifact }}
         run: |
+          if [[ "$RENEW_ACCESS_TOKEN_ONCE" == "true" && "$CHECK_RENEWAL_CREDENTIALS" == "true" ]]; then
+            echo "skipped:conflicting_operation_inputs"
+            exit 2
+          fi
           if [[ "$CAPTURE_TRANSACTIONS_ONCE" == "true" || "$PUBLISH" == "true" || "$DIAGNOSE_SOURCE_ACCESS" == "true" || "$VERIFY_NATIVE_IDENTITY" == "true" || "$CHECK_TOKEN_LOAD" == "true" || "$EMIT_DIGEST_CANDIDATES" == "true" || "$CAPTURE_ARTIFACT" == "true" ]]; then
             echo "skipped:conflicting_operation_inputs"
             exit 2
@@ -360,7 +371,15 @@ jobs:
           workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
 
+      - name: Check fixed renewal credential readiness
+        if: ${{ inputs.check_renewal_credentials && !inputs.renew_access_token_once }}
+        env:
+          SCHWAB_CHECK_RENEWAL_CREDENTIALS: "true"
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: uv run --no-sync python -m scripts.schwab_native_identity --check-renewal-credentials
+
       - name: Renew cached Schwab access token once
+        if: ${{ inputs.renew_access_token_once && !inputs.check_renewal_credentials }}
         env:
           SCHWAB_RENEW_ACCESS_TOKEN_ONCE: "true"
           PYTHONDONTWRITEBYTECODE: "1"
