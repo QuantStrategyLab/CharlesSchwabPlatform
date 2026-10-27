@@ -42,6 +42,18 @@
 Unicode、长度、标点及策略差异仍拒绝。它不证明旧记录原字符串与当前 broker 返回原字符串相同，
 不改生产绑定或账本，也不消除缺 outcome、UNKNOWN、待对账或不完整窗口。
 
+`outcome_shape_field_counts` 只细分首个失败为 `outcome_shape` 的记录，每条失败在每个固定字段各计一次。
+`orders_pending_count` 分缺失、非整数（含 bool）、负数、有效；`submitted_orders` 分缺失、非 list、
+非对象元素、无法按原合同判别的不可哈希订单状态、有效。`execution_status` 仅输出缺失、非字符串、
+空串，或原白名单 `pending_reconciliation/completed/no_action/no_op`；其他原值统一计 `other_string`。
+`broker_submission_done` 只区分缺失、非 bool、有效，不输出值。有效字段不使整条记录有效，原总体
+partial 及配对/UNKNOWN 等 null 保留，不将缺字段补为零或空数组。
+
+`writer_source_reference` 仅统计原对象或 metadata 是否含固定已知 source/git/runtime revision 键：
+缺失或 `present_unverified`。它不输出原值，不把自述字段当作经验证的写入源码，不按业务 key、
+日期或当前 checkout 推断版本。原 claim/outcome 合同没有必需的 writer commit provenance，缺乏
+独立来源绑定时写入源码仍不可证。未完成稳定读取时整组为 null，没有该类失败时固定计数均为零。
+
 ## 对账 namespace 修正与证据边界
 
 原执行器按券商原生账户 hash 写 execution claim/outcome，但对账候选曾用控制面 `account_scope`（常为 `live`）读账本，可能错误看到空范围。现在只在观察身份明确匹配且原生 hash 有效时读取正确范围，缺失或不匹配就拒绝，不回退 `live`。控制面身份及 broker evidence 的账户摘要合同不变。回归覆盖了旧 scope 为 0、原生 hash 下有 UNKNOWN 提交结果时旧空基线必须不匹配；不消除原有 UNKNOWN、partial 或缺失成交覆盖。

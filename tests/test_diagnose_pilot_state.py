@@ -304,6 +304,57 @@ def test_prior_schema_failure_does_not_inspect_or_count_identity_fields(source, 
     _no_authority(result)
 
 
+@pytest.mark.parametrize("field,value,state", [
+    ("orders_pending_count", None, "not_integer"), ("orders_pending_count", True, "not_integer"),
+    ("orders_pending_count", -1, "negative"), ("submitted_orders", None, "not_list"),
+    ("submitted_orders", [False], "non_object_order"),
+    ("submitted_orders", [{"status": {}}], "unhashable_order_status"),
+    ("execution_status", False, "not_string"), ("broker_submission_done", None, "not_boolean"),
+    *[(field, "MISSING", "missing") for field in (
+        "orders_pending_count", "submitted_orders", "execution_status", "broker_submission_done")],
+])
+def test_outcome_shape_fields_explain_rejection_without_acceptance(source, target, field, value, state):
+    key, claim, outcome = _records()
+    if value == "MISSING":
+        del outcome["metadata"][field]
+    else:
+        outcome["metadata"][field] = value
+    result, _, _ = _probe(source, target, store=_entry_store([
+        (Store.namespace, key, claim), (Store.outcome_namespace, key, outcome)]))
+    c = result["ledger"]["classification"]
+    assert c["invalid_first_failure_counts"]["outcome_shape"] == 1
+    details = c["outcome_shape_field_counts"]
+    assert details[field][state] == 1
+    assert all(sum(states.values()) == 1 for states in details.values())
+    assert result["status"] == "partial_state" and c["paired_count"] is None
+    assert c["explicit_unknown_outcomes_count"] is None
+    _no_authority(result)
+
+
+@pytest.mark.parametrize("status,expected", [("completed", "completed"), ("no_action", "no_action"),
+    ("no_op", "no_op"), ("pending_reconciliation", "pending_reconciliation"), ("", "blank"),
+    ("private-unqualified-status-canary", "other_string")])
+def test_outcome_status_is_allowlisted_and_writer_reference_is_not_proof(source, target, status, expected):
+    key, claim, outcome = _records()
+    del outcome["metadata"]["orders_pending_count"]
+    outcome["metadata"]["execution_status"] = status
+    outcome["metadata"]["source_revision"] = "private-unqualified-source-canary"
+    result, _, _ = _probe(source, target, store=_entry_store([
+        (Store.namespace, key, claim), (Store.outcome_namespace, key, outcome)]))
+    details = result["ledger"]["classification"]["outcome_shape_field_counts"]
+    assert details["execution_status"][expected] == 1
+    assert details["writer_source_reference"]["present_unverified"] == 1
+    assert "private-unqualified" not in json.dumps(result)
+    _no_authority(result)
+
+
+def test_outcome_detail_is_unknown_before_read_and_zero_when_not_rejected(source, target):
+    result, _, _ = _probe(source, target, store=Store(error="ledger"))
+    assert result["ledger"]["classification"]["outcome_shape_field_counts"] is None
+    result, _, _ = _probe(source, target)
+    assert all(sum(states.values()) == 0 for states in result["ledger"]["classification"]["outcome_shape_field_counts"].values())
+
+
 def test_actual_serving_identity_and_native_namespace_gate_storage(source, target, capsys):
     result, events, store = _probe(source, target)
     assert result["status"] == "observed_state" and result["reason"] == "observed"
