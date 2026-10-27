@@ -683,6 +683,95 @@ def _safe_result_text(result: Mapping[str, Any]) -> str:
     return "skipped:unknown"
 
 
+def inspect_existing_inventory() -> dict[str, Any]:
+    """Inspect one existing qualified report, without reading a sync/broker token."""
+    source = os.getenv("GITHUB_SHA", "")
+    result = {
+        "schema_version": "schwab_existing_inventory_inspection.v1",
+        "status": "skipped", "reason": "inventory_inspection_unavailable",
+        "inspection_source_sha": source if re.fullmatch(r"[0-9a-f]{40}", source) else None,
+        "serving_revision_sha256": None, "report_identity_verified": False,
+        "inventory_status": "unknown", "inventory_diagnostics_present": False,
+        "native_positions_present": None, "linked_positions_present": None,
+        "native_positions_count": None, "projected_stock_count": None,
+        "report_positions_present": None, "report_positions_count": None,
+        "projected_positions_present": None, "payload_positions_retained": None,
+        "include_positions_enabled": None,
+        "broker_requested": False, "published": False, "notifications_requested": False,
+    }
+    try:
+        if (os.getenv("GITHUB_EVENT_NAME") != "workflow_dispatch"
+                or os.getenv("GITHUB_REF") != "refs/heads/main"
+                or os.getenv("GITHUB_REPOSITORY") != "QuantStrategyLab/CharlesSchwabPlatform"
+                or os.getenv("GITHUB_RUN_ATTEMPT") != "1"):
+            result["reason"] = "inspection_context_required"
+            return result
+        prefix = os.getenv("SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX", "")
+        service = os.getenv("SCHWAB_ACCOUNT_FACTS_SERVICE_NAME", "")
+        target = os.getenv("SCHWAB_ACCOUNT_FACTS_TARGET_ID", "")
+        if not _valid_report_prefix(prefix) or not service or not target.strip():
+            result["reason"] = "source_configuration_unavailable"
+            return result
+        if os.getenv("SCHWAB_NET_ASSETS_CURRENCY") != "USD":
+            result["reason"] = "net_assets_currency_unconfirmed"
+            return result
+        revision = _current_serving_revision(service)
+        if not isinstance(revision, str) or _REVISION.fullmatch(revision) is None:
+            result["reason"] = "runtime_revision_readback_mismatch"
+            return result
+        result["serving_revision_sha256"] = hashlib.sha256(revision.encode()).hexdigest()
+        now = datetime.now(timezone.utc)
+        uri = _latest_recent_report_uri(report_prefix=prefix, now=now)
+        if uri is None:
+            result["reason"] = "report_unavailable"
+            return result
+        _report_uri_parts(uri, prefix)
+        report = _read_report(uri)
+        if report is None:
+            result["reason"] = "report_unavailable"
+            return result
+        projected = project_schwab_account_facts_history(
+            report, source_report_uri=uri, report_prefix=prefix,
+            expected_service_name=service, expected_runtime_revision=revision,
+            expected_target_id=target, expected_cash_currency=os.getenv("SCHWAB_CASH_CURRENCY"), now=now,
+        )
+        if projected.get("status") == "skipped":
+            result["reason"] = _safe_result_text(projected).partition(":")[2]
+            return result
+        if _current_serving_revision(service) != revision:
+            result["reason"] = "runtime_revision_readback_mismatch"
+            return result
+        observation = report["summary"]["account_observation"]
+        diagnostics = observation.get("broker_stock_inventory_diagnostics")
+        result["inventory_diagnostics_present"] = isinstance(diagnostics, Mapping)
+        diagnostics = diagnostics if isinstance(diagnostics, Mapping) else {}
+        inventory_status = observation.get("broker_stock_inventory_status")
+        if inventory_status in {"available", "unknown", "read_failed"}:
+            result["inventory_status"] = inventory_status
+        for output, field in (("native_positions_present", "positions_field_present"),
+                              ("linked_positions_present", "linked_positions_field_present")):
+            value = diagnostics.get(field)
+            result[output] = value if type(value) is bool else None
+        for field, limit in (("native_positions_count", 512), ("projected_stock_count", _MAX_POSITIONS)):
+            value = diagnostics.get(field)
+            result[field] = value if type(value) is int and 0 <= value <= limit else None
+        positions = observation.get("broker_reported_positions")
+        include = os.getenv("SCHWAB_ACCOUNT_FACTS_INCLUDE_POSITIONS", "").strip().lower() == "true"
+        payload = prepare_sync_payload(projected, include_positions=include)
+        result.update(
+            status="inspected", reason="existing_report_inspected", report_identity_verified=True,
+            include_positions_enabled=include,
+            report_positions_present="broker_reported_positions" in observation,
+            report_positions_count=len(positions) if isinstance(positions, list) and len(positions) <= _MAX_POSITIONS else None,
+            projected_positions_present="broker_reported_positions" in projected,
+            payload_positions_retained="broker_reported_positions" in payload,
+        )
+    except Exception:
+        # No native exception, report, account, URL or financial value may escape.
+        result["reason"] = "inventory_inspection_failed"
+    return result
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
@@ -690,6 +779,7 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--latest-report", action="store_true")
     mode.add_argument("--report-uri")
     parser.add_argument("--expected-runtime-revision")
+    parser.add_argument("--inspect-only", action="store_true")
     args = parser.parse_args(argv)
 
     if os.getenv("GITHUB_ACTIONS") != "true":
@@ -708,6 +798,13 @@ def main(argv: list[str] | None = None) -> int:
     ):
         print("skipped:runtime_revision_invalid")
         return 2
+    if args.inspect_only:
+        if not args.latest_report:
+            print("skipped:inspection_requires_manual_latest_report")
+            return 2
+        inspected = inspect_existing_inventory()
+        print(json.dumps(inspected, sort_keys=True))
+        return 0 if inspected["status"] == "inspected" else 2
     token = os.getenv("SCHWAB_ACCOUNT_FACTS_SYNC_TOKEN", "")
     sync_url = os.getenv("ACCOUNT_FACTS_SYNC_URL", "")
     report_prefix = os.getenv("SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX", "")
