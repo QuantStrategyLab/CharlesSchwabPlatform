@@ -47,6 +47,13 @@ DEFAULT_ACCEPT_STAGES = {
 DEFAULT_REJECT_STAGES = {"ERROR", "EXECUTION_BLOCKED", "FAILED", "FAILURE"}
 
 
+def _write_assessment(status: str, reason: str) -> None:
+    """Publish bounded machine-readable facts independently of log wording."""
+    path = os.environ.get("RUNTIME_HEARTBEAT_ASSESSMENT_PATH")
+    if path:
+        Path(path).write_text(json.dumps({"status": status, "reason": reason}) + "\n")
+
+
 def _split_values(raw: str | None) -> list[str]:
     if not raw:
         return []
@@ -811,12 +818,14 @@ def main(now: dt.datetime | None = None) -> int:
     )
     name = os.environ.get("RUNTIME_HEARTBEAT_NAME") or os.environ.get("GITHUB_REPOSITORY") or "runtime"
     if not _runtime_target_enabled():
+        _write_assessment("not_applicable", "runtime_target_disabled")
         print(f"Execution report heartbeat skipped for {name}: runtime target is disabled")
         return 0
     if (
         runtime_target_configuration_present(os.environ)
         and not runtime_target_configuration_has_enabled_targets(os.environ)
     ):
+        _write_assessment("not_applicable", "no_enabled_runtime_target")
         print(
             f"Execution report heartbeat skipped for {name}: "
             "no enabled runtime target matches this heartbeat"
@@ -840,6 +849,7 @@ def main(now: dt.datetime | None = None) -> int:
             project=project,
         )
     except RuntimeError as exc:
+        _write_assessment("unavailable", "scheduler_policy_unavailable")
         message = format_operational_alert(
             locale=_notification_locale(),
             alert_type="execution_report_heartbeat",
@@ -867,6 +877,7 @@ def main(now: dt.datetime | None = None) -> int:
         publication_grace=dt.timedelta(minutes=publication_grace_minutes),
     )
     if runtime_targets and target_schedule_evaluated and not due_targets:
+        _write_assessment("not_due", "no_due_runtime_schedule")
         target_names = ", ".join(target_label(target) for target in runtime_targets)
         schedule_reason = _heartbeat_skip_reason_for_schedule(due_since, now)
         print(
@@ -881,6 +892,7 @@ def main(now: dt.datetime | None = None) -> int:
     if not runtime_targets:
         schedule_skip_reason = _heartbeat_skip_reason_for_schedule(due_since, now)
         if schedule_skip_reason:
+            _write_assessment("not_due", "no_due_runtime_schedule")
             print(f"Execution report heartbeat skipped for {name}: {schedule_skip_reason}")
             return _send_normal_heartbeat(name, _notice("heartbeat_no_scheduler_run_due"))
     if due_targets:
@@ -1041,6 +1053,13 @@ def main(now: dt.datetime | None = None) -> int:
     if required_keys:
         missing = [key for key in required_keys if key not in accepted_by_service]
         if not missing and not list_errors and not read_incomplete and not latest_report_issues:
+            _write_assessment(
+                "healthy" if all(quiet_by_service[key] for key in required_keys) and not notification_attention else "attention",
+                "order_status_unknown" if notification_attention else (
+                    "acceptable_report_observed" if all(quiet_by_service[key] for key in required_keys)
+                    else "receipt_evidence_unconfirmed"
+                ),
+            )
             details = ", ".join(
                 f"{required_labels[key]}@{accepted_by_service[key][1].isoformat()}"
                 for key in required_keys
@@ -1056,6 +1075,12 @@ def main(now: dt.datetime | None = None) -> int:
                 source_reports=source_reports,
             )
     if accepted and not list_errors and not read_incomplete and not latest_report_issues:
+        _write_assessment(
+            "healthy" if all(quiet_reports) and not notification_attention else "attention",
+            "order_status_unknown" if notification_attention else (
+                "acceptable_report_observed" if all(quiet_reports) else "receipt_evidence_unconfirmed"
+            ),
+        )
         uri, updated, reason = accepted[0]
         print(
             f"Execution report heartbeat OK for {name}: {reason}, updated={updated.isoformat()}, uri={uri}"
@@ -1069,6 +1094,10 @@ def main(now: dt.datetime | None = None) -> int:
             source_reports=source_reports,
         )
 
+    _write_assessment(
+        "unavailable" if list_errors or read_incomplete else "attention",
+        "report_read_unavailable" if list_errors or read_incomplete else "acceptable_report_missing",
+    )
     issues = []
     technical_details = list(latest_report_issues)
     if read_incomplete or latest_report_issues:
