@@ -24,6 +24,17 @@ Live execution is fail-closed behind a durable atomic execution claim. Cloud Run
 - Should start with dry-run or paper mode before any live order path is enabled.
 - Account production-drift status is consumed only from the account risk snapshot (or the portfolio snapshot fallback); unbound research performance stores are not used by the Schwab execution gate.
 
+Lifecycle summaries show the operator switch, continuity state and effective
+standard-execution state separately. An enabled switch with `PAUSED` or
+`RECONCILE_ONLY` does not permit ordinary execution. These are configuration
+observations, not evidence that credentials, broker connectivity or orders work.
+
+The execution heartbeat can write bounded JSON `status` and `reason` fields to
+`RUNTIME_HEARTBEAT_ASSESSMENT_PATH`. Its lifecycle workflow uses that assessment
+to distinguish disabled, not due, healthy, attention and unavailable states.
+Missing or malformed assessments and unsuccessful processes cannot become a
+passing heartbeat merely because of an exit code or a matching log message.
+
 ## Direct vs snapshot-backed profiles
 
 Direct runtime profiles can usually run from market history or portfolio state. Snapshot-backed profiles need a current artifact bundle from the matching snapshot pipeline before this platform should execute them. The platform should not invent strategy eligibility; it should consume the status and artifacts published by the strategy and snapshot repositories.

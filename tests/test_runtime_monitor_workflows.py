@@ -70,8 +70,12 @@ def test_qpk_dependent_heartbeats_use_locked_uv_runtime() -> None:
 def test_lifecycle_classifies_import_failures_as_unavailable() -> None:
     workflow = (ROOT / ".github/workflows/runtime-target-lifecycle.yml").read_text()
 
-    assert workflow.count("status=unavailable") >= 2
-    assert workflow.count("traceback|importerror|modulenotfounderror") == 2
+    assert workflow.count("status=unavailable") >= 1
+    # Runtime guard still has its legacy text classifier. Execution heartbeat
+    # consumes structured evidence, and missing evidence is unavailable.
+    assert workflow.count("traceback|importerror|modulenotfounderror") == 1
+    assert "RUNTIME_HEARTBEAT_ASSESSMENT_PATH" in workflow
+    assert "grep -qi 'heartbeat skipped'" not in workflow
 
 
 def test_lifecycle_observes_production_drift_without_optimization() -> None:

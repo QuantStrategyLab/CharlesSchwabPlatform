@@ -16,6 +16,8 @@ class RuntimeTargetLifecycleStateError(ValueError):
 class RuntimeTargetLifecycleState:
     configured_state: str
     execution_mode: str
+    operator_state: str
+    continuity_state: str
 
 
 def _text(value: object) -> str:
@@ -72,14 +74,26 @@ def resolve_runtime_target_lifecycle_state(
 
     environment = os.environ if environ is None else environ
     target = _target_from_env(environment)
+    operator_enabled = _enabled(environment, target)
+    continuity = target.get("live_continuity")
+    continuity_state = (
+        _text(continuity.get("state")).upper()
+        if isinstance(continuity, Mapping) else ""
+    ) or "NONE"
+    if continuity_state not in {
+        "NONE", "ACTIVE_LKG", "ROLLBACK_LKG", "PAUSED", "RECONCILE_ONLY",
+    }:
+        continuity_state = "UNKNOWN"
     configured_state = (
         "enabled"
-        if _enabled(environment, target) and _permits_standard_execution(target)
+        if operator_enabled and _permits_standard_execution(target)
         else "disabled"
     )
     return RuntimeTargetLifecycleState(
         configured_state=configured_state,
         execution_mode=_execution_mode(environment, target),
+        operator_state="enabled" if operator_enabled else "disabled",
+        continuity_state=continuity_state,
     )
 
 
@@ -87,6 +101,8 @@ def main() -> int:
     state = resolve_runtime_target_lifecycle_state()
     print(f"configured_state={state.configured_state}")
     print(f"execution_mode={state.execution_mode}")
+    print(f"operator_state={state.operator_state}")
+    print(f"continuity_state={state.continuity_state}")
     return 0
 
 

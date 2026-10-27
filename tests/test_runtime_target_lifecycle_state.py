@@ -57,6 +57,17 @@ def test_active_lkg_target_requires_explicit_enablement() -> None:
     assert state.configured_state == "enabled"
 
 
+@pytest.mark.parametrize("continuity_state", ["PAUSED", "RECONCILE_ONLY"])
+def test_operator_switch_does_not_claim_effective_execution(continuity_state) -> None:
+    state = resolve_runtime_target_lifecycle_state({
+        "RUNTIME_TARGET_ENABLED": "true",
+        "RUNTIME_TARGET_JSON": _target(continuity_state=continuity_state),
+    })
+    assert state.operator_state == "enabled"
+    assert state.continuity_state == continuity_state
+    assert state.configured_state == "disabled"
+
+
 def test_invalid_target_or_enablement_fails_closed() -> None:
     with pytest.raises(RuntimeTargetLifecycleStateError, match="invalid"):
         resolve_runtime_target_lifecycle_state({"RUNTIME_TARGET_JSON": "not-json"})
