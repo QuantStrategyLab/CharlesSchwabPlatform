@@ -69,6 +69,13 @@ uv run --no-sync python scripts/check_qpk_pin_consistency.py
 
 ## Inspect inventory in an existing report
 
+Natural-cycle reports use bounded native stock inventory from the same snapshot
+when the installed QPK reader supplies `broker_stock_inventory` metadata and the
+account currency is explicitly declared USD. This adds no broker read; NAV and
+inventory share `snapshot.as_of`. Adopt the matching QPK reader separately:
+older readers retain the strategy-only projection, and missing native positions
+remain unknown rather than proving an empty account.
+
 The existing **Schwab Account Facts Sync** workflow accepts
 `inspect_only=true` together with `latest_report=true`; leave the exact URI and
 revision inputs empty. This manual, main-only, first-attempt inspection reuses

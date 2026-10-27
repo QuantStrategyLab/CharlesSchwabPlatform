@@ -648,7 +648,9 @@ def run_strategy_core(
     continuity_context = getattr(config, "intent_continuity", None)
     continuity = (_IntentSession(continuity_context, snapshot=snapshot, profile_id=config.strategy_profile)
                   if continuity_context is not None and not config.dry_run_only else None)
-    account_observation = build_account_observation(snapshot)
+    account_observation = build_account_observation(
+        snapshot, net_assets_currency=os.getenv("SCHWAB_NET_ASSETS_CURRENCY"),
+    )
     plan, portfolio, execution, allocation = load_plan(snapshot)
     execution_port = (
         runtime.execution_port_factory(plan["account_hash"])
