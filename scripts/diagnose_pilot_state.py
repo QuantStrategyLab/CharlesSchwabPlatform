@@ -42,14 +42,23 @@ _INVALID_RECORD_REASONS = (
 )
 _IDENTITY_STATES = ("missing", "not_string", "blank", "exact_match", "hex_digest_match", "key_match_only", "mismatch")
 _KEY_DIFFERENCES = ("ascii_case_only", "surrounding_whitespace_only", "whitespace_and_ascii_case", "other_key_collision")
+_OUTCOME_FIELD_STATES = {
+    "orders_pending_count": ("missing", "not_integer", "negative", "valid"),
+    "submitted_orders": ("missing", "not_list", "non_object_order", "unhashable_order_status", "valid"),
+    "execution_status": ("missing", "not_string", "blank", "pending_reconciliation", "completed", "no_action", "no_op", "other_string"),
+    "broker_submission_done": ("missing", "not_boolean", "valid"),
+    "writer_source_reference": ("missing", "present_unverified"),
+}
 
 
 class _InvalidRecord(ValueError):
     """A code-defined first failure; never an upstream field or error body."""
 
-    def __init__(self, reason: str, *, identity_states: dict[str, str] | None = None):
+    def __init__(self, reason: str, *, identity_states: dict[str, str] | None = None,
+                 outcome_fields: dict[str, str] | None = None):
         super().__init__(reason)
         self.identity_states = identity_states
+        self.outcome_fields = outcome_fields
 
 
 def _classification_projection() -> dict[str, Any]:
@@ -65,6 +74,7 @@ def _classification_projection() -> dict[str, Any]:
         "identity_failure_field_counts": None,
         "identity_key_difference_counts": None,
         "account_hash_hex_representation_matches_count": None,
+        "outcome_shape_field_counts": None,
     }
 
 
@@ -104,6 +114,36 @@ def _key_difference(value: str, expected: str) -> str:
     if value.isascii() and expected.isascii() and value.strip().lower() == expected.lower():
         return "whitespace_and_ascii_case"
     return "other_key_collision"
+
+
+def _outcome_field_states(record: dict, payload: dict) -> dict[str, str]:
+    """Explain only an already-rejected shape; never expose values or infer defaults."""
+    count = record.get("orders_pending_count")
+    orders = record.get("submitted_orders")
+    status = record.get("execution_status")
+    states = {
+        "orders_pending_count": "missing" if "orders_pending_count" not in record else
+            "not_integer" if type(count) is not int else "negative" if count < 0 else "valid",
+        "submitted_orders": "missing" if "submitted_orders" not in record else
+            "not_list" if not isinstance(orders, list) else
+            "non_object_order" if not all(isinstance(order, dict) for order in orders) else "valid",
+        "execution_status": "missing" if "execution_status" not in record else
+            "not_string" if not isinstance(status, str) else "blank" if not status else
+            status if status in {"pending_reconciliation", "completed", "no_action", "no_op"} else "other_string",
+        "broker_submission_done": "missing" if "broker_submission_done" not in record else
+            "not_boolean" if type(record["broker_submission_done"]) is not bool else "valid",
+    }
+    if states["submitted_orders"] == "valid":
+        try:
+            for order in orders:
+                hash(order.get("status"))
+        except TypeError:
+            states["submitted_orders"] = "unhashable_order_status"
+    source_fields = {"source_revision", "source_commit", "source_sha", "git_revision", "git_sha", "runtime_revision", "code_sha"}
+    states["writer_source_reference"] = "present_unverified" if any(
+        key in source for source in (payload, record) for key in source_fields
+    ) else "missing"
+    return states
 
 
 def _entries_digest(entries: Mapping[str, list[tuple[str, str]]]) -> str:
@@ -161,14 +201,14 @@ def _record_classification(store: Any, *, namespace: str, uri: str, content: str
     if (type(count) is not int or count < 0 or not isinstance(orders, list)
             or not all(isinstance(order, dict) for order in orders) or not isinstance(status, str)
             or type(record.get("broker_submission_done")) is not bool):
-        raise _InvalidRecord("outcome_shape")
+        raise _InvalidRecord("outcome_shape", outcome_fields=_outcome_field_states(record, payload))
     # Keep the original _recorded_execution_replay semantics. These are recorded
     # intent states, never an inference that the broker has finished an order.
     if status == "pending_reconciliation":
         try:
             pending = sum(order.get("status") in {"accepted", "unknown"} for order in orders)
         except TypeError:
-            raise _InvalidRecord("outcome_shape") from None
+            raise _InvalidRecord("outcome_shape", outcome_fields=_outcome_field_states(record, payload)) from None
         if count < pending:
             raise _InvalidRecord("pending_count")
         return key, "explicit_unknown" if any(order.get("status") == "unknown" for order in orders) else "pending_reconciliation"
@@ -215,6 +255,7 @@ def _classify_ledger(store: Any, *, account: str, profile: str, expected_digest:
     difference_counts = {field: dict.fromkeys(_KEY_DIFFERENCES, 0)
                          for field in ("account_scope", "strategy_profile")}
     hex_representation_matches = 0
+    outcome_field_counts = {field: dict.fromkeys(states, 0) for field, states in _OUTCOME_FIELD_STATES.items()}
     for namespace, values in entries.items():
         for uri, content in values:
             try:
@@ -234,6 +275,9 @@ def _classify_ledger(store: Any, *, account: str, profile: str, expected_digest:
                 invalid += 1
                 reason = str(exc)
                 failures[reason if reason in failures else "unclassifiable"] += 1
+                if reason == "outcome_shape" and exc.outcome_fields is not None:
+                    for field, state in exc.outcome_fields.items():
+                        outcome_field_counts[field][state] += 1
                 if reason == "identity_fields" and exc.identity_states is not None:
                     for field, state in exc.identity_states.items():
                         identity_counts[field][state] += 1
@@ -252,6 +296,7 @@ def _classify_ledger(store: Any, *, account: str, profile: str, expected_digest:
     projection["identity_failure_field_counts"] = identity_counts
     projection["identity_key_difference_counts"] = difference_counts
     projection["account_hash_hex_representation_matches_count"] = hex_representation_matches
+    projection["outcome_shape_field_counts"] = outcome_field_counts
     if invalid:
         # Invalid records may contain a counterpart or an UNKNOWN outcome;
         # do not report exact pairing/semantic totals from a valid subset.
