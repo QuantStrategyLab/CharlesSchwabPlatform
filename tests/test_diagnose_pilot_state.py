@@ -191,6 +191,68 @@ def test_identity_detail_counts_are_empty_for_valid_records_and_unknown_before_s
     result, _, _ = _probe(source, target, store=Store(error="ledger"))
     assert result["ledger"]["classification"]["identity_failure_field_counts"] is None
     assert result["ledger"]["classification"]["identity_key_difference_counts"] is None
+    assert result["ledger"]["classification"]["account_hash_hex_representation_matches_count"] is None
+
+
+def _bind_hex_account(source, target, monkeypatch):
+    value = "a1b2c3d4" * 8
+    monkeypatch.setattr(sys.modules[__name__], "ACCOUNT", value)
+    target["runtime_risk_limits"]["binding"]["account_hash"] = value
+    source["RUNTIME_TARGET_JSON"] = json.dumps(target)
+    return value
+
+
+def test_hex_account_representation_matches_preserve_real_unknown_outcome(source, target, monkeypatch):
+    account = _bind_hex_account(source, target, monkeypatch)
+
+    class HexStore(Store):
+        def _entries(self):
+            values = super()._entries()
+            for namespace, entries in values.items():
+                uri, raw = entries[0]
+                payload = json.loads(raw)
+                payload["metadata"]["account_scope"] = account.upper()
+                values[namespace] = [(uri, json.dumps(payload))]
+            return values
+
+    result, _, _ = _probe(source, target, store=HexStore())
+    classification = result["ledger"]["classification"]
+    assert result["status"] == "observed_state"
+    assert classification["account_hash_hex_representation_matches_count"] == 2
+    assert classification["invalid_records_count"] == 0 and classification["paired_count"] == 1
+    assert classification["explicit_unknown_outcomes_count"] == 1
+    assert classification["claims_without_outcome_in_window_count"] == 0
+    assert account not in json.dumps(result) and account.upper() not in json.dumps(result)
+    _no_authority(result)
+
+
+@pytest.mark.parametrize("change", ["different_digest", "shorter", "nonhex", "unicode", "profile_case"])
+def test_hex_representation_never_accepts_other_identity_differences(source, target, monkeypatch, change):
+    account = _bind_hex_account(source, target, monkeypatch)
+
+    class ChangedStore(Store):
+        def _entries(self):
+            values = super()._entries()
+            uri, raw = values[self.namespace][0]
+            payload = json.loads(raw)
+            payload["metadata"]["account_scope"] = {
+                "different_digest": "b" + account[1:], "shorter": account.upper()[:-1],
+                "nonhex": "G" + account.upper()[1:], "unicode": "\N{FULLWIDTH LATIN CAPITAL LETTER A}" + account.upper()[1:],
+                "profile_case": account.upper(),
+            }[change]
+            if change == "profile_case":
+                payload["metadata"]["strategy_profile"] = PROFILE.upper()
+            values[self.namespace] = [(uri, json.dumps(payload))]
+            return values
+
+    result, _, _ = _probe(source, target, store=ChangedStore())
+    classification = result["ledger"]["classification"]
+    assert result["status"] == "partial_state" and classification["invalid_records_count"] == 1
+    assert classification["paired_count"] is classification["explicit_unknown_outcomes_count"] is None
+    if change == "profile_case":
+        assert classification["identity_failure_field_counts"]["account_scope"]["hex_digest_match"] == 1
+        assert classification["identity_failure_field_counts"]["strategy_profile"]["key_match_only"] == 1
+    _no_authority(result)
 
 
 @pytest.mark.parametrize("value,reason", [

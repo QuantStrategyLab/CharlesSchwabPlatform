@@ -470,6 +470,39 @@ def test_reads_fixed_native_endpoint_once_and_matches_exact_selected_hash():
     assert EXPECTED_HASH not in result
 
 
+def test_native_hex_digest_case_matches_serving_contract_without_refresh():
+    expected = "a1b2c3d4" * 8
+    session = session_for([{"hashValue": expected.upper()}])
+    result, loader = verify(session, expected_hash=expected)
+    assert result == "verified"
+    session.get.assert_called_once()
+    loader.assert_called_once()
+
+
+@pytest.mark.parametrize("expected,observed", [
+    ("a" * 64, "B" + "A" * 63),
+    ("a" * 63, "A" * 63), ("a" * 65, "A" * 65),
+    ("g" + "a" * 63, "G" + "A" * 63),
+    ("k" + "a" * 63, "\N{KELVIN SIGN}" + "A" * 63),
+    (EXPECTED_HASH, EXPECTED_HASH.upper()),
+    ("synthetic--account", "SYNTHETIC-ACCOUNT"),
+])
+def test_native_digest_matching_rejects_other_identity_changes(expected, observed):
+    session = session_for([{"hashValue": observed}])
+    result, _ = verify(session, expected_hash=expected)
+    assert result == "native_identity_mismatch"
+    session.get.assert_called_once()
+
+
+@pytest.mark.parametrize("second", ["a1b2c3d4" * 8, ("a1b2c3d4" * 8).upper()])
+def test_native_multiple_same_digest_accounts_remain_ambiguous(second):
+    expected = "a1b2c3d4" * 8
+    session = session_for([{"hashValue": expected}, {"hashValue": second}])
+    result, _ = verify(session, expected_hash=expected)
+    assert result == "native_identity_ambiguous"
+    session.get.assert_called_once()
+
+
 def test_owned_session_ignores_proxy_environment_and_closes(monkeypatch):
     import requests
 

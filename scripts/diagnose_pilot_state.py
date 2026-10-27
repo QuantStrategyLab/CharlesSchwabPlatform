@@ -22,6 +22,7 @@ from typing import Any
 
 from scripts import diagnose_pilot_metadata as metadata
 from scripts.diagnose_pilot_native_identity import _account_hash, _pause_projection
+from scripts.schwab_native_identity import _account_hash_matches
 
 
 SCHEMA = "schwab.pilot-state-readback.v1"
@@ -39,7 +40,7 @@ _INVALID_RECORD_REASONS = (
     "key_shape_or_arity", "uri_mismatch", "identity_fields", "mode", "date_key",
     "claim_state", "outcome_shape", "pending_count", "duplicate_record", "unclassifiable",
 )
-_IDENTITY_STATES = ("missing", "not_string", "blank", "exact_match", "key_match_only", "mismatch")
+_IDENTITY_STATES = ("missing", "not_string", "blank", "exact_match", "hex_digest_match", "key_match_only", "mismatch")
 _KEY_DIFFERENCES = ("ascii_case_only", "surrounding_whitespace_only", "whitespace_and_ascii_case", "other_key_collision")
 
 
@@ -63,6 +64,7 @@ def _classification_projection() -> dict[str, Any]:
         "invalid_first_failure_counts": None,
         "identity_failure_field_counts": None,
         "identity_key_difference_counts": None,
+        "account_hash_hex_representation_matches_count": None,
     }
 
 
@@ -82,6 +84,8 @@ def _identity_states(record: dict, key: str, *, account: str, profile: str) -> d
             state = "blank"
         elif value == expected:
             state = "exact_match"
+        elif field == "account_scope" and _account_hash_matches(expected, value):
+            state = "hex_digest_match"
         elif (_clean_key_part(value, fallback=fallback)
               == _clean_key_part(expected, fallback=fallback) == key.split("/")[index]):
             state = "key_match_only"
@@ -139,7 +143,7 @@ def _record_classification(store: Any, *, namespace: str, uri: str, content: str
         raise _InvalidRecord("key_shape_or_arity")
     if store._cloud_uri_for_namespace(key, namespace) != uri:
         raise _InvalidRecord("uri_mismatch")
-    if record.get("strategy_profile") != profile or record.get("account_scope") != account:
+    if record.get("strategy_profile") != profile or not _account_hash_matches(account, record.get("account_scope")):
         raise _InvalidRecord("identity_fields", identity_states=_identity_states(
             record, key, account=account, profile=profile))
     if record.get("dry_run_only") is not False:
@@ -210,6 +214,7 @@ def _classify_ledger(store: Any, *, account: str, profile: str, expected_digest:
                        for field in ("account_scope", "strategy_profile")}
     difference_counts = {field: dict.fromkeys(_KEY_DIFFERENCES, 0)
                          for field in ("account_scope", "strategy_profile")}
+    hex_representation_matches = 0
     for namespace, values in entries.items():
         for uri, content in values:
             try:
@@ -220,6 +225,9 @@ def _classify_ledger(store: Any, *, account: str, profile: str, expected_digest:
                 if key in keys[namespace]:
                     raise _InvalidRecord("duplicate_record")
                 keys[namespace].add(key)
+                # Count only otherwise valid records; raw values stay in memory.
+                if metadata._json(content)["metadata"]["account_scope"] != account:
+                    hex_representation_matches += 1
                 if category != "claim":
                     counts[category] += 1
             except _InvalidRecord as exc:
@@ -243,6 +251,7 @@ def _classify_ledger(store: Any, *, account: str, profile: str, expected_digest:
     projection["invalid_first_failure_counts"] = failures
     projection["identity_failure_field_counts"] = identity_counts
     projection["identity_key_difference_counts"] = difference_counts
+    projection["account_hash_hex_representation_matches_count"] = hex_representation_matches
     if invalid:
         # Invalid records may contain a counterpart or an UNKNOWN outcome;
         # do not report exact pairing/semantic totals from a valid subset.
