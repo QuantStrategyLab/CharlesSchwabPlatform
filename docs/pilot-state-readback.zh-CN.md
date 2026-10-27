@@ -22,17 +22,25 @@
 
 `identity_failure_field_counts` 只进一步解释首个失败为 `identity_fields` 的记录，分别统计
 `account_scope`、`strategy_profile` 的固定状态：`missing`（缺字段）、`not_string`（含 null）、
-`blank`、`exact_match`、`key_match_only`、`mismatch`。每个字段的计数和分别等于身份失败记录数，
+`blank`、`exact_match`、`hex_digest_match`、`key_match_only`、`mismatch`。每个字段的计数和分别等于身份失败记录数，
 不是额外的订单数；稳定窗口中没有身份失败则均为零，尚未完成稳定读取则为 null。
 `key_match_only` 表示记录值和当前预期仅在原 QPK 有损键规范化后与路径对应段相同，
-不能证明原始账户或策略身份相同，更不能作为兼容读取的许可。两个身份字段始终要求原值精确相等；
+不能证明原始账户或策略身份相同，更不能作为兼容读取的许可。策略字段始终要求原值精确相等；
+账户仅允许原值精确相等，或双方均为合法 64 位 ASCII hex 且解码后的摘要字节相同。
+`hex_digest_match` 仅描述后一种账户表示（例如另一策略字段失败时），不适用于策略名。
 前置 schema/键等失败不检查这些字段。不输出原值、规范化值或其哈希，不改变配对、恢复或暂停判断。
 
 `identity_key_difference_counts` 仅细分 `key_match_only`：`ascii_case_only` 表示仅 ASCII 大小写差异，
 `surrounding_whitespace_only` 表示仅首尾空白，`whitespace_and_ascii_case` 表示两者同时存在，
 `other_key_collision` 表示其他原值被有损规范化到同一键。每个字段的计数和等于对应的
 `key_match_only` 数；窗口尚未稳定读取时为 null。ASCII 判断避免把 Unicode 大小写折叠混同为普通大小写差异。
-这些原因只帮助定位历史写入来源，所有差异仍是身份失败，不能据此接受记录、推定账户相同或解除暂停。
+这些原因只帮助定位未被摘要合同接受的历史写入差异，不能据有损键相等接受记录或解除暂停。
+
+`account_hash_hex_representation_matches_count` 统计结构、身份及原状态合同有效的记录中，原字符串不同
+但合法 64 位 hex 摘要字节相同的条数；读取未完成或窗口不稳定时为 null。此规则与现役
+`strategy_runtime` 的账户摘要语义一致，避免将 hex 大小写表示误报为另一账户。其他不合法 hex、
+Unicode、长度、标点及策略差异仍拒绝。它不证明旧记录原字符串与当前 broker 返回原字符串相同，
+不改生产绑定或账本，也不消除缺 outcome、UNKNOWN、待对账或不完整窗口。
 
 ## 对账 namespace 修正与证据边界
 

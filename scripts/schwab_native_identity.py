@@ -137,6 +137,23 @@ def _finite_timestamp(value: object) -> bool:
     )
 
 
+def _account_hash_matches(expected: object, observed: object) -> bool:
+    """Preserve exact IDs; compare Schwab's 64-digit hex digest by its bytes.
+
+    The serving strategy already treats hex case as representation. This does
+    not apply lossy storage-key cleaning or case folding to arbitrary IDs.
+    """
+    import re
+
+    if not isinstance(expected, str) or not isinstance(observed, str):
+        return False
+    if expected == observed:
+        return True
+    if not all(re.fullmatch(r"[0-9A-Fa-f]{64}", value) for value in (expected, observed)):
+        return False
+    return bytes.fromhex(expected) == bytes.fromhex(observed)
+
+
 def _read_renewal_app_credential(client, name):
     """Return a fixed diagnosis plus an in-memory value, never an exception body."""
     ref = _RENEWAL_APP_PREFIX + name + "/versions/1"
@@ -521,7 +538,7 @@ def verify_native_identity(
             ):
                 return "native_identity_response_invalid"
             hashes.append(item["hashValue"])
-        matches = sum(value == expected_account_hash for value in hashes)
+        matches = sum(_account_hash_matches(expected_account_hash, value) for value in hashes)
         if matches == 1:
             return "verified"
         if matches > 1:
