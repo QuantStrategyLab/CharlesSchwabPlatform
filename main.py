@@ -993,6 +993,8 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
             else:
                 report_path = persist_execution_report(report, dry_run_only_override=dry_run_only_override)
             print(f"execution_report {report_path}", flush=True)
+            from notifications.unified import persist_completed_report
+            persist_completed_report(report)
         except Exception as persist_exc:
             print(f"failed to persist execution report: {persist_exc}", flush=True)
 

@@ -46,3 +46,17 @@ submission, pending orders or errors, permits `order_submitted_this_run=false`.
 It never establishes daily zero counts. Older reports retain the generic blocked
 wording, with a run fact only when the existing receipt proves it. The runtime
 daily receiver projection is unchanged; the new object goes only to notifications.
+
+When `SCHWAB_UNIFIED_NOTIFICATION_ENABLED=true`, successful execution-report
+persistence also publishes that completed report's notification candidate. The
+producer merges runs by `source_run_id` into the exact configured
+`schwab/<business-day>/<slot>.json` object. It uses a single generation-conditional
+write. Identical reports are idempotent; conflicting identities or source facts
+stop the write. Missing order and fill evidence stays unknown.
+
+Incident markers retain their existing directory. Diagnostic event staging uses
+`schwab/notification-markers/events/`; it cannot establish a business run or
+replace an archived report. Archive projection reads the events saved in each
+report and any explicit receipt observation bound to that same source run. It
+does not list the notification bucket. Producers need access only to their marker
+directory and exact daily candidate objects, in addition to existing report reads.
