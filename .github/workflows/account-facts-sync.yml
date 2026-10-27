@@ -3,6 +3,11 @@ name: Schwab Account Facts Sync
 on:
   workflow_dispatch:
     inputs:
+      inspect_only:
+        description: Inspect inventory status in the latest existing report only; no broker request or publication.
+        required: false
+        default: false
+        type: boolean
       latest_report:
         description: Select the latest private report and verify its exact serving revision.
         required: false
@@ -62,7 +67,27 @@ jobs:
         with:
           project_id: ${{ env.GCP_PROJECT_ID }}
 
+      - name: Inspect inventory in the latest existing report without publishing
+        if: ${{ inputs.inspect_only }}
+        env:
+          VALID_INSPECTION_SELECTOR: ${{ inputs.latest_report && inputs.report_uri == '' && inputs.expected_runtime_revision == '' }}
+          SCHWAB_NET_ASSETS_CURRENCY: ${{ vars.SCHWAB_NET_ASSETS_CURRENCY }}
+          SCHWAB_CASH_CURRENCY: ${{ vars.SCHWAB_CASH_CURRENCY }}
+          SCHWAB_ACCOUNT_FACTS_INCLUDE_POSITIONS: ${{ vars.SCHWAB_ACCOUNT_FACTS_INCLUDE_POSITIONS || 'false' }}
+          SCHWAB_ACCOUNT_FACTS_TARGET_ID: ${{ secrets.SCHWAB_ACCOUNT_FACTS_TARGET_ID }}
+          SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX: ${{ secrets.SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX }}
+          SCHWAB_ACCOUNT_FACTS_SERVICE_NAME: ${{ secrets.SCHWAB_ACCOUNT_FACTS_SERVICE_NAME }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$VALID_INSPECTION_SELECTOR" != "true" ]]; then
+            echo "skipped:inspection_requires_manual_latest_report"
+            exit 2
+          fi
+          python3 scripts/publish_account_facts_from_reports.py --latest-report --inspect-only
+
       - name: Project and publish the selected archived report
+        if: ${{ !inputs.inspect_only }}
         env:
           LATEST_REPORT: ${{ inputs.latest_report }}
           REPORT_URI: ${{ inputs.report_uri }}

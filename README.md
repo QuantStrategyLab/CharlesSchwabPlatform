@@ -67,6 +67,25 @@ uv run --no-sync ruff check --exclude external .
 uv run --no-sync python scripts/check_qpk_pin_consistency.py
 ```
 
+## Inspect inventory in an existing report
+
+The existing **Schwab Account Facts Sync** workflow accepts
+`inspect_only=true` together with `latest_report=true`; leave the exact URI and
+revision inputs empty. This manual, main-only, first-attempt inspection reuses
+the original cloud identity, latest-report selector, source/identity/freshness
+projection and serving-revision checks. An unqualified latest report stops with
+a fixed reason; it never falls back to an older report.
+
+The separate inspection step receives no sync token or sync URL. It reads no
+broker token, imports no broker client, requests no broker data, publishes
+nothing and sends no notification. Output contains only fixed inventory states,
+field-presence flags, record counts, projection/payload-retention flags, the
+inspection code SHA and a serving-revision hash. No report body, account,
+security, position quantity, amount, URI or native identifier is emitted.
+`inspected` means the existing report passed its source checks; it does not mean
+positions were provided or prove an empty account. The default workflow mode
+continues to publish under its existing contract.
+
 ## Useful docs
 
 - No separate `docs/` directory yet; start with this README and the workflow files.
