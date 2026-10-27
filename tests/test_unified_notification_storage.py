@@ -38,7 +38,7 @@ def fake_gcs(monkeypatch):
             if kwargs.get("if_generation_match", current) != current:
                 raise PreconditionFailed("synthetic conflict")
             objects[self.uri] = (current + 1, body)
-            if failures["lose_marker_response"] and "/notification-markers/" in self.uri:
+            if failures["lose_marker_response"] and "/notification-markers/" in self.uri and "/events/" not in self.uri:
                 failures["lose_marker_response"] = False
                 raise TimeoutError("synthetic lost write response")
 
@@ -97,14 +97,15 @@ def test_completed_archive_counts_runs_once_and_attaches_noncounting_facts(missi
             "schema_version": "qsl.notification_cycle.v1", "order_count": 0, "fill_count": None, "routine": True, "dry_run": False}}}
     facts = [event("routine_cycle", run="missing-run" if missing_source else "source-run", order_count=0).to_candidate(),
              event("healthy_heartbeat", run="monitor-run").to_candidate()]
+    source["summary"]["notification_events"] = facts[:1]
     def read(args):
         if args[0] == "ls":
             if "/notification-events/" in args[-1]:
-                return [{"url": f"gs://synthetic-store/candidates/schwab/notification-events/2026-10-16/{i}.json"} for i in range(2)]
+                pytest.fail("archive projection must not list notification staging")
             return [{"url": "gs://synthetic-store/archive/schwab/strategy-a/2026-10/" + name + ".json", "metadata": {"updated": NOW.isoformat()}}
                 for name in (["source", "copy"] if duplicate_source else ["source"])]
         if "/notification-events/" in args[-1]:
-            return {"event": facts[int(args[-1].rsplit("/", 1)[-1].split(".")[0])]}
+            pytest.fail("archive projection must use its archived event facts")
         payload = copy.deepcopy(source)
         if duplicate_source == "conflict" and args[-1].endswith("copy.json"):
             payload["status"] = "error"
@@ -112,7 +113,7 @@ def test_completed_archive_counts_runs_once_and_attaches_noncounting_facts(missi
     uploads = []
     import datetime as dt
     if duplicate_source == "conflict" or missing_source:
-        with pytest.raises(ValueError, match="source_run_conflict" if duplicate_source == "conflict" else "source_report_missing"):
+        with pytest.raises(ValueError, match="source_run_conflict" if duplicate_source == "conflict" else "event_identity_unknown"):
             unified.emit_completed_candidates(env, now=NOW.replace(hour=23), read=read, upload=lambda *a: uploads.append(a))
         assert not uploads
         return

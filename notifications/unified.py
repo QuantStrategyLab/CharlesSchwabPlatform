@@ -102,7 +102,7 @@ class GCSNotificationStore:
             return False
         # Staging is outside <platform>/<day>/<target>.json, so a partial cycle
         # can never replace the completed-window aggregate or inflate its runs.
-        blob = self._blob(f"notification-events/{fact['business_day']}/{key}.json")
+        blob = self._blob(f"notification-markers/events/{fact['business_day']}/{key}.json")
         payload = {"schema_version": "qsl.notification_candidate_fact.v1", "event": fact, "projection": projection}
         body = json.dumps(payload, sort_keys=True, allow_nan=False)
         try:
@@ -377,6 +377,10 @@ def _project_runs(reports, **kwargs):
         payload = project_reports([_notification_report(report)], **kwargs)
         for row in payload["runs"]:
             row["source_run_id"] = run_id
+            events = (report.get("summary") or {}).get("notification_events") or []
+            if not isinstance(events, list):
+                raise ValueError("notification_event_identity_unknown")
+            row["notification_events"] = copy.deepcopy(events)
             row["field_status"] = {name: "known" if row.get(name) is not None else "unknown"
                 for name in ("order_count", "fill_count", "cycle_count")}
             from .approved_gates import report_gate_reasons, render_gate_reasons
@@ -391,6 +395,95 @@ def _project_runs(reports, **kwargs):
 def _run_identity(value):
     return tuple(value.get(name) for name in
         ("platform_id", "opaque_account_uid", "target_id", "strategy_profile", "source_run_id"))
+
+
+def persist_projected_candidate(payload, *, env=None, store=None):
+    """Merge archive-authoritative runs into one exact object, with one CAS."""
+    import re
+    from google.api_core.exceptions import NotFound
+    env = os.environ if env is None else env
+    slot = env.get("DIGEST_STORE_TARGET", "")
+    rows = payload.get("runs")
+    if (not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,40}", slot)
+            or payload.get("schema_version") != "qsl.digest_candidates.v1"
+            or not isinstance(rows, list) or not rows or len(rows) > 10000):
+        raise ValueError("notification_candidate_invalid")
+    scope = ("platform_id", "opaque_account_uid", "target_id", "strategy_profile", "business_day")
+    identity = tuple(rows[0].get(k) for k in scope)
+    if not all(isinstance(v, str) and v for v in identity) or identity[0] != "schwab":
+        raise ValueError("notification_candidate_identity_unknown")
+    from datetime import date
+    date.fromisoformat(identity[-1])
+    store = store or GCSNotificationStore(env)
+    blob = store._blob(f"{identity[-1]}/{slot}.json")
+    try:
+        blob.reload(retry=None, timeout=30)
+        generation = int(blob.generation)
+        if getattr(blob, "size", 0) and int(blob.size) > 2 * 1024**2:
+            raise ValueError("notification_candidate_budget_exceeded")
+        previous = json.loads(blob.download_as_text(if_generation_match=generation, retry=None, timeout=30))
+    except NotFound:
+        generation, previous = 0, None
+    if previous is not None and (not isinstance(previous, dict)
+            or previous.get("schema_version") != "qsl.digest_candidates.v1"
+            or not isinstance(previous.get("runs"), list)):
+        raise ValueError("notification_candidate_history_unknown")
+    merged = {}
+    for row in [*((previous or {}).get("runs") or []), *rows]:
+        if (not isinstance(row, dict) or tuple(row.get(k) for k in scope) != identity
+                or row.get("actually_ran") is not True or row.get("cycle_count") != 1
+                or not isinstance(row.get("source_run_id"), str) or not row["source_run_id"]):
+            raise ValueError("notification_candidate_scope_conflict")
+        key = row["source_run_id"]
+        current = dict(row)
+        events = current.pop("notification_events", [])
+        prior = dict(merged.get(key) or {})
+        prior_events = prior.pop("notification_events", [])
+        if prior and prior != current:
+            raise ValueError("notification_candidate_source_conflict")
+        facts = {}
+        for event in [*prior_events, *events]:
+            if (not isinstance(event, dict) or not event.get("dedupe_key")
+                    or tuple(event.get(k) for k in (*scope, "source_run_id")) != (*identity, key)):
+                raise ValueError("notification_event_identity_unknown")
+            fact = dict(event)
+            for nullable in ("incident_reason", "order_execution_digest", "expected_block_evidence", "order_count", "fill_count"):
+                fact.setdefault(nullable, None)
+            event_key = fact["dedupe_key"]
+            if event_key in facts and facts[event_key] != fact:
+                raise ValueError("notification_event_conflict")
+            facts[event_key] = fact
+        merged[key] = {**current, "notification_events": [facts[k] for k in sorted(facts)]}
+    final = {"schema_version": "qsl.digest_candidates.v1", "producer_status": "projected",
+             "runs": [merged[key] for key in sorted(merged)]}
+    if final == previous:
+        return True
+    body = json.dumps(final, sort_keys=True, allow_nan=False)
+    if len(body.encode()) > 2 * 1024**2 or len(merged) > 10000:
+        raise ValueError("notification_candidate_budget_exceeded")
+    blob.upload_from_string(body, content_type="application/json", if_generation_match=generation,
+                            retry=None, timeout=30)
+    return True
+
+
+def persist_completed_report(report, *, env=None, store=None):
+    """Called only after the existing report persistence succeeded."""
+    env = os.environ if env is None else env
+    if not enabled(env):
+        return False
+    try:
+        if env.get("RUNTIME_TARGET_ENABLED") != "true":
+            raise ValueError("notification_target_not_enabled")
+        target = json.loads(env.get("RUNTIME_TARGET_JSON") or "{}")
+        if target.get("platform_id") == "charles_schwab":
+            target["platform_id"] = "schwab"
+        payload = _project_runs([report], expected_target=target,
+            opaque_account_uid=env.get("DIGEST_OPAQUE_ACCOUNT_UID", ""),
+            target_id=env.get("DIGEST_TARGET_ID", ""), now=datetime.now(timezone.utc))
+        return persist_projected_candidate(payload, env=env, store=store)
+    except Exception:
+        _log_failure("completed_report_candidate_unconfirmed")
+        return False
 
 
 def observe_attention_recovery(event):
@@ -417,7 +510,7 @@ def stage_approved_gate_observation(*, profile, reasons):
         return False
 
 
-def emit_completed_candidates(env, *, now=None, read=None, upload=None, required_runs=()):
+def emit_completed_candidates(env, *, now=None, read=None, upload=None, required_runs=(), observed_events=()):
     """Export one archive-authoritative row per business run, with own facts."""
     from .digest_snapshot import digest_archive
     if not enabled(env):
@@ -431,43 +524,14 @@ def emit_completed_candidates(env, *, now=None, read=None, upload=None, required
         payload = json.loads(body)
         rows = payload.get("runs", [])
         for row in rows:
-            prefix, separator, _ = uri.rpartition("/" + row["platform_id"] + "/")
-            if not separator:
-                raise ValueError("notification_event_store_mismatch")
-            event_prefix = f"{prefix}/schwab/notification-events/{row['business_day']}/"
-            if injected_read:
-                entries = read(["ls", "--json", event_prefix + "*.json"])
-            else:
-                from google.cloud import storage
-                bucket, _, path = event_prefix[5:].partition("/")
-                entries = [{"url": f"gs://{bucket}/{blob.name}"} for blob in
-                    storage.Client().list_blobs(bucket, prefix=path, max_results=10001, retry=None, timeout=30)]
-            if len(entries) > 10000:
-                raise ValueError("notification_event_budget_exceeded")
-            source_ids = {other.get("source_run_id") for other in rows
-                if all(other.get(k) == row.get(k) for k in
-                    ("platform_id", "opaque_account_uid", "target_id", "strategy_profile", "business_day"))}
             facts = {}
-            for entry in entries:
-                locator = str(entry.get("url") or "").split("#", 1)[0]
-                if not locator.startswith(event_prefix):
-                    raise ValueError("notification_event_locator_mismatch")
-                fact = read(["cat", locator]).get("event", {})
-                identity = ("platform_id", "opaque_account_uid", "target_id", "strategy_profile", "business_day")
-                if fact.get("schema_version") != "qsl.notification_event.v1" or any(fact.get(k) != row.get(k) for k in identity):
-                    continue
-                key = fact.get("dedupe_key")
-                if not key or fact.get("coverage_status") != "known":
+            for fact in [*row.get("notification_events", []), *(e for e in observed_events if e.get("source_run_id") == row.get("source_run_id"))]:
+                identity = ("platform_id", "opaque_account_uid", "target_id", "strategy_profile", "business_day", "source_run_id")
+                if (not isinstance(fact, dict) or fact.get("schema_version") != "qsl.notification_event.v1"
+                        or any(fact.get(k) != row.get(k) for k in identity)
+                        or fact.get("coverage_status") != "known" or not fact.get("dedupe_key")):
                     raise ValueError("notification_event_identity_unknown")
-                if fact.get("source_run_id") not in source_ids:
-                    if fact.get("event_kind") == "healthy_heartbeat":
-                        # Historical monitor-only observations are not business
-                        # runs. New observations use the receipt's actual run ID.
-                        _log_failure("unassociated_monitor_observation")
-                        continue
-                    raise ValueError("notification_source_report_missing")
-                if fact.get("source_run_id") != row.get("source_run_id"):
-                    continue
+                key = fact["dedupe_key"]
                 if key in facts and facts[key] != fact:
                     raise ValueError("notification_event_conflict")
                 facts[key] = fact
@@ -480,9 +544,7 @@ def emit_completed_candidates(env, *, now=None, read=None, upload=None, required
         if upload:
             upload(uri, projected)
         else:
-            from google.cloud import storage
-            storage.Blob.from_string(uri, client=storage.Client()).upload_from_string(
-                projected, content_type="application/json", retry=None, timeout=30)
+            persist_projected_candidate(payload, env=configured)
         published_runs.update(identities)
 
     def notification_read(args):
@@ -548,7 +610,7 @@ def publish_receipt(legacy, *, kind, reason, recovered=False, observed_at=None, 
                 raise CandidatePersistenceError("notification_receipt_fact_unconfirmed")
             # Publish after staging the observation, so the very same export
             # includes this receipt-linked fact rather than a monitor-only row.
-            if emit_completed_candidates(os.environ, required_runs=[_run_identity(event.to_candidate())]).get("uploaded") is not True:
+            if emit_completed_candidates(os.environ, required_runs=[_run_identity(event.to_candidate())], observed_events=[event.to_candidate()]).get("uploaded") is not True:
                 raise CandidatePersistenceError("notification_archive_write_unconfirmed")
             if recovered:
                 _incident(replace(event, occurred_at=observed_at or event.occurred_at), stream="receipt",
