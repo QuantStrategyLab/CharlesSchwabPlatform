@@ -28,6 +28,12 @@
 不能证明原始账户或策略身份相同，更不能作为兼容读取的许可。两个身份字段始终要求原值精确相等；
 前置 schema/键等失败不检查这些字段。不输出原值、规范化值或其哈希，不改变配对、恢复或暂停判断。
 
+`identity_key_difference_counts` 仅细分 `key_match_only`：`ascii_case_only` 表示仅 ASCII 大小写差异，
+`surrounding_whitespace_only` 表示仅首尾空白，`whitespace_and_ascii_case` 表示两者同时存在，
+`other_key_collision` 表示其他原值被有损规范化到同一键。每个字段的计数和等于对应的
+`key_match_only` 数；窗口尚未稳定读取时为 null。ASCII 判断避免把 Unicode 大小写折叠混同为普通大小写差异。
+这些原因只帮助定位历史写入来源，所有差异仍是身份失败，不能据此接受记录、推定账户相同或解除暂停。
+
 ## 对账 namespace 修正与证据边界
 
 原执行器按券商原生账户 hash 写 execution claim/outcome，但对账候选曾用控制面 `account_scope`（常为 `live`）读账本，可能错误看到空范围。现在只在观察身份明确匹配且原生 hash 有效时读取正确范围，缺失或不匹配就拒绝，不回退 `live`。控制面身份及 broker evidence 的账户摘要合同不变。回归覆盖了旧 scope 为 0、原生 hash 下有 UNKNOWN 提交结果时旧空基线必须不匹配；不消除原有 UNKNOWN、partial 或缺失成交覆盖。

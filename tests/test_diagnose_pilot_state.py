@@ -187,8 +187,41 @@ def test_identity_detail_counts_are_empty_for_valid_records_and_unknown_before_s
     fields = result["ledger"]["classification"]["identity_failure_field_counts"]
     assert set(fields) == {"account_scope", "strategy_profile"}
     assert all(sum(counts.values()) == 0 for counts in fields.values())
+    assert all(sum(counts.values()) == 0 for counts in result["ledger"]["classification"]["identity_key_difference_counts"].values())
     result, _, _ = _probe(source, target, store=Store(error="ledger"))
     assert result["ledger"]["classification"]["identity_failure_field_counts"] is None
+    assert result["ledger"]["classification"]["identity_key_difference_counts"] is None
+
+
+@pytest.mark.parametrize("value,reason", [
+    (ACCOUNT.upper(), "ascii_case_only"),
+    (" " + ACCOUNT + "\t", "surrounding_whitespace_only"),
+    (" " + ACCOUNT.upper() + " ", "whitespace_and_ascii_case"),
+    (ACCOUNT.replace("-", "--"), "other_key_collision"),
+    (ACCOUNT.replace("-", "\N{EM DASH}"), "other_key_collision"),
+])
+def test_lossy_key_difference_is_explained_but_never_accepted(source, target, value, reason):
+    class ChangedStore(Store):
+        def _entries(self):
+            values = super()._entries()
+            uri, raw = values[self.namespace][0]
+            payload = json.loads(raw)
+            payload["metadata"]["account_scope"] = value
+            values[self.namespace] = [(uri, json.dumps(payload))]
+            return values
+
+    result, _, _ = _probe(source, target, store=ChangedStore())
+    classification = result["ledger"]["classification"]
+    counts = classification["identity_key_difference_counts"]
+    assert counts["account_scope"][reason] == 1
+    assert sum(counts["account_scope"].values()) == 1
+    assert sum(counts["strategy_profile"].values()) == 0
+    assert classification["identity_failure_field_counts"]["account_scope"]["key_match_only"] == 1
+    assert result["status"] == "partial_state"
+    assert classification["paired_count"] is None
+    assert classification["explicit_unknown_outcomes_count"] is None
+    assert value not in json.dumps(result)
+    _no_authority(result)
 
 
 def test_prior_schema_failure_does_not_inspect_or_count_identity_fields(source, target):
