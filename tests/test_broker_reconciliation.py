@@ -248,6 +248,7 @@ def test_candidate_stays_frozen_without_private_expected_digests(tmp_path):
     assert candidate.permits_active_lkg is False
     assert candidate.expected_digests_configured is False
     assert candidate.to_safe_dict()["evidence"]["positions_sha256"]
+    assert set(candidate.coverage["comparison_status"].values()) == {"not_configured"}
 
 
 def test_missing_private_baseline_is_a_single_stable_blocker(tmp_path):
@@ -315,6 +316,7 @@ def test_candidate_can_pass_only_with_all_matching_private_digests(tmp_path):
         env_reader=configured_env,
     )
     assert candidate.permits_active_lkg is True
+    assert set(candidate.coverage["comparison_status"].values()) == {"matched"}
     assert (
         validate_reconciliation_candidate(candidate)["evidence"]["schema_version"]
         == "broker_reconciliation_evidence.v1"
@@ -538,6 +540,7 @@ def test_candidate_still_blocks_quantity_cash_order_and_ledger_changes(tmp_path)
         BrokerReconciliationFinding.POSITIONS_MISMATCH,
     )
     assert cash_change.recovery_blockers == (BrokerReconciliationFinding.CASH_MISMATCH,)
+    assert cash_change.coverage["comparison_status"]["cash"] == "mismatched"
     assert order_change.recovery_blockers == (
         BrokerReconciliationFinding.OPEN_ORDERS_MISMATCH,
     )
@@ -632,6 +635,34 @@ def test_old_full_observation_baseline_does_not_silently_match_new_accounting_di
     assert candidate.permits_active_lkg is False
     assert BrokerReconciliationFinding.POSITIONS_MISMATCH in candidate.recovery_blockers
     assert BrokerReconciliationFinding.CASH_MISMATCH in candidate.recovery_blockers
+
+
+def test_incomplete_order_coverage_is_not_reported_as_a_comparison(tmp_path):
+    observations = _synthetic_complete_observations()
+
+    def empty_env(name, default=None):
+        return str(tmp_path) if name == "SCHWAB_EXECUTION_STATE_DIR" else default
+
+    seed = build_reconciliation_candidate(
+        observations=observations, runtime_target=_target(), project_id=None, env_reader=empty_env
+    )
+    expected = {key: seed.evidence.to_dict()[key] for key in (
+        "account_scope_sha256", "positions_sha256", "cash_sha256", "open_orders_sha256",
+        "recent_executions_sha256", "local_execution_ledger_sha256",
+    )}
+
+    def configured_env(name, default=None):
+        if name == "SCHWAB_RECONCILIATION_EXPECTED_DIGESTS_JSON":
+            return json.dumps(expected)
+        return empty_env(name, default)
+
+    candidate = build_reconciliation_candidate(
+        observations=replace(observations, open_orders_complete=False, recent_executions_complete=False),
+        runtime_target=_target(), project_id=None, env_reader=configured_env,
+    )
+    assert candidate.coverage["comparison_status"]["open_orders"] == "not_compared"
+    assert candidate.coverage["comparison_status"]["recent_executions"] == "not_compared"
+    assert candidate.permits_active_lkg is False
 
 
 def test_reconciliation_candidate_requires_canonical_receipt_schema():
