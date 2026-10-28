@@ -75,6 +75,15 @@ partial 及配对/UNKNOWN 等 null 保留，不将缺字段补为零或空数组
 `identity_date_candidates_count` 额外要求六项声明精确一致及账户观察 hash 按现有摘要合同一致。
 `candidates_with_revision_count` 仅表示候选带合法格式 revision 名，不证明该 revision 的写入来源。
 
+`date_candidate_identity_field_counts` 只细分上述日期候选。六项声明逐字段计固定的缺失、类型不支持、
+格式不支持、精确匹配、不匹配；selector 仍按原单元素字符串 list 格式，不转换旧字符串/别名。
+账户 hash 另分观察对象不可用、缺字段、类型不支持、非支持的摘要格式、精确匹配、合法 hex 表示匹配、
+不同摘要。非摘要字符串的原有精确匹配规则保留，其他字符串不做近似接受。各字段计数和等于已检查的
+日期候选数；六项声明字段存在数可由除 missing 外的计数求和，hash 的观察对象不可用单独计数。
+不能把缺失或不支持格式称为另一个账户。
+没有完成读取或读取失败时整组为 null；完整读到空窗口时为零；截断时只描述已检查子集。
+这些细分不改变原候选判定，不输出任何字段原值，也不补写声明、账本或来源证明。
+
 现有报告合同没有把 ledger marker 与完整券商订单明细绑定。即使唯一候选、revision 存在且报告
 订单计数为零，结果仍为 unknown；任意额外 marker 字段也不被视为受支持的关联证据。
 `exact_execution_link_supported/writer_source_verified/broker_order_mapping_verified/recovery_qualified`
