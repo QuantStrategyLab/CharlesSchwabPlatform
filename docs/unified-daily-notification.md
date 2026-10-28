@@ -70,3 +70,9 @@ build a broker client, load strategy signals, submit orders or send a message.
 The existing generation checks and source-conflict protection also apply to
 these non-execution rows. Failed persistence leaves coverage unknown. No
 retrospective report is inferred from a probe or an HTTP success.
+
+Runtime Guard notifications keep the localized summary and workflow link. Raw
+provider audit entries remain in their original restricted logs and are not
+passed as Telegram technical details, including when the deployed formatter is
+pinned to an older shared package. Guard detection, deduplication and failure
+exit codes are unchanged.

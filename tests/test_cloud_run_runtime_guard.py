@@ -4,6 +4,7 @@ import datetime as dt
 import json
 import re
 import subprocess
+from types import SimpleNamespace
 
 from scripts import cloud_run_runtime_guard as guard
 
@@ -399,3 +400,29 @@ def test_active_lkg_reconcile_ignore_stays_narrow(monkeypatch):
     )
     monkeypatch.setenv("RUNTIME_TARGET_ENABLED", "false")
     assert guard._is_failure(_reconcile_503_entry()) is True
+
+
+def test_runtime_guard_keeps_provider_audit_payload_out_of_notification(monkeypatch):
+    monkeypatch.setenv("GCP_PROJECT_ID", "synthetic-project")
+    monkeypatch.setenv("NOTIFY_LANG", "zh")
+    monkeypatch.setenv("RUNTIME_GUARD_CHECK_SCHEDULER", "false")
+    monkeypatch.setenv("RUNTIME_GUARD_IGNORE_PRE_READY_REVISION_LOGS", "false")
+    monkeypatch.setenv("GITHUB_SERVER_URL", "https://example.test")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "example/runtime")
+    monkeypatch.setenv("GITHUB_RUN_ID", "1")
+    monkeypatch.setattr(guard, "_load_services", lambda: ["synthetic-service"])
+    monkeypatch.setattr(guard, "_run_gcloud_logging", lambda *args: [{
+        "severity": "ERROR",
+        "protoPayload": {"@type": "google.cloud.audit.AuditLog", "authenticationInfo": {"principalEmail": "example@example.test"}},
+    }])
+    monkeypatch.setattr(guard.alert_dedupe, "decide", lambda **kwargs: SimpleNamespace(send=True, log_line=lambda: "synthetic-decision"))
+    messages = []
+    monkeypatch.setattr(guard, "_send_telegram", lambda message: messages.append(message) or True)
+
+    assert guard.main() == 1
+    assert len(messages) == 1
+    assert "失败日志" in messages[0]
+    assert "https://example.test/example/runtime/actions/runs/1" in messages[0]
+    assert "AuditLog" not in messages[0]
+    assert "principalEmail" not in messages[0]
+    assert "example@example.test" not in messages[0]
