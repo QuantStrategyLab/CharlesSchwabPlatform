@@ -9,6 +9,7 @@ from scripts import schwab_historical_outcome as history
 
 
 PREFIX = "gs://synthetic-bucket/execution-reports/charles_schwab/soxl_soxx_trend_income/"
+SOURCE = "gs://synthetic-bucket/execution-reports"
 TARGET = {"service_name": "synthetic-service", "platform_id": "schwab", "account_scope": "live",
           "account_selector": ["live"], "deployment_selector": "live", "strategy_profile": "soxl_soxx_trend_income",
           "live_continuity": {"state": "PAUSED"}}
@@ -55,7 +56,7 @@ class Client:
 
 
 def inspect(client, **kwargs):
-    options = dict(outcomes=[copy.deepcopy(OUTCOME)], env={"EXECUTION_REPORT_GCS_URI": {"value": PREFIX}},
+    options = dict(outcomes=[copy.deepcopy(OUTCOME)], env={"EXECUTION_REPORT_GCS_URI": {"value": SOURCE}},
                    state_uri="gs://synthetic-bucket/private-state", target=TARGET, account=ACCOUNT,
                    project="synthetic-project", client=client)
     options.update(kwargs)
@@ -83,6 +84,36 @@ def test_one_date_identity_revision_candidate_is_still_unknown_even_with_claimed
     encoded = json.dumps(result)
     for private in (OUTCOME["marker_key"], ACCOUNT, PREFIX, "2026-10-24", "synthetic-service-00001-abc"):
         assert private not in encoded
+
+
+@pytest.mark.parametrize("root", [SOURCE, SOURCE + "/"])
+def test_report_root_follows_the_actual_qpk_writer_path(root):
+    from urllib.parse import urlsplit
+
+    from quant_platform_kit.common.runtime_reports import build_runtime_report_cloud_uri
+
+    payload = report()
+    payload["started_at"] = "2026-10-24T12:00:00+00:00"
+    # RuntimeAssembly supplies no top-level account_scope, even when the
+    # runtime_target contains the legacy logical scope 'live'.
+    object_uri = build_runtime_report_cloud_uri(payload, cloud_prefix_uri=root)
+    assert "/live/" not in object_uri
+    blob = Blob(payload, name=urlsplit(object_uri).path.lstrip("/"))
+    client = Client([blob])
+    result = inspect(client, env={"EXECUTION_REPORT_GCS_URI": {"value": root}})
+    assert client.calls[0][1]["prefix"] == urlsplit(PREFIX).path.lstrip("/")
+    assert result["report_read_attempted"] and result["identity_date_candidates_count"] == 1
+    assert result["status"] == "unknown" and not result["exact_execution_link_supported"]
+
+
+@pytest.mark.parametrize("source", [SOURCE + "?private-query", SOURCE + "#private-fragment",
+                                    SOURCE.replace("gs://", "gs://private-user@"), " " + SOURCE,
+                                    "gs://synthetic-bucket", SOURCE + "/other"])
+def test_invalid_or_different_writer_root_has_no_guessed_fallback(source):
+    client = Client()
+    result = inspect(client, env={"EXECUTION_REPORT_CLOUD_URI": {"value": source},
+                                  "EXECUTION_REPORT_GCS_URI": {"value": SOURCE}})
+    assert result["reason"] == "report_source_unavailable" and not client.calls
 
 
 @pytest.mark.parametrize("fault", ["wrong_account", "unicode_account", "missing_account", "other_strategy", "other_selector"])
@@ -159,8 +190,9 @@ def test_valid_early_year_window_stays_canonical_and_bounded():
     assert options["end_offset"].endswith("0002-01/00020103T000000Z.json")
 
 
-@pytest.mark.parametrize("env", [{}, {"EXECUTION_REPORT_GCS_URI": {"value": PREFIX.replace("synthetic-bucket", "other-bucket")}},
-                                {"EXECUTION_REPORT_GCS_URI": {"value": PREFIX.replace("execution-reports", "other")}},
+@pytest.mark.parametrize("env", [{}, {"EXECUTION_REPORT_GCS_URI": {"value": SOURCE.replace("synthetic-bucket", "other-bucket")}},
+                                {"EXECUTION_REPORT_GCS_URI": {"value": SOURCE.replace("execution-reports", "other")}},
+                                {"EXECUTION_REPORT_GCS_URI": {"value": PREFIX}},
                                 {"EXECUTION_REPORT_GCS_URI": {"valueFrom": {"secretKeyRef": {"name": "private"}}}}])
 def test_missing_redirected_or_secret_source_never_reads(env):
     client = Client()
@@ -171,7 +203,7 @@ def test_missing_redirected_or_secret_source_never_reads(env):
 def test_explicit_blank_current_report_source_does_not_fall_back_to_legacy():
     client = Client()
     result = inspect(client, env={"EXECUTION_REPORT_CLOUD_URI": {"value": ""},
-                                  "EXECUTION_REPORT_GCS_URI": {"value": PREFIX}})
+                                  "EXECUTION_REPORT_GCS_URI": {"value": SOURCE}})
     assert result["reason"] == "report_source_unavailable" and not client.calls
 
 

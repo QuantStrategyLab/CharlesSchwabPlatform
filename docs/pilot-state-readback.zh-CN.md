@@ -61,6 +61,10 @@ partial 及配对/UNKNOWN 等 null 保留，不将缺字段补为零或空数组
 报告源来自 actual-serving 的原报告环境变量，必须为原固定 Schwab/SOXL 报告前缀且与账本同桶；
 不接受外部 URI、账户、日期输入，不扩大原 WIF 权限。
 
+运行 composer 把报告根目录交给 QPK，报告本身的 account_scope 未设置；QPK 的
+`build_runtime_report_cloud_uri` 依次追加平台、策略、月份和 run_id。诊断复用此构造器从原根目录
+得到报告前缀，再校验固定路径及同桶，不把根目录误当完整前缀，也不尝试其他拼接或回退路径。
+
 仅列举 effective_date 前一日零时至后两日零时的固定三天 UTC 窗口；最多读取 20 个报告正文，
 每个上限 1 MiB，读取绑定列举所得 generation，禁止重试；第 21 项只用于识别截断，不下载正文。
 读取失败的数量为 null，截断的数量仅表示已检查子集；耗尽窗口也不证明归档留存完整或券商历史完整。
