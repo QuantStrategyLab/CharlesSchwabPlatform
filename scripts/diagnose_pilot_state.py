@@ -1,7 +1,8 @@
 """Read the existing serving account's owner fence and bounded ledger digest.
 
 This is storage evidence, not broker reconciliation or authority to resume. It
-never creates a client, reads a token/report, writes state or clears a claim.
+never creates a broker client, reads a token, writes state or clears a claim.
+The default-off history option reads only bounded existing archive clues.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from typing import Any
 from scripts import diagnose_pilot_metadata as metadata
 from scripts.diagnose_pilot_native_identity import _account_hash, _pause_projection
 from scripts.schwab_native_identity import _account_hash_matches
+from scripts.schwab_historical_outcome import inspect_history, projection as history_projection
 
 
 SCHEMA = "schwab.pilot-state-readback.v1"
@@ -218,7 +220,8 @@ def _record_classification(store: Any, *, namespace: str, uri: str, content: str
 
 
 def _classify_ledger(store: Any, *, account: str, profile: str, expected_digest: str,
-                     expected_count: int, projection: dict[str, Any]) -> None:
+                     expected_count: int, projection: dict[str, Any],
+                     historical_outcomes: list[dict] | None = None) -> None:
     from quant_platform_kit.common.execution_state import _clean_key_part
 
     prefix = "/".join(("v1", "schwab", _clean_key_part(account, fallback="account"),
@@ -278,6 +281,8 @@ def _classify_ledger(store: Any, *, account: str, profile: str, expected_digest:
                 if reason == "outcome_shape" and exc.outcome_fields is not None:
                     for field, state in exc.outcome_fields.items():
                         outcome_field_counts[field][state] += 1
+                    if historical_outcomes is not None and namespace == store.outcome_namespace:
+                        historical_outcomes.append(metadata._json(content))
                 if reason == "identity_fields" and exc.identity_states is not None:
                     for field, state in exc.identity_states.items():
                         identity_counts[field][state] += 1
@@ -395,7 +400,10 @@ def _read_owner(store: Any, *, account: str, profile: str) -> dict[str, Any]:
 def diagnose_state(
     environ: Mapping[str, str], *, describe: Callable[..., dict[str, Any]] | None = None,
     store_factory: Callable[..., Any] = _existing_store,
+    history_reader: Callable[..., dict[str, Any]] = inspect_history,
 ) -> dict[str, Any]:
+    history_enabled = environ.get("PILOT_STATE_INSPECT_HISTORY") == "true"
+    historical_outcomes: list[dict] | None = [] if history_enabled else None
     result: dict[str, Any] = {
         "schema_version": SCHEMA, "status": "unavailable", "reason": "source_unavailable",
         "account_source": "actual_serving_runtime_risk_binding",
@@ -414,6 +422,7 @@ def diagnose_state(
         "cloud_write_attempted": False, "claims_changed": False, "breaker_reset": False,
         "trading_state_changed": False, "grant_exclusivity_verified": False,
         "recovery_qualified": False, "execution_enabled_by_check": False,
+        "historical_outcome": history_projection(enabled=history_enabled),
     }
     read = metadata._describe if describe is None else describe
     stage = "metadata"
@@ -456,7 +465,15 @@ def diagnose_state(
             result["ledger"].update(read_status="partial", sha256=digest, records_count=count)
             _classify_ledger(store, account=account, profile=target["strategy_profile"],
                              expected_digest=digest, expected_count=count,
-                             projection=result["ledger"]["classification"])
+                             projection=result["ledger"]["classification"], historical_outcomes=historical_outcomes)
+            if historical_outcomes is not None:
+                if result["ledger"]["classification"]["invalid_records_count"] != 1:
+                    historical_outcomes.clear()
+                result["historical_outcome"] = history_reader(
+                    outcomes=historical_outcomes, env=env, state_uri=uri,
+                    target=target, account=account, project=project,
+                )
+                result["reports_read"] = result["historical_outcome"]["report_read_attempted"]
             if result["ledger"]["classification"]["complete"]:
                 result["ledger"]["read_status"] = "observed"
         stage = "metadata"

@@ -2,6 +2,11 @@ name: Protected Schwab Pilot State Readback
 
 on:
   workflow_call:
+    inputs:
+      inspect_historical_outcome:
+        type: boolean
+        required: false
+        default: false
     secrets:
       inventory:
         required: false
@@ -55,6 +60,7 @@ jobs:
           CLOUD_RUN_SERVICES: ${{ secrets.services }}
           CLOUD_RUN_REGION: ${{ secrets.region }}
           PILOT_STATE_RESULT_PATH: ${{ runner.temp }}/schwab-pilot-state.safe.json
+          PILOT_STATE_INSPECT_HISTORY: ${{ inputs.inspect_historical_outcome && 'true' || 'false' }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: uv run --no-sync python -m scripts.diagnose_pilot_state
 
