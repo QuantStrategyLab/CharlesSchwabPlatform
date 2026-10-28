@@ -55,7 +55,7 @@ def project_reports(reports: Sequence[Mapping], *, expected_target: Mapping,
             or not isinstance(expected_target["account_selector"], list) or not expected_target["account_selector"]
             or any(not isinstance(v, str) or not v.strip() for v in expected_target["account_selector"])):
         raise ValueError("candidate_target_invalid")
-    rows, seen, block_reports = {}, set(), {}
+    rows, seen, block_reports, not_run_rows = {}, set(), {}, {}
     for report in reports:
         target = report.get("runtime_target") or {}
         if not isinstance(target, Mapping) or any(target.get(k) != expected_target[k] for k in required):
@@ -68,7 +68,9 @@ def project_reports(reports: Sequence[Mapping], *, expected_target: Mapping,
         stamp = datetime.fromisoformat(str(report.get("started_at", "")).replace("Z", "+00:00"))
         if stamp.tzinfo is None or not timedelta(0) <= now - stamp <= timedelta(hours=36):
             raise ValueError("candidate_source_time_invalid")
-        if report.get("status") not in {"ok", "completed", "success", "error", "aborted", "failed"}:
+        not_run = (report.get("status") == "skipped"
+                   and (report.get("diagnostics") or {}).get("skip_reason") == "runtime_execution_not_admitted")
+        if not not_run and report.get("status") not in {"ok", "completed", "success", "error", "aborted", "failed"}:
             raise ValueError("candidate_source_incomplete")
         run_id = report.get("run_id")
         if not isinstance(run_id, str) or not run_id:
@@ -77,6 +79,20 @@ def project_reports(reports: Sequence[Mapping], *, expected_target: Mapping,
             raise ValueError("candidate_duplicate_run")
         seen.add(run_id)
         day = (stamp.astimezone(ZoneInfo("Asia/Singapore")) - timedelta(hours=6)).date().isoformat()
+        if not_run:
+            if (report.get("summary") or {}).get("notification_digest"):
+                raise ValueError("candidate_non_execution_conflict")
+            not_run_rows[day] = {
+                "platform_id": expected_target["platform_id"], "strategy_profile": expected_target["strategy_profile"],
+                "opaque_account_uid": opaque_account_uid, "target_id": target_id, "business_day": day,
+                "actually_ran": False, "as_of": stamp.isoformat(), "status": "alert",
+                "fill_count": None, "order_count": None, "cycle_count": 0,
+                "field_status": {"fill_count": "unknown", "order_count": "unknown", "cycle_count": "known"},
+                "execution_status": "not_run", "reason_code": "runtime_execution_not_admitted",
+                "evidence_provenance": "candidates", "persistence_status": "persisted",
+                "delivery_status": "pending_central",
+            }
+            continue
         if expected_target["platform_id"] == "schwab":
             block_reports.setdefault(day, []).append(report)
         facts = (report.get("summary") or {}).get("notification_digest") or {}
@@ -109,7 +125,8 @@ def project_reports(reports: Sequence[Mapping], *, expected_target: Mapping,
             reason = latest_block_reason({"conflicts": [], "runs": [_run(report, now) for report in sources]}, sources)
             if reason:
                 rows[day]["block_reason"] = reason
-    return {"schema_version": "qsl.digest_candidates.v1", "producer_status": "projected", "runs": list(rows.values())}
+    return {"schema_version": "qsl.digest_candidates.v1", "producer_status": "projected",
+            "runs": [*rows.values(), *not_run_rows.values()]}
 
 
 def summary_evidence(summary: Mapping, *, dry_run: bool = False) -> dict:
