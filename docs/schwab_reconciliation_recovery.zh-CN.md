@@ -15,9 +15,17 @@
 候选一律保持阻断。`permits_active_lkg=true` 也只是候选事实，不能直接修改
 `RUNTIME_TARGET_JSON`。
 
-恢复既有基线仍按共享 QPK 契约进行：两份有时间间隔的收据、独立复核、双审、账户持有人
-确认、确认后的新收据，以及控制面精确 CAS
-`RECONCILE_ONLY -> ACTIVE_LKG`。该端点不实现 CAS，也不提供订单权限。
+恢复仍按当前固定版本的共享 QPK 契约进行：可信来源的 v2 候选至少需要一份新鲜收据，
+模型审查为 advisory；人工明确确认后，还需新的只读收据及控制面精确 CAS
+`RECONCILE_ONLY -> ACTIVE_LKG`。来源、账户、订单和账本等真实事实仍须独立核验。
+该端点不实现 CAS，也不提供订单权限。
+
+`coverage.comparison_status` 区分 `not_configured`（缺少预期摘要）、`not_compared`
+（覆盖不完整）、`matched` 与 `mismatched`。读取失败时请求失败，不生成候选；
+`evidence` 中兼容契约的 false 本身不能区分未比较与不匹配，应结合上述状态和阻断码。
+现金摘要只比较 `cash_balance`；`buying_power` 和 `total_equity` 仍作为实时观测保留。
+旧完整观测摘要不能转换为现金摘要，也不能仅凭摘要差异断定实际错账；迁移须依据
+受保护的原始材料独立核验和批准，不能把当前观测自动当作预期基准。
 
 运行 `Runtime Target Lifecycle` 只会发布无订单的健康状态，不会调用
 `POST /reconcile`。当目标仍为 `RECONCILE_ONLY`，它必须报告为 `disabled`（但保留

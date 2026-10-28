@@ -430,10 +430,24 @@ def build_reconciliation_candidate(
             if key != "account_scope_sha256"
         },
     )
+    comparison_status = {}
+    for key, complete in (
+        ("positions", True),
+        ("cash", True),
+        ("open_orders", observations.open_orders_complete is True),
+        ("recent_executions", observations.recent_executions_complete is True),
+        ("local_execution_ledger", True),
+    ):
+        digest_key = f"{key}_sha256"
+        comparison_status[key] = (
+            "not_configured" if expected is None else
+            "not_compared" if not complete else
+            "matched" if expected[digest_key] == digests[digest_key] else "mismatched"
+        )
     return SchwabReconciliationCandidate(
         evidence=evidence,
         recovery_blockers=blockers,
         expected_digests_configured=expected is not None,
         execution_ledger_records_count=records_count,
-        coverage=dict(observations.coverage),
+        coverage={**observations.coverage, "comparison_status": comparison_status},
     )
