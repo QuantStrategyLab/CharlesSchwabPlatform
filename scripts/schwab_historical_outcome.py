@@ -59,6 +59,25 @@ def inspect_history(*, outcomes: list[dict], env: dict, state_uri: str,
             if entry["value"]:
                 uri = entry["value"]
                 break
+    try:
+        from quant_platform_kit.common.runtime_reports import build_runtime_report_cloud_uri
+
+        # The runtime composer supplies a report root, not the final archive
+        # prefix. Its RuntimeAssembly leaves report.account_scope unset; QPK
+        # appends platform/profile/month/run. Reuse that exact writer contract.
+        source = urlsplit(uri)
+        if (source.scheme != "gs" or not source.netloc or source.query or source.fragment
+                or source.username is not None or source.password is not None or uri != uri.strip()):
+            raise ValueError
+        probe = build_runtime_report_cloud_uri(
+            {"platform": "charles_schwab", "strategy_profile": target["strategy_profile"],
+             "account_scope": None, "started_at": dt.datetime(2000, 1, 1, tzinfo=dt.timezone.utc),
+             "run_id": "diagnostic-probe"}, cloud_prefix_uri=uri,
+        )
+        uri = probe.rsplit("/", 2)[0] + "/"
+    except Exception:
+        result["reason"] = "report_source_unavailable"
+        return result
     if not _valid_report_prefix(uri) or urlsplit(uri).netloc != urlsplit(state_uri).netloc:
         result["reason"] = "report_source_unavailable"
         return result
