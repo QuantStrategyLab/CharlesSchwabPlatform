@@ -792,6 +792,19 @@ def attach_signal_data_provenance(report) -> None:
 
 def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_body: str = "OK"):
     if dry_run_only_override is None and not getattr(RUNTIME_SETTINGS, "runtime_target_enabled", True):
+        from notifications import unified
+        if unified.enabled():
+            try:
+                reporting = build_composer().build_reporting_adapters()
+                report = build_execution_report(reporting.build_log_context())
+                finalize_runtime_report(
+                    report, status="skipped",
+                    diagnostics=_runtime_revision_diagnostics(skip_reason="runtime_execution_not_admitted"),
+                )
+                if persist_execution_report(report):
+                    unified.persist_completed_report(report)
+            except Exception:
+                print("unified_notification_failed reason=non_execution_report_unconfirmed coverage=unknown", flush=True)
         return "Runtime Target Disabled", 200
     composer = build_composer(dry_run_only_override=dry_run_only_override)
     reporting_adapters = composer.build_reporting_adapters()

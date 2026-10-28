@@ -430,8 +430,12 @@ def persist_projected_candidate(payload, *, env=None, store=None):
         raise ValueError("notification_candidate_history_unknown")
     merged = {}
     for row in [*((previous or {}).get("runs") or []), *rows]:
+        executed = row.get("actually_ran") is True and row.get("cycle_count") == 1 if isinstance(row, dict) else False
+        not_run = (isinstance(row, dict) and row.get("actually_ran") is False and row.get("cycle_count") == 0
+                   and row.get("execution_status") == "not_run" and row.get("reason_code") == "runtime_execution_not_admitted"
+                   and row.get("order_count") is None and row.get("fill_count") is None)
         if (not isinstance(row, dict) or tuple(row.get(k) for k in scope) != identity
-                or row.get("actually_ran") is not True or row.get("cycle_count") != 1
+                or not (executed or not_run)
                 or not isinstance(row.get("source_run_id"), str) or not row["source_run_id"]):
             raise ValueError("notification_candidate_scope_conflict")
         key = row["source_run_id"]

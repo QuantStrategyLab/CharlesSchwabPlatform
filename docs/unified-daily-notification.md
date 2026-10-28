@@ -60,3 +60,13 @@ replace an archived report. Archive projection reads the events saved in each
 report and any explicit receipt observation bound to that same source run. It
 does not list the notification bucket. Producers need access only to their marker
 directory and exact daily candidate objects, in addition to existing report reads.
+
+When the normal live entry is blocked by runtime admission, unified mode archives
+a `skipped` report before returning. Its exact
+`runtime_execution_not_admitted` diagnostic projects an `actually_ran=false`
+row with `cycle_count=0` and unknown order/fill counts, only after the archive
+acknowledges persistence. This path builds reporting adapters only; it does not
+build a broker client, load strategy signals, submit orders or send a message.
+The existing generation checks and source-conflict protection also apply to
+these non-execution rows. Failed persistence leaves coverage unknown. No
+retrospective report is inferred from a probe or an HTTP success.
