@@ -825,7 +825,8 @@ def main() -> int:
         name=name,
         context={"project": project, "lookback_minutes": lookback_minutes},
         issues=issues,
-        technical_details=details[:10],
+        # Keep provider audit payloads in their source logs, including on pinned QPK.
+        technical_details=(),
         workflow_url=run_url,
     )
     print(message)
