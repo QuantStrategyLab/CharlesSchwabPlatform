@@ -1,6 +1,6 @@
 # Schwab 试点状态只读核验
 
-手动运行 `Schwab Pilot State Readback`，无输入。只在原仓库 `main`、首次尝试执行；不自动重跑。调用独立的受保护 workflow，沿用 metadata/native identity 包的原 Variable 优先、Secret 回退、原 WIF 与云身份来源，不复制项目、服务、账户或存储映射。原声明仅在一个操作步骤中以 Secret 环境变量消费。它不调用券商、不读 token、不刷新、不写 Secret、不修改配置或 claim、不解除暂停、不归档、不发通知。
+手动运行 `Schwab Pilot State Readback`，历史报告检查 `inspect_historical_outcome` 默认关闭。只在原仓库 `main`、首次尝试执行；不自动重跑。调用独立的受保护 workflow，沿用 metadata/native identity 包的原 Variable 优先、Secret 回退、原 WIF 与云身份来源，不复制项目、服务、账户或存储映射。原声明仅在一个操作步骤中以 Secret 环境变量消费。它不调用券商、不读 token、不刷新、不写 Secret、不修改配置或 claim、不解除暂停、不归档、不发通知。
 
 程序从 Cloud Run 服务选唯一 100% serving revision；校对六项身份及 actual-serving 风险绑定账户 hash 与原声明相等，存储操作前后再校对 serving revision。账本读取使用该原生 hash，而不是控制面的 `account_scope`。`PAUSED` 原样保留；只报告结构化原因字段是否存在，不把字段存在或账本内容解释成暂停原因。
 
@@ -53,6 +53,29 @@ partial 及配对/UNKNOWN 等 null 保留，不将缺字段补为零或空数组
 缺失或 `present_unverified`。它不输出原值，不把自述字段当作经验证的写入源码，不按业务 key、
 日期或当前 checkout 推断版本。原 claim/outcome 合同没有必需的 writer commit provenance，缺乏
 独立来源绑定时写入源码仍不可证。未完成稳定读取时整组为 null，没有该类失败时固定计数均为零。
+
+## 可选历史报告线索
+
+仅显式开启 `inspect_historical_outcome` 时读取报告。要求现役仍为 PAUSED、账本窗口稳定且恰好一条无效记录，
+该记录的首个失败必须是 outcome_shape。否则不读报告。严格 ISO effective_date 无法确定时不猜日期。
+报告源来自 actual-serving 的原报告环境变量，必须为原固定 Schwab/SOXL 报告前缀且与账本同桶；
+不接受外部 URI、账户、日期输入，不扩大原 WIF 权限。
+
+仅列举 effective_date 前一日零时至后两日零时的固定三天 UTC 窗口；最多读取 20 个报告正文，
+每个上限 1 MiB，读取绑定列举所得 generation，禁止重试；第 21 项只用于识别截断，不下载正文。
+读取失败的数量为 null，截断的数量仅表示已检查子集；耗尽窗口也不证明归档留存完整或券商历史完整。
+`reports_read` 表示报告读取流程已尝试，不代表所有正文已读成功。
+
+`historical_outcome` 只输出固定原因、窗口/候选数量及布尔值，不输出日期、路径、账户、marker、
+订单或报告原文。`date_candidates_count` 要求原报告身份及 signal/effective 日期相同，
+`identity_date_candidates_count` 额外要求六项声明精确一致及账户观察 hash 按现有摘要合同一致。
+`candidates_with_revision_count` 仅表示候选带合法格式 revision 名，不证明该 revision 的写入来源。
+
+现有报告合同没有把 ledger marker 与完整券商订单明细绑定。即使唯一候选、revision 存在且报告
+订单计数为零，结果仍为 unknown；任意额外 marker 字段也不被视为受支持的关联证据。
+`exact_execution_link_supported/writer_source_verified/broker_order_mapping_verified/recovery_qualified`
+始终 false；账本 partial、null 配对和 UNKNOWN 总数、PAUSED 保持。此诊断只能缩小可检查归档，
+不能补写旧 outcome 或替代对应券商订单、执行报告与独立来源核验。
 
 ## 对账 namespace 修正与证据边界
 

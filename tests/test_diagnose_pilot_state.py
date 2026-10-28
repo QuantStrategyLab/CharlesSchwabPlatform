@@ -118,7 +118,7 @@ def _records(*, status="pending_reconciliation", order_status="unknown", signal=
     return key, claim, outcome
 
 
-def _probe(source, target, *, store=None, replies=None, env=None, factory=None):
+def _probe(source, target, *, store=None, replies=None, env=None, factory=None, history_reader=None):
     store = Store() if store is None else store
     events = []
     replies = [_service(), _revision(target, env), _service(), _service()] if replies is None else replies
@@ -134,7 +134,56 @@ def _probe(source, target, *, store=None, replies=None, env=None, factory=None):
         events.append(("store", kwargs))
         return store if factory is None else factory(**kwargs)
 
-    return reader.diagnose_state(source, describe=describe, store_factory=create), events, store
+    options = {"history_reader": history_reader} if history_reader is not None else {}
+    return reader.diagnose_state(source, describe=describe, store_factory=create, **options), events, store
+
+
+def test_history_is_default_off_and_does_not_consume_a_report_reader(source, target):
+    def forbidden(**kwargs):
+        pytest.fail("disabled history read reports")
+
+    result, _, _ = _probe(source, target, history_reader=forbidden)
+    assert result["historical_outcome"]["status"] == "disabled"
+    _no_authority(result)
+
+
+def test_explicit_history_passes_only_one_already_rejected_outcome_in_memory(source, target):
+    calls = []
+
+    class HistoricalStore(Store):
+        def _entries(self):
+            values = super()._entries()
+            uri, content = values[self.outcome_namespace][0]
+            payload = json.loads(content)
+            del payload["metadata"]["submitted_orders"]
+            values[self.outcome_namespace] = [(uri, json.dumps(payload))]
+            return values
+
+    def inspect(**kwargs):
+        calls.append(kwargs)
+        result = reader.history_projection(enabled=True)
+        result.update(report_read_attempted=True, reason="exact_execution_link_unavailable")
+        return result
+
+    result, _, _ = _probe({**source, "PILOT_STATE_INSPECT_HISTORY": "true"}, target,
+                         store=HistoricalStore(), history_reader=inspect)
+    assert len(calls) == 1 and len(calls[0]["outcomes"]) == 1
+    assert "submitted_orders" not in calls[0]["outcomes"][0]["metadata"]
+    assert calls[0]["account"] == ACCOUNT and calls[0]["state_uri"] == URI
+    assert result["status"] == "partial_state" and result["reports_read"] is True
+    assert result["ledger"]["classification"]["paired_count"] is None
+    assert not result["recovery_qualified"] and not result["execution_enabled_by_check"]
+    assert result["continuity"]["paused"] is True
+
+
+def test_unavailable_ledger_never_reaches_history_reader(source, target):
+    def forbidden(**kwargs):
+        pytest.fail("unknown ledger reached history reader")
+
+    result, _, _ = _probe({**source, "PILOT_STATE_INSPECT_HISTORY": "true"}, target,
+                         store=Store(error="ledger"), history_reader=forbidden)
+    assert result["historical_outcome"]["reason"] == "ledger_not_available"
+    assert not result["reports_read"]
 
 
 def _no_authority(result):
@@ -852,7 +901,9 @@ def test_workflows_keep_original_protected_sources_without_dispatch_overrides():
     for workflow in (wrapper, protected):
         assert "github.repository == 'QuantStrategyLab/CharlesSchwabPlatform'" in workflow
         assert "github.ref == 'refs/heads/main'" in workflow and "github.run_attempt == 1" in workflow
-        assert "inputs:" not in workflow and "jobs:\n  read_state:" in workflow
+        assert "jobs:\n  read_state:" in workflow
+        assert "inspect_historical_outcome:" in workflow and "default: false" in workflow
+        assert "report_uri:" not in workflow and "account_hash:" not in workflow
     assert "vars.CLOUD_RUN_SERVICE_TARGETS_JSON || secrets.CLOUD_RUN_SERVICE_TARGETS_JSON" in wrapper
     assert "vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON" in wrapper
     assert "uses: ./.github/workflows/pilot-state-readback-protected.yml" in wrapper
