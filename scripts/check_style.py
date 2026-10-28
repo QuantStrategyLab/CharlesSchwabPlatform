@@ -219,6 +219,17 @@ def check_links(root: Path, report: Report) -> None:
             if target.startswith(("http://", "https://", "mailto:", "#", "<")):
                 continue
             resolved = (path.parent / urllib.parse.unquote(target.split("#")[0])).resolve()
+            # A link that climbs out of the repository points at a sibling
+            # checkout. CI only has this repository, so the target cannot exist
+            # there — that is not a broken link, it is a reference this check
+            # cannot verify. Reporting it as broken makes the check unusable in
+            # CI while passing locally, which is the worst of both.
+            if not resolved.is_relative_to(root):
+                report.add(
+                    "content",
+                    f"{path.relative_to(root).as_posix()}: cross-repository reference, not checked -> {target}",
+                )
+                continue
             if not resolved.exists():
                 report.add(
                     "links",
