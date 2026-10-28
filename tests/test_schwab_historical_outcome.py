@@ -148,6 +148,17 @@ def test_invalid_or_overflow_date_has_no_guessed_window(date):
     assert not client.calls
 
 
+def test_valid_early_year_window_stays_canonical_and_bounded():
+    value = copy.deepcopy(OUTCOME)
+    value["metadata"]["effective_date"] = "0002-01-01"
+    client = Client()
+    result = inspect(client, outcomes=[value])
+    assert result["window_exhausted"] is True
+    _, options = client.calls[0]
+    assert options["start_offset"].endswith("0001-12/00011231T000000Z.json")
+    assert options["end_offset"].endswith("0002-01/00020103T000000Z.json")
+
+
 @pytest.mark.parametrize("env", [{}, {"EXECUTION_REPORT_GCS_URI": {"value": PREFIX.replace("synthetic-bucket", "other-bucket")}},
                                 {"EXECUTION_REPORT_GCS_URI": {"value": PREFIX.replace("execution-reports", "other")}},
                                 {"EXECUTION_REPORT_GCS_URI": {"valueFrom": {"secretKeyRef": {"name": "private"}}}}])

@@ -65,7 +65,8 @@ def inspect_history(*, outcomes: list[dict], env: dict, state_uri: str,
     parts = urlsplit(uri)
     prefix = parts.path.lstrip("/")
     def boundary(date: dt.date) -> str:
-        return prefix + date.strftime("%Y-%m/%Y%m%dT000000Z.json")
+        day = date.isoformat()
+        return prefix + day[:7] + "/" + day.replace("-", "") + "T000000Z.json"
     result["report_read_attempted"] = True
     try:
         if client is None:
@@ -86,7 +87,7 @@ def inspect_history(*, outcomes: list[dict], env: dict, state_uri: str,
             object_uri = f"gs://{parts.netloc}/{blob.name}"
             month, stamp = _report_uri_parts(object_uri, uri)
             observed_day = dt.datetime.strptime(stamp, "%Y%m%dT%H%M%SZ").date()
-            if observed_day.strftime("%Y-%m") != month:
+            if observed_day.isoformat()[:7] != month:
                 raise ValueError
             if not boundary(start) <= blob.name < boundary(end):
                 raise ValueError
