@@ -41,6 +41,8 @@ uv run --no-sync python -m pytest -q tests
 CI additionally verifies frozen shared artifacts, the paper admission contract,
 the notification delivery gates and the no-traffic deployment workflow.
 
+Organization documentation rules are checked by `python scripts/check_style.py`, which also runs in CI as the `Documentation check` job.
+
 ## Naming and documentation
 
 - Developer documentation is English by default; Chinese siblings use
