@@ -135,6 +135,75 @@ def test_same_date_never_establishes_identity(fault):
     assert result["reason"] == "qualified_report_not_found"
 
 
+@pytest.mark.parametrize("field", history.metadata._IDENTITY_FIELDS)
+@pytest.mark.parametrize("fault,state", [("missing", "missing"), ("type", "type_unsupported"),
+                                         ("format", "format_unsupported"), ("different", "mismatch")])
+def test_date_candidate_identity_details_distinguish_schema_and_mismatch(field, fault, state):
+    payload = report()
+    declared = payload["runtime_target"]
+    if fault == "missing":
+        del declared[field]
+    elif fault == "type":
+        declared[field] = None
+    elif fault == "format":
+        declared[field] = [] if field == "account_selector" else " "
+    else:
+        declared[field] = ["private-different-canary"] if field == "account_selector" else "private-different-canary"
+    result = inspect(Client([Blob(payload)]))
+    assert result["date_candidates_count"] == 1 and result["identity_date_candidates_count"] == 0
+    counts = result["date_candidate_identity_field_counts"]
+    assert counts[field][state] == 1
+    assert all(sum(states.values()) == 1 for states in counts.values())
+    for other in history.metadata._IDENTITY_FIELDS:
+        if other != field:
+            assert counts[other]["exact_match"] == 1
+    assert counts["account_hash"]["exact_match"] == 1
+    assert "private-different-canary" not in json.dumps(result)
+    assert not result["writer_source_verified"] and not result["broker_order_mapping_verified"]
+
+
+@pytest.mark.parametrize("observation,state,qualified", [
+    (None, "observation_unavailable", 0), ([], "observation_unavailable", 0),
+    ({}, "missing", 0), ({"account_hash": None}, "type_unsupported", 0),
+    ({"account_hash": "private-invalid-canary"}, "format_unsupported", 0),
+    ({"account_hash": "Ａ" * 64}, "format_unsupported", 0),
+    ({"account_hash": "a" * 63}, "format_unsupported", 0),
+    ({"account_hash": "b" * 64}, "mismatch", 0),
+    ({"account_hash": ACCOUNT}, "exact_match", 1),
+    ({"account_hash": ACCOUNT.upper()}, "hex_digest_match", 1),
+])
+def test_hash_schema_and_digest_details_do_not_change_existing_qualification(observation, state, qualified):
+    payload = report()
+    payload["summary"]["account_observation"] = observation
+    result = inspect(Client([Blob(payload)]))
+    counts = result["date_candidate_identity_field_counts"]
+    assert counts["account_hash"][state] == 1 and sum(counts["account_hash"].values()) == 1
+    assert result["identity_date_candidates_count"] == qualified
+    assert result["status"] == "unknown" and not result["recovery_qualified"]
+    assert "private-invalid-canary" not in json.dumps(result)
+
+
+def test_existing_opaque_exact_account_contract_is_not_replaced_by_a_new_gate():
+    payload = report()
+    payload["summary"]["account_observation"]["account_hash"] = "private-opaque-canary"
+    result = inspect(Client([Blob(payload)]), account="private-opaque-canary")
+    assert result["identity_date_candidates_count"] == 1
+    assert result["date_candidate_identity_field_counts"]["account_hash"]["exact_match"] == 1
+    assert "private-opaque-canary" not in json.dumps(result)
+
+
+def test_four_old_schema_candidates_do_not_become_four_wrong_accounts():
+    payload = report()
+    del payload["runtime_target"]["deployment_selector"]
+    del payload["summary"]["account_observation"]
+    result = inspect(Client([Blob(payload) for _ in range(4)]))
+    counts = result["date_candidate_identity_field_counts"]
+    assert result["date_candidates_count"] == 4 and result["identity_date_candidates_count"] == 0
+    assert counts["deployment_selector"]["missing"] == counts["account_hash"]["observation_unavailable"] == 4
+    assert all(states["mismatch"] == 0 and sum(states.values()) == 4 for states in counts.values())
+    assert result["reason"] == "qualified_report_not_found"
+
+
 def test_hex_representation_remains_the_existing_account_contract():
     payload = report()
     payload["summary"]["account_observation"]["account_hash"] = ACCOUNT.upper()
@@ -226,6 +295,7 @@ def test_read_denial_is_unknown_and_never_an_empty_report_set(capsys):
     result = inspect(Client(error=PermissionError("private-upstream-canary")))
     assert result["reason"] == "report_read_failed" and result["window_exhausted"] is None
     assert result["window_reports_count"] is result["identity_date_candidates_count"] is None
+    assert result["date_candidate_identity_field_counts"] is None
     assert capsys.readouterr().out == capsys.readouterr().err == ""
 
 
@@ -246,3 +316,10 @@ def test_exhausted_empty_window_does_not_prove_absent_historical_orders():
     assert result["window_exhausted"] is True and result["window_reports_count"] == 0
     assert result["reason"] == "qualified_report_not_found"
     assert result["status"] == "unknown" and not result["broker_order_mapping_verified"]
+    assert all(sum(states.values()) == 0 for states in result["date_candidate_identity_field_counts"].values())
+
+
+def test_identity_field_counts_are_null_before_reading():
+    assert history.projection()["date_candidate_identity_field_counts"] is None
+    result = inspect(Client(), outcomes=[])
+    assert not result["report_read_attempted"] and result["date_candidate_identity_field_counts"] is None

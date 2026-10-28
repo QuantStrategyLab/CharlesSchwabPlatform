@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import re
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -13,6 +14,51 @@ from scripts.schwab_native_identity import _account_hash_matches
 
 _MAX_REPORTS = 20
 _MAX_BYTES = 1024 * 1024
+_FIELD_STATES = ("missing", "type_unsupported", "format_unsupported", "exact_match", "mismatch")
+_HASH_STATES = ("observation_unavailable", "missing", "type_unsupported", "format_unsupported",
+                "exact_match", "hex_digest_match", "mismatch")
+
+
+def _identity_field_states(declared: dict, observation: Any, *, target: dict, account: str) -> dict[str, str]:
+    """Describe existing date candidates without changing their qualification."""
+    states = {}
+    for field in metadata._IDENTITY_FIELDS:
+        value = declared.get(field)
+        if field not in declared:
+            state = "missing"
+        elif field == "account_selector":
+            if not isinstance(value, list):
+                state = "type_unsupported"
+            elif (len(value) != 1 or not isinstance(value[0], str)
+                  or not value[0] or value[0] != value[0].strip()):
+                state = "format_unsupported"
+            else:
+                state = "exact_match" if value == target[field] else "mismatch"
+        elif not isinstance(value, str):
+            state = "type_unsupported"
+        elif not value or value != value.strip():
+            state = "format_unsupported"
+        else:
+            state = "exact_match" if value == target[field] else "mismatch"
+        states[field] = state
+    if not isinstance(observation, dict):
+        state = "observation_unavailable"
+    elif "account_hash" not in observation:
+        state = "missing"
+    else:
+        value = observation["account_hash"]
+        if not isinstance(value, str):
+            state = "type_unsupported"
+        elif value == account:
+            state = "exact_match"
+        elif not re.fullmatch(r"[0-9A-Fa-f]{64}", value):
+            state = "format_unsupported"
+        elif _account_hash_matches(account, value):
+            state = "hex_digest_match"
+        else:
+            state = "mismatch"
+    states["account_hash"] = state
+    return states
 
 
 def projection(*, enabled: bool = False) -> dict[str, Any]:
@@ -23,6 +69,7 @@ def projection(*, enabled: bool = False) -> dict[str, Any]:
         "window_exhausted": None, "window_reports_count": None,
         "date_candidates_count": None,
         "identity_date_candidates_count": None, "candidates_with_revision_count": None,
+        "date_candidate_identity_field_counts": None,
         "exact_execution_link_supported": False, "writer_source_verified": False,
         "broker_order_mapping_verified": False, "recovery_qualified": False,
     }
@@ -99,6 +146,9 @@ def inspect_history(*, outcomes: list[dict], env: dict, state_uri: str,
         count = candidates = revisions = 0
         result.update(window_exhausted=False, window_reports_count=0,
                       date_candidates_count=0, identity_date_candidates_count=0, candidates_with_revision_count=0)
+        field_counts = {field: dict.fromkeys(_FIELD_STATES, 0) for field in metadata._IDENTITY_FIELDS}
+        field_counts["account_hash"] = dict.fromkeys(_HASH_STATES, 0)
+        result["date_candidate_identity_field_counts"] = field_counts
         for blob in objects:
             if count == _MAX_REPORTS:
                 result["reason"] = "report_window_truncated"
@@ -135,6 +185,8 @@ def inspect_history(*, outcomes: list[dict], env: dict, state_uri: str,
                 continue
             result["date_candidates_count"] += 1
             observation = summary.get("account_observation")
+            for field, state in _identity_field_states(declared, observation, target=target, account=account).items():
+                field_counts[field][state] += 1
             if (any(declared.get(field) != target[field] for field in metadata._IDENTITY_FIELDS)
                     or not isinstance(observation, dict)
                     or not _account_hash_matches(account, observation.get("account_hash"))):
@@ -154,6 +206,7 @@ def inspect_history(*, outcomes: list[dict], env: dict, state_uri: str,
     except Exception:
         result["reason"] = "report_read_failed"
         result["window_exhausted"] = None
+        result["date_candidate_identity_field_counts"] = None
         for field in ("window_reports_count", "date_candidates_count", "identity_date_candidates_count", "candidates_with_revision_count"):
             result[field] = None
     return result
