@@ -88,16 +88,16 @@ LEAK_PATTERNS = [
     (re.compile(r"\b[\w-]+\.workers\.dev\b"), "content", "personal subdomain (section 13)"),
     (re.compile(r"\b[0-9a-f]{40}\b"), "content", "40-character hex string (section 5)"),
     (re.compile(r"\|\s*(PR\b|#\d+)"), "content", "PR-number status table (section 5)"),
-    (re.compile(r"\b(this round|this task|in this task)\b", re.I),
+    (re.compile(r"\b(this round|this task|in this task)\b", re.IGNORECASE),
      "content", "task-scope wording (section 5)"),
-    (re.compile(r"\b(the owner approved|approved by)\b", re.I),
+    (re.compile(r"\b(the owner approved|approved by)\b", re.IGNORECASE),
      "content", "owner approval note (section 5)"),
 ]
 
 # Section 6: paths for notes that must never be committed.
 INTERNAL_NOTE_GITIGNORE = [".local/", "ops-notes/", "*.local.md", "*.internal.md"]
 
-DATED_TITLE = re.compile(r"(audit|acceptance).*20\d{2}-\d{2}-\d{2}", re.I)
+DATED_TITLE = re.compile(r"(audit|acceptance).*20\d{2}-\d{2}-\d{2}", re.IGNORECASE)
 
 # Blocking categories per phase.
 #
@@ -154,7 +154,7 @@ def strip_fenced_blocks(text: str) -> str:
     `[简体中文](README.zh-CN.md)`. Those are illustrations, not links, and
     checking them reports failures the author cannot fix.
     """
-    return re.sub(r"^```.*?^```", "", text, flags=re.S | re.M)
+    return re.sub(r"^```.*?^```", "", text, flags=re.DOTALL | re.MULTILINE)
 
 
 def check_naming(root: Path, report: Report) -> None:
@@ -195,7 +195,7 @@ def check_readme(root: Path, report: Report) -> None:
         report.add("readme", "README.md is missing")
         return
     text = readme.read_text(encoding="utf-8", errors="ignore")
-    headings = [h.strip().lower() for h in re.findall(r"^#{2,3}\s+(.+)$", text, re.M)]
+    headings = [h.strip().lower() for h in re.findall(r"^#{2,3}\s+(.+)$", text, re.MULTILINE)]
     missing = [
         section for section in README_OUTLINE
         if not any(section in heading for heading in headings)
@@ -260,10 +260,10 @@ def check_agent_files(root: Path, report: Report) -> None:
 
 def check_language(root: Path, report: Report) -> None:
     marketing = re.compile(
-        r"\b(" + "|".join(re.escape(w) for w in MARKETING_WORDS) + r")\b", re.I
+        r"\b(" + "|".join(re.escape(w) for w in MARKETING_WORDS) + r")\b", re.IGNORECASE
     )
     filler = re.compile(
-        r"\b(" + "|".join(re.escape(p) for p in FILLER_PHRASES) + r")\b", re.I
+        r"\b(" + "|".join(re.escape(p) for p in FILLER_PHRASES) + r")\b", re.IGNORECASE
     )
     for path in iter_files(root):
         if not is_markdown(path):
