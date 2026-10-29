@@ -1,4 +1,4 @@
-name: Protected Schwab Pilot Metadata and Resume
+name: Protected Schwab Pilot Metadata and Runtime Switch
 
 on:
   workflow_call:
@@ -6,6 +6,10 @@ on:
       resume_operation:
         type: string
         default: none
+        required: false
+      request_id:
+        type: string
+        default: ''
         required: false
     secrets:
       inventory:
@@ -85,14 +89,26 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-      - name: Inspect or resume the paused service
-        if: ${{ inputs.resume_operation == 'inspect' || inputs.resume_operation == 'apply' }}
+      - name: Inspect or synchronize the runtime switch
+        if: ${{ inputs.resume_operation == 'inspect' || inputs.resume_operation == 'enable' || inputs.resume_operation == 'disable' }}
         env:
           CLOUD_RUN_SERVICE_TARGETS_JSON: ${{ secrets.inventory }}
           RUNTIME_TARGET_JSON: ${{ secrets.runtime_target }}
           CLOUD_RUN_SERVICE: ${{ secrets.service }}
           CLOUD_RUN_SERVICES: ${{ secrets.services }}
           CLOUD_RUN_REGION: ${{ secrets.region }}
+          RUNTIME_TARGET_ENABLED: ${{ secrets.target_enabled }}
           RESUME_OPERATION: ${{ inputs.resume_operation }}
+          RUNTIME_SWITCH_REQUEST_ID: ${{ inputs.request_id }}
+          RUNTIME_SWITCH_RESULT_PATH: ${{ runner.temp }}/schwab-runtime-switch.safe.json
           PYTHONDONTWRITEBYTECODE: "1"
         run: uv run --no-sync python -m scripts.resume_schwab_single_state
+
+      - name: Save fixed runtime switch receipt
+        if: ${{ always() && inputs.resume_operation != 'none' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: schwab-runtime-switch-safe
+          path: ${{ runner.temp }}/schwab-runtime-switch.safe.json
+          if-no-files-found: error
+          retention-days: 3
