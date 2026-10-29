@@ -45,7 +45,7 @@ def run(monkeypatch, client, *, state="PAUSED", changed=False):
 
 
 def test_missing_positions_remains_unknown_while_orders_are_checked(monkeypatch):
-    client = FakeClient(orders=[{"orderId": 42, "status": "WORKING", "orderLegCollection": [{"instrument": {"symbol": "SYN"}, "quantity": 1}]}])
+    client = FakeClient(orders=[{"orderId": "private-order-canary", "status": "WORKING", "orderLegCollection": [{"instrument": {"symbol": "SYN"}, "quantity": 1}]}])
     result = run(monkeypatch, client)
     assert result["status"] == "observed"
     assert result["positions"] == "unknown"
@@ -53,7 +53,7 @@ def test_missing_positions_remains_unknown_while_orders_are_checked(monkeypatch)
     assert result["recent_executions"] == "unknown"
     assert result["history_link"] == "unknown"
     assert result["recovery_qualified"] is False and result["no_order"] is True
-    assert client.closed and "42" not in str(result) and "SYN" not in str(result)
+    assert client.closed and "private-order-canary" not in str(result) and "SYN" not in str(result)
 
 
 def test_paused_only_prevents_any_broker_request(monkeypatch):

@@ -302,12 +302,16 @@ def test_cli_writes_only_private_create_only_safe_artifact(monkeypatch, tmp_path
 def test_workflow_is_protected_and_uses_same_sources_without_daily_or_writes():
     wrapper = (ROOT / ".github/workflows/pilot-native-identity.yml").read_text()
     protected = (ROOT / ".github/workflows/pilot-native-identity-protected.yml").read_text()
-    assert "workflow_dispatch:" in wrapper and "inputs:" not in wrapper and "env:" not in wrapper
+    assert "workflow_dispatch:" in wrapper and "observe_current:" in wrapper and "env:" not in wrapper
+    assert "default: false" in wrapper
     assert "uses: ./.github/workflows/pilot-native-identity-protected.yml" in wrapper
     assert "inventory: ${{ vars.CLOUD_RUN_SERVICE_TARGETS_JSON || secrets.CLOUD_RUN_SERVICE_TARGETS_JSON }}" in wrapper
     assert "runtime_target: ${{ vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}" in wrapper
     assert "workflow_call:" in protected and "workflow_dispatch:" not in protected and "vars." not in protected
-    assert protected.count("    env:") == 1
+    assert protected.count("    env:") == 2
+    assert "if: ${{ !inputs.observe_current }}" in protected
+    assert "if: ${{ inputs.observe_current }}" in protected
+    assert "python -m scripts.observe_paused_account" in protected
     assert "RUNTIME_TARGET_JSON: ${{ secrets.runtime_target }}" in protected
     assert "python3 -m scripts.diagnose_pilot_metadata --bootstrap-cloud-source" in protected
     assert "python -m scripts.diagnose_pilot_native_identity" in protected
