@@ -377,10 +377,8 @@ def _report_provenance_problem(
         return (
             "schema_invalid" if scope_problem == "invalid_report" else "scope_invalid"
         )
-    if (
-        payload.get("diagnostics", {}).get("runtime_revision")
-        != expected_runtime_revision
-    ):
+    revision = payload.get("diagnostics", {}).get("runtime_revision")
+    if not isinstance(revision, str) or _REVISION.fullmatch(revision) is None:
         return "revision_mismatch"
     if (
         stamp != payload.get("run_id")

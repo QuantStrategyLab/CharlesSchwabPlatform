@@ -188,7 +188,7 @@ def test_independent_identity_fails_closed(mutation):
         ),
         ("uri", PREFIX + "2026-09/20261006T200100Z.json"),
         ("uri", PREFIX + "2026-10/20261006T200100Z.json#12"),
-        ("revision", "wrong-revision"),
+        ("revision", "invalid revision"),
         ("start", "2026-10-06T21:01:00Z"),
         ("start", "2026-10-06T20:01:00"),
         ("finish", "2026-10-06T19:00:00Z"),
@@ -210,6 +210,29 @@ def test_bad_provenance_is_rejected_without_raw_detail(field, value):
     assert result.projection["records"][0]["runs"] == []
     assert "report_read_error" in result.projection["read_errors"]
     assert result.projection["completeness"] == "incomplete"
+
+
+def test_same_day_reports_from_distinct_revisions_are_included():
+    older = envelope(stamp="20261006T200000Z")
+    newer = envelope(stamp="20261006T200100Z")
+    older["payload"]["diagnostics"]["runtime_revision"] = "earlier-revision"
+    result = prepare([older, newer])
+    assert result.reason == "prepared"
+    assert len(result.projection["records"][0]["runs"]) == 2
+    assert "report_read_error" not in result.projection["read_errors"]
+    assert "coverage_unconfirmed" in result.projection["read_errors"]
+    assert result.projection["completeness"] == "incomplete"
+
+
+def test_cross_revision_account_mismatch_still_blocks_publication():
+    older = envelope(stamp="20261006T200000Z")
+    older["payload"]["diagnostics"]["runtime_revision"] = "earlier-revision"
+    older["payload"]["summary"]["account_observation"]["account_hash"] = "OTHER"
+    result = prepare([older, envelope()])
+    assert result.reason == "source_identity_mismatch"
+    assert result.projection is None
+    _, opener = publish(result)
+    opener.open.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -797,7 +820,7 @@ def test_diagnostic_mixed_batch_emits_only_bounded_whitelisted_counts(capsys):
     case_only = mismatch_entry(account_hash=HASH.swapcase())
     other = mismatch_entry()
     stale = mismatch_entry()
-    stale["payload"]["diagnostics"]["runtime_revision"] = "PRIVATE-OLD-REVISION"
+    stale["payload"]["diagnostics"]["runtime_revision"] = "PRIVATE INVALID REVISION"
     malformed = mismatch_entry()
     malformed["payload"]["diagnostics"] = []
     entries = [case_only, other, stale, malformed, envelope()]
@@ -847,7 +870,7 @@ def test_diagnostic_non_account_gates_never_turn_failure_or_uncertainty_into_pas
     elif mutation == "alias":
         payload["runtime_target"]["service_name"] = "other-service"
     elif mutation == "revision":
-        payload["diagnostics"]["runtime_revision"] = "PRIVATE-OLD-REVISION"
+        payload["diagnostics"]["runtime_revision"] = "PRIVATE INVALID REVISION"
     elif mutation == "month":
         entry["object_uri"] = PREFIX + "2026-09/20261006T200100Z.json"
     elif mutation == "run_id":
@@ -914,7 +937,7 @@ def test_diagnostic_non_ascii_is_not_declared_ascii_case_only(expected, reported
 
 def test_diagnostic_case_count_is_limited_to_gate_passing_mismatches():
     entry = mismatch_entry(account_hash=HASH.swapcase())
-    entry["payload"]["diagnostics"]["runtime_revision"] = "older-revision"
+    entry["payload"]["diagnostics"]["runtime_revision"] = "invalid revision"
     assert diagnose([entry]) == diagnostic_counts(failed=1)
 
 
@@ -968,7 +991,7 @@ def test_diagnostic_unavailable_context_is_not_fabricated_zero_counts(change):
 def excluded_mismatch(kind="revision"):
     entry = mismatch_entry()
     if kind == "revision":
-        entry["payload"]["diagnostics"]["runtime_revision"] = "older-revision"
+        entry["payload"]["diagnostics"]["runtime_revision"] = "invalid revision"
     elif kind == "scope":
         entry["payload"]["account_scope"] = "paper"
     elif kind == "uri":
@@ -1169,7 +1192,7 @@ def prefilter_case(kind):
     elif kind == "scope_invalid":
         value["runtime_target"]["account_scope"] = "PRIVATE-SCOPE"
     elif kind == "revision_mismatch":
-        value["diagnostics"]["runtime_revision"] = "PRIVATE-REVISION"
+        value["diagnostics"]["runtime_revision"] = "PRIVATE INVALID"
     elif kind == "path_mismatch":
         value["run_id"] = "PRIVATE-RUN"
     elif kind == "time_order_invalid":
@@ -1256,17 +1279,17 @@ def test_zero_run_prefilter_does_not_inspect_opaque_containers_or_account_hash()
     assert diagnose_prefilter([item] * 20) == zero_run_counts(20, provenance_passed=20)
 
 
-def legacy_provenance_result(
+def reference_provenance_result(
     payload, *, object_uri, report_prefix, expected_runtime_revision, observed_at
 ):
-    # Frozen original expression, including eager URI/time parsing and exceptions.
+    # Reference expression, including eager URI/time parsing and exceptions.
     month, stamp = caller._report_uri_parts(object_uri, report_prefix)
     started = caller._instant(payload.get("started_at"))
     finished = caller._instant(payload.get("finished_at"))
     return not (
         caller._scope_problem(payload) is not None
-        or payload.get("diagnostics", {}).get("runtime_revision")
-        != expected_runtime_revision
+        or not isinstance(payload.get("diagnostics", {}).get("runtime_revision"), str)
+        or caller._REVISION.fullmatch(payload["diagnostics"]["runtime_revision"]) is None
         or stamp != payload.get("run_id")
         or stamp != started.strftime("%Y%m%dT%H%M%SZ")
         or month != started.strftime("%Y-%m")
@@ -1277,7 +1300,7 @@ def legacy_provenance_result(
 
 @pytest.mark.parametrize("category", ZERO_RUN_CATEGORIES)
 @pytest.mark.parametrize("later_fault", [False, True])
-def test_zero_run_decomposition_preserves_original_bool_and_exception(
+def test_zero_run_decomposition_preserves_reference_bool_and_exception(
     category, later_fault
 ):
     item = prefilter_case(category)
@@ -1297,7 +1320,7 @@ def test_zero_run_decomposition_preserves_original_bool_and_exception(
             return ("exception", type(exc), exc.args)
 
     assert observed(caller._report_provenance_passes) == observed(
-        legacy_provenance_result
+        reference_provenance_result
     )
 
 
@@ -1319,7 +1342,7 @@ def test_zero_run_prefilter_malformed_payloads_are_unevaluable(fault):
         ("path_mismatch", "time_order_invalid"),
     ],
 )
-def test_zero_run_prefilter_multiple_failures_report_original_first_stage(
+def test_zero_run_prefilter_multiple_failures_report_first_stage(
     earlier, later
 ):
     first, second, original = prefilter_case(earlier), prefilter_case(later), envelope()
