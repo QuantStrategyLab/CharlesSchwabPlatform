@@ -38,6 +38,30 @@ def test_inspect_is_read_only_and_detects_template_drift(case):
         resume.execute({"RESUME_OPERATION": "inspect"}, describe=describe)
 
 
+def test_template_difference_exposes_only_fixed_boolean_comparisons():
+    desired = {"containers": [{"image": "PRIVATE_A", "env": [{"name": "PRIVATE_FIELD"}]}]}
+    serving = {"containers": [{"image": "PRIVATE_B", "env": [{"name": "PRIVATE_FIELD"}]}]}
+    result = resume.TemplateDifference(desired, serving).comparisons
+    assert result["container_image"] == "mismatch" and result["container_env"] == "match"
+    assert all(value in {"match", "mismatch"} for value in result.values())
+    assert "PRIVATE" not in json.dumps(result)
+
+
+def test_runtime_comparison_ignores_only_known_server_representation():
+    original = {"containers": [{"name": "generated", "image": "immutable",
+                                "env": [{"name": "B", "value": "2"}, {"name": "A", "value": "1"}]}],
+                "servingState": "active", "timeoutSeconds": 300}
+    equivalent = {"containers": [{"image": "immutable",
+                                  "env": [{"name": "A", "value": "1"}, {"name": "B", "value": "2"}]}],
+                  "timeoutSeconds": 300}
+    assert resume._runtime_spec(original) == resume._runtime_spec(equivalent)
+    equivalent["containers"][0]["image"] = "other"
+    assert resume._runtime_spec(original) != resume._runtime_spec(equivalent)
+    equivalent["containers"][0]["image"] = "immutable"
+    equivalent["timeoutSeconds"] = 10
+    assert resume._runtime_spec(original) != resume._runtime_spec(equivalent)
+
+
 def test_apply_writes_only_state_then_adopts_and_reads_back(case, monkeypatch):
     service, revision, target = case
     declared = copy.deepcopy(target)
@@ -59,7 +83,7 @@ def test_apply_writes_only_state_then_adopts_and_reads_back(case, monkeypatch):
         if state["phase"] == "adopted": result["status"]["traffic"] = [{"revisionName": candidate, "percent": 100}]
         return result
     result = resume.execute({"RESUME_OPERATION": "apply", "GITHUB_RUN_ID": "123"}, describe=describe, command=command)
-    assert result["status"] == "active_readback" and not result["natural_cycle_observed"]
+    assert result["status"] == "active_readback" and result["natural_cycle"] == "not_observed"
     assert len(state["calls"]) == 2
     assert "--no-traffic" in state["calls"][0]
     update = next(x for x in state["calls"][0] if x.startswith("--update-env-vars="))

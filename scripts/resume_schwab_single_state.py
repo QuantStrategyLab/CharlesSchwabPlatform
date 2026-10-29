@@ -18,6 +18,29 @@ REVISION = SERVICE + "-00805-buq"
 IMAGE = "sha256:e5b96671086a3c3da8e8d2c88fd7a9b65a69b7d38d9aaa63a2e66da94170ba1f"
 
 
+class TemplateDifference(ValueError):
+    def __init__(self, desired, serving):
+        super().__init__("template_differs")
+        fields = ("containers", "containerConcurrency", "timeoutSeconds", "serviceAccountName", "volumes")
+        self.comparisons = {name: "match" if desired.get(name) == serving.get(name) else "mismatch" for name in fields}
+        self.comparisons["other_fields"] = "match" if {k: v for k, v in desired.items() if k not in fields} == {k: v for k, v in serving.items() if k not in fields} else "mismatch"
+        left, right = desired.get("containers", []), serving.get("containers", [])
+        if len(left) == len(right) == 1:
+            names = ("image", "env", "resources", "ports", "startupProbe", "command", "args", "name")
+            self.comparisons.update({"container_" + name: "match" if left[0].get(name) == right[0].get(name) else "mismatch" for name in names})
+            self.comparisons["container_other_fields"] = "match" if {k: v for k, v in left[0].items() if k not in names} == {k: v for k, v in right[0].items() if k not in names} else "mismatch"
+
+
+def _runtime_spec(spec):
+    """Use the previously verified Cloud Run revision representation rules."""
+    spec = copy.deepcopy(spec)
+    spec.pop("servingState", None)
+    for container in spec["containers"]:
+        container.pop("name", None)
+        container["env"] = sorted(container.get("env", []), key=lambda item: item["name"])
+    return spec
+
+
 def _command(args):
     result = subprocess.run(args, capture_output=True, text=True, timeout=180, check=False,
                             env={**os.environ, "CLOUDSDK_CORE_DISABLE_FILE_LOGGING": "true",
@@ -48,8 +71,10 @@ def inspect(environ, *, describe=metadata._describe):
     if target != paused or build_live_continuity(target["live_continuity"]).baseline_target_sha256 != runtime_target_fingerprint(target):
         raise ValueError("target_mismatch")
     desired = before.get("spec", {}).get("template", {}).get("spec")
-    if desired != revision.get("spec"):
-        raise ValueError("template_differs")
+    if not isinstance(desired, dict) or _runtime_spec(desired) != _runtime_spec(revision["spec"]):
+        if not isinstance(desired, dict) or not isinstance(revision.get("spec"), dict):
+            raise ValueError("template_differs")
+        raise TemplateDifference(desired, revision["spec"])
     containers = revision["spec"]["containers"]
     if len(containers) != 1 or not containers[0]["image"].endswith("@" + IMAGE):
         raise ValueError("image_mismatch")
@@ -76,9 +101,9 @@ def execute(environ, *, describe=metadata._describe, command=_command):
                     scheduler = "unknown"
         except Exception:
             pass
-        return {"status": "ready_for_review", "template_matches_serving": True,
-                "paused": True, "declaration_state": declared_state, "scheduler_run": scheduler,
-                "cloud_write_attempted": False}
+        return {"status": "ready_for_review", "template_comparison": "match",
+                "continuity_state": "PAUSED", "declaration_state": declared_state, "scheduler_run": scheduler,
+                "cloud_write": "none"}
     if mode != "apply" or declared_state != "ACTIVE_LKG":
         raise ValueError("active_declaration_required")
     run_id = environ.get("GITHUB_RUN_ID", "")
@@ -111,7 +136,7 @@ def execute(environ, *, describe=metadata._describe, command=_command):
     for item in expected_spec["containers"][0]["env"]:
         if item.get("name") == "RUNTIME_TARGET_JSON":
             item["value"] = value
-    if staged.get("spec") != expected_spec:
+    if _runtime_spec(staged.get("spec", {})) != _runtime_spec(expected_spec):
         raise ValueError("candidate_configuration_mismatch")
     ready = {x.get("type"): x.get("status") for x in staged.get("status", {}).get("conditions", [])}
     if ready.get("Ready") != "True":
@@ -131,13 +156,13 @@ def execute(environ, *, describe=metadata._describe, command=_command):
         confirmed = describe("services", SERVICE, PROJECT, REGION)
     except Exception:
         raise RuntimeError("adoption_readback_unknown_do_not_retry") from None
-    if (metadata._serving(readback, SERVICE) != candidate or adopted.get("spec") != expected_spec
+    if (metadata._serving(readback, SERVICE) != candidate or _runtime_spec(adopted.get("spec", {})) != _runtime_spec(expected_spec)
             or metadata._serving(confirmed, SERVICE) != candidate
             or readback.get("metadata", {}).get("resourceVersion") != confirmed.get("metadata", {}).get("resourceVersion")):
         raise ValueError("adoption_readback_mismatch")
-    return {"status": "active_readback", "template_matches_serving": True,
-            "paused": False, "declaration_state": declared_state, "cloud_write_attempted": True,
-            "broker_requested": False, "natural_cycle_observed": False}
+    return {"status": "active_readback", "template_comparison": "match",
+            "continuity_state": "ACTIVE_LKG", "declaration_state": declared_state, "cloud_write": "attempted",
+            "broker_read": "none", "natural_cycle": "not_observed"}
 
 
 def main():
@@ -153,7 +178,10 @@ def main():
                    "traffic_write_uncertain_do_not_retry", "adoption_readback_mismatch",
                    "candidate_readback_unknown_do_not_retry", "adoption_readback_unknown_do_not_retry"}
         reason = str(exc) if str(exc) in allowed else "read_or_validation_failed"
-        print(json.dumps({"status": "stopped", "reason": reason}))
+        result = {"status": "stopped", "reason": reason}
+        if isinstance(exc, TemplateDifference):
+            result["template_field_matches"] = exc.comparisons
+        print(json.dumps(result, sort_keys=True))
         return 1
     print(json.dumps(result, sort_keys=True))
     return 0
