@@ -1,13 +1,18 @@
-name: Schwab Pilot Metadata and Resume
+name: Schwab Pilot Metadata and Runtime Switch
+run-name: Schwab runtime switch ${{ inputs.request_id || 'read-only' }}
 
 on:
   workflow_dispatch:
     inputs:
       resume_operation:
-        description: Default read-only; inspect is read-only; apply resumes live trading.
+        description: Default read-only; enable and disable apply the existing runtime declaration.
         type: choice
-        options: [none, inspect, apply]
+        options: [none, inspect, enable, disable]
         default: none
+      request_id:
+        description: Lowercase UUID binding this runtime switch request and receipt.
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -23,8 +28,9 @@ jobs:
     uses: ./.github/workflows/pilot-metadata-readback-protected.yml
     with:
       resume_operation: ${{ inputs.resume_operation || 'none' }}
+      request_id: ${{ inputs.request_id || '' }}
     # Named workflow secrets mask existing target and service values before step
-    # headers. Only the explicit apply mode changes the existing live service.
+    # headers. Only explicit enable/disable modes can change the live service.
     secrets:
       inventory: ${{ vars.CLOUD_RUN_SERVICE_TARGETS_JSON || secrets.CLOUD_RUN_SERVICE_TARGETS_JSON }}
       runtime_target: ${{ vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}
