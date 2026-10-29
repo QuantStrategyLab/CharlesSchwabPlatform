@@ -188,7 +188,7 @@ def execute(environ, *, describe=metadata._describe, command=_command):
     status = ("observed" if mode == "inspect" else
               "protected" if mode == "enable" and not effective else
               "partial" if mode == "enable" and scheduler != "enabled" else "applied")
-    return {"status": status, "request_id": request_id, "run_id": run_id, "attempt": 1,
+    return {"status": status, "operation": mode, "request_id": request_id, "run_id": run_id, "attempt": 1,
             "operator_state": "enabled" if actual else "disabled", "declaration_state": "enabled" if desired else "disabled",
             "continuity_state": continuity_state, "effective_state": "enabled" if effective else "disabled",
             "scheduler_state": scheduler, "scheduler_write": scheduler_write,
@@ -214,7 +214,8 @@ def main():
         except (ValueError, AttributeError):
             request_id = None
         run_id = os.environ.get("GITHUB_RUN_ID", "")
-        result = {"status": "stopped", "reason": reason, "request_id": request_id,
+        mode = os.environ.get("RESUME_OPERATION")
+        result = {"status": "stopped", "reason": reason, "operation": mode if mode in {"inspect", "enable", "disable"} else None, "request_id": request_id,
                   "run_id": run_id if run_id.isascii() and run_id.isdigit() else None,
                   "attempt": 1 if os.environ.get("GITHUB_RUN_ATTEMPT") == "1" else None}
     path = os.environ.get("RUNTIME_SWITCH_RESULT_PATH")

@@ -43,7 +43,7 @@ def test_same_enabled_value_reads_back_without_changing_service(case):
     result = switch.execute(environment("enable"), describe=describe, command=command)
     assert result["status"] == "applied" and result["cloud_write"] == "none"
     assert result["operator_state"] == result["effective_state"] == "enabled"
-    assert result["request_id"] == REQUEST and result["run_id"] == "123"
+    assert result["request_id"] == REQUEST and result["run_id"] == "123" and result["operation"] == "enable"
 
 
 def test_enable_is_partial_when_scheduler_cannot_be_confirmed(case):
