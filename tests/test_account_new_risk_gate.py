@@ -979,5 +979,67 @@ class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
         self.assertFalse(any("Account new-risk gate" in log for log in result.trade_logs))
 
 
-if __name__ == "__main__":
-    unittest.main()
+    def test_invalid_vol_does_not_liquidate_existing_target(self) -> None:
+        result, orders = self._run_buy_cycle(portfolio_overrides={
+            "market_values": {"SOXL": 400.0}, "quantities": {"SOXL": 4},
+            "realized_vol": float("nan"),
+        })
+        self.assertEqual(orders, [])
+        self.assertTrue(any("NEW_RISK_PROHIBITED" in log for log in result.trade_logs))
+
+
+    def test_no_target_hard_brake_requires_registered_continuity(self) -> None:
+        submitted_orders = []
+        plan = {
+            "account_hash": "demo",
+            "allocation": {
+                "target_mode": "value",
+                "strategy_symbols": (),
+                "risk_symbols": (),
+                "income_symbols": (),
+                "safe_haven_symbols": (),
+                "targets": {},
+            },
+            "portfolio": {
+                "market_values": {"SOXL": 400.0},
+                "quantities": {"SOXL": 4},
+                "total_equity": 40000,
+                "peak_equity_usd": 50000,
+                "realized_vol": float("nan"),
+                "liquid_cash": 100.0,
+                "cash_sweep_symbol": None,
+            },
+            "execution": {
+                "trade_threshold_value": 10.0,
+                "reserved_cash": 0.0,
+            },
+        }
+        result = execute_rebalance_cycle(
+            client=object(),
+            plan=plan,
+            portfolio=plan["portfolio"],
+            execution=plan["execution"],
+            allocation=plan["allocation"],
+            fetch_managed_snapshot=lambda _client: None,
+            market_data_port=CallableMarketDataPort(
+                quote_loader=lambda symbol: QuoteSnapshot(
+                    symbol=symbol,
+                    as_of="2026-08-24",
+                    last_price=100.0,
+                    ask_price=100.0,
+                )
+            ),
+            load_plan=lambda _snapshot: (
+                plan,
+                plan["portfolio"],
+                plan["execution"],
+                plan["allocation"],
+            ),
+            execution_port=CallableExecutionPort(submitted_orders.append),
+            translator=build_translator("en"),
+            limit_buy_premium=1.0,
+            sell_settle_delay_sec=0,
+            publish_order_issue=lambda _message: None,
+        )
+        self.assertEqual(submitted_orders, [])
+        self.assertTrue(any("Account hard brake observed" in line for line in result.trade_logs))

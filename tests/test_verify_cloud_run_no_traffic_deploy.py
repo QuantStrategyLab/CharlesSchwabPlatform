@@ -989,3 +989,40 @@ def test_native_empty_overrides_preserved_without_text_projection(field):
         return {}
     identity = dict(project="demo-project", region="demo-region", service="demo-service", baseline_revision=BASE_REV)
     assert check.capture_native_snapshot(identity, read=read) == expected
+
+
+@pytest.mark.parametrize("changed_name", ["RUNTIME_TARGET_ENABLED", "SCHWAB_DRY_RUN_ONLY", "ACCOUNT_POLICY"])
+def test_legacy_readback_rejects_literal_environment_drift_without_disclosure(tmp_path, monkeypatch, capsys, changed_name):
+    args = SimpleNamespace(project="demo-project", region="demo-region", service="demo-service",
+                           scheduler_location="demo-region", expected_sha=CANDIDATE_COMMIT,
+                           expected_image_digest="sha256:" + "e" * 64, before=tmp_path / "before.json")
+    entries = [{"name": name, "value": SENTINEL + name} for name in
+               ("RUNTIME_TARGET_ENABLED", "SCHWAB_DRY_RUN_ONLY", "ACCOUNT_POLICY")]
+    service = {"status": {"traffic": [{"revisionName": BASE_REV, "percent": 100}]},
+               "spec": {"template": {"spec": {"containers": [{"env": entries}]}}}}
+
+    def fake_gcloud(command, **kwargs):
+        if command[-1] == "--format=value(status.latestCreatedRevisionName)":
+            result = CANDIDATE_REV
+        elif command[1:4] == ["run", "revisions", "describe"]:
+            result = json.dumps({"metadata": {"name": CANDIDATE_REV, "labels": {"commit-sha": CANDIDATE_COMMIT}},
+                                 "spec": {"containers": [{"image": CANDIDATE_IMAGE}]}})
+        elif "get-iam-policy" in command:
+            result = '{"bindings":[]}'
+        elif "scheduler" in command:
+            result = "[]"
+        else:
+            assert "spec.template.spec.containers[].env[].value," in command[-1]
+            result = json.dumps(service)
+        return SimpleNamespace(returncode=0, stdout=result, stderr=SENTINEL)
+
+    monkeypatch.setattr(check, "_run_json", lambda command: json.loads(fake_gcloud(command).stdout))
+    monkeypatch.setattr(check.subprocess, "run", fake_gcloud)
+    args.before.write_text(json.dumps(check._snapshot(args)), encoding="utf-8")
+    assert SENTINEL not in args.before.read_text()
+    next(entry for entry in entries if entry["name"] == changed_name)["value"] += "changed"
+    with pytest.raises(RuntimeError, match="configuration changed during no-traffic deployment") as exc:
+        check._verify(args)
+    assert SENTINEL not in str(exc.value)
+    output = capsys.readouterr()
+    assert SENTINEL not in output.out + output.err

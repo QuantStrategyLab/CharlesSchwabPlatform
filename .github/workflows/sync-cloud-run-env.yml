@@ -62,8 +62,6 @@ env:
   GCP_RUNTIME_SERVICE_ACCOUNT: schwab-platform-runtime@charlesschwabquant.iam.gserviceaccount.com
   GCP_SCHEDULER_SERVICE_ACCOUNT: schwab-platform-scheduler@charlesschwabquant.iam.gserviceaccount.com
   GCP_ARTIFACT_REGISTRY_REPOSITORY: cloud-run-source-deploy
-  WEBSITE_OBSERVATION_SOURCE: 4843141d42337b644e6f594d2c0da5421e146c6c
-  WEBSITE_OBSERVATION_TREE: 40961a49c1886df4d3ba55758c83290e8adfe692
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
@@ -455,16 +453,11 @@ jobs:
           DEPLOY_READBACK_FILE: ${{ runner.temp }}/cloud-run-no-traffic-baseline.json
         run: |
           set -euo pipefail
-          cash_currency_args=()
-          if [ -n "${SCHWAB_CASH_CURRENCY:-}" ]; then
-            cash_currency_args+=(--cash-currency="${SCHWAB_CASH_CURRENCY}")
-          fi
           python3 scripts/verify_cloud_run_no_traffic_deploy.py capture \
             --project="${GCP_PROJECT_ID}" \
             --region="${CLOUD_RUN_REGION}" \
             --service="${CLOUD_RUN_SERVICE}" \
             --scheduler-location="${CLOUD_SCHEDULER_LOCATION:-${CLOUD_RUN_REGION}}" \
-            "${cash_currency_args[@]}" \
             --output="${DEPLOY_READBACK_FILE}"
 
       - name: Verify deployed runtime target admission before traffic shift
@@ -486,22 +479,6 @@ jobs:
             "${projection_args[@]}"
 
 
-      - name: Checkout reviewed website observation source
-        if: steps.config.outputs.deploy_enabled == 'true' && inputs.notification_only != true
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ env.WEBSITE_OBSERVATION_SOURCE }}
-          path: website-observation-source
-
-      - name: Verify reviewed website observation source
-        if: steps.config.outputs.deploy_enabled == 'true' && inputs.notification_only != true
-        run: |
-          set -euo pipefail
-          test "$GITHUB_REF" = "refs/heads/main"
-          test "$(git -C website-observation-source rev-parse HEAD)" = "$WEBSITE_OBSERVATION_SOURCE"
-          test "$(git -C website-observation-source rev-parse 'HEAD^{tree}')" = "$WEBSITE_OBSERVATION_TREE"
-          git merge-base --is-ancestor "$WEBSITE_OBSERVATION_SOURCE" HEAD
-
       - name: Build, push, and deploy Cloud Run image
         id: deploy
         if: steps.config.outputs.deploy_enabled == 'true' && inputs.notification_only != true
@@ -515,10 +492,12 @@ jobs:
           image="${image_repo}:${GITHUB_SHA}"
 
           gcloud auth configure-docker "${artifact_registry_hostname}" --quiet
-          git -C website-observation-source archive HEAD | docker build --pull -t "${image}" -
+          test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
+          git show "${EXPECTED_SHA}:uv.lock" | cmp -s - uv.lock
+          git archive "${EXPECTED_SHA}" | docker build --pull -t "${image}" -
           # RS-08 guard: block the deploy if the image's installed UES revision differs from
           # strategy_release / runtime-risk binding (live would reject every SOXL rebalance).
-          python3 scripts/verify_image_ues_release_binding.py --image "${image}" --lockfile website-observation-source/uv.lock
+          python3 scripts/verify_image_ues_release_binding.py --image "${image}" --lockfile uv.lock
           docker push "${image}"
           image_digest="$(gcloud artifacts docker images describe "${image}" --project="${GCP_PROJECT_ID}" --format='value(image_summary.digest)')"
           if [[ ! "${image_digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
@@ -528,29 +507,12 @@ jobs:
           immutable_image="${image_repo}@${image_digest}"
           echo "image_digest=${image_digest}" >> "${GITHUB_OUTPUT}"
 
-          cash_deploy_env_args=()
-          if [ -n "${SCHWAB_CASH_CURRENCY:-}" ]; then
-            cash_deploy_env_args+=(--update-env-vars="SCHWAB_CASH_CURRENCY=${SCHWAB_CASH_CURRENCY}")
-          fi
-
-          gcloud run deploy "${CLOUD_RUN_SERVICE}" \
+          gcloud run services update "${CLOUD_RUN_SERVICE}" \
             --project="${GCP_PROJECT_ID}" \
             --region="${CLOUD_RUN_REGION}" \
-            --platform=managed \
             --image="${immutable_image}" \
-            --service-account="${GCP_RUNTIME_SERVICE_ACCOUNT}" \
-            --ingress=internal \
-            --no-allow-unauthenticated \
-            --max-instances=1 \
-            --concurrency=1 \
-            --memory=512Mi \
-            --cpu=1 \
-            --timeout=300s \
-            --labels="managed-by=github-actions,commit-sha=${WEBSITE_OBSERVATION_SOURCE},github-run-id=${GITHUB_RUN_ID}" \
+            --update-labels="managed-by=github-actions,commit-sha=${EXPECTED_SHA},github-run-id=${GITHUB_RUN_ID}" \
             --no-traffic \
-            --deploy-health-check \
-            --startup-probe="httpGet.path=/health,httpGet.port=8080,periodSeconds=10,timeoutSeconds=5,failureThreshold=24" \
-            "${cash_deploy_env_args[@]}" \
             --quiet
 
       - name: Verify no-traffic deployment readback
@@ -560,18 +522,13 @@ jobs:
           EXPECTED_IMAGE_DIGEST: ${{ steps.deploy.outputs.image_digest }}
         run: |
           set -euo pipefail
-          cash_currency_args=()
-          if [ -n "${SCHWAB_CASH_CURRENCY:-}" ]; then
-            cash_currency_args+=(--cash-currency="${SCHWAB_CASH_CURRENCY}")
-          fi
           python3 scripts/verify_cloud_run_no_traffic_deploy.py verify \
             --project="${GCP_PROJECT_ID}" \
             --region="${CLOUD_RUN_REGION}" \
             --service="${CLOUD_RUN_SERVICE}" \
             --scheduler-location="${CLOUD_SCHEDULER_LOCATION:-${CLOUD_RUN_REGION}}" \
-            "${cash_currency_args[@]}" \
             --before="${DEPLOY_READBACK_FILE}" \
-            --expected-sha="${WEBSITE_OBSERVATION_SOURCE}" \
+            --expected-sha="${EXPECTED_SHA}" \
             --expected-image-digest="${EXPECTED_IMAGE_DIGEST}"
 
       - name: Checkout reviewed notification source

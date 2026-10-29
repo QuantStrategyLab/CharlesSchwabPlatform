@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import textwrap
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -21,12 +22,13 @@ spec.loader.exec_module(admission)
 def recovery(monkeypatch):
     from quant_platform_kit.common.live_continuity import runtime_target_fingerprint
 
+    declared_ues = tomllib.loads((ROOT / "qsl.toml").read_text())["qsl"]["requires"]["us_equity_strategies"]
     target = {
         "platform_id": "schwab", "service_name": "synthetic-service",
         "strategy_profile": "soxl_soxx_trend_income", "execution_mode": "live",
         "dry_run_only": False, "account_scope": "synthetic-account",
-        "strategy_release": {"strategy_revision": "9d1544d1476dd19b1da61b16f37cee7f9126caf4"},
-        "runtime_risk_limits": {"binding": {"ues_revision": "9d1544d1476dd19b1da61b16f37cee7f9126caf4"}},
+        "strategy_release": {"strategy_revision": declared_ues},
+        "runtime_risk_limits": {"binding": {"ues_revision": declared_ues}},
     }
     target["live_continuity"] = {
         "state": "PAUSED", "baseline_kind": "legacy_authorized",

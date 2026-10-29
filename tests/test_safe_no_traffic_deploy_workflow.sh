@@ -22,10 +22,16 @@ grep -Fq 'steps.config.outputs.scheduler_iam_sync_enabled == '\''true'\''' "$wor
 grep -Fq 'steps.config.outputs.traffic_shift_enabled == '\''true'\''' "$workflow"
 grep -Fq 'steps.config.outputs.cleanup_enabled == '\''true'\''' "$workflow"
 
-deploy_block="$(sed -n '/gcloud run deploy "${CLOUD_RUN_SERVICE}"/,/--quiet/p' "$workflow")"
+deploy_block="$(awk '/gcloud run services update "\$\{CLOUD_RUN_SERVICE\}"/ {found=1} found {print} found && /--quiet/ {exit}' "$workflow")"
 grep -Fq 'immutable_image="${image_repo}@${image_digest}"' "$workflow"
 grep -Fq -- '--image="${immutable_image}"' <<<"$deploy_block"
 grep -Fq -- '--no-traffic' <<<"$deploy_block"
+for option in --update-env-vars --set-env-vars --service-account --ingress --max-instances --concurrency --memory --cpu --timeout --startup-probe; do
+  if grep -Fq -- "$option" <<<"$deploy_block"; then
+    echo "image-only update must not change runtime configuration" >&2
+    exit 1
+  fi
+done
 if grep -Fq -- '--to-latest' <<<"$deploy_block"; then
   echo "image deploy must not shift traffic" >&2
   exit 1
@@ -35,8 +41,6 @@ grep -Fq 'Capture no-traffic deployment baseline' "$workflow"
 grep -Fq 'Verify no-traffic deployment readback' "$workflow"
 grep -Fq 'scripts/verify_cloud_run_no_traffic_deploy.py capture' "$workflow"
 grep -Fq 'scripts/verify_cloud_run_no_traffic_deploy.py verify' "$workflow"
-grep -Fq 'cash_currency_args+=(--cash-currency="${SCHWAB_CASH_CURRENCY}")' "$workflow"
-test "$(grep -Fc '"${cash_currency_args[@]}"' "$workflow")" -eq 2
 grep -Fq -- '--expected-image-digest="${EXPECTED_IMAGE_DIGEST}"' "$workflow"
 grep -Fq 'image_summary.digest' "$workflow"
 
@@ -47,7 +51,7 @@ grep -Fq 'if percent > 0:' "$readback"
 grep -Fq 'json(spec.template.spec.containers[].env.always().filter("name=SCHWAB_CASH_CURRENCY").map().extract(value))' "$readback"
 grep -Fq 'json(spec.containers[].env.always().filter("name=SCHWAB_CASH_CURRENCY").map().extract(value))' "$readback"
 grep -Fq 'deployment baseline cash currency is not an allowed value' "$readback"
-if grep -Fq 'secrets versions access' "$readback" || grep -Fq 'containers.env.value,' "$readback"; then
+if grep -Fq 'secrets versions access' "$readback"; then
   echo "readback must not access Secret Manager values or plaintext environment values" >&2
   exit 1
 fi
@@ -66,15 +70,15 @@ with tempfile.TemporaryDirectory() as directory:
     root = Path(directory)
     control = root / "checkout"
     control.mkdir()
-    checkout = control / "website-observation-source"
-    checkout.mkdir()
+    checkout = control
     env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
     def git(*args):
         subprocess.run(["git", *args], cwd=checkout, env=env, check=True, capture_output=True)
     git("init", "-q")
     (checkout / "Dockerfile").write_text("FROM scratch\nCOPY . /app/\n")
     (checkout / "tracked.txt").write_text("synthetic source\n")
-    git("add", "Dockerfile", "tracked.txt")
+    (checkout / "uv.lock").write_text("synthetic lock\n")
+    git("add", "Dockerfile", "tracked.txt", "uv.lock")
     git("-c", "user.name=synthetic", "-c", "user.email=synthetic@example.invalid", "-c", "commit.gpgSign=false", "commit", "-qm", "synthetic")
     (checkout / "gha-creds-synthetic.json").write_text('{"synthetic":true}\n')
     (control / "gha-creds-control.json").write_text('{"synthetic":true}\n')
@@ -87,50 +91,41 @@ if sys.argv[-1] != "-":
     raise SystemExit("workspace build context can include generated credentials")
 with tarfile.open(fileobj=sys.stdin.buffer, mode="r|*") as archive:
     names = {member.name for member in archive}
-if names != {"Dockerfile", "tracked.txt"}:
+if names != {"Dockerfile", "tracked.txt", "uv.lock"}:
     raise SystemExit("build context must contain only the approved tracked source")
 ''')
     docker.chmod(0o700)
-    env.update(PATH=f"{bin_dir}:{os.environ['PATH']}", image="synthetic:test")
+    env.update(PATH=f"{bin_dir}:{os.environ['PATH']}", image="synthetic:test", EXPECTED_SHA=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=checkout, env=env, text=True).strip())
     result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + build_command], cwd=control, env=env, capture_output=True)
     if result.returncode:
         raise SystemExit("FAIL: generated authentication file is not excluded by the build boundary")
+    guard = 'test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"\ngit show "${EXPECTED_SHA}:uv.lock" | cmp -s - uv.lock'
+    def check_guard():
+        return subprocess.run(["bash", "-c", "set -euo pipefail\n" + guard], cwd=control, env=env).returncode
+    assert check_guard() == 0
+    (checkout / "uv.lock").write_text("tampered lock\n")
+    assert check_guard() != 0
+    (checkout / "uv.lock").write_text("synthetic lock\n")
+    env["EXPECTED_SHA"] = "0" * 40
+    assert check_guard() != 0
 print("PASS: tracked-source container build excludes generated authentication files")
 PY
 
-# Exercise the real frozen-source guard: branch, commit, tree and ancestry.
-python3 - "$workflow" <<'PY_GUARD'
-import json, os, subprocess, sys, tempfile
-from pathlib import Path
+# The image, dependency lock, label and readback must all use the approved checkout.
+python3 - "$workflow" <<'PY_SOURCE'
+import json, subprocess, sys
 wf = json.loads(subprocess.check_output(["ruby", "-rjson", "-ryaml", "-e", "puts JSON.generate(YAML.load_file(ARGV[0]))", sys.argv[1]]))
-guard = next(s["run"] for s in wf["jobs"]["sync-cloud-run-env"]["steps"] if s.get("name") == "Verify reviewed website observation source")
-with tempfile.TemporaryDirectory() as directory:
-    root = Path(directory)
-    env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
-    def git(*args, cwd=root):
-        return subprocess.check_output(["git", *args], cwd=cwd, env=env, stderr=subprocess.DEVNULL, text=True).strip()
-    git("init", "-q")
-    git("config", "user.name", "synthetic")
-    git("config", "user.email", "synthetic@example.invalid")
-    (root / "runtime.txt").write_text("reviewed source\n")
-    git("add", "runtime.txt"); git("-c", "commit.gpgSign=false", "commit", "-qm", "source")
-    source = git("rev-parse", "HEAD"); tree = git("rev-parse", "HEAD^{tree}")
-    git("clone", "-q", ".", "website-observation-source")
-    (root / "control.txt").write_text("approved control\n")
-    git("add", "control.txt"); git("-c", "commit.gpgSign=false", "commit", "-qm", "control")
-    baseline = dict(env, GITHUB_REF="refs/heads/main", WEBSITE_OBSERVATION_SOURCE=source, WEBSITE_OBSERVATION_TREE=tree)
-    def run(changes=None):
-        return subprocess.run(["bash", "-c", guard], cwd=root, env={**baseline, **(changes or {})}, capture_output=True).returncode
-    assert run() == 0
-    for changes in ({"GITHUB_REF": "refs/heads/unapproved"}, {"WEBSITE_OBSERVATION_SOURCE": "0" * 40}, {"WEBSITE_OBSERVATION_TREE": "0" * 40}):
-        assert run(changes) != 0
-    nested = root / "website-observation-source"
-    git("config", "user.name", "synthetic", cwd=nested); git("config", "user.email", "synthetic@example.invalid", cwd=nested)
-    (nested / "unadopted.txt").write_text("not an ancestor\n")
-    git("add", "unadopted.txt", cwd=nested); git("-c", "commit.gpgSign=false", "commit", "-qm", "unadopted", cwd=nested)
-    assert run({"WEBSITE_OBSERVATION_SOURCE": git("rev-parse", "HEAD", cwd=nested), "WEBSITE_OBSERVATION_TREE": git("rev-parse", "HEAD^{tree}", cwd=nested)}) != 0
-print("PASS: frozen runtime source rejects wrong branch, commit, tree and unadopted ancestry")
-PY_GUARD
+steps = wf["jobs"]["sync-cloud-run-env"]["steps"]
+build = next(s["run"] for s in steps if s.get("name") == "Build, push, and deploy Cloud Run image")
+readback = next(s["run"] for s in steps if s.get("name") == "Verify no-traffic deployment readback")
+assert 'test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"' in build
+assert 'git show "${EXPECTED_SHA}:uv.lock" | cmp -s - uv.lock' in build
+assert 'git archive "${EXPECTED_SHA}" | docker build' in build
+assert '--lockfile uv.lock' in build
+assert 'commit-sha=${EXPECTED_SHA}' in build and '--expected-sha="${EXPECTED_SHA}"' in readback
+assert 'WEBSITE_OBSERVATION_SOURCE' not in str(wf)
+print("PASS: source, lock, image label and readback bind to the approved SHA")
+PY_SOURCE
 
 # Execute the actual mode selector with no connected services. Mixed-operation
 # approvals must stop before checkout/auth; default HTTP remains available.

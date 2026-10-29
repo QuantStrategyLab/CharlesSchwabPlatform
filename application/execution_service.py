@@ -582,6 +582,8 @@ def execute_rebalance_cycle(
         )
         print(attention_message, flush=True)
         trade_logs.append(attention_message)
+        if not strategy_symbols and getattr(admission, "hard_brake_triggered", False):
+            trade_logs.append("Account hard brake observed; no registered reduction plan is available.")
         allocation = apply_combined_scale_to_allocation_targets(
             allocation,
             admission.combined_scale,
