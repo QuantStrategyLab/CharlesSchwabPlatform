@@ -84,7 +84,7 @@ jobs:
             echo "skipped:inspection_requires_manual_latest_report"
             exit 2
           fi
-          python3 scripts/publish_account_facts_from_reports.py --latest-report --inspect-only
+          python3 -m scripts.publish_account_facts_from_reports --latest-report --inspect-only
 
       - name: Project and publish the selected archived report
         if: ${{ !inputs.inspect_only }}
@@ -109,9 +109,9 @@ jobs:
               echo "skipped:conflicting_source_selection"
               exit 2
             fi
-            python3 scripts/publish_account_facts_from_reports.py --latest-report
+            python3 -m scripts.publish_account_facts_from_reports --latest-report
           else
-            python3 scripts/publish_account_facts_from_reports.py \
+            python3 -m scripts.publish_account_facts_from_reports \
               --report-uri "$REPORT_URI" \
               --expected-runtime-revision "$EXPECTED_RUNTIME_REVISION"
           fi
