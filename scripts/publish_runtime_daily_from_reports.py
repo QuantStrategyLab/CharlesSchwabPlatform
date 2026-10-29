@@ -575,6 +575,7 @@ def prepare_daily(
     except Exception:
         return PreparedDaily("observation_time_invalid")
     admitted = []
+    rejected_unattributed = False
     failed = batch.read_failed or batch.truncated
     try:
         for index, entry in enumerate(batch.entries):
@@ -595,6 +596,9 @@ def prepare_daily(
                 # Preserve the original exception path for malformed containers:
                 # they remain excluded bad reports, not new whole-batch skips.
                 identity_problem = _account_identity_problem(payload, account_hash)
+                if identity_problem == "source_observation_missing":
+                    rejected_unattributed = True
+                    continue
                 if identity_problem is not None:
                     return PreparedDaily(identity_problem)
                 admitted.append({"payload": payload, "object_uri": uri})
@@ -627,9 +631,12 @@ def prepare_daily(
         schedule_facts=schedule,
         # No current reader proves retention and all earlier unresolved runs.
         coverage_complete=False,
-        read_errors=["report_read_error"] if failed else [],
+        read_errors=(["report_read_error"] if failed else [])
+        + (["report_rejected"] if rejected_unattributed else []),
         expected_account_hash=account_hash,
     )
+    if rejected_unattributed and not projection["records"][0]["runs"]:
+        return PreparedDaily("source_observation_missing")
     if not _within_budget(projection):
         return PreparedDaily("projection_budget_exceeded")
     binding_id = _binding_id(account_hash, TARGET["service"])
