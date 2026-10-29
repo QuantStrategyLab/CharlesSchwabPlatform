@@ -1,7 +1,12 @@
-name: Protected Schwab Pilot Metadata Reader
+name: Protected Schwab Pilot Metadata and Resume
 
 on:
   workflow_call:
+    inputs:
+      resume_operation:
+        type: string
+        default: none
+        required: false
     secrets:
       inventory:
         required: false
@@ -56,6 +61,7 @@ jobs:
           project_id: ${{ env.GCP_PROJECT_ID }}
 
       - name: Read existing serving metadata once
+        if: ${{ inputs.resume_operation == 'none' }}
         env:
           CLOUD_RUN_SERVICE_TARGETS_JSON: ${{ secrets.inventory }}
           RUNTIME_TARGET_JSON: ${{ secrets.runtime_target }}
@@ -71,10 +77,22 @@ jobs:
         run: uv run --no-sync python -m scripts.diagnose_pilot_metadata
 
       - name: Save fixed safe projection
-        if: ${{ always() }}
+        if: ${{ always() && inputs.resume_operation == 'none' }}
         uses: actions/upload-artifact@v4
         with:
           name: schwab-pilot-metadata-safe
           path: ${{ runner.temp }}/schwab-pilot-metadata.safe.json
           if-no-files-found: error
           retention-days: 3
+
+      - name: Inspect or resume the paused service
+        if: ${{ inputs.resume_operation == 'inspect' || inputs.resume_operation == 'apply' }}
+        env:
+          CLOUD_RUN_SERVICE_TARGETS_JSON: ${{ secrets.inventory }}
+          RUNTIME_TARGET_JSON: ${{ secrets.runtime_target }}
+          CLOUD_RUN_SERVICE: ${{ secrets.service }}
+          CLOUD_RUN_SERVICES: ${{ secrets.services }}
+          CLOUD_RUN_REGION: ${{ secrets.region }}
+          RESUME_OPERATION: ${{ inputs.resume_operation }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: uv run --no-sync python -m scripts.resume_schwab_single_state

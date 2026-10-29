@@ -1,7 +1,13 @@
-name: Schwab Pilot Metadata Readback
+name: Schwab Pilot Metadata and Resume
 
 on:
   workflow_dispatch:
+    inputs:
+      resume_operation:
+        description: Default read-only; inspect is read-only; apply resumes live trading.
+        type: choice
+        options: [none, inspect, apply]
+        default: none
 
 permissions:
   contents: read
@@ -15,9 +21,10 @@ jobs:
   readback:
     if: github.repository == 'QuantStrategyLab/CharlesSchwabPlatform' && github.ref == 'refs/heads/main' && github.run_attempt == 1
     uses: ./.github/workflows/pilot-metadata-readback-protected.yml
-    # Passing both original Variables and their legacy Secret fallbacks through
-    # named workflow secrets masks them before any runner step header is logged.
-    # No caller-supplied service, account, policy or operation overrides exist.
+    with:
+      resume_operation: ${{ inputs.resume_operation || 'none' }}
+    # Named workflow secrets mask existing target and service values before step
+    # headers. Only the explicit apply mode changes the existing live service.
     secrets:
       inventory: ${{ vars.CLOUD_RUN_SERVICE_TARGETS_JSON || secrets.CLOUD_RUN_SERVICE_TARGETS_JSON }}
       runtime_target: ${{ vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}
