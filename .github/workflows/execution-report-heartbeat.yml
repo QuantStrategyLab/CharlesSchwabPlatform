@@ -182,7 +182,7 @@ jobs:
           project_id: ${{ env.GCP_PROJECT_ID }}
 
       - name: Sync the latest in-window archived account observation
-        run: python3 scripts/publish_account_facts_from_reports.py --latest-scheduled-report
+        run: python3 -m scripts.publish_account_facts_from_reports --latest-scheduled-report
 
       - name: Publish existing reports as unified digest candidates
         if: ${{ success() && vars.QSL_ROUTINE_NOTIFICATION_MODE == 'daily_digest' }}
