@@ -2527,6 +2527,9 @@ def test_managed_caller_all_final_orders_and_both_transports(tmp_path, kind, bra
         qualify_synthetic_sell(c)
     result = run_strategy_core(runtime=c.runtime, config=c.config)
     assert len(c.calls) == 1
+    accepted_log = next(line for line in result.trade_logs if "accepted by broker" in line)
+    assert "fill not confirmed" in accepted_log
+    assert not accepted_log.startswith("✅")
     ref = json.loads(c.locator.read_registered().payload_json)["references"][0]
     raw = json.loads(c.store.object_store.read_text(ref["descriptor_uri"]))
     assert raw["intent"]["order"] == __import__("dataclasses").asdict(c.calls[0])
@@ -3340,6 +3343,10 @@ def test_verified_original_closure_does_not_reenter_sell_resource_obligations(tm
     original = qualify_synthetic_sell(continuity_case(tmp_path, branch=branch))
     first = run_strategy_core(runtime=original.runtime, config=original.config)
     assert len(original.calls) == 1 and first.submitted_orders[0]["broker_order_id"] == "SYNTH_ACK"
+    sell_log = next(line for line in first.trade_logs if "Market Sell" in line)
+    assert "accepted by broker" in sell_log
+    assert "fill not confirmed" in sell_log
+    assert "risk reduced" not in sell_log.lower()
     from application.execution_intent_continuity import _IntentSession
     from quant_platform_kit.common.execution_commands import ExecutionCommandState
     current = continuity_case(tmp_path, "2026-10-01", branch=branch)
