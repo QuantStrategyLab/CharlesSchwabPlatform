@@ -344,7 +344,7 @@ def _report_provenance_passes(
     *,
     object_uri: str,
     report_prefix: str,
-    expected_runtime_revision: str,
+    expected_runtime_revision: str | None,
     observed_at: dt.datetime,
 ) -> bool:
     """The original non-account checks, in their original evaluation order."""
@@ -365,7 +365,7 @@ def _report_provenance_problem(
     *,
     object_uri: str,
     report_prefix: str,
-    expected_runtime_revision: str,
+    expected_runtime_revision: str | None,
     observed_at: dt.datetime,
 ) -> str | None:
     """Decompose the same predicate, preserving short-circuit and exceptions."""
@@ -397,7 +397,7 @@ def diagnose_report_prefilter(
     *,
     batch: ReadBatch,
     report_prefix: str,
-    expected_runtime_revision: str,
+    expected_runtime_revision: str | None,
     observed_at: dt.datetime,
 ) -> dict[str, int | bool] | None:
     """Classify this memory batch without identity comparison or source reads."""
@@ -409,8 +409,10 @@ def diagnose_report_prefilter(
             or type(batch.read_failed) is not bool
             or type(batch.truncated) is not bool
             or not _valid_report_prefix(report_prefix)
-            or not isinstance(expected_runtime_revision, str)
-            or _REVISION.fullmatch(expected_runtime_revision) is None
+            or (expected_runtime_revision is not None and (
+                not isinstance(expected_runtime_revision, str)
+                or _REVISION.fullmatch(expected_runtime_revision) is None
+            ))
             or not isinstance(observed_at, dt.datetime)
         ):
             return None
@@ -472,7 +474,7 @@ def diagnose_identity_mismatch(
     environ: Mapping[str, str],
     batch: ReadBatch,
     report_prefix: str,
-    expected_runtime_revision: str,
+    expected_runtime_revision: str | None,
     observed_at: dt.datetime,
 ) -> dict[str, int] | None:
     """Count only the supplied first 20 memory entries, never read more data.
@@ -485,8 +487,10 @@ def diagnose_identity_mismatch(
         account_hash, _policy = _select_identity(environ)
         if (
             not _valid_report_prefix(report_prefix)
-            or not isinstance(expected_runtime_revision, str)
-            or _REVISION.fullmatch(expected_runtime_revision) is None
+            or (expected_runtime_revision is not None and (
+                not isinstance(expected_runtime_revision, str)
+                or _REVISION.fullmatch(expected_runtime_revision) is None
+            ))
             or not isinstance(observed_at, dt.datetime)
             or type(batch.entries) not in (list, tuple)
         ):
@@ -546,7 +550,7 @@ def prepare_daily(
     environ: Mapping[str, str],
     batch: ReadBatch,
     report_prefix: str,
-    expected_runtime_revision: str,
+    expected_runtime_revision: str | None,
     observed_at: dt.datetime,
     session_dates_loader: Callable[..., set[dt.date]] | None = None,
     schedule_provider: Callable[..., dict[str, Any] | None] | None = None,
@@ -557,8 +561,10 @@ def prepare_daily(
     except Exception:
         return PreparedDaily("source_identity_unavailable")
     if (
-        not isinstance(expected_runtime_revision, str)
-        or _REVISION.fullmatch(expected_runtime_revision) is None
+        (expected_runtime_revision is not None and (
+            not isinstance(expected_runtime_revision, str)
+            or _REVISION.fullmatch(expected_runtime_revision) is None
+        ))
         or not _valid_report_prefix(report_prefix)
     ):
         return PreparedDaily("source_configuration_invalid")

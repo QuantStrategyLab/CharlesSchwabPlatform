@@ -126,7 +126,7 @@ def _zero_run_diagnostics(
     *,
     batch: caller.ReadBatch,
     report_prefix: str,
-    expected_runtime_revision: str,
+    expected_runtime_revision: str | None,
     observed_at: dt.datetime,
 ) -> dict[str, int | bool]:
     """Supplement only sealed empty runs with bounded, fixed memory facts."""
@@ -332,7 +332,8 @@ def run_daily(
             if verify_native_identity_only:
                 return {"status": "native_identity_verified"}
         facts = fact_reader(environ)
-        if (
+        expected = environ.get("EXPECTED_RUNTIME_REVISION")
+        if expected and (
             not isinstance(facts.runtime_revision, str)
             or caller._REVISION.fullmatch(facts.runtime_revision) is None
         ):
@@ -343,7 +344,6 @@ def run_daily(
                 if facts.reason in SAFE_REASONS
                 else "service_unavailable",
             }
-        expected = environ.get("EXPECTED_RUNTIME_REVISION")
         if expected and expected != facts.runtime_revision:
             return {"status": "skipped", "reason": "service_revision_mismatch"}
         batch = archive_reader(report_prefix=prefix, observed_at=now)
