@@ -1028,7 +1028,6 @@ def test_unqualified_mismatch_no_longer_blocks_qualified_matching_report(
 @pytest.mark.parametrize(
     "failure",
     [
-        "observation",
         "hash_missing",
         "hash_invalid",
         "mismatch",
@@ -1066,6 +1065,30 @@ def test_qualified_identity_failure_stops_every_mixed_batch_order_without_post(
     assert prepared._source_binding_id is None and prepared._preparation_digest is None
     result, opener = publish(prepared)
     assert result == {"status": "skipped", "reason": "projection_unavailable"}
+    opener.open.assert_not_called()
+
+
+@pytest.mark.parametrize("bad_first", [False, True])
+def test_unattributed_report_excluded_while_matching_report_remains_incomplete(bad_first):
+    bad = envelope(stamp="20261006T200000Z")
+    bad["payload"]["summary"].pop("account_observation")
+    good = envelope()
+    result = prepare([bad, good] if bad_first else [good, bad])
+    assert result.reason == "prepared"
+    assert len(result.projection["records"][0]["runs"]) == 1
+    assert result.projection["completeness"] == "incomplete"
+    assert "report_rejected" in result.projection["read_errors"]
+    assert "coverage_unconfirmed" in result.projection["read_errors"]
+    assert "report_read_error" not in result.projection["read_errors"]
+
+
+def test_only_unattributed_report_cannot_publish_zero_runs():
+    bad = envelope()
+    bad["payload"]["summary"].pop("account_observation")
+    prepared = prepare([bad])
+    assert prepared.reason == "source_observation_missing"
+    assert prepared.projection is None
+    _, opener = publish(prepared)
     opener.open.assert_not_called()
 
 
@@ -1421,7 +1444,6 @@ def test_source_built_producer_contract_reaches_existing_bound_projection(
     "failure,reason",
     [
         ("selector", "source_selector_mismatch"),
-        ("observation", "source_observation_missing"),
         ("hash_missing", "source_hash_missing"),
         ("hash_invalid", "source_identity_invalid_shape"),
         ("hash_mismatch", "source_identity_mismatch"),

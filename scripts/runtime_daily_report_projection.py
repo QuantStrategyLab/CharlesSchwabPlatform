@@ -159,7 +159,10 @@ def project_daily_runtime(
         raise ValueError("invalid_business_date")
     schedule = _schedule(schedule_facts, day, observed)
     read_failed = bool(read_errors) or coverage_complete is not True
-    errors = ["report_read_error"] * len(read_errors)
+    errors = [
+        "report_rejected" if error == "report_rejected" else "report_read_error"
+        for error in read_errors
+    ]
     if coverage_complete is not True:
         errors.append("coverage_unconfirmed")
     runs: list[dict[str, Any]] = []
