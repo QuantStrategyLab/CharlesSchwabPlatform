@@ -38,6 +38,15 @@ def test_inspect_is_read_only_and_detects_template_drift(case):
         resume.execute({"RESUME_OPERATION": "inspect"}, describe=describe)
 
 
+def test_template_difference_exposes_only_fixed_boolean_comparisons():
+    desired = {"containers": [{"image": "PRIVATE_A", "env": [{"name": "PRIVATE_FIELD"}]}]}
+    serving = {"containers": [{"image": "PRIVATE_B", "env": [{"name": "PRIVATE_FIELD"}]}]}
+    result = resume.TemplateDifference(desired, serving).comparisons
+    assert result["container_image"] is False and result["container_env"] is True
+    assert all(type(value) is bool for value in result.values())
+    assert "PRIVATE" not in json.dumps(result)
+
+
 def test_apply_writes_only_state_then_adopts_and_reads_back(case, monkeypatch):
     service, revision, target = case
     declared = copy.deepcopy(target)
