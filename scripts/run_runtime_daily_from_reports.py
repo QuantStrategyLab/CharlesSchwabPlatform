@@ -336,7 +336,13 @@ def run_daily(
             not isinstance(facts.runtime_revision, str)
             or caller._REVISION.fullmatch(facts.runtime_revision) is None
         ):
-            return {"status": "skipped", "reason": "service_revision_unavailable"}
+            return {
+                "status": "skipped",
+                "reason": "service_revision_unavailable",
+                "source_facts": facts.reason
+                if facts.reason in SAFE_REASONS
+                else "service_unavailable",
+            }
         expected = environ.get("EXPECTED_RUNTIME_REVISION")
         if expected and expected != facts.runtime_revision:
             return {"status": "skipped", "reason": "service_revision_mismatch"}
