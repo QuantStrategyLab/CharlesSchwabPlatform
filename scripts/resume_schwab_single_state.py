@@ -18,6 +18,19 @@ REVISION = SERVICE + "-00805-buq"
 IMAGE = "sha256:e5b96671086a3c3da8e8d2c88fd7a9b65a69b7d38d9aaa63a2e66da94170ba1f"
 
 
+class TemplateDifference(ValueError):
+    def __init__(self, desired, serving):
+        super().__init__("template_differs")
+        fields = ("containers", "containerConcurrency", "timeoutSeconds", "serviceAccountName", "volumes")
+        self.comparisons = {name: desired.get(name) == serving.get(name) for name in fields}
+        self.comparisons["other_fields"] = {k: v for k, v in desired.items() if k not in fields} == {k: v for k, v in serving.items() if k not in fields}
+        left, right = desired.get("containers", []), serving.get("containers", [])
+        if len(left) == len(right) == 1:
+            names = ("image", "env", "resources", "ports", "startupProbe", "command", "args", "name")
+            self.comparisons.update({"container_" + name: left[0].get(name) == right[0].get(name) for name in names})
+            self.comparisons["container_other_fields"] = {k: v for k, v in left[0].items() if k not in names} == {k: v for k, v in right[0].items() if k not in names}
+
+
 def _command(args):
     result = subprocess.run(args, capture_output=True, text=True, timeout=180, check=False,
                             env={**os.environ, "CLOUDSDK_CORE_DISABLE_FILE_LOGGING": "true",
@@ -49,7 +62,9 @@ def inspect(environ, *, describe=metadata._describe):
         raise ValueError("target_mismatch")
     desired = before.get("spec", {}).get("template", {}).get("spec")
     if desired != revision.get("spec"):
-        raise ValueError("template_differs")
+        if not isinstance(desired, dict) or not isinstance(revision.get("spec"), dict):
+            raise ValueError("template_differs")
+        raise TemplateDifference(desired, revision["spec"])
     containers = revision["spec"]["containers"]
     if len(containers) != 1 or not containers[0]["image"].endswith("@" + IMAGE):
         raise ValueError("image_mismatch")
@@ -153,7 +168,10 @@ def main():
                    "traffic_write_uncertain_do_not_retry", "adoption_readback_mismatch",
                    "candidate_readback_unknown_do_not_retry", "adoption_readback_unknown_do_not_retry"}
         reason = str(exc) if str(exc) in allowed else "read_or_validation_failed"
-        print(json.dumps({"status": "stopped", "reason": reason}))
+        result = {"status": "stopped", "reason": reason}
+        if isinstance(exc, TemplateDifference):
+            result["template_field_matches"] = exc.comparisons
+        print(json.dumps(result, sort_keys=True))
         return 1
     print(json.dumps(result, sort_keys=True))
     return 0
