@@ -409,9 +409,34 @@ def test_declared_five_field_cron_never_repairs_unknown_actual_scheduler(reason)
      ("PRIVATE-ERROR", "service_unavailable")],
 )
 def test_unavailable_revision_reports_only_safe_fact_without_reads_or_post(reason, expected):
-    result, readers = run(observation=facts.SourceFacts(reason))
+    env = environment()
+    env["EXPECTED_RUNTIME_REVISION"] = REVISION
+    result, readers = run(environ=env, observation=facts.SourceFacts(reason))
     assert result == {"status": "skipped", "reason": "service_revision_unavailable",
                       "source_facts": expected}
+    readers["archive_reader"].assert_not_called()
+    readers["publisher"].assert_not_called()
+
+
+def test_missing_service_facts_keeps_schedule_unknown_and_publishes_reports():
+    result, readers = run(
+        environ=environment_with_protected_daily_target(),
+        publish=True,
+        observation=facts.SourceFacts("service_traffic_unconfirmed"),
+    )
+    assert result["status"] == "stored_acknowledged"
+    assert result["schedule"] == "unevaluable"
+    assert result["completeness"] == "incomplete"
+    assert result["projected_run_count"] == 1
+    readers["archive_reader"].assert_called_once()
+    readers["publisher"].assert_called_once()
+
+
+def test_expected_revision_conflict_still_blocks_reads_and_publication():
+    env = environment_with_protected_daily_target()
+    env["EXPECTED_RUNTIME_REVISION"] = "other-revision"
+    result, readers = run(environ=env, publish=True)
+    assert result == {"status": "skipped", "reason": "service_revision_mismatch"}
     readers["archive_reader"].assert_not_called()
     readers["publisher"].assert_not_called()
 
@@ -748,8 +773,10 @@ def test_invalid_inputs_do_not_read_reports_or_post(mutation):
         read_facts.assert_not_called()
 
 
-def test_missing_serving_revision_never_reads_a_report():
-    result, readers = run(observation=facts.SourceFacts("service_unavailable"))
+def test_expected_serving_revision_missing_never_reads_a_report():
+    env = environment()
+    env["EXPECTED_RUNTIME_REVISION"] = REVISION
+    result, readers = run(environ=env, observation=facts.SourceFacts("service_unavailable"))
     assert result["status"] == "skipped"
     readers["archive_reader"].assert_not_called()
     readers["publisher"].assert_not_called()
