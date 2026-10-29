@@ -57,7 +57,7 @@ Direct runtime profiles can usually run from market history or portfolio state. 
 ## Paper command consumer
 
 The isolated, default-disabled Schwab paper command consumer is documented in
-[`docs/paper_execution_command_consumer.md`](docs/paper_execution_command_consumer.md).
+[`docs/paper-execution-command-consumer.md`](docs/paper-execution-command-consumer.md).
 
 ## Quick start
 
