@@ -11,7 +11,7 @@ import os
 import re
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -433,6 +433,8 @@ def fetch_schwab_transactions(
     Reuses the same expected-hash selection rule as QPK schwab portfolio reads:
     single account may omit expected; multiple accounts require an explicit hash.
     """
+    if start.tzinfo is None or end.tzinfo is None:
+        raise RuntimeError("transaction window must be timezone-aware")
     get_account_numbers = getattr(client, "get_account_numbers", None)
     get_transactions = getattr(client, "get_transactions", None)
     if not callable(get_account_numbers) or not callable(get_transactions):
@@ -462,7 +464,10 @@ def fetch_schwab_transactions(
             raise RuntimeError("expected schwab account hash unavailable for transactions")
         account_hash = matched[0]
 
-    response = get_transactions(account_hash, start_date=start, end_date=end)
+    # schwab-py formats the supplied wall clock with Z without converting it.
+    response = get_transactions(
+        account_hash, start_date=start.astimezone(timezone.utc), end_date=end.astimezone(timezone.utc)
+    )
     status = getattr(response, "status_code", None)
     payload = response.json()
     if status is not None and int(status) >= 400:
