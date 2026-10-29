@@ -55,6 +55,16 @@ CONVENTIONAL_UPPER = {
 
 DATE_IN_NAME = re.compile(r"(?<!\d)20\d{2}[-_]?\d{2}[-_]?\d{2}(?!\d)")
 
+# A date in the name is a defect when the file describes something that keeps
+# changing, because the date goes stale while the name stays. It is the
+# identity of the record when the file is a snapshot of one date: two analyses
+# of the same subject from different months are different documents, and
+# dropping the date leaves them fighting over one name.
+#
+# Section 7 therefore exempts the two places that hold records. ADRs carry a
+# sequence number rather than a date, but they are the same kind of thing.
+DATE_BEARING_PATHS = ("docs/adr/", "docs/research/")
+
 # Section 3 outline. The guide calls it "a default, not a required template",
 # so a missing section is never blocking.
 README_OUTLINE = [
@@ -185,7 +195,7 @@ def check_naming(root: Path, report: Report) -> None:
             if "_" in core:
                 report.add("naming", f"{rel}: use hyphens, not underscores (section 7)")
 
-        if DATE_IN_NAME.search(core) and "/adr/" not in rel:
+        if DATE_IN_NAME.search(core) and not rel.startswith(DATE_BEARING_PATHS):
             report.add("naming", f"{rel}: dates belong in history, not file names (section 7)")
 
 
