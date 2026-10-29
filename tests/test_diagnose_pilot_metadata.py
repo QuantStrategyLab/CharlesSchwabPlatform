@@ -445,7 +445,7 @@ def test_cli_safe_artifact_is_private_create_only_and_no_override(monkeypatch, t
 def test_wrapper_masks_original_variable_precedence_before_step_headers():
     wrapper = (ROOT / ".github/workflows/pilot-metadata-readback.yml").read_text()
     protected = (ROOT / ".github/workflows/pilot-metadata-readback-protected.yml").read_text()
-    assert "workflow_dispatch:" in wrapper and "options: [none, inspect, apply]" in wrapper
+    assert "workflow_dispatch:" in wrapper and "options: [none, inspect, enable, disable]" in wrapper
     assert "default: none" in wrapper
     assert "uses: ./.github/workflows/pilot-metadata-readback-protected.yml" in wrapper
     assert "inventory: ${{ vars.CLOUD_RUN_SERVICE_TARGETS_JSON || secrets.CLOUD_RUN_SERVICE_TARGETS_JSON }}" in wrapper
