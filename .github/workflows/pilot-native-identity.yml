@@ -2,6 +2,11 @@ name: Schwab Pilot Native Identity
 
 on:
   workflow_dispatch:
+    inputs:
+      observe_current:
+        description: Observe paused account and current orders once without recovery or trading.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -15,6 +20,8 @@ jobs:
   verify:
     if: github.repository == 'QuantStrategyLab/CharlesSchwabPlatform' && github.ref == 'refs/heads/main' && github.run_attempt == 1
     uses: ./.github/workflows/pilot-native-identity-protected.yml
+    with:
+      observe_current: ${{ inputs.observe_current || false }}
     # Preserve the metadata reader's original priority while masking values
     # before any runner step header. The separate daily target is not consumed.
     secrets:
