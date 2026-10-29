@@ -205,13 +205,10 @@ grep -Fq 'python3 scripts/reconcile_cloud_runtime.py build-monitor-targets' "$wo
 grep -Fq 'direct_monitor_description="Managed by CharlesSchwabPlatform direct-monitor-v1"' "$workflow_file"
 grep -Fq -- '--description="${direct_monitor_description}"' "$workflow_file"
 grep -Fq 'Reconcile Cloud Run traffic' "$workflow_file"
-grep -Fq -- '--max-instances=1' "$workflow_file"
-grep -Fq -- '--concurrency=1' "$workflow_file"
-deploy_block="$(sed -n '/gcloud run deploy "${CLOUD_RUN_SERVICE}"/,/--quiet/p' "$workflow_file")"
-grep -Fq -- '--ingress=internal' <<<"$deploy_block"
-grep -Fq -- '--no-allow-unauthenticated' <<<"$deploy_block"
-grep -Fq '"${cash_deploy_env_args[@]}"' <<<"$deploy_block"
-grep -Fq 'cash_deploy_env_args+=(--update-env-vars="SCHWAB_CASH_CURRENCY=${SCHWAB_CASH_CURRENCY}")' "$workflow_file"
+# Ordinary image update preserves existing service settings, including singleton
+# execution limits; cash configuration remains on the separate sync path.
+grep -Fq 'gcloud run services update "${CLOUD_RUN_SERVICE}"' "$workflow_file"
+grep -Fq -- '--no-traffic' "$workflow_file"
 grep -Fq 'if [ -n "${SCHWAB_CASH_CURRENCY:-}" ] && [ "${SCHWAB_CASH_CURRENCY}" != "USD" ]; then' "$workflow_file"
 cash_validation_line="$(grep -n -F 'SCHWAB_CASH_CURRENCY must be USD when configured.' "$workflow_file" | head -1 | cut -d: -f1)"
 auth_line="$(grep -n -F 'name: Authenticate to Google Cloud' "$workflow_file" | head -1 | cut -d: -f1)"

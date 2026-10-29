@@ -64,6 +64,14 @@ def _coerce_optional_float(value: object) -> float | None:
     return number
 
 
+def _risk_input(value: object) -> float | str | None:
+    """Preserve invalidity without putting non-finite numbers into JSON."""
+    if value is None:
+        return None
+    number = _coerce_optional_float(value)
+    return number if number is not None else "INVALID_RISK_INPUT"
+
+
 def _positive_limit_or_none(value: object) -> float | None:
     """Accept only finite positive limits; never invent a production default."""
     number = _coerce_optional_float(value)
@@ -183,6 +191,11 @@ def build_account_new_risk_snapshot(
     )
     projection = apply_cycle_new_risk_health_axes(projection, evidence)
     projection["equity_usd"] = equity_usd
+    for key in ("peak_equity_usd", "drawdown_from_peak", "realized_vol"):
+        if key in projection:
+            projection[key] = _risk_input(projection[key])
+        elif key in portfolio:
+            projection[key] = _risk_input(portfolio[key])
     return projection
 
 
@@ -489,30 +502,16 @@ def build_snapshot_from_portfolio(
     equity_usd = _coerce_optional_float(projection.get("equity_usd"))
     if equity_usd is None:
         equity_usd = _resolve_equity_usd(portfolio, execution)
-    peak_equity_usd = (
-        _coerce_optional_float(projection.get("peak_equity_usd"))
-        if "peak_equity_usd" in projection
-        else _coerce_optional_float(portfolio.get("peak_equity_usd"))
-    )
-    explicit_dd = (
-        _coerce_optional_float(projection.get("drawdown_from_peak"))
-        if "drawdown_from_peak" in projection
-        else _coerce_optional_float(portfolio.get("drawdown_from_peak"))
-    )
+    peak_equity_usd = _risk_input(projection.get("peak_equity_usd"))
+    explicit_dd = _risk_input(projection.get("drawdown_from_peak"))
     return InjectedReconciliationSnapshot(
         observation_status=str(projection.get("observation_status") or "UNAVAILABLE"),
         reconciliation_status=str(projection.get("reconciliation_status") or "UNVERIFIED"),
         circuit_breaker_state=str(projection.get("circuit_breaker_state") or "OPEN"),
         equity_usd=equity_usd,
         peak_equity_usd=peak_equity_usd,
-        drawdown_from_peak=_resolve_drawdown_from_peak(
-            equity_usd=equity_usd,
-            peak_equity_usd=peak_equity_usd,
-            explicit=explicit_dd,
-        ),
-        realized_vol=_coerce_optional_float(projection.get("realized_vol"))
-        if "realized_vol" in projection
-        else _coerce_optional_float(portfolio.get("realized_vol")),
+        drawdown_from_peak=explicit_dd,
+        realized_vol=_risk_input(projection.get("realized_vol")),
         production_drift_status=_resolve_production_drift_status(portfolio, projection),
         daily_loss_usd=_resolve_explicit_daily_loss_usd(projection, portfolio, execution),
     )

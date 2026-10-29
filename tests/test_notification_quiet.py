@@ -136,7 +136,20 @@ def test_accepted_report_does_not_cover_incomplete_listing_or_read(monkeypatch):
     assert sent
 
 
-def test_unscoped_mixed_services_unknown_is_visible(monkeypatch, capsys):
+def capture_alert_diagnostics(monkeypatch):
+    diagnostics = []
+    original = heartbeat.format_operational_alert
+
+    def render(**kwargs):
+        diagnostics.extend(kwargs.get("technical_details", ()))
+        return original(**kwargs)
+
+    monkeypatch.setattr(heartbeat, "format_operational_alert", render)
+    return diagnostics
+
+
+def test_unscoped_mixed_services_unknown_is_visible(monkeypatch):
+    diagnostics = capture_alert_diagnostics(monkeypatch)
     sent = mock_heartbeat(monkeypatch, report())
     monkeypatch.setattr(heartbeat, '_list_gcs_objects', lambda *args, **kw: [
         {'url': 'gs://mock/a.json', 'metadata': {'updated': NOW.isoformat()}},
@@ -150,11 +163,14 @@ def test_unscoped_mixed_services_unknown_is_visible(monkeypatch, capsys):
     monkeypatch.setattr(heartbeat, '_cat_gcs_json', read)
     assert heartbeat.main(NOW) == 0
     assert len(sent) == 1
-    assert 'unknown' in capsys.readouterr().out
+    assert 'unknown' in '\n'.join(diagnostics)
+    assert heartbeat._notice('status_normal') not in sent[0]
+    assert 'gs://mock/' not in sent[0]
     assert ('运行检查证据待核对' if heartbeat._notification_locale() == 'zh' else 'Runtime check evidence is unconfirmed') in sent[0]
 
 
-def test_conflicting_latest_identity_cannot_be_hidden_by_old_healthy(monkeypatch, capsys):
+def test_conflicting_latest_identity_cannot_be_hidden_by_old_healthy(monkeypatch):
+    diagnostics = capture_alert_diagnostics(monkeypatch)
     sent = mock_heartbeat(monkeypatch, report())
     monkeypatch.setenv('RUNTIME_HEARTBEAT_ACCOUNT_SCOPE', TARGET.scope)
     monkeypatch.setattr(heartbeat, '_load_required_services', lambda: [TARGET.service])
@@ -169,7 +185,8 @@ def test_conflicting_latest_identity_cannot_be_hidden_by_old_healthy(monkeypatch
     monkeypatch.setattr(heartbeat, '_cat_gcs_json', read)
     assert heartbeat.main(NOW) == 1
     assert len(sent) == 1
-    assert 'conflicting report identity' in capsys.readouterr().out
+    assert 'conflicting report identity' in '\n'.join(diagnostics)
+    assert heartbeat._notice('status_normal') not in sent[0]
     assert 'gs://' not in sent[0]
 
 

@@ -97,23 +97,24 @@ def test_no_traffic_capture_keeps_resource_secret_reference_and_iam_arrays(monke
     from scripts import verify_cloud_run_no_traffic_deploy as readback
     service_spec = {"template": {"spec": {"containers": [{
         "resources": {"limits": {"cpu": "1", "memory": "512Mi"}},
-        "env": [{"name": "SYNTHETIC_SECRET", "valueFrom": {"secretKeyRef": {"name": "synthetic", "key": "1"}}}],
+        "env": [{"name": "SYNTHETIC_SECRET", "valueFrom": {"secretKeyRef": {"name": "synthetic", "key": "1"}}},
+                {"name": "SYNTHETIC_LITERAL", "value": "private-synthetic-value"}],
     }]}}}
     policy = {"bindings": [{"role": "roles/run.invoker", "members": ["serviceAccount:synthetic"]}]}
     def projected(command):
         expression = command[-1]
-        assert 'env.value,' not in expression and 'env[].value,' not in expression
         if "get-iam-policy" in command:
             return policy if "bindings[].members" in expression else None
         if "scheduler" in command:
             return []
         result = {"status": {"traffic": [{"revisionName": "synthetic", "percent": 100}]}}
-        if all(value in expression for value in ("containers[].resources", "containers[].env[].name", "containers[].env[].valueFrom.secretKeyRef")):
+        if all(value in expression for value in ("containers[].resources", "containers[].env[].name", "containers[].env[].value,", "containers[].env[].valueFrom.secretKeyRef")):
             result["spec"] = service_spec
         return result
     monkeypatch.setattr(readback, "_run_json", projected)
     result = readback._snapshot(SimpleNamespace(service="synthetic", project="synthetic", region="synthetic", scheduler_location="synthetic"))
     assert result["configuration"] == readback._digest(service_spec)
+    assert "private-synthetic-value" not in json.dumps(result)
     assert result["iam"] == readback._digest(policy)
 
 

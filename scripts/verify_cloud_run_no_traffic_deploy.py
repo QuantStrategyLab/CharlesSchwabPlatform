@@ -19,7 +19,7 @@ SERVICE_FORMAT = (
     "json(status.traffic,spec.template.spec.serviceAccountName,"
     "spec.template.spec.containerConcurrency,spec.template.spec.timeoutSeconds,"
     "spec.template.spec.containers[].resources,spec.template.spec.containers[].env[].name,"
-    "spec.template.spec.containers[].env[].valueFrom.secretKeyRef)"
+    "spec.template.spec.containers[].env[].value,spec.template.spec.containers[].env[].valueFrom.secretKeyRef)"
 )
 IAM_FORMAT = "json(bindings[].role,bindings[].members,bindings[].condition)"
 SCHEDULER_FORMAT = "json(name,state,schedule,timeZone,httpTarget.uri,httpTarget.oidcToken)"
@@ -87,8 +87,8 @@ def _cash_currency(args: argparse.Namespace, *, revision: bool = False) -> str |
 def _configuration_projection(spec: object, *, allow_cash_currency: bool) -> object:
     if not allow_cash_currency or not isinstance(spec, dict):
         return spec
-    # SERVICE_FORMAT returns only names and secret references, never plaintext
-    # environment values. Remove the single explicitly allowed env name before
+    # Literal values are consumed in memory and only their aggregate digest is persisted.
+    # Remove the single explicitly allowed env name before
     # hashing so an absent-to-USD addition does not mask any other config drift.
     projected = json.loads(_canonical(spec))
     template = projected.get("template")
