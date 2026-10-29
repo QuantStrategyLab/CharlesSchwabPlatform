@@ -29,8 +29,8 @@ def render_attention(*, decision, platform, account_alias, strategy_profile, gua
     descriptions = []
     for code in reasons:
         if code == "DAILY_LOSS_LIMIT_EXCEEDED":
-            text = ("相对账户净值基准的亏损达到配置上限" if zh else
-                    "Loss relative to the account equity baseline reached the configured limit")
+            text = ("相对基准净值的下降达到配置上限" if zh else
+                    "The decline relative to the equity baseline reached the configured limit")
         else:
             text = localize_attention_reason_code(lang, code)
         if text == code:
