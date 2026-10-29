@@ -403,6 +403,19 @@ def test_declared_five_field_cron_never_repairs_unknown_actual_scheduler(reason)
     readers["publisher"].assert_not_called()
 
 
+@pytest.mark.parametrize(
+    "reason,expected",
+    [("service_traffic_unconfirmed", "service_traffic_unconfirmed"),
+     ("PRIVATE-ERROR", "service_unavailable")],
+)
+def test_unavailable_revision_reports_only_safe_fact_without_reads_or_post(reason, expected):
+    result, readers = run(observation=facts.SourceFacts(reason))
+    assert result == {"status": "skipped", "reason": "service_revision_unavailable",
+                      "source_facts": expected}
+    readers["archive_reader"].assert_not_called()
+    readers["publisher"].assert_not_called()
+
+
 def test_prepare_does_not_require_publication_credentials():
     env = environment()
     env.pop("EXECUTION_EVIDENCE_SYNC_TOKEN", None)
