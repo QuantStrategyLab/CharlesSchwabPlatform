@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from application.daily_loss_fact_producer import (
     EXTERNAL_CASH_FLOW_TYPES,
     derive_daily_loss_usd,
@@ -341,3 +343,43 @@ def test_c1_dual_account_first_hash_differs_from_expected_is_reachable():
     except RuntimeError:
         raised = True
     assert raised is True
+
+
+@pytest.mark.parametrize("start,end,wire", [
+    (datetime(2026, 10, 28, 15, 35, tzinfo=NY), datetime(2026, 10, 29, 9, 46, tzinfo=NY),
+     ("2026-10-28T19:35:00Z", "2026-10-29T13:46:00Z")),
+    (datetime(2026, 12, 2, 15, 35, tzinfo=NY), datetime(2026, 12, 3, 9, 46, tzinfo=NY),
+     ("2026-12-02T20:35:00Z", "2026-12-03T14:46:00Z")),
+])
+def test_transaction_query_normalizes_offsets_before_sdk_formats_z(start, end, wire):
+    from schwab.client.base import BaseClient
+
+    class Response:
+        status_code = 200
+        def __init__(self, value):
+            self.value = value
+        def json(self):
+            return self.value
+
+    class Client:
+        def get_account_numbers(self):
+            return Response([{"hashValue": "synthetic"}])
+        def get_transactions(self, account_hash, *, start_date, end_date):
+            formatter = BaseClient.__new__(BaseClient)
+            self.wire = (formatter._format_date_as_iso("start_date", start_date),
+                         formatter._format_date_as_iso("end_date", end_date))
+            return Response([])
+
+    client = Client()
+    fetch_schwab_transactions(client, start=start, end=end)
+    assert client.wire == wire
+
+
+def test_transaction_query_rejects_naive_before_client_call():
+    class Client:
+        def get_account_numbers(self):
+            pytest.fail("naive input must not reach broker")
+
+    with pytest.raises(RuntimeError, match="timezone-aware"):
+        fetch_schwab_transactions(Client(), start=datetime(2026, 10, 28),
+                                  end=datetime(2026, 10, 29, tzinfo=NY))
