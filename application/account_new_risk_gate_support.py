@@ -675,6 +675,7 @@ def maybe_publish_attention_for_admission(
         account_alias=_resolve_attention_account_alias(portfolio, execution, plan),
         strategy_profile=profile,
         guard_reason_codes=reasons,
+        daily_loss_context=_mapping_or_empty(portfolio.get("account_new_risk_snapshot")),
         previous_level=None,
         already_sent_keys=list(_attention_sent_keys),
         record_sent_key=_attention_sent_keys.add,
