@@ -305,6 +305,17 @@ def _declarations(target: dict[str, Any], expected: dict[str, Any], env: dict[st
     continuity = target.get("live_continuity")
     state = continuity.get("state") if isinstance(continuity, dict) else None
     flags["live_continuity"] = {"status": "absent" if continuity is None else "explicit" if state in _STATES else "invalid", "state": state if state in _STATES else None, "matches_expected": _same(continuity, expected.get("live_continuity"))}
+    from quant_platform_kit.common.live_continuity import build_live_continuity, runtime_target_fingerprint
+    flags["continuity_baseline"] = {"target_matches_frozen": None, "target_matches_declared": None}
+    try:
+        frozen = build_live_continuity(continuity)
+        actual_digest = runtime_target_fingerprint(target)
+        flags["continuity_baseline"] = {
+            "target_matches_frozen": actual_digest == frozen.baseline_target_sha256,
+            "target_matches_declared": actual_digest == runtime_target_fingerprint(expected),
+        }
+    except (TypeError, ValueError):
+        pass
     release = target.get("strategy_release")
     release_present = isinstance(release, dict) and bool(release)
     flags["strategy_release"] = {"status": "absent" if release is None else "explicit" if release_present else "invalid", "present": release_present, "matches_expected": None if release is None or expected.get("strategy_release") is None else _same(release, expected["strategy_release"])}

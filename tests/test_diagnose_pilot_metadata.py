@@ -92,6 +92,33 @@ def _assert_no_authority(result):
         assert result[key] is False
 
 
+def test_frozen_target_comparisons_are_read_only_and_fail_closed(source, target):
+    from quant_platform_kit.common.live_continuity import runtime_target_fingerprint
+
+    target["live_continuity"] = {
+        "state": "PAUSED", "baseline_kind": "legacy_authorized",
+        "baseline_id": "synthetic-baseline", "captured_at": "2026-10-01",
+        "baseline_target_sha256": runtime_target_fingerprint(target),
+    }
+    source["RUNTIME_TARGET_JSON"] = json.dumps(target)
+    observed = copy.deepcopy(target)
+    result, _ = _read(source, _revision(observed))
+    assert result["declarations"]["continuity_baseline"] == {
+        "target_matches_frozen": True, "target_matches_declared": True,
+    }
+    observed["runtime_risk_limits"]["financial_canary"] = 1
+    result, _ = _read(source, _revision(observed))
+    assert result["declarations"]["continuity_baseline"] == {
+        "target_matches_frozen": False, "target_matches_declared": False,
+    }
+    observed["live_continuity"].pop("baseline_id")
+    result, _ = _read(source, _revision(observed))
+    assert result["declarations"]["continuity_baseline"] == {
+        "target_matches_frozen": None, "target_matches_declared": None,
+    }
+    _assert_no_authority(result)
+
+
 def test_reads_only_exact_serving_and_keeps_reconcile_only(source, target, capsys):
     result, calls = _read(source, _revision(target))
     assert result["status"] == "verified_metadata"
