@@ -11,7 +11,7 @@ The exact write whitelist is:
 
 - `research/phase5_offline_adapter.py`: one pure local adapter, with no runtime registration;
 - `tests/test_phase5_offline_adapter.py`: direct synthetic and opt-in approved-local-input checks;
-- `research/PHASE5_OFFLINE_ADAPTER.md`: this contract and evidence.
+- `research/phase5-offline-adapter.md`: this contract and evidence.
 
 Base: CharlesSchwabPlatform `origin/main` at
 `baff23153ed1e08dee77f3231287ad599d869e1f`. Locked dependencies in

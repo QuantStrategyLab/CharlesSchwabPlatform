@@ -89,4 +89,4 @@ cloud/IAM/secret changes, real notifications or billing.
 Normal disable and re-enable reuse the valid baseline and existing authorized
 configuration. Research, complete historical reconstruction and custom recovery
 tooling are not universal prerequisites; preserve identity, risk and execution
-claim protections. See [Schwab recovery](docs/schwab_reconciliation_recovery.zh-CN.md).
+claim protections. See [Schwab recovery](docs/schwab-reconciliation-recovery.zh-CN.md).
