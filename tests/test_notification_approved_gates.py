@@ -61,7 +61,7 @@ def test_approved_gates_are_digest_candidates_with_every_reason_and_no_order(mon
         assert ("连亏熔断" if locale == "zh" else "Consecutive-loss gate") in text
         assert "6>5" in text
     if DAILY in reasons:
-        assert ("日亏损上限" if locale == "zh" else "Daily-loss gate") in text
+        assert ("相对账户净值基准的亏损" if locale == "zh" else "loss relative to the account equity baseline") in text
         assert ("80≥60" if locale == "zh" else "80>=60") in text
     result.execution.pop("notification_events")
     assert result.execution == original

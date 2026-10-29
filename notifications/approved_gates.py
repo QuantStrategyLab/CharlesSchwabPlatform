@@ -98,8 +98,8 @@ def render_gate_reasons(reasons, locale):
             lines.append(f"连亏熔断：连续亏损 {observed}>{limit}" if zh else
                 f"Consecutive-loss gate: consecutive losses {observed}>{limit}")
         else:
-            lines.append(f"日亏损上限：日亏损 {observed:g}≥{limit:g}" if zh else
-                f"Daily-loss gate: daily loss {observed:g}>={limit:g}")
+            lines.append(f"亏损上限：相对账户净值基准的亏损 {observed:g}≥{limit:g}；基准与资金流待核对" if zh else
+                f"Loss limit: loss relative to the account equity baseline {observed:g}>={limit:g}; review baseline and cash flows")
     lines.append("本轮未下单" if zh else "No order this run")
     return "\n".join(lines)
 

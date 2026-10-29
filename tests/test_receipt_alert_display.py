@@ -114,3 +114,26 @@ def test_attention_render_wrapper_keeps_shared_transition_key(monkeypatch):
     assert recorded == [expected_key]
     assert sent[0]["alert_key"] == expected_key
     assert "account snapshot is incomplete" in sent[0]["text"]
+
+@pytest.mark.parametrize("locale", ["zh", "en"])
+def test_daily_loss_attention_explains_snapshot_baseline(locale):
+    decision = evaluate_attention(AttentionAxes(new_risk_prohibited=True))
+    text = render_attention(decision=decision, platform="schwab", account_alias="synthetic",
+        strategy_profile="synthetic_profile", guard_reason_codes=("DAILY_LOSS_LIMIT_EXCEEDED",),
+        daily_loss_context={"daily_loss_fact_status": "verified", "daily_loss_baseline_as_of": "2026-10-28T19:35:33+00:00"},
+        locale=locale)
+    assert "2026-10-28 15:35" in text
+    assert ("账户运行快照" if locale == "zh" else "account runtime snapshot") in text
+    assert ("核对资金进出" if locale == "zh" else "review cash flows") in text
+    assert ("当日亏损" if locale == "zh" else "daily loss") not in text
+
+
+@pytest.mark.parametrize("context", [{}, {"daily_loss_fact_status": "verified", "daily_loss_baseline_as_of": "not-a-date"},
+                                    {"daily_loss_fact_status": "omitted", "daily_loss_baseline_as_of": "2026-10-28T19:35:33+00:00"}])
+def test_daily_loss_attention_does_not_invent_baseline(context):
+    decision = evaluate_attention(AttentionAxes(new_risk_prohibited=True))
+    text = render_attention(decision=decision, platform="schwab", account_alias="synthetic",
+        strategy_profile="synthetic_profile", guard_reason_codes=("DAILY_LOSS_LIMIT_EXCEEDED",),
+        daily_loss_context=context, locale="zh")
+    assert "基准时间和来源待核对" in text
+    assert "保持禁止新增风险" in text

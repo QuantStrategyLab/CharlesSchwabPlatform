@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import re
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from quant_platform_kit.common.operational_notification_localization import (
     localize_attention_reason_code,
@@ -14,7 +16,7 @@ from quant_platform_kit.common.operational_notification_localization import (
 from .display_names import display_name
 
 
-def render_attention(*, decision, platform, account_alias, strategy_profile, guard_reason_codes=(), locale=None):
+def render_attention(*, decision, platform, account_alias, strategy_profile, guard_reason_codes=(), locale=None, daily_loss_context=None):
     lang = resolve_operational_notification_locale(locale or os.getenv("QSL_NOTIFY_LANG") or os.getenv("NOTIFY_LANG"))
     zh = lang == "zh"
     platform_name = display_name("platforms", platform, lang, fallback="交易平台" if zh else "Trading platform")
@@ -26,7 +28,11 @@ def render_attention(*, decision, platform, account_alias, strategy_profile, gua
         reasons = tuple(code for code in decision.reason_codes if code != "new_risk_prohibited")
     descriptions = []
     for code in reasons:
-        text = localize_attention_reason_code(lang, code)
+        if code == "DAILY_LOSS_LIMIT_EXCEEDED":
+            text = ("相对账户净值基准的亏损达到配置上限" if zh else
+                    "Loss relative to the account equity baseline reached the configured limit")
+        else:
+            text = localize_attention_reason_code(lang, code)
         if text == code:
             continue
         # Existing helpers include English severity tokens in the Chinese text.
@@ -45,12 +51,30 @@ def render_attention(*, decision, platform, account_alias, strategy_profile, gua
         next_key = "review_daily_loss"
     elif level == "action" and "new_risk_prohibited" in decision.reason_codes:
         next_key = "inspect_guard_reason"
+    next_line = operational_notification_text(lang, f"attention_next_{next_key}")
+    if "DAILY_LOSS_LIMIT_EXCEEDED" in reasons:
+        context = daily_loss_context if isinstance(daily_loss_context, dict) else {}
+        stamp = context.get("daily_loss_baseline_as_of")
+        baseline = None
+        if context.get("daily_loss_fact_status") == "verified" and isinstance(stamp, str):
+            try:
+                parsed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+                if parsed.tzinfo is not None:
+                    baseline = parsed.astimezone(ZoneInfo("America/New_York")).strftime("%Y-%m-%d %H:%M")
+            except (ValueError, OverflowError):
+                pass
+        if zh:
+            basis = f"基准为 {baseline}（纽约时间）的账户运行快照" if baseline else "基准时间和来源待核对"
+            next_line = f"下一步：{basis}；核对资金进出及亏损上限，保持禁止新增风险"
+        else:
+            basis = f"Baseline: account runtime snapshot at {baseline} New York time" if baseline else "Baseline time and source require review"
+            next_line = f"Next: {basis}; review cash flows and the loss limit, and keep new risk prohibited"
     emoji = {"ok": "✅", "watch": "👀", "action": "⚠️", "halt": "🚨"}[level]
     return "\n".join((
         f"{emoji} {platform_name} · {account} · {strategy}",
         operational_notification_text(lang, key),
         reason_line,
-        operational_notification_text(lang, f"attention_next_{next_key}"),
+        next_line,
     ))
 
 
@@ -59,8 +83,9 @@ def publish_attention_telegram_transition(**kwargs):
     from .unified import enabled, event_for, route, observe_attention_recovery, stage_approved_gate_observation
 
     approved = kwargs.pop("approved_gate_reasons", [])
+    daily_loss_context = kwargs.pop("daily_loss_context", None)
     sender = kwargs.get("telegram_sender") or attention_notify._default_telegram_sender
-    text = render_attention(**{key: kwargs[key] for key in (
+    text = render_attention(daily_loss_context=daily_loss_context, **{key: kwargs[key] for key in (
         "decision", "platform", "account_alias", "strategy_profile", "guard_reason_codes", "locale",
     ) if key in kwargs})
 
