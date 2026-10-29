@@ -16,6 +16,14 @@ from quant_platform_kit.common.operational_notification_localization import (
 from .display_names import display_name
 
 
+def localize_guard_reason(lang, code):
+    """Use Schwab's verified baseline wording; preserve unknown reason codes."""
+    if code == "DAILY_LOSS_LIMIT_EXCEEDED":
+        return ("相对基准净值的下降达到配置上限" if lang == "zh" else
+                "The decline relative to the equity baseline reached the configured limit")
+    return localize_attention_reason_code(lang, code)
+
+
 def render_attention(*, decision, platform, account_alias, strategy_profile, guard_reason_codes=(), locale=None, daily_loss_context=None):
     lang = resolve_operational_notification_locale(locale or os.getenv("QSL_NOTIFY_LANG") or os.getenv("NOTIFY_LANG"))
     zh = lang == "zh"
@@ -28,11 +36,7 @@ def render_attention(*, decision, platform, account_alias, strategy_profile, gua
         reasons = tuple(code for code in decision.reason_codes if code != "new_risk_prohibited")
     descriptions = []
     for code in reasons:
-        if code == "DAILY_LOSS_LIMIT_EXCEEDED":
-            text = ("相对基准净值的下降达到配置上限" if zh else
-                    "The decline relative to the equity baseline reached the configured limit")
-        else:
-            text = localize_attention_reason_code(lang, code)
+        text = localize_guard_reason(lang, code)
         if text == code:
             continue
         # Existing helpers include English severity tokens in the Chinese text.

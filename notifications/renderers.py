@@ -5,7 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import datetime
 import math
+import re
 
+from notifications.attention import localize_guard_reason
 from notifications.compact_adapter import adapt_compact_sections
 from notifications.events import RenderedNotification
 from quant_platform_kit.common.notification_localization import (
@@ -44,6 +46,40 @@ def _has_benchmark_context(execution):
 
 def _localize_notification_text(text, *, translator):
     return _base_localize_notification_text(text, translator=translator)
+
+
+_GUARD_REASON_LIST = r"[A-Za-z][A-Za-z0-9_]*(?:,\s*[A-Za-z][A-Za-z0-9_]*)*"
+_GUARD_INLINE_ZH = re.compile(rf"⚠️ 账户风险检查：禁止新增风险（(?P<reasons>{_GUARD_REASON_LIST})）")
+_GUARD_INLINE_EN = re.compile(rf"⚠️ Account risk check: new risk blocked \((?P<reasons>{_GUARD_REASON_LIST})\)")
+_GUARD_BUY_NOTE = re.compile(
+    rf"ℹ️ \[(?:买入说明|Buy note)\] \[Account new-risk gate\] (?P<reasons>{_GUARD_REASON_LIST})"
+)
+
+
+def _localize_guard_lines(lines, *, translator):
+    """Translate only the exact humanized gate and buy-note formats."""
+    zh = _translator_uses_zh(translator)
+    lang = "zh" if zh else "en"
+    result = []
+    for line in lines:
+        inline = (_GUARD_INLINE_ZH if zh else _GUARD_INLINE_EN).fullmatch(line)
+        buy = _GUARD_BUY_NOTE.fullmatch(line)
+        match = inline or buy
+        if not match:
+            result.append(line)
+            continue
+        details = []
+        for code in re.split(r",\s*", match.group("reasons")):
+            explanation = localize_guard_reason(lang, code)
+            details.append(f"{explanation} ({code})" if explanation != code else code)
+        joined = ("；" if zh else "; ").join(details)
+        if inline:
+            result.append(f"⚠️ 账户风险检查：禁止新增风险（{joined}）" if zh else
+                          f"⚠️ Account risk check: new risk blocked ({joined})")
+        else:
+            result.append(f"ℹ️ [买入说明] 账户风险检查：{joined}" if zh else
+                          f"ℹ️ [Buy note] Account risk check: {joined}")
+    return result
 
 
 def _localize_timing_contract(contract: str, *, translator) -> str:
@@ -313,7 +349,9 @@ def render_trade_notification(
         extra_notification_lines,
         translator=translator,
     )
-    trade_logs = _humanize_notification_lines(trade_logs, translator=translator)
+    trade_logs = _localize_guard_lines(
+        _humanize_notification_lines(trade_logs, translator=translator), translator=translator,
+    )
     cash_only_execution = bool(execution.get("cash_only_execution", True))
     dashboard_text = _format_dashboard_text(
         str(execution["dashboard_text"]),
