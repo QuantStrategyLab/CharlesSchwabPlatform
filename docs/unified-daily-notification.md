@@ -1,5 +1,9 @@
 # Unified daily notification (code only)
 
+An accepted order notice reports broker acceptance and says that a fill is not
+yet confirmed. An order identifier alone does not establish a partial or full
+fill. A sell notice does not assert that the account's risk has decreased.
+
 `QSL_ROUTINE_NOTIFICATION_MODE` defaults to `immediate`. Exact `daily_digest`
 opts into one central bilingual digest. `QSL_DIGEST_ROUTINE_ORDERS=false` retains
 immediate confirmed order notices. Failed, pending, uncertain, risk, persistence

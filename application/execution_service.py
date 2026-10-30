@@ -817,19 +817,19 @@ def execute_rebalance_cycle(
             if success:
                 if action_type == "SELL":
                     trade_logs.append(
-                        f"✅ 📉 {translator('market_sell_cmd')} {symbol}: {quantity}{translator('shares')} {order_id_suffix}"
+                        f"⏳ 📉 {translator('market_sell_cmd')} {symbol}: {quantity}{translator('shares')} {translator('order_accepted_unfilled')} {order_id_suffix}"
                     )
                 elif action_type == "BUY_LIMIT":
                     trade_logs.append(
-                        f"✅ 💰 {translator('limit_buy_cmd')} {symbol} (${price_text}): {quantity}{translator('shares')} {translator('submitted')} {order_id_suffix}"
+                        f"⏳ 💰 {translator('limit_buy_cmd')} {symbol} (${price_text}): {quantity}{translator('shares')} {translator('order_accepted_unfilled')} {order_id_suffix}"
                     )
                 elif action_type == "BUY_NOTIONAL":
                     trade_logs.append(
-                        f"✅ 📈 {translator('market_buy_cmd')} {symbol}: ${float(quantity):.2f} {order_id_suffix}"
+                        f"⏳ 📈 {translator('market_buy_cmd')} {symbol}: ${float(quantity):.2f} {translator('order_accepted_unfilled')} {order_id_suffix}"
                     )
                 elif action_type == "BUY_MARKET":
                     trade_logs.append(
-                        f"✅ 📈 {translator('market_buy_cmd')} {symbol}: {quantity}{translator('shares')} {order_id_suffix}"
+                        f"⏳ 📈 {translator('market_buy_cmd')} {symbol}: {quantity}{translator('shares')} {translator('order_accepted_unfilled')} {order_id_suffix}"
                     )
                 return True
 
