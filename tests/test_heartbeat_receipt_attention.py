@@ -47,8 +47,9 @@ def test_pending_report_explains_uncertain_order_status(monkeypatch, unified, ex
     monkeypatch.setattr(heartbeat, "publish_receipt", publish)
 
     assert heartbeat.main(now=now) == 0
-    if quiet and not unified:
+    if quiet:
         assert sent == []
+        assert published[0]["kind"] == "healthy_heartbeat"
         return
     assert len(sent) == 1
     assert expected in sent[0]

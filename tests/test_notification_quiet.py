@@ -41,6 +41,7 @@ def mock_heartbeat(monkeypatch, payload):
     monkeypatch.setattr(heartbeat, '_cat_gcs_json', lambda *args, **kw: payload)
     sent = []
     monkeypatch.setattr(heartbeat, '_send_telegram', lambda msg, **kw: sent.append(msg) or True)
+    monkeypatch.setattr(heartbeat, 'publish_receipt', lambda sender, **kw: None if kw.get('kind') == 'healthy_heartbeat' else sender())
     return sent
 
 
@@ -50,7 +51,7 @@ def test_heartbeat_explicit_normal_preserves_manual_flag(monkeypatch, capsys, fl
         monkeypatch.setenv('RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS', flag)
     sent = mock_heartbeat(monkeypatch, report())
     assert heartbeat.main(NOW) == 0
-    assert bool(sent) is (flag == 'true')
+    assert not sent
     assert 'heartbeat OK' in capsys.readouterr().out
 
 
@@ -334,11 +335,11 @@ def test_unconfirmed_check_message_never_claims_normal_or_trade_failure(monkeypa
     assert '交易失败' not in sent[0]
 
 
-def test_confirmed_manual_opt_in_uses_existing_normal_formatter(monkeypatch):
+def test_confirmed_manual_opt_in_does_not_send_healthy_heartbeat(monkeypatch):
     monkeypatch.setenv('RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS', 'true')
     sent = mock_heartbeat(monkeypatch, report())
     assert heartbeat.main(NOW) == 0
-    assert heartbeat._notice('status_normal') in sent[0]
+    assert not sent
 
 
 def test_native_schwab_summary_and_alias_remain_healthy_quiet(monkeypatch):

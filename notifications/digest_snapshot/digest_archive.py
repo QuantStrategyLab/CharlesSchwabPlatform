@@ -42,6 +42,7 @@ def emit(env, *, now=None, read=_read, upload=None, projector=project_reports):
         raise ValueError("candidate_target_enablement_unknown")
     target = json.loads(env.get("RUNTIME_TARGET_JSON", ""))
     platform = target.get("platform_id", "")
+    source_platform = {"schwab": "charles_schwab"}.get(platform, platform)
     slot = env.get("DIGEST_STORE_TARGET", "")
     if not _SAFE.fullmatch(platform) or not _SAFE.fullmatch(slot):
         raise ValueError("candidate_store_identity_missing")
@@ -63,7 +64,7 @@ def emit(env, *, now=None, read=_read, upload=None, projector=project_reports):
     months = {start.astimezone(timezone.utc).strftime("%Y-%m"), end.astimezone(timezone.utc).strftime("%Y-%m")}
     entries = []
     for month in sorted(months):
-        entries.extend(read(["ls", "--json", f"{prefix}/{platform}/**/{month}/*.json"]))
+        entries.extend(read(["ls", "--json", f"{prefix}/{source_platform}/**/{month}/*.json"]))
     if len(entries) > 10000:
         raise ValueError("candidate_archive_budget_exceeded")
     reports, uris = [], set()
@@ -71,7 +72,7 @@ def emit(env, *, now=None, read=_read, upload=None, projector=project_reports):
         uri = str(entry.get("url", "")).split("#", 1)[0]
         if uri in uris:
             continue
-        if not uri.startswith(f"{prefix}/{platform}/"):
+        if not uri.startswith(f"{prefix}/{source_platform}/"):
             raise ValueError("candidate_source_locator_mismatch")
         uris.add(uri)
         raw_stamp = (entry.get("metadata") or {}).get("updated") or (entry.get("metadata") or {}).get("timeCreated")

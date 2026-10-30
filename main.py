@@ -522,6 +522,27 @@ def _notify_runtime_error(exc: Exception, *, route_label: str) -> bool:
     return bool(outcomes) and all(outcomes)
 
 
+def _notify_digest_coverage_failure() -> bool:
+    from quant_platform_kit.common.operational_notification_localization import resolve_operational_notification_locale
+    zh = resolve_operational_notification_locale(NOTIFY_LANG) == "zh"
+    message = ("⚠️ 每日摘要记录未确认；请检查运行记录和摘要存储。" if zh else
+               "⚠️ Daily digest coverage is unconfirmed; check the run and digest storage.")
+    try:
+        if publish_notification(detailed_text=message, compact_text=message):
+            return True
+    except Exception:
+        pass
+    # Reuse the independent existing error sender without exposing trade content.
+    return _notify_runtime_error(RuntimeError("digest_coverage_unconfirmed"), route_label="digest_coverage")
+
+
+def _report_requires_digest_coverage(report) -> bool:
+    summary = report.get("summary") or {}
+    if (summary.get("notification_digest") or {}).get("routine") is True:
+        return True
+    return bool(summary.get("routine_observation_counts"))
+
+
 def _publish_runtime_failure_notification_legacy(*, detailed_text: str, compact_text: str, exc: Exception) -> bool:
     try:
         if publish_notification(detailed_text=detailed_text, compact_text=compact_text):
@@ -613,8 +634,12 @@ def build_strategy_plugin_alert_context_label() -> str:
 
 def publish_strategy_plugin_alerts(signals, *, report=None):
     from notifications.digest_snapshot.digest_routing import immediate_plugin_signals
+    from notifications.digest_snapshot.digest_candidates import routine_observation_counts
+    signals = tuple(signals or ())
+    if report is not None:
+        report.setdefault("summary", {})["routine_observation_counts"] = routine_observation_counts(signals)
     result = dispatch_strategy_plugin_alerts(
-        immediate_plugin_signals(signals),
+        immediate_plugin_signals(signals, mode="daily_digest"),
         notification_settings=RUNTIME_SETTINGS,
         translator=t,
         strategy_label=STRATEGY_PROFILE,
@@ -1007,9 +1032,13 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
                 report_path = persist_execution_report(report, dry_run_only_override=dry_run_only_override)
             print(f"execution_report {report_path}", flush=True)
             from notifications.unified import persist_completed_report
-            persist_completed_report(report)
+            coverage_confirmed = persist_completed_report(report)
+            if _report_requires_digest_coverage(report) and not coverage_confirmed:
+                _notify_digest_coverage_failure()
         except Exception as persist_exc:
             print(f"failed to persist execution report: {persist_exc}", flush=True)
+            if _report_requires_digest_coverage(report):
+                _notify_digest_coverage_failure()
 
 
 def _paper_command_consumer_runtime_is_isolated() -> bool:

@@ -21,10 +21,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from notifications.receipt_alerts import render_receipt_alert
 from notifications.unified import enabled as unified_enabled, publish_receipt, publish_approved_receipts
 from notifications.approved_gates import report_gate_reasons
-from quant_platform_kit.common.execution_receipts import validate_execution_receipt
+from quant_platform_kit.common.execution_receipts import attach_execution_receipt, validate_execution_receipt
 from quant_platform_kit.common.operational_notification_localization import (
     format_operational_alert,
-    format_operational_heartbeat_status,
     operational_notification_text,
     resolve_operational_notification_locale,
 )
@@ -643,6 +642,54 @@ def _market_closed_by_calendar(payload: dict[str, Any]) -> bool:
         return False
 
 
+def _is_proven_accepted_report(payload: dict[str, Any], *, now: dt.datetime) -> bool:
+    """Use only the archive's cycle-produced proof; ACK does not mean filled."""
+    summary = payload.get("summary")
+    if (not isinstance(summary, dict) or payload.get("status") not in {"ok", "success", "completed"}
+            or payload.get("dry_run") is not False or payload.get("platform") != "charles_schwab"
+            or _report_execution_status(payload).lower() != "pending_reconciliation"):
+        return False
+    fact = summary.get("notification_digest")
+    if not isinstance(fact, dict) or fact.get("schema_version") != "qsl.notification_cycle.v1":
+        return False
+    count = summary.get("orders_submitted_count")
+    status_counts = summary.get("submitted_order_status_counts")
+    if (type(count) is not int or count < 1 or type(summary.get("orders_pending_count")) is not int
+            or summary.get("orders_pending_count") != count
+            or summary.get("broker_submission_done") is not True
+            or not isinstance(status_counts, dict) or not status_counts
+            or any(key not in {"accepted", "submitted", "broker_acknowledged", "pending", "partially_filled"}
+                   or type(value) is not int or value < 1 for key, value in status_counts.items())
+            or sum(status_counts.values()) != count
+            or fact.get("routine") is not True or fact.get("dry_run") is not False
+            or type(fact.get("order_count")) is not int or fact.get("order_count") != count
+            or fact.get("fill_count") is not None):
+        return False
+    started = _parse_timestamp(payload.get("started_at"), require_timezone=True)
+    finished = _parse_timestamp(payload.get("finished_at"), require_timezone=True)
+    if (started is None or finished is None or finished < started
+            or finished > now + dt.timedelta(minutes=5)):
+        return False
+    diagnostics = payload.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        return False
+    if (payload.get("errors") != [] or _report_errors(payload) or _report_notification_failure(payload)):
+        return False
+    if any(scope.get(key) for scope in (payload, summary, diagnostics) for key in (
+        "notification_attention_reason_codes", "notification_order_issue", "reconciliation_required",
+        "execution_blocked", "plugin_error", "persistence_error", "notification_error", "risk_flags",
+    )):
+        return False
+    try:
+        receipt = validate_execution_receipt(payload.get("execution_receipt"))
+        attach_execution_receipt(dict(payload), receipt)
+    except (ValueError, TypeError):
+        return False
+    return (receipt["outcome"] == "reconciliation_required"
+            and receipt["platform"] == "schwab"
+            and receipt["strategy_profile"] == payload.get("strategy_profile"))
+
+
 def _is_quiet_report(payload: dict[str, Any], *, now: dt.datetime | None = None) -> bool:
     """Quiet a complete healthy receipt without duplicating the business notification."""
     if payload.get("errors") != [] or not isinstance(payload.get("errors"), list):
@@ -769,20 +816,15 @@ def _workflow_run_url() -> str:
 
 def _send_normal_heartbeat_legacy(name: str, detail: str, *, quiet_eligible: bool = True,
                                   attention_reason: str = "") -> int:
-    if quiet_eligible and not _env_bool("RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS", False):
-        return 0
     if quiet_eligible:
-        message = format_operational_heartbeat_status(
-            locale=_notification_locale(), name=name, detail=detail,
-        )
-    else:
-        message = format_operational_alert(
-            locale=_notification_locale(), alert_type="execution_report_heartbeat", name=name,
-            issues=["运行检查证据待核对" if _notification_locale() == "zh" else "Runtime check evidence needs review"],
-            technical_details=[detail],
-        )
+        return 0
+    message = format_operational_alert(
+        locale=_notification_locale(), alert_type="execution_report_heartbeat", name=name,
+        issues=["运行检查证据待核对" if _notification_locale() == "zh" else "Runtime check evidence needs review"],
+        technical_details=[detail],
+    )
     print(message)
-    delivered_message = message if quiet_eligible else render_receipt_alert(
+    delivered_message = render_receipt_alert(
         locale=_notification_locale(), unconfirmed=True, workflow_url=_workflow_run_url(),
         attention_reason=attention_reason,
     )
@@ -794,19 +836,24 @@ def _send_normal_heartbeat(name: str, detail: str, *, quiet_eligible: bool = Tru
     def legacy():
         return _send_normal_heartbeat_legacy(name, detail, quiet_eligible=quiet_eligible,
                                              attention_reason=attention_reason)
-    if not unified_enabled():
+    if not unified_enabled() and not quiet_eligible:
         return legacy()
     healthy = quiet_eligible and not attention_reason
-    if healthy and source_reports and any(not report.get("execution_receipt") for report in source_reports):
-        healthy = False
-        attention_reason = "receipt_missing"
     message = render_receipt_alert(locale=_notification_locale(), unconfirmed=True,
                                    workflow_url=_workflow_run_url(), attention_reason=attention_reason)
     if healthy and source_reports:
-        results = [publish_receipt(legacy, kind="healthy_heartbeat", reason="receipt_evidence_observed",
-            recovered=recovery_at is not None, observed_at=recovery_at, source_report=report)
-            for report in source_reports]
+        try:
+            results = [publish_receipt(legacy, kind="healthy_heartbeat", reason="receipt_evidence_observed",
+                recovered=recovery_at is not None, observed_at=recovery_at, source_report=report)
+                for report in source_reports]
+        except Exception:
+            text = ("⚠️ 每日摘要记录未确认；请检查运行记录和摘要存储。" if _notification_locale() == "zh" else
+                    "⚠️ Daily digest coverage is unconfirmed; check the run and digest storage.")
+            _send_telegram(text)
+            return 1
         return next((value for value in results if type(value) is int and value), 0)
+    if healthy:
+        return 0
     result = publish_receipt(
         legacy if healthy else lambda: _send_telegram(message),
         kind="healthy_heartbeat" if healthy else (attention_reason if attention_reason in {"order_status_unknown", "receipt_missing"} else "receipt_unacceptable"),
@@ -1024,15 +1071,16 @@ def main(now: dt.datetime | None = None) -> int:
         if ok and is_latest_report:
             source_reports.append(payload)
             execution_status = _report_execution_status(payload).lower()
-            if execution_status in {"unknown", "pending", "submitted", "broker_acknowledged", "partially_filled", "pending_reconciliation", "reconciliation_required"}:
-                notification_attention.append("order_status_unknown")
-            quiet = _is_quiet_report(payload, now=now)
+            proven_accepted = _is_proven_accepted_report(payload, now=now)
+            quiet = proven_accepted or _is_quiet_report(payload, now=now)
             freshness_detail = ""
             if quiet and latest_due_at is not None:
                 finished_at = _parse_timestamp(payload.get("finished_at"), require_timezone=True)
                 if finished_at is None or finished_at < latest_due_at:
                     quiet = False
                     freshness_detail = "; payload finished_at predates latest due schedule"
+            if not quiet and execution_status in {"unknown", "pending", "submitted", "broker_acknowledged", "partially_filled", "pending_reconciliation", "reconciliation_required"}:
+                notification_attention.append("order_status_unknown")
             if not quiet:
                 visible_report_details.append(
                     f"{service_name or name}: execution_status={_report_execution_status(payload) or 'unconfirmed'}; {reason}{freshness_detail}"

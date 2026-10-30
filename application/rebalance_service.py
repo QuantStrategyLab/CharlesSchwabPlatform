@@ -666,7 +666,7 @@ def run_strategy_core(
     execution_state_store = getattr(config, "execution_state_store", None)
     execution_already_recorded = False
     same_key_live_replay = False
-    notification_attention_reason_codes = []
+    notification_attention_reason_codes = list(getattr(config, "notification_attention_reason_codes", ()) or ())
     execution_claim_acquired = False
     dry_run_bypass_marker = _dry_run_bypasses_execution_marker(config)
     if dry_run_bypass_marker:
@@ -908,7 +908,16 @@ def run_strategy_core(
                 flush=True,
             )
 
-    publish_cycle(execution_result, config=config, legacy=publish_existing_cycle)
+    def report_digest_coverage_failure():
+        from quant_platform_kit.common.operational_notification_localization import resolve_operational_notification_locale
+        import os
+        zh = resolve_operational_notification_locale(os.getenv("QSL_NOTIFY_LANG") or os.getenv("NOTIFY_LANG")) == "zh"
+        message = ("⚠️ 每日摘要记录未确认；请检查运行记录和摘要存储。" if zh else
+                   "⚠️ Daily digest coverage is unconfirmed; check the run and digest storage.")
+        return notification_publisher.publish(RenderedNotification(detailed_text=message, compact_text=message))
+
+    publish_cycle(execution_result, config=config, legacy=publish_existing_cycle,
+                  coverage_failure=report_digest_coverage_failure)
     notification_delivery_summary = _build_notification_delivery_summary(
         getattr(runtime, "notification_delivery_events", []) or []
     )

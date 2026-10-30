@@ -501,6 +501,7 @@ def execute_rebalance_cycle(
     quotes = load_quotes(strategy_symbols)
     trade_logs: list[str] = []
     submitted_orders: list[dict] = []
+    notification_order_issue = False
     small_account_cash_note_messages: set[str] = set()
     small_account_bootstrap_note_messages: set[str] = set()
 
@@ -670,7 +671,7 @@ def execute_rebalance_cycle(
     sell_resource_evidence_required = False
 
     def execute_fire_forget(symbol, action_type, quantity, price=None):
-        nonlocal submission_halted, submission_outcome_unknown, sell_resource_evidence_required
+        nonlocal submission_halted, submission_outcome_unknown, sell_resource_evidence_required, notification_order_issue
         if submission_halted:
             # N13: redundant T2/T3 consult; local halt always wins (no behavior change).
             should_block_halted_resubmit(
@@ -840,6 +841,7 @@ def execute_rebalance_cycle(
             else:
                 message = f"❌ {translator('market_buy')} {symbol}: {quantity}{translator('shares')} {translator('failed')} - {info}"
             trade_logs.append(message)
+            notification_order_issue = True
             publish_order_issue(message)
             return False
         except Exception:
@@ -860,6 +862,7 @@ def execute_rebalance_cycle(
             else:
                 message = "Order validation failed before submission."
             trade_logs.append(message)
+            notification_order_issue = True
             try:
                 publish_order_issue(message)
             except Exception:
@@ -1258,6 +1261,11 @@ def execute_rebalance_cycle(
     trade_logs.extend(format_small_account_allocation_drift_notes(drift_notes, translator=translator))
 
     result_execution = dict(execution or {})
+    # Notification evidence only: this point is reached after the cycle's
+    # normal execution path completed; it does not establish a fill.
+    result_execution["notification_cycle_completed"] = True
+    if notification_order_issue:
+        result_execution["notification_order_issue"] = True
     attention_reasons = list(result_execution.get("notification_attention_reason_codes") or ())
     if sell_resource_evidence_required:
         attention_reasons.append("sell_resource_evidence_required")

@@ -4,28 +4,32 @@ An accepted order notice reports broker acceptance and says that a fill is not
 yet confirmed. An order identifier alone does not establish a partial or full
 fill. A sell notice does not assert that the account's risk has decreased.
 
-`QSL_ROUTINE_NOTIFICATION_MODE` defaults to `immediate`. Exact `daily_digest`
-opts into one central bilingual digest. `QSL_DIGEST_ROUTINE_ORDERS=false` retains
-immediate confirmed order notices. Failed, pending, uncertain, risk, persistence
-and authentication outcomes retain immediate alerts. Healthy idle cycles and
-routine plugin observations do not produce individual pushes.
+Successful orders, no-trade cycles and healthy receipt checks are recorded for
+the next scheduled daily digest in the selected language, regardless of the unified routing
+flag. Failure, unconfirmed submission, unresolved reconciliation, risk,
+persistence and authentication incidents retain immediate alerts. If digest
+coverage cannot be confirmed, an independent operational alert identifies that
+gap without sending the routine trade message.
 
 When an execution-report heartbeat sends an order-status attention alert, it
 directs the operator to check the broker's order and fill records without
-asserting that an order filled. In legacy mode, complete submitted, acknowledged,
-partially filled and pending reports remain quiet to avoid repeating the trade
-notice. The workflow link remains available without a web preview.
+asserting that an order filled. A Schwab acknowledgement awaiting reconciliation
+is routine only when the archived cycle contains positive, consistent acceptance
+evidence; missing or contradictory evidence remains attention. The original
+receipt still says reconciliation is required, and fill counts stay unknown
+until individually confirmed. The workflow link remains available without a web
+preview. The manual healthy-check option cannot force an immediate message.
 
-QPK source reference: `4cc5e55251269923771f90cd661bb62a5cfdf0cd` (notification modules only).
+The notification-only source snapshot follows QPK revision
+`2b04882058666ebc81d1650d93fa2105ec4ba3d8`. The trading dependency remains
+pinned separately to the existing revision in `pyproject.toml`.
 
-The notification-only QPK source snapshot in `notifications/digest_snapshot/` avoids an
-unrelated trading dependency upgrade. `digest_routing.py` and `digest_archive.py`
-remain byte-identical to that reference. `digest_candidates.py` additionally
-appends Schwab-only `block_reason` facts through `notifications.block_reason`.
-Existing QPK/strategy pins, order
-execution, funding, risk, account enablement and durable report writes are unchanged.
+The notification-only QPK source snapshot in `notifications/digest_snapshot/`
+includes Schwab-specific per-run projection and `block_reason` facts through
+`notifications.block_reason`. The trading and strategy pins, order execution,
+funding, risk, account enablement and durable report writes are unchanged.
 
-Before enabling routing, validate the exact active target's private archived
+Before deploying this policy, validate the exact active target's private archived
 report, candidate store and QRS receiver. Existing cloud monitor wiring uses
 `RUNTIME_TARGET_ENABLED=true`, exact protected `RUNTIME_TARGET_JSON`,
 `EXECUTION_REPORT_GCS_URI`, `DIGEST_CANDIDATES_GCS_URI`, `DIGEST_STORE_TARGET`,

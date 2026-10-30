@@ -14,12 +14,12 @@ from contextvars import ContextVar
 from dataclasses import replace
 from datetime import datetime, timezone
 
-from .digest_snapshot.digest_candidates import cycle_evidence, project_reports
+from .digest_snapshot.digest_candidates import project_reports
 from .digest_snapshot.digest_routing import defer_routine_cycle_to_digest
 from .digest_snapshot.unified_contract import (
     CandidatePersistenceError, IncidentTracker, NotificationEvent,
-    effective_notification_mode, order_identity_digest, route_notification_event,
-    select_notification_route, sgt_business_window, unified_notification_enabled,
+    order_identity_digest, route_notification_event,
+    sgt_business_window, unified_notification_enabled,
 )
 
 FLAG = "SCHWAB_UNIFIED_NOTIFICATION_ENABLED"
@@ -43,9 +43,6 @@ def _stamp(value):
 
 @contextmanager
 def notification_context(report):
-    if not enabled():
-        yield
-        return
     token = _context.set(report)
     try:
         yield
@@ -212,9 +209,9 @@ def _incident(event, *, stream, state, severity, recovered, sender, store):
 def route(event, *, legacy, immediate=None, stream="cycle", state="alert", severity=1,
           recovered=False, projection=None, store=None, env=None, candidate_details=None):
     env = os.environ if env is None else env
-    if not enabled(env):
+    routine = event.event_kind in {"routine_cycle", "healthy_heartbeat", "order_submitted", "fill"}
+    if not enabled(env) and not routine:
         return legacy()
-    routine = select_notification_route(event_kind=event.event_kind, env=env, flag_key=FLAG) == "digest_candidate"
     persisted = False
     try:
         store = store or GCSNotificationStore(env)
@@ -238,7 +235,7 @@ def route(event, *, legacy, immediate=None, stream="cycle", state="alert", sever
     except CandidatePersistenceError:
         # Never turn a failed routine candidate write into silent success.
         _log_failure("candidate_write_unconfirmed")
-        return legacy()
+        raise
     except StaleObservation:
         _log_failure("stale_observation")
         return False
@@ -246,7 +243,7 @@ def route(event, *, legacy, immediate=None, stream="cycle", state="alert", sever
         # Incomplete marker history cannot authorize an untracked alert retry.
         _log_failure("marker_or_producer_unavailable")
         if routine and not persisted:
-            return legacy()
+            raise CandidatePersistenceError("notification_candidate_write_unconfirmed")
         return False
 
 
@@ -258,8 +255,12 @@ def _cycle_projection(result, fact, config):
     # Normalize only the notification copy of the established Schwab aliases.
     target["platform_id"] = "schwab"
     report.update(platform="schwab", status="ok", dry_run=bool(config.dry_run_only))
-    report["summary"] = {"notification_digest": cycle_evidence(result.execution, result.submitted_orders,
-        dry_run=bool(config.dry_run_only))}
+    from .accepted_orders import cycle_notification_evidence
+    summary = dict(report.get("summary") or {})
+    summary.update(execution_status=result.execution.get("execution_status"),
+        notification_digest=cycle_notification_evidence(result.execution, result.submitted_orders,
+            dry_run=bool(config.dry_run_only)))
+    report["summary"] = summary
     if report["dry_run"]:
         # Existing live archive acceptance is unchanged; previews are facts only.
         return {"schema_version": "qsl.digest_candidates.v1", "runs": [], "notification_events": [fact]}
@@ -270,10 +271,8 @@ def _cycle_projection(result, fact, config):
     return payload
 
 
-def publish_cycle(result, *, config, legacy):
+def publish_cycle(result, *, config, legacy, coverage_failure=None):
     """Called after execution; only the notification callback is moved."""
-    if not enabled():
-        return legacy()
     execution, orders = result.execution, tuple(result.submitted_orders or ())
     from .approved_gates import approved_block_reasons, render_gate_reasons
     approved = approved_block_reasons(execution, order_count=len(orders), dry_run=config.dry_run_only)
@@ -285,14 +284,16 @@ def publish_cycle(result, *, config, legacy):
     metadata_healthy = isinstance(metadata, dict) and defer_routine_cycle_to_digest(
         {**metadata, "execution_status": metadata.get("execution_status") or "no_action"},
         submitted_order_count=0, mode="daily_digest", include_orders=True)
-    healthy = healthy and metadata_healthy
+    from .accepted_orders import cycle_notification_evidence
+    cycle_facts = cycle_notification_evidence(execution, orders, dry_run=config.dry_run_only)
+    healthy = metadata_healthy and (healthy or cycle_facts.get("routine") is True)
     if getattr(config, "notification_attention_reason_codes", ()):
         healthy = False
-    status = str(execution.get("execution_status") or "unknown")
+    status = str(execution.get("execution_status") or ("no_action" if cycle_facts.get("routine") is True else "unknown"))
     reason = str(execution.get("no_op_reason") or status)
     dry_run_healthy = config.dry_run_only and not getattr(config, "notification_attention_reason_codes", ()) and status in {"dry_run", "dry_run_completed"} and metadata_healthy and defer_routine_cycle_to_digest(
         {**execution, "execution_status": "no_action"}, submitted_order_count=0, mode="daily_digest", include_orders=True)
-    if orders and not config.dry_run_only and all(isinstance(order, dict) and str(order.get("status") or "").lower() in {"filled", "completed", "executed"} for order in orders):
+    if orders and healthy and not config.dry_run_only:
         kind = "order_submitted"
     elif dry_run_healthy or approved:
         kind = "routine_cycle"
@@ -300,7 +301,7 @@ def publish_cycle(result, *, config, legacy):
         kind = "blocked_run"
     elif orders and not healthy:
         kind = "order_status_unknown"
-    elif status in {"unknown", "pending", "pending_reconciliation", "reconciliation_required"}:
+    elif status in {"unknown", "pending", "pending_reconciliation", "reconciliation_required"} and not healthy:
         kind = "order_status_unknown"
     elif healthy and orders:
         kind = "order_submitted"
@@ -314,7 +315,7 @@ def publish_cycle(result, *, config, legacy):
         reason += ":" + digest
     event = event_for(kind, profile=config.strategy_profile, reason=reason,
         order_count=None if config.dry_run_only else len(orders),
-        fill_count=cycle_evidence(execution, orders, dry_run=config.dry_run_only)["fill_count"], order_digest=digest)
+        fill_count=cycle_facts["fill_count"], order_digest=digest)
     fact = event.to_candidate()
     if approved:
         fact.update(approved_gate_reasons=approved,
@@ -324,23 +325,30 @@ def publish_cycle(result, *, config, legacy):
         projection = _cycle_projection(result, fact, config)
     except Exception:
         _log_failure("candidate_projection_failed")
-        # Urgent events still require the durable marker; routine falls back to
-        # the original direct path when its producer has not proved coverage.
-        if kind == "routine_cycle":
-            return legacy()
+        # An unconfirmed routine candidate is an operational failure, not a
+        # reason to send the routine trade or heartbeat body immediately.
+        if kind in {"routine_cycle", "order_submitted"}:
+            if coverage_failure:
+                coverage_failure()
+                return False
+            raise CandidatePersistenceError("notification_candidate_projection_failed")
         projection = None
-    if kind == "order_submitted":
-        # Real orders stay immediate by default. Count staging failures must not
-        # suppress or delay the existing order/fill notification.
+    if kind in {"order_submitted", "routine_cycle"}:
+        # Stage the fact now; the archived run remains authoritative for counts.
         try:
             store = GCSNotificationStore()
-            store.persist(fact, projection)
-            if healthy:
+            if store.persist(fact, projection) is not True:
+                raise CandidatePersistenceError("notification_candidate_write_unconfirmed")
+            if healthy and enabled():
                 _incident(event, stream="cycle", state="healthy", severity=0,
                     recovered=True, sender=lambda: False, store=store)
         except Exception:
             _log_failure("order_candidate_or_recovery_unconfirmed")
-        return legacy()
+            if coverage_failure:
+                coverage_failure()
+                return False
+            raise CandidatePersistenceError("notification_candidate_write_unconfirmed")
+        return None
     return route(event, legacy=legacy, projection=projection, state=status, recovered=healthy,
         candidate_details={k: fact[k] for k in ("approved_gate_reasons", "reason_text_zh", "reason_text_en") if k in fact})
 
@@ -377,6 +385,15 @@ def _project_runs(reports, **kwargs):
         payload = project_reports([_notification_report(report)], **kwargs)
         for row in payload["runs"]:
             row["source_run_id"] = run_id
+            observations = (report.get("summary") or {}).get("routine_observation_counts")
+            if observations is not None:
+                allowed = {"watch", "opportunity_watch", "panic_reversal", "taco_rebound"}
+                if (not isinstance(observations, dict) or any(
+                    key not in allowed or type(count) is not int or count < 0
+                    for key, count in observations.items()
+                )):
+                    raise ValueError("candidate_plugin_observations_invalid")
+                row["routine_observation_counts"] = dict(observations)
             events = (report.get("summary") or {}).get("notification_events") or []
             if not isinstance(events, list):
                 raise ValueError("notification_event_identity_unknown")
@@ -473,8 +490,6 @@ def persist_projected_candidate(payload, *, env=None, store=None):
 def persist_completed_report(report, *, env=None, store=None):
     """Called only after the existing report persistence succeeded."""
     env = os.environ if env is None else env
-    if not enabled(env):
-        return False
     try:
         if env.get("RUNTIME_TARGET_ENABLED") != "true":
             raise ValueError("notification_target_not_enabled")
@@ -517,11 +532,9 @@ def stage_approved_gate_observation(*, profile, reasons):
 def emit_completed_candidates(env, *, now=None, read=None, upload=None, required_runs=(), observed_events=()):
     """Export one archive-authoritative row per business run, with own facts."""
     from .digest_snapshot import digest_archive
-    if not enabled(env):
-        return digest_archive.emit(env, now=now, **({"read": read} if read else {}), **({"upload": upload} if upload else {}))
     injected_read = read
     read = read or digest_archive._read
-    configured = {**env, "QSL_ROUTINE_NOTIFICATION_MODE": effective_notification_mode(env, FLAG)}
+    configured = {**env, "QSL_ROUTINE_NOTIFICATION_MODE": "daily_digest"}
     published_runs = set()
 
     def write(uri, body):
@@ -604,8 +617,6 @@ def publish_approved_receipts(reports):
 
 def publish_receipt(legacy, *, kind, reason, recovered=False, observed_at=None, source_report=None):
     """Receipt acceptance and workflow disposition remain authoritative."""
-    if not enabled():
-        return legacy()
     if kind == "healthy_heartbeat":
         try:
             event = _receipt_event(source_report, kind, reason)
@@ -622,7 +633,9 @@ def publish_receipt(legacy, *, kind, reason, recovered=False, observed_at=None, 
             return None
         except Exception:
             _log_failure("receipt_candidate_projection_failed")
-            return legacy()
+            raise CandidatePersistenceError("notification_receipt_coverage_unconfirmed")
+    if not enabled():
+        return legacy()
     event = event_for(kind, reason=reason, occurred_at=observed_at)
     try:
         # Receipt incidents without a business run belong only to the durable
