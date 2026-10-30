@@ -68,11 +68,12 @@ def test_true_maps_single_mode_and_persists_before_routine_deferral():
     assert next(iter(store.facts.values()))[0]["window_id"] == "sgt-0600:2026-10-16"
 
 
-def test_routine_write_failure_falls_back_and_records_unknown(capsys):
+def test_routine_write_failure_is_unresolved_and_records_unknown(capsys):
     store, sent = MemoryStore(), []
     store.fail_candidate = True
-    unified.route(event("routine_cycle"), env={unified.FLAG: "true"}, store=store, legacy=lambda: sent.append("direct"))
-    assert sent == ["direct"]
+    with pytest.raises(unified.CandidatePersistenceError):
+        unified.route(event("routine_cycle"), env={unified.FLAG: "true"}, store=store, legacy=lambda: sent.append("direct"))
+    assert sent == []
     assert "coverage=unknown" in capsys.readouterr().out
 
 
@@ -165,9 +166,9 @@ def test_unknown_identity_keeps_unknown_counts_and_cannot_claim_delivery():
     assert not calls
 
 
-def test_orders_default_immediate_in_contract():
+def test_orders_default_to_daily_candidate_in_contract():
     from notifications.digest_snapshot.unified_contract import select_notification_route
-    assert select_notification_route(event_kind="fill", env={unified.FLAG: "true"}, flag_key=unified.FLAG) == "immediate"
+    assert select_notification_route(event_kind="fill", env={unified.FLAG: "true"}, flag_key=unified.FLAG) == "digest_candidate"
 
 
 def test_real_rebalance_entrypoint_on_stages_producer_and_keeps_broker_calls(monkeypatch):

@@ -9,16 +9,31 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+_ROUTINE_ROUTES = frozenset({"watch", "opportunity_watch", "panic_reversal", "taco_rebound"})
+_ROUTINE_ACTIONS = frozenset({"watch", "observe", "notify_manual_review"})
 
-def cycle_evidence(execution: Mapping, orders: Sequence[Mapping], *, dry_run: bool = False) -> dict:
-    """Keep counts derived from actual order responses, never from log lines."""
+
+def routine_observation_counts(observations) -> dict[str, int]:
+    """Count live signals using the same criteria as the immediate filter."""
+    counts: dict[str, int] = {}
+    for item in observations:
+        route = str(getattr(item, "canonical_route", "") or "").lower()
+        action = str(getattr(item, "suggested_action", "") or "").lower()
+        if route in _ROUTINE_ROUTES and action in _ROUTINE_ACTIONS and not any(getattr(item, k, None) for k in ("error", "errors", "risk_halt", "auth_expired")):
+            counts[route] = counts.get(route, 0) + 1
+    return counts
+
+
+def cycle_evidence(execution: Mapping, orders: Sequence[Mapping], *, dry_run: bool = False,
+                   known_pending: bool = False) -> dict:
+    """Keep counts from broker responses; known_pending requires producer proof."""
     from .digest_routing import defer_routine_cycle_to_digest
 
     count = len(orders)
     valid = all(isinstance(order, Mapping) and bool(order.get("status")) for order in orders)
     confirmed = valid and all(str(order["status"]).lower() in {"filled", "completed", "executed"} for order in orders)
     healthy = defer_routine_cycle_to_digest(execution, submitted_order_count=count,
-        submitted_orders=orders, mode="daily_digest", include_orders=True)
+        submitted_orders=orders, mode="daily_digest", include_orders=True, known_pending=known_pending)
     fill_ids = []
     fills_known = confirmed and healthy
     for order in orders:
@@ -61,7 +76,7 @@ def project_reports(reports: Sequence[Mapping], *, expected_target: Mapping,
         if not isinstance(target, Mapping) or any(target.get(k) != expected_target[k] for k in required):
             raise ValueError("candidate_source_identity_mismatch")
         if (report.get("schema_version") != "runtime_report.v1" or report.get("dry_run") is not False
-                or report.get("platform") != expected_target["platform_id"]
+                or report.get("platform") not in ({"schwab", "charles_schwab"} if expected_target["platform_id"] == "schwab" else {expected_target["platform_id"]})
                 or report.get("strategy_profile") != expected_target["strategy_profile"]
                 or report.get("service_name") != expected_target["service_name"]):
             raise ValueError("candidate_source_invalid")
@@ -95,7 +110,8 @@ def project_reports(reports: Sequence[Mapping], *, expected_target: Mapping,
             continue
         if expected_target["platform_id"] == "schwab":
             block_reports.setdefault(day, []).append(report)
-        facts = (report.get("summary") or {}).get("notification_digest") or {}
+        summary = report.get("summary") or {}
+        facts = summary.get("notification_digest") or {}
         known = (facts.get("schema_version") == "qsl.notification_cycle.v1" and facts.get("dry_run") is False
                  and type(facts.get("order_count")) is int and facts["order_count"] >= 0
                  and (facts.get("fill_count") is None or (type(facts["fill_count"]) is int and facts["fill_count"] >= 0)))
@@ -114,7 +130,11 @@ def project_reports(reports: Sequence[Mapping], *, expected_target: Mapping,
             row[key] = row[key] + facts[key] if known and type(facts.get(key)) is int and row[key] is not None else None
             row["field_status"][key] = "known" if row[key] is not None else "counts_unknown"
         if not alert and row["status"] == "ok":
-            row["execution_status"] = "executed" if row["order_count"] else "no_action"
+            pending = str(summary.get("execution_status") or "").lower() == "pending_reconciliation" and facts.get("routine") is True and bool(facts.get("order_count"))
+            if pending or row.get("execution_status") == "order_submitted":
+                row["execution_status"] = "order_submitted"
+            else:
+                row["execution_status"] = "executed" if row["order_count"] else "no_action"
         if alert:
             row.update(status="alert", reason_code="source_cycle_alert" if error else "execution_evidence_missing_or_attention",
                        execution_status="execution_alert" if error else "execution_unknown")
@@ -129,7 +149,7 @@ def project_reports(reports: Sequence[Mapping], *, expected_target: Mapping,
             "runs": [*rows.values(), *not_run_rows.values()]}
 
 
-def summary_evidence(summary: Mapping, *, dry_run: bool = False) -> dict:
+def summary_evidence(summary: Mapping, *, dry_run: bool = False, known_pending: bool = False) -> dict:
     """IBKR named order collections are broker facts, unlike formatted logs."""
     if not isinstance(summary.get("orders_submitted"), (list, tuple)):
         return {"schema_version": "qsl.notification_cycle.v1", "order_count": None,
@@ -144,4 +164,4 @@ def summary_evidence(summary: Mapping, *, dry_run: bool = False) -> dict:
         facts = [{**order, "status": "filled"} for order in filled] if all(isinstance(order, Mapping) for order in filled) else orders
     else:
         facts = orders
-    return cycle_evidence(evidence, facts, dry_run=dry_run)
+    return cycle_evidence(evidence, facts, dry_run=dry_run, known_pending=known_pending)

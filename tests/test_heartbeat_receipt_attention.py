@@ -23,6 +23,12 @@ def test_pending_report_explains_uncertain_order_status(monkeypatch, unified, ex
         "diagnostics": {},
     }
     quiet = execution_status in {"pending", "submitted", "broker_acknowledged", "partially_filled"}
+    if quiet:
+        from quant_platform_kit.common.execution_receipts import build_execution_receipt
+        report.update(platform="charles_schwab", strategy_profile="synthetic")
+        outcome = execution_status if execution_status != "pending" else "submitted"
+        report["execution_receipt"] = build_execution_receipt(platform="schwab", strategy_profile="synthetic",
+            strategy_revision="a" * 40, execution_mode="live", outcome=outcome, observed_at=now)
     assert heartbeat._is_quiet_report(report, now=now) is quiet
     sent, published = [], []
     monkeypatch.setenv("NOTIFY_LANG", locale)
@@ -47,8 +53,9 @@ def test_pending_report_explains_uncertain_order_status(monkeypatch, unified, ex
     monkeypatch.setattr(heartbeat, "publish_receipt", publish)
 
     assert heartbeat.main(now=now) == 0
-    if quiet and not unified:
+    if quiet:
         assert sent == []
+        assert published[0]["kind"] == "healthy_heartbeat"
         return
     assert len(sent) == 1
     assert expected in sent[0]

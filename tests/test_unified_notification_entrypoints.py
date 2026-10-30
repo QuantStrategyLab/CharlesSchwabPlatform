@@ -22,14 +22,21 @@ def configure(monkeypatch):
     return store
 
 
-def test_completed_real_order_is_immediate_and_only_counted_in_candidate(monkeypatch):
+def test_completed_real_order_is_only_counted_in_candidate(monkeypatch):
     store = configure(monkeypatch)
     calls = []
     result = SimpleNamespace(execution={"execution_status": "completed", "broker_submission_done": True},
         submitted_orders=({"status": "filled", "broker_order_id": "synthetic-order"},))
     config = SimpleNamespace(dry_run_only=False, strategy_profile="synthetic_profile")
-    unified.publish_cycle(result, config=config, legacy=lambda: calls.append("order") or True)
-    assert calls == ["order"]
+    target = dict(platform_id="schwab", strategy_profile="synthetic_profile", service_name="synthetic-service",
+        account_scope="synthetic", account_selector=["synthetic"], deployment_selector="synthetic-slot", dry_run_only=False)
+    source = dict(schema_version="runtime_report.v1", platform="schwab", strategy_profile="synthetic_profile", service_name="synthetic-service",
+        runtime_target=target, dry_run=False, status="ok", run_id="run-synthetic",
+        started_at=dt.datetime.now(dt.timezone.utc).isoformat())
+    monkeypatch.setenv("RUNTIME_TARGET_JSON", json.dumps(target))
+    with unified.notification_context(source):
+        unified.publish_cycle(result, config=config, legacy=lambda: calls.append("order") or True)
+    assert calls == []
     fact, _ = next(iter(store.facts.values()))
     assert fact["event_kind"] == "order_submitted" and fact["order_count"] == 1
     assert fact["fill_count"] is None
@@ -74,6 +81,7 @@ def test_heartbeat_healthy_uses_real_producer_before_suppressing_manual_send(mon
     store = configure(monkeypatch)
     payload = healthy_business_receipt(monkeypatch)
     sent = mock_heartbeat(monkeypatch, payload)
+    monkeypatch.setattr(heartbeat, "publish_receipt", unified.publish_receipt)
     monkeypatch.setenv("RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS", "true")
     def produce(env, **kwargs):
         store.operations.append("completed_archive_upload")
@@ -89,13 +97,15 @@ def test_heartbeat_healthy_uses_real_producer_before_suppressing_manual_send(mon
     assert fact["order_count"] is None and fact["fill_count"] is None
 
 
-def test_heartbeat_failed_producer_keeps_manual_send_and_reports_unknown(monkeypatch, capsys):
+def test_heartbeat_failed_producer_sends_coverage_error_and_reports_unknown(monkeypatch, capsys):
     configure(monkeypatch)
     sent = mock_heartbeat(monkeypatch, healthy_business_receipt(monkeypatch))
+    monkeypatch.setattr(heartbeat, "publish_receipt", unified.publish_receipt)
     monkeypatch.setenv("RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS", "true")
     monkeypatch.setattr(unified, "emit_completed_candidates", lambda env, **kwargs: {"uploaded": False})
-    assert heartbeat.main(NOW) == 0
+    assert heartbeat.main(NOW) == 1
     assert len(sent) == 1
+    assert "每日摘要记录未确认" in sent[0]
     assert "coverage=unknown" in capsys.readouterr().out
 
 
@@ -104,6 +114,7 @@ def test_blocked_receipt_real_entrypoint_remains_failure_but_pages_once_across_r
     payload = report()
     payload["summary"].update(execution_status="blocked", no_op_reason="strategy_risk_rejected", orders_submitted_count=0)
     sent = mock_heartbeat(monkeypatch, payload)
+    monkeypatch.setattr(heartbeat, "publish_receipt", unified.publish_receipt)
     for run in ("a", "b"):
         monkeypatch.setenv("GITHUB_RUN_ID", run)
         assert heartbeat.main(NOW) == 1
@@ -113,14 +124,17 @@ def test_blocked_receipt_real_entrypoint_remains_failure_but_pages_once_across_r
     assert heartbeat._is_accepted_report(payload)[0] is False
 
 
-def test_pending_status_is_immediate_even_when_legacy_quiet_rule_accepts_it(monkeypatch):
+def test_pending_status_is_deferred_when_legacy_quiet_rule_accepts_it(monkeypatch):
     configure(monkeypatch)
-    payload = report()
+    payload = healthy_business_receipt(monkeypatch)
     payload["summary"].update(execution_status="pending", orders_submitted_count=1)
+    from quant_platform_kit.common.execution_receipts import build_execution_receipt
+    payload["execution_receipt"] = build_execution_receipt(platform="schwab", strategy_profile=payload["strategy_profile"],
+        strategy_revision="a" * 40, execution_mode="live", outcome="submitted", observed_at=payload["finished_at"])
     assert heartbeat._is_quiet_report(payload, now=NOW)
     sent = mock_heartbeat(monkeypatch, payload)
     assert heartbeat.main(NOW) == 0  # Acceptance and exit code remain the original result.
-    assert len(sent) == 1
+    assert not sent
 
 
 def test_runtime_failure_on_uses_one_attempt_without_legacy_fallback(monkeypatch):

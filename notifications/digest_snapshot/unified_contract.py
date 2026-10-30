@@ -14,8 +14,6 @@ from datetime import date, datetime, time, timedelta
 from typing import Literal, Protocol
 from zoneinfo import ZoneInfo
 
-from .digest_routing import daily_digest_enabled
-
 Route = Literal["immediate", "digest_candidate", "legacy"]
 EVENT_KINDS = frozenset({
     "routine_cycle", "healthy_heartbeat", "order_submitted", "fill",
@@ -42,18 +40,14 @@ def effective_notification_mode(env: Mapping[str, object], flag_key: str) -> str
 
 
 def select_notification_route(*, event_kind: str, env: Mapping[str, object], flag_key: str) -> Route:
-    """OFF delegates untouched to legacy. Unknown/blocked/urgent stays immediate.
+    """Route routine facts to durable daily evidence in every flag state.
 
-    The new contract defaults routine orders to immediate. Legacy routing's
-    historical order default is deliberately not changed by this API.
+    Flags retain their existing meaning for urgent and unknown event kinds.
     """
+    if event_kind in ROUTINE_EVENT_KINDS | ORDER_EVENT_KINDS:
+        return "digest_candidate"
     if not unified_notification_enabled(env, flag_key):
         return "legacy"
-    if daily_digest_enabled(effective_notification_mode(env, flag_key)):
-        if event_kind in ROUTINE_EVENT_KINDS:
-            return "digest_candidate"
-        if event_kind in ORDER_EVENT_KINDS and unified_notification_enabled(env, "QSL_DIGEST_ROUTINE_ORDERS"):
-            return "digest_candidate"
     return "immediate"
 
 
@@ -175,7 +169,11 @@ def route_notification_event(
     if route == "digest_candidate":
         if event.coverage_status != "known":
             raise CandidatePersistenceError("notification_candidate_identity_unknown")
-        if persist_candidate(event.to_candidate()) is not True:
+        try:
+            persisted = persist_candidate(event.to_candidate()) is True
+        except Exception:
+            raise CandidatePersistenceError("notification_candidate_write_unconfirmed") from None
+        if not persisted:
             raise CandidatePersistenceError("notification_candidate_write_unconfirmed")
         return RoutingResult(route, True)
     try:

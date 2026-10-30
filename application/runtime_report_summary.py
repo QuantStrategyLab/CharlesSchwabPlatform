@@ -68,18 +68,15 @@ def summarize_execution_cycle_result(result: object, *, dry_run: bool) -> dict[s
     notification_delivery_summary = _as_mapping(execution.get("notification_delivery_summary"))
     if notification_delivery_summary:
         summary["notification_delivery_summary"] = notification_delivery_summary
-    from notifications.digest_snapshot.digest_routing import daily_digest_enabled
     from notifications.unified import enabled as unified_enabled
-    if daily_digest_enabled() or unified_enabled():
-        from notifications.digest_snapshot.digest_candidates import cycle_evidence
-        summary["notification_digest"] = cycle_evidence(
-            dict(getattr(result, "execution", {}) or {}),
-            tuple(getattr(result, "submitted_orders", ()) or ()), dry_run=dry_run)
+    from notifications.accepted_orders import cycle_notification_evidence
+    raw_orders = tuple(getattr(result, "submitted_orders", ()) or ())
+    summary["notification_digest"] = cycle_notification_evidence(execution, raw_orders, dry_run=dry_run)
     if unified_enabled() and execution.get("notification_approved_gates"):
         from notifications.approved_gates import clean_gate_reasons
         summary["notification_approved_gates"] = clean_gate_reasons(execution["notification_approved_gates"])
         if execution.get("notification_attention_reason_codes"):
             summary["notification_attention_reason_codes"] = list(execution["notification_attention_reason_codes"])
-    if unified_enabled() and execution.get("notification_events"):
+    if execution.get("notification_events"):
         summary["notification_events"] = execution["notification_events"]
     return summary

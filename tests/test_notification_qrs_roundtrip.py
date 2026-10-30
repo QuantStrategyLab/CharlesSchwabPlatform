@@ -54,7 +54,7 @@ def producer(monkeypatch):
             if "/notification-events/" in args[-1]:
                 return [{"url": f"gs://synthetic-store/candidates/schwab/notification-events/2026-10-16/{key}.json"}
                     for key in store.facts]
-            return [{"url": f"gs://synthetic-store/archive/schwab/strategy-a/2026-10/{i}.json",
+            return [{"url": f"gs://synthetic-store/archive/charles_schwab/strategy-a/2026-10/{i}.json",
                 "metadata": {"updated": SOURCE_AT.isoformat()}} for i in range(len(reports))]
         key = args[-1].rsplit("/", 1)[-1].split(".")[0]
         if "/notification-events/" in args[-1]:
@@ -125,7 +125,7 @@ def test_real_producer_qrs_roundtrip_two_runs_zero_orders_order_and_duplicate(mo
     assert zero["field_status"]["order_count"] == "known"
     assert "全窗口统计未知" not in text and "覆盖不完整" not in text
     assert f"订单：{int(with_order)}" in text
-    assert producer.sends == (["business-b"] if with_order else [])
+    assert producer.sends == []
     assert receipt["total_fills_status"] == "known"
 
 
@@ -136,7 +136,7 @@ def test_notification_snapshots_match_recorded_source_hashes():
         assert hashlib.sha256((SNAPSHOT / name).read_bytes()).hexdigest() == metadata["sha256"]
     snapshot = Path(unified.__file__).parent / "digest_snapshot"
     provenance = json.loads((snapshot / "provenance.json").read_text())
-    assert provenance["source_commit"] == "07e24c0c804a9b47316b6ec3c75bb63820d8f421"
+    assert provenance["source_commit"] == "2b04882058666ebc81d1650d93fa2105ec4ba3d8"
     for name, metadata in provenance["files"].items():
         assert hashlib.sha256((snapshot / name).read_bytes()).hexdigest() == metadata["sha256"]
 
