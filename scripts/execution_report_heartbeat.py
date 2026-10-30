@@ -743,7 +743,10 @@ def _send_telegram(message: str) -> bool:
     base_url = "https://api.telegram.org"
     ok = True
     for token_value, chat_id in unique_targets:
-        body = urllib.parse.urlencode({"chat_id": chat_id, "text": message}).encode()
+        body = urllib.parse.urlencode({
+            "chat_id": chat_id, "text": message,
+            "link_preview_options": json.dumps({"is_disabled": True}),
+        }).encode()
         request = urllib.request.Request(
             f"{base_url.rstrip('/')}/bot{token_value}/sendMessage",
             data=body,
@@ -764,7 +767,8 @@ def _workflow_run_url() -> str:
     return ""
 
 
-def _send_normal_heartbeat_legacy(name: str, detail: str, *, quiet_eligible: bool = True) -> int:
+def _send_normal_heartbeat_legacy(name: str, detail: str, *, quiet_eligible: bool = True,
+                                  attention_reason: str = "") -> int:
     if quiet_eligible and not _env_bool("RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS", False):
         return 0
     if quiet_eligible:
@@ -780,6 +784,7 @@ def _send_normal_heartbeat_legacy(name: str, detail: str, *, quiet_eligible: boo
     print(message)
     delivered_message = message if quiet_eligible else render_receipt_alert(
         locale=_notification_locale(), unconfirmed=True, workflow_url=_workflow_run_url(),
+        attention_reason=attention_reason,
     )
     return 0 if _send_telegram(delivered_message[:3900]) else 1
 
@@ -787,14 +792,16 @@ def _send_normal_heartbeat_legacy(name: str, detail: str, *, quiet_eligible: boo
 def _send_normal_heartbeat(name: str, detail: str, *, quiet_eligible: bool = True,
                            recovery_at=None, attention_reason="", source_reports=()) -> int:
     def legacy():
-        return _send_normal_heartbeat_legacy(name, detail, quiet_eligible=quiet_eligible)
+        return _send_normal_heartbeat_legacy(name, detail, quiet_eligible=quiet_eligible,
+                                             attention_reason=attention_reason)
     if not unified_enabled():
         return legacy()
     healthy = quiet_eligible and not attention_reason
     if healthy and source_reports and any(not report.get("execution_receipt") for report in source_reports):
         healthy = False
         attention_reason = "receipt_missing"
-    message = render_receipt_alert(locale=_notification_locale(), unconfirmed=True, workflow_url=_workflow_run_url())
+    message = render_receipt_alert(locale=_notification_locale(), unconfirmed=True,
+                                   workflow_url=_workflow_run_url(), attention_reason=attention_reason)
     if healthy and source_reports:
         results = [publish_receipt(legacy, kind="healthy_heartbeat", reason="receipt_evidence_observed",
             recovered=recovery_at is not None, observed_at=recovery_at, source_report=report)
