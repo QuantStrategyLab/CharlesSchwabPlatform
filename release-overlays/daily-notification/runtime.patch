@@ -1,0 +1,645 @@
+--- a/application/execution_service.py
++++ b/application/execution_service.py
+@@ -677,0 +678 @@
++    notification_order_issue = False
+@@ -831 +832 @@
+-        nonlocal submission_halted, submission_outcome_unknown
++        nonlocal submission_halted, submission_outcome_unknown, notification_order_issue
+@@ -972,0 +974 @@
++            notification_order_issue = True
+@@ -987,0 +990 @@
++            notification_order_issue = True
+@@ -1383,0 +1387,3 @@
++    result_execution["notification_cycle_completed"] = True
++    if notification_order_issue:
++        result_execution["notification_order_issue"] = True
+--- a/application/rebalance_service.py
++++ b/application/rebalance_service.py
+@@ -589 +589 @@
+-    notification_attention_reason_codes = []
++    notification_attention_reason_codes = list(getattr(config, "notification_attention_reason_codes", ()) or ())
+@@ -816 +816,9 @@
+-    publish_cycle_safely(execution_result, config=config, legacy=publish_existing_cycle)
++    def report_digest_coverage_failure():
++        from quant_platform_kit.common.operational_notification_localization import resolve_operational_notification_locale
++        import os
++        zh = resolve_operational_notification_locale(os.getenv("QSL_NOTIFY_LANG") or os.getenv("NOTIFY_LANG")) == "zh"
++        message = ("⚠️ 每日摘要记录未确认；请检查运行记录和摘要存储。" if zh else
++                   "⚠️ Daily digest coverage is unconfirmed; check the run and digest storage.")
++        return notification_publisher.publish(RenderedNotification(detailed_text=message, compact_text=message))
++
++    publish_cycle_safely(execution_result, config=config, legacy=publish_existing_cycle, coverage_failure=report_digest_coverage_failure)
+--- a/main.py
++++ b/main.py
+@@ -524,0 +525,21 @@
++def _notify_digest_coverage_failure() -> bool:
++    from quant_platform_kit.common.operational_notification_localization import resolve_operational_notification_locale
++    zh = resolve_operational_notification_locale(NOTIFY_LANG) == "zh"
++    message = ("⚠️ 每日摘要记录未确认；请检查运行记录和摘要存储。" if zh else
++               "⚠️ Daily digest coverage is unconfirmed; check the run and digest storage.")
++    try:
++        if publish_notification(detailed_text=message, compact_text=message):
++            return True
++    except Exception:
++        pass
++    # Reuse the independent existing error sender without exposing trade content.
++    return _notify_runtime_error(RuntimeError("digest_coverage_unconfirmed"), route_label="digest_coverage")
++
++
++def _report_requires_digest_coverage(report) -> bool:
++    summary = report.get("summary") or {}
++    if (summary.get("notification_digest") or {}).get("routine") is True:
++        return True
++    return bool(summary.get("routine_observation_counts"))
++
++
+@@ -616,0 +638,5 @@
++    from notifications.digest_snapshot.digest_routing import immediate_plugin_signals
++    from notifications.digest_snapshot.digest_candidates import routine_observation_counts
++    signals = tuple(signals or ())
++    if report is not None:
++        report.setdefault("summary", {})["routine_observation_counts"] = routine_observation_counts(signals)
+@@ -618 +644 @@
+-        signals,
++        immediate_plugin_signals(signals, mode="daily_digest"),
+@@ -1011 +1037,3 @@
+-            persist_completed_report(report)
++            coverage_confirmed = persist_completed_report(report)
++            if _report_requires_digest_coverage(report) and not coverage_confirmed:
++                _notify_digest_coverage_failure()
+@@ -1013,0 +1042,2 @@
++            if _report_requires_digest_coverage(report):
++                _notify_digest_coverage_failure()
+--- /dev/null
++++ b/notifications/accepted_orders.py
+@@ -0,0 +1,60 @@
++"""Conservative notification-only evidence for acknowledged Schwab orders."""
++
++from collections.abc import Mapping
++
++
++def confirmed_acceptances(execution, orders):
++    """Recognize acknowledgements without interpreting them as fills."""
++    if not isinstance(execution, Mapping) or not orders:
++        return False
++    if execution.get("execution_status") != "pending_reconciliation":
++        return False
++    if execution.get("broker_submission_done") is not True:
++        return False
++    if type(execution.get("orders_pending_count")) is not int or execution["orders_pending_count"] != len(orders):
++        return False
++    if any(execution.get(key) for key in (
++        "notification_attention_reason_codes", "notification_order_issue", "error", "errors",
++        "fail_reason", "execution_blocked_reason", "plugin_error", "persistence_error",
++        "report_persistence_error", "notification_error", "reconciliation_required",
++        "market_data_retry_required", "risk_flags", "execution_blocked", "auth_expired",
++        "outcome_unknown", "submission_halted",
++    )):
++        return False
++    ids = []
++    for order in orders:
++        if not isinstance(order, Mapping) or str(order.get("status") or "").lower() not in {
++            "accepted", "submitted", "broker_acknowledged", "pending", "partially_filled",
++        }:
++            return False
++        broker_id = order.get("broker_order_id")
++        if not isinstance(broker_id, str) or not broker_id.strip():
++            return False
++        ids.append(broker_id)
++    return len(ids) == len(set(ids))
++
++
++def cycle_notification_evidence(execution, orders, *, dry_run=False):
++    """Project a completed zero-order cycle without altering its execution."""
++    from .digest_snapshot.digest_candidates import cycle_evidence
++    from .digest_snapshot.digest_routing import defer_routine_cycle_to_digest
++    copy = dict(execution)
++    if (not orders and not copy.get("execution_status")
++            and copy.get("notification_cycle_completed") is True
++            and not copy.get("notification_order_issue")):
++        copy["execution_status"] = "no_action"
++    facts = cycle_evidence(copy, orders, dry_run=dry_run,
++                           known_pending=confirmed_acceptances(execution, orders))
++    metadata = execution.get("signal_metadata") or {}
++    if not isinstance(metadata, Mapping) or not defer_routine_cycle_to_digest(
++        {**metadata, "execution_status": metadata.get("execution_status") or "no_action"},
++        submitted_order_count=0, mode="daily_digest", include_orders=True,
++    ):
++        facts["routine"] = False
++    from .approved_gates import approved_block_reasons
++    approved_zero = bool(approved_block_reasons(execution, order_count=len(orders), dry_run=dry_run))
++    if facts.get("routine") is not True and not orders and not approved_zero:
++        # A blocked or incomplete cycle does not establish a zero-order day.
++        facts["order_count"] = None
++        facts["fill_count"] = None
++    return facts
+--- a/notifications/boundary.py
++++ b/notifications/boundary.py
+@@ -44,3 +44 @@
+-        if not enabled():
+-            return
+-        from .digest_snapshot.digest_candidates import cycle_evidence
++        from .accepted_orders import cycle_notification_evidence
+@@ -49 +47 @@
+-        summary["notification_digest"] = cycle_evidence(execution,
++        summary["notification_digest"] = cycle_notification_evidence(execution,
+@@ -60 +58 @@
+-def publish_cycle_safely(result, *, config, legacy):
++def publish_cycle_safely(result, *, config, legacy, coverage_failure=None):
+@@ -62,0 +61,7 @@
++    coverage_attempted = False
++
++    def report_coverage_failure():
++        nonlocal coverage_attempted
++        coverage_attempted = True
++        if coverage_failure is not None:
++            return coverage_failure()
+@@ -74 +79,2 @@
+-        return publish_cycle(result, config=config, legacy=original)
++        return publish_cycle(result, config=config, legacy=original,
++                             coverage_failure=report_coverage_failure if coverage_failure is not None else None)
+@@ -78,0 +85,2 @@
++        if coverage_attempted:
++            return False
+--- a/notifications/digest_snapshot/__init__.py
++++ b/notifications/digest_snapshot/__init__.py
+@@ -1 +1 @@
+-"""Notification-only QPK source snapshot; trading dependency pins stay unchanged."""
++"""QPK notification snapshot at 2b04882058666ebc81d1650d93fa2105ec4ba3d8, with Schwab extensions."""
+--- a/notifications/digest_snapshot/digest_archive.py
++++ b/notifications/digest_snapshot/digest_archive.py
+@@ -44,0 +45 @@
++    source_platform = {"schwab": "charles_schwab"}.get(platform, platform)
+--- a/notifications/digest_snapshot/digest_candidates.py
++++ b/notifications/digest_snapshot/digest_candidates.py
+@@ -11,0 +12,2 @@
++_ROUTINE_ROUTES = frozenset({"watch", "opportunity_watch", "panic_reversal", "taco_rebound"})
++_ROUTINE_ACTIONS = frozenset({"watch", "observe", "notify_manual_review"})
+@@ -13,2 +15,15 @@
+-def cycle_evidence(execution: Mapping, orders: Sequence[Mapping], *, dry_run: bool = False) -> dict:
+-    """Keep counts derived from actual order responses, never from log lines."""
++
++def routine_observation_counts(observations) -> dict[str, int]:
++    """Count live signals using the same criteria as the immediate filter."""
++    counts: dict[str, int] = {}
++    for item in observations:
++        route = str(getattr(item, "canonical_route", "") or "").lower()
++        action = str(getattr(item, "suggested_action", "") or "").lower()
++        if route in _ROUTINE_ROUTES and action in _ROUTINE_ACTIONS and not any(getattr(item, k, None) for k in ("error", "errors", "risk_halt", "auth_expired")):
++            counts[route] = counts.get(route, 0) + 1
++    return counts
++
++
++def cycle_evidence(execution: Mapping, orders: Sequence[Mapping], *, dry_run: bool = False,
++                   known_pending: bool = False) -> dict:
++    """Keep counts from broker responses; known_pending requires producer proof."""
+@@ -21 +36 @@
+-        submitted_orders=orders, mode="daily_digest", include_orders=True)
++        submitted_orders=orders, mode="daily_digest", include_orders=True, known_pending=known_pending)
+@@ -64 +79 @@
+-                or report.get("platform") != expected_target["platform_id"]
++                or report.get("platform") not in ({"schwab", "charles_schwab"} if expected_target["platform_id"] == "schwab" else {expected_target["platform_id"]})
+@@ -98 +113,2 @@
+-        facts = (report.get("summary") or {}).get("notification_digest") or {}
++        summary = report.get("summary") or {}
++        facts = summary.get("notification_digest") or {}
+@@ -117 +133,5 @@
+-            row["execution_status"] = "executed" if row["order_count"] else "no_action"
++            pending = str(summary.get("execution_status") or "").lower() == "pending_reconciliation" and facts.get("routine") is True and bool(facts.get("order_count"))
++            if pending or row.get("execution_status") == "order_submitted":
++                row["execution_status"] = "order_submitted"
++            else:
++                row["execution_status"] = "executed" if row["order_count"] else "no_action"
+@@ -132 +152 @@
+-def summary_evidence(summary: Mapping, *, dry_run: bool = False) -> dict:
++def summary_evidence(summary: Mapping, *, dry_run: bool = False, known_pending: bool = False) -> dict:
+@@ -147 +167 @@
+-    return cycle_evidence(evidence, facts, dry_run=dry_run)
++    return cycle_evidence(evidence, facts, dry_run=dry_run, known_pending=known_pending)
+--- a/notifications/digest_snapshot/digest_routing.py
++++ b/notifications/digest_snapshot/digest_routing.py
+@@ -23,0 +24 @@
++    known_pending: bool = False,
+@@ -35 +36,3 @@
+-    if str(execution.get("execution_status") or "").lower() not in {"no_action", "no_op", "completed", "executed"}:
++    pending_proven = known_pending is True and submitted_order_count > 0
++    status = str(execution.get("execution_status") or "").lower()
++    if status not in {"no_action", "no_op", "completed", "executed"} and not (pending_proven and status == "pending_reconciliation"):
+@@ -40 +43 @@
+-    ):
++    ) and not (pending_proven and execution.get("no_op_reason") == "broker_order_pending_confirmation"):
+@@ -45,2 +48,2 @@
+-        "pending_reconciliation", "reconciliation_required", "market_data_retry_required",
+-        "notification_attention_reason_codes", "orders_pending_count",
++        "reconciliation_required", "market_data_retry_required",
++        "notification_attention_reason_codes",
+@@ -51 +54 @@
+-        "data_error", "blocked_reason", "failed_order_count",
++        "data_error", "blocked_reason", "failed_order_count", "outcome_unknown", "submission_halted",
+@@ -53,2 +56,4 @@
+-        # Only an explicit healthy no-order fact is eligible. Even a failed
+-        # routine notification or unclassified no-op reason stays immediate.
++        # Independent failure, risk or unclassified evidence remains urgent,
++        # including when a producer has established a pending acknowledgement.
++        return False
++    if not pending_proven and (execution.get("pending_reconciliation") or execution.get("orders_pending_count")):
+@@ -62,3 +67,6 @@
+-        # A submission acknowledgement is not a completed fill. Pending,
+-        # rejected and unknown outcomes retain the immediate channel.
+-        if any(not isinstance(order, Mapping) or str(order.get("status") or "").lower() not in {"filled", "completed", "executed"}
++        # Only producer-verified acknowledgements may use the pending statuses;
++        # rejected and unknown outcomes remain immediate. No fill is inferred.
++        routine_statuses = {"filled", "completed", "executed"}
++        if pending_proven:
++            routine_statuses |= {"accepted", "submitted", "pending", "pendingsubmit", "apipending", "apipendingsubmit", "presubmitted", "partiallyfilled", "partial", "partially_filled", "broker_acknowledged"}
++        if any(not isinstance(order, Mapping) or str(order.get("status") or "").lower() not in routine_statuses
+@@ -72 +80 @@
+-def immediate_plugin_signals(signals):
++def immediate_plugin_signals(signals, *, mode: str | None = None):
+@@ -74 +82 @@
+-    if not daily_digest_enabled():
++    if not daily_digest_enabled(mode):
+--- a/notifications/digest_snapshot/provenance.json
++++ b/notifications/digest_snapshot/provenance.json
+@@ -3 +3 @@
+-  "source_commit": "07e24c0c804a9b47316b6ec3c75bb63820d8f421",
++  "source_commit": "2b04882058666ebc81d1650d93fa2105ec4ba3d8",
+@@ -8 +8 @@
+-      "sha256": "7ba48d1d7c74e66be8cd3ff983c2117002776e82cda6675a084cfe0dc51aecc0"
++      "sha256": "a5a9138063940a74d4bb3575166bdd1c21b95c1afb4a13db67c6cf33e53bcfba"
+@@ -12 +12 @@
+-      "sha256": "60c3f258c4d1a03bc49c7d03b392c02c316541726dfacb0b1d4fae6dbd2e5017"
++      "sha256": "271885fc4898d48e8882b8788eba07cb460d1048515ab3766f1353226d317654"
+@@ -15 +15 @@
+-  "source_merge_commit": "07e24c0c804a9b47316b6ec3c75bb63820d8f421"
++  "source_merge_commit": "2b04882058666ebc81d1650d93fa2105ec4ba3d8"
+--- a/notifications/digest_snapshot/unified_contract.py
++++ b/notifications/digest_snapshot/unified_contract.py
+@@ -16,2 +15,0 @@
+-
+-from .digest_routing import daily_digest_enabled
+@@ -45,5 +43,6 @@
+-    """OFF delegates untouched to legacy. Unknown/blocked/urgent stays immediate.
+-
+-    The new contract defaults routine orders to immediate. Legacy routing's
+-    historical order default is deliberately not changed by this API.
+-    """
++    """Route routine facts to durable daily evidence in every flag state.
++
++    Flags retain their existing meaning for urgent and unknown event kinds.
++    """
++    if event_kind in ROUTINE_EVENT_KINDS | ORDER_EVENT_KINDS:
++        return "digest_candidate"
+@@ -52,5 +50,0 @@
+-    if daily_digest_enabled(effective_notification_mode(env, flag_key)):
+-        if event_kind in ROUTINE_EVENT_KINDS:
+-            return "digest_candidate"
+-        if event_kind in ORDER_EVENT_KINDS and unified_notification_enabled(env, "QSL_DIGEST_ROUTINE_ORDERS"):
+-            return "digest_candidate"
+@@ -178 +172,5 @@
+-        if persist_candidate(event.to_candidate()) is not True:
++        try:
++            persisted = persist_candidate(event.to_candidate()) is True
++        except Exception:
++            raise CandidatePersistenceError("notification_candidate_write_unconfirmed") from None
++        if not persisted:
+--- a/notifications/monitor.py
++++ b/notifications/monitor.py
+@@ -27 +27,2 @@
+-        return legacy()
++        message = render_receipt_alert(locale=locale, **presentation)[:3900]
++        return sender(message)
+@@ -39,2 +40,2 @@
+-def publish_health(legacy, reports):
+-    if not enabled() or not reports:
++def publish_health(legacy, reports, *, quiet_eligible=True):
++    if not quiet_eligible:
+@@ -41,0 +43,2 @@
++    if not reports:
++        return 0
+@@ -43 +46 @@
+-        if _defer_approved(reports, True):
++        if enabled() and _defer_approved(reports, True):
+@@ -45 +48,7 @@
+-        healthy = all(_healthy(report) for report in reports)
++        if enabled() and not all(_healthy(report) for report in reports):
++            from scripts import execution_report_heartbeat as heartbeat
++            return publish_alert(legacy, sender=heartbeat._send_telegram, locale=heartbeat._notification_locale(),
++                unconfirmed=True, reports=reports)
++        results = [publish_receipt(legacy, kind="healthy_heartbeat", reason="receipt_evidence_observed", source_report=report,
++            recovered=True, observed_at=_instant(report.get("finished_at"))) for report in reports]
++        return next((value for value in results if type(value) is int and value), 0)
+@@ -47,2 +55,0 @@
+-        healthy = False
+-    if not healthy:
+@@ -50,7 +57,4 @@
+-        publish_alert(legacy, sender=heartbeat._send_telegram, locale=heartbeat._notification_locale(),
+-            unconfirmed=True, reports=reports)
+-        return 0
+-    results = [publish_receipt(legacy, kind="healthy_heartbeat", reason="receipt_evidence_observed", source_report=report,
+-        recovered=True, observed_at=_instant(report.get("finished_at")))
+-        for report in reports]
+-    return next((value for value in results if type(value) is int and value), 0)
++        text = ("⚠️ 每日摘要记录未确认；请检查运行记录和摘要存储。" if heartbeat._notification_locale() == "zh" else
++                "⚠️ Daily digest coverage is unconfirmed; check the run and digest storage.")
++        heartbeat._send_telegram(text)
++        return 1
+--- a/notifications/receipt_alerts.py
++++ b/notifications/receipt_alerts.py
+@@ -12 +12,2 @@
+-                         list_failed=False, missing=False, due_at=None, unconfirmed=False):
++                         list_failed=False, missing=False, due_at=None, unconfirmed=False,
++                         attention_reason=""):
+@@ -32,2 +33,6 @@
+-        lines.append("运行检查证据待核对；请查看该次运行记录。" if zh else
+-                     "Runtime check evidence is unconfirmed; inspect the workflow run.")
++        if attention_reason == "order_status_unknown":
++            lines.append("订单状态尚待核对；请在券商核对订单及成交记录。" if zh else
++                         "Order status needs review; check orders and fills with the broker.")
++        else:
++            lines.append("运行检查证据待核对；请查看该次运行记录。" if zh else
++                         "Runtime check evidence is unconfirmed; inspect the workflow run.")
+--- a/notifications/unified.py
++++ b/notifications/unified.py
+@@ -17 +17 @@
+-from .digest_snapshot.digest_candidates import cycle_evidence, project_reports
++from .digest_snapshot.digest_candidates import project_reports
+@@ -21,2 +21,2 @@
+-    effective_notification_mode, order_identity_digest, route_notification_event,
+-    select_notification_route, sgt_business_window, unified_notification_enabled,
++    order_identity_digest, route_notification_event,
++    sgt_business_window, unified_notification_enabled,
+@@ -46,3 +45,0 @@
+-    if not enabled():
+-        yield
+-        return
+@@ -215 +212,2 @@
+-    if not enabled(env):
++    routine = event.event_kind in {"routine_cycle", "healthy_heartbeat", "order_submitted", "fill"}
++    if not enabled(env) and not routine:
+@@ -217 +214,0 @@
+-    routine = select_notification_route(event_kind=event.event_kind, env=env, flag_key=FLAG) == "digest_candidate"
+@@ -241 +238 @@
+-        return legacy()
++        raise
+@@ -249 +246 @@
+-            return legacy()
++            raise CandidatePersistenceError("notification_candidate_write_unconfirmed")
+@@ -261,2 +258,6 @@
+-    report["summary"] = {"notification_digest": cycle_evidence(result.execution, result.submitted_orders,
+-        dry_run=bool(config.dry_run_only))}
++    from .accepted_orders import cycle_notification_evidence
++    summary = dict(report.get("summary") or {})
++    summary.update(execution_status=result.execution.get("execution_status"),
++        notification_digest=cycle_notification_evidence(result.execution, result.submitted_orders,
++            dry_run=bool(config.dry_run_only)))
++    report["summary"] = summary
+@@ -273 +274 @@
+-def publish_cycle(result, *, config, legacy):
++def publish_cycle(result, *, config, legacy, coverage_failure=None):
+@@ -275,2 +275,0 @@
+-    if not enabled():
+-        return legacy()
+@@ -288 +287,3 @@
+-    healthy = healthy and metadata_healthy
++    from .accepted_orders import cycle_notification_evidence
++    cycle_facts = cycle_notification_evidence(execution, orders, dry_run=config.dry_run_only)
++    healthy = metadata_healthy and (healthy or cycle_facts.get("routine") is True)
+@@ -291 +292 @@
+-    status = str(execution.get("execution_status") or "unknown")
++    status = str(execution.get("execution_status") or ("no_action" if cycle_facts.get("routine") is True else "unknown"))
+@@ -293 +294,2 @@
+-    dry_run_healthy = config.dry_run_only and not getattr(config, "notification_attention_reason_codes", ()) and status in {"dry_run", "dry_run_completed"} and metadata_healthy and defer_routine_cycle_to_digest(
++    preview_status = str(execution.get("execution_status") or "").lower()
++    dry_run_healthy = config.dry_run_only and not getattr(config, "notification_attention_reason_codes", ()) and not execution.get("notification_order_issue") and preview_status in {"", "no_action", "no_op", "completed", "dry_run", "dry_run_completed"} and metadata_healthy and defer_routine_cycle_to_digest(
+@@ -295 +297,5 @@
+-    if orders and not config.dry_run_only and all(isinstance(order, dict) and str(order.get("status") or "").lower() in {"filled", "completed", "executed"} for order in orders):
++    if dry_run_healthy:
++        # A preview is not an archived live run and must not demand live digest
++        # coverage or emit a normal notification.
++        return None
++    if orders and healthy and not config.dry_run_only:
+@@ -303 +309 @@
+-    elif status in {"unknown", "pending", "pending_reconciliation", "reconciliation_required"}:
++    elif status in {"unknown", "pending", "pending_reconciliation", "reconciliation_required"} and not healthy:
+@@ -317 +323 @@
+-        fill_count=cycle_evidence(execution, orders, dry_run=config.dry_run_only)["fill_count"], order_digest=digest)
++        fill_count=cycle_facts["fill_count"], order_digest=digest)
+@@ -327,4 +333,7 @@
+-        # Urgent events still require the durable marker; routine falls back to
+-        # the original direct path when its producer has not proved coverage.
+-        if kind == "routine_cycle":
+-            return legacy()
++        # An unconfirmed routine candidate is an operational failure, not a
++        # reason to send the routine trade or heartbeat body immediately.
++        if kind in {"routine_cycle", "order_submitted"}:
++            if coverage_failure:
++                coverage_failure()
++                return False
++            raise CandidatePersistenceError("notification_candidate_projection_failed")
+@@ -332,3 +341,2 @@
+-    if kind == "order_submitted":
+-        # Real orders stay immediate by default. Count staging failures must not
+-        # suppress or delay the existing order/fill notification.
++    if kind in {"order_submitted", "routine_cycle"}:
++        # Stage the fact now; the archived run remains authoritative for counts.
+@@ -337,2 +345,3 @@
+-            store.persist(fact, projection)
+-            if healthy:
++            if store.persist(fact, projection) is not True:
++                raise CandidatePersistenceError("notification_candidate_write_unconfirmed")
++            if healthy and enabled():
+@@ -343 +352,5 @@
+-        return legacy()
++            if coverage_failure:
++                coverage_failure()
++                return False
++            raise CandidatePersistenceError("notification_candidate_write_unconfirmed")
++        return None
+@@ -379,0 +393,9 @@
++            observations = (report.get("summary") or {}).get("routine_observation_counts")
++            if observations is not None:
++                allowed = {"watch", "opportunity_watch", "panic_reversal", "taco_rebound"}
++                if (not isinstance(observations, dict) or any(
++                    key not in allowed or type(count) is not int or count < 0
++                    for key, count in observations.items()
++                )):
++                    raise ValueError("candidate_plugin_observations_invalid")
++                row["routine_observation_counts"] = dict(observations)
+@@ -476,2 +497,0 @@
+-    if not enabled(env):
+-        return False
+@@ -520,2 +539,0 @@
+-    if not enabled(env):
+-        return digest_archive.emit(env, now=now, **({"read": read} if read else {}), **({"upload": upload} if upload else {}))
+@@ -524 +542 @@
+-    configured = {**env, "QSL_ROUTINE_NOTIFICATION_MODE": effective_notification_mode(env, FLAG)}
++    configured = {**env, "QSL_ROUTINE_NOTIFICATION_MODE": "daily_digest"}
+@@ -607,2 +624,0 @@
+-    if not enabled():
+-        return legacy()
+@@ -625 +641,3 @@
+-            return legacy()
++            raise CandidatePersistenceError("notification_receipt_coverage_unconfirmed")
++    if not enabled():
++        return legacy()
+--- a/scripts/emit_unified_digest_candidates.py
++++ b/scripts/emit_unified_digest_candidates.py
+@@ -16,0 +17,4 @@
++        from scripts.execution_report_heartbeat import _notification_locale, _send_telegram
++        message = ("⚠️ 每日摘要记录未确认；请检查运行记录和摘要存储。" if _notification_locale() == "zh" else
++                   "⚠️ Daily digest coverage is unconfirmed; check the run and digest storage.")
++        _send_telegram(message)
+--- a/scripts/execution_report_heartbeat.py
++++ b/scripts/execution_report_heartbeat.py
+@@ -17 +17,4 @@
+-from notifications.monitor import publish_alert, publish_health
++from notifications.monitor import publish_alert
++from notifications.receipt_alerts import render_receipt_alert
++from notifications.unified import enabled as unified_enabled, publish_receipt, publish_approved_receipts
++from notifications.approved_gates import report_gate_reasons
+@@ -20 +23 @@
+-from quant_platform_kit.common.execution_receipts import validate_execution_receipt
++from quant_platform_kit.common.execution_receipts import attach_execution_receipt, validate_execution_receipt
+@@ -634,0 +638,48 @@
++def _is_proven_accepted_report(payload: dict[str, Any], *, now: dt.datetime) -> bool:
++    """Use only the archive's cycle-produced proof; ACK does not mean filled."""
++    summary = payload.get("summary")
++    if (not isinstance(summary, dict) or payload.get("status") not in {"ok", "success", "completed"}
++            or payload.get("dry_run") is not False or payload.get("platform") != "charles_schwab"
++            or _report_execution_status(payload).lower() != "pending_reconciliation"):
++        return False
++    fact = summary.get("notification_digest")
++    if not isinstance(fact, dict) or fact.get("schema_version") != "qsl.notification_cycle.v1":
++        return False
++    count = summary.get("orders_submitted_count")
++    status_counts = summary.get("submitted_order_status_counts")
++    if (type(count) is not int or count < 1 or type(summary.get("orders_pending_count")) is not int
++            or summary.get("orders_pending_count") != count
++            or summary.get("broker_submission_done") is not True
++            or not isinstance(status_counts, dict) or not status_counts
++            or any(key not in {"accepted", "submitted", "broker_acknowledged", "pending", "partially_filled"}
++                   or type(value) is not int or value < 1 for key, value in status_counts.items())
++            or sum(status_counts.values()) != count
++            or fact.get("routine") is not True or fact.get("dry_run") is not False
++            or type(fact.get("order_count")) is not int or fact.get("order_count") != count
++            or fact.get("fill_count") is not None):
++        return False
++    started = _parse_timestamp(payload.get("started_at"), require_timezone=True)
++    finished = _parse_timestamp(payload.get("finished_at"), require_timezone=True)
++    if (started is None or finished is None or finished < started
++            or finished > now + dt.timedelta(minutes=5)):
++        return False
++    diagnostics = payload.get("diagnostics")
++    if not isinstance(diagnostics, dict):
++        return False
++    if (payload.get("errors") != [] or _report_errors(payload) or _report_notification_failure(payload)):
++        return False
++    if any(scope.get(key) for scope in (payload, summary, diagnostics) for key in (
++        "notification_attention_reason_codes", "notification_order_issue", "reconciliation_required",
++        "execution_blocked", "plugin_error", "persistence_error", "notification_error", "risk_flags",
++    )):
++        return False
++    try:
++        receipt = validate_execution_receipt(payload.get("execution_receipt"))
++        attach_execution_receipt(dict(payload), receipt)
++    except (ValueError, TypeError):
++        return False
++    return (receipt["outcome"] == "reconciliation_required"
++            and receipt["platform"] == "schwab"
++            and receipt["strategy_profile"] == payload.get("strategy_profile"))
++
++
+@@ -735 +786,4 @@
+-        body = urllib.parse.urlencode({"chat_id": chat_id, "text": message}).encode()
++        body = urllib.parse.urlencode({
++            "chat_id": chat_id, "text": message,
++            "link_preview_options": json.dumps({"is_disabled": True}),
++        }).encode()
+@@ -750,2 +804,9 @@
+-def _send_normal_heartbeat_legacy(name: str, detail: str, *, quiet_eligible: bool = True) -> int:
+-    if quiet_eligible and not _env_bool("RUNTIME_HEARTBEAT_NOTIFY_ON_SUCCESS", False):
++def _workflow_run_url() -> str:
++    if all(os.environ.get(key) for key in ("GITHUB_SERVER_URL", "GITHUB_REPOSITORY", "GITHUB_RUN_ID")):
++        return f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
++    return ""
++
++
++def _send_normal_heartbeat_legacy(name: str, detail: str, *, quiet_eligible: bool = True,
++                                  attention_reason: str = "") -> int:
++    if quiet_eligible:
+@@ -753,10 +814,5 @@
+-    if quiet_eligible:
+-        message = format_operational_heartbeat_status(
+-            locale=_notification_locale(), name=name, detail=detail,
+-        )
+-    else:
+-        message = format_operational_alert(
+-            locale=_notification_locale(), alert_type="execution_report_heartbeat", name=name,
+-            issues=["运行检查证据待核对" if _notification_locale() == "zh" else "Runtime check evidence needs review"],
+-            technical_details=[detail],
+-        )
++    message = format_operational_alert(
++        locale=_notification_locale(), alert_type="execution_report_heartbeat", name=name,
++        issues=["运行检查证据待核对" if _notification_locale() == "zh" else "Runtime check evidence needs review"],
++        technical_details=[detail],
++    )
+@@ -764,5 +820,41 @@
+-    return 0 if _send_telegram(message[:3900]) else 1
+-
+-
+-def _send_normal_heartbeat(name: str, detail: str, *, quiet_eligible: bool = True, source_reports=()) -> int:
+-    return publish_health(lambda: _send_normal_heartbeat_legacy(name, detail, quiet_eligible=quiet_eligible), source_reports)
++    delivered_message = render_receipt_alert(
++        locale=_notification_locale(), unconfirmed=True, workflow_url=_workflow_run_url(),
++        attention_reason=attention_reason,
++    )
++    return 0 if _send_telegram(delivered_message[:3900]) else 1
++
++
++def _send_normal_heartbeat(name: str, detail: str, *, quiet_eligible: bool = True,
++                           recovery_at=None, attention_reason="", source_reports=()) -> int:
++    def legacy():
++        return _send_normal_heartbeat_legacy(name, detail, quiet_eligible=quiet_eligible,
++                                             attention_reason=attention_reason)
++    if not unified_enabled() and not quiet_eligible:
++        return legacy()
++    healthy = quiet_eligible and not attention_reason
++    if unified_enabled() and healthy and source_reports and any(not report.get("execution_receipt") for report in source_reports):
++        healthy = False
++        attention_reason = "receipt_missing"
++    message = render_receipt_alert(locale=_notification_locale(), unconfirmed=True,
++                                   workflow_url=_workflow_run_url(), attention_reason=attention_reason)
++    if healthy and source_reports:
++        try:
++            results = [publish_receipt(legacy, kind="healthy_heartbeat", reason="receipt_evidence_observed",
++                recovered=recovery_at is not None, observed_at=recovery_at, source_report=report)
++                for report in source_reports]
++        except Exception:
++            text = ("⚠️ 每日摘要记录未确认；请检查运行记录和摘要存储。" if _notification_locale() == "zh" else
++                    "⚠️ Daily digest coverage is unconfirmed; check the run and digest storage.")
++            _send_telegram(text)
++            return 1
++        return next((value for value in results if type(value) is int and value), 0)
++    if healthy:
++        return 0
++    result = publish_receipt(
++        legacy if healthy else lambda: _send_telegram(message),
++        kind="healthy_heartbeat" if healthy else (attention_reason if attention_reason in {"order_status_unknown", "receipt_missing"} else "receipt_unacceptable"),
++        reason=attention_reason or "receipt_evidence_unconfirmed",
++        recovered=healthy and recovery_at is not None, observed_at=recovery_at,
++    )
++    # Receipt acceptance and workflow disposition are unchanged by routing.
++    return result if type(result) is int else 0
+@@ -906,0 +999 @@
++    notification_attention = []
+@@ -955 +1048 @@
+-            quiet = _is_quiet_report(payload, now=now)
++            quiet = _is_proven_accepted_report(payload, now=now) or _is_quiet_report(payload, now=now)
+@@ -961,0 +1055,2 @@
++            if not quiet and status.lower() in {"unknown", "pending", "submitted", "broker_acknowledged", "partially_filled", "pending_reconciliation", "reconciliation_required"}:
++                notification_attention.append("order_status_unknown")
+@@ -995,0 +1091 @@
++                attention_reason="order_status_unknown" if notification_attention else "",
+@@ -1006,0 +1103 @@
++                attention_reason="order_status_unknown" if notification_attention else "",
