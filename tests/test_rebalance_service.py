@@ -1,5 +1,6 @@
 import sys
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -899,6 +900,9 @@ class RebalanceServiceTests(unittest.TestCase):
         self.assertEqual(order.metadata["notional_usd"], 50.0)
         self.assertTrue(any("market_buy_cmd" in log or "Market Buy" in log for log in result.trade_logs))
 
+    # Isolate producer and legacy renderer semantics; actual daily routing is
+    # exercised below with a source-bound report and durable fake store.
+    @patch("notifications.unified.publish_cycle", new=lambda result, *, config, legacy, **kwargs: legacy())
     def test_run_strategy_core_supports_execution_port_runtime_path(self):
         sent_messages = []
         observed_orders = []
@@ -1063,6 +1067,7 @@ class RebalanceServiceTests(unittest.TestCase):
             "SOXL 站上 150 日均线，持有 SOXL，交易层风险仓位 40.2%",
         )
 
+    @patch("notifications.unified.publish_cycle", new=lambda result, *, config, legacy, **kwargs: legacy())
     def test_run_strategy_core_uses_managed_wrappers(self):
         sent_messages = []
         observed = {}
@@ -1164,6 +1169,7 @@ class RebalanceServiceTests(unittest.TestCase):
         self.assertTrue(sent_messages)
         self.assertIn("strategy=TQQQ Growth Income", sent_messages[0])
 
+    @patch("notifications.unified.publish_cycle", new=lambda result, *, config, legacy, **kwargs: legacy())
     def test_run_strategy_core_accepts_normalized_portfolio_and_execution_sections(self):
         sent_messages = []
         snapshot = SimpleNamespace(
@@ -1255,6 +1261,7 @@ class RebalanceServiceTests(unittest.TestCase):
         self.assertIn("strategy=TQQQ Growth Income", sent_messages[0])
         self.assertIn("Account risk check passed", sent_messages[0])
 
+    @patch("notifications.unified.publish_cycle", new=lambda result, *, config, legacy, **kwargs: legacy())
     def test_run_strategy_core_suppresses_no_trade_plugin_heartbeat_when_configured(self):
         sent_messages = []
         snapshot = SimpleNamespace(
@@ -1483,6 +1490,7 @@ class RebalanceServiceTests(unittest.TestCase):
         self.assertEqual(snapshots, [])
         self.assertTrue(sent_messages)
 
+    @patch("notifications.unified.publish_cycle", new=lambda result, *, config, legacy, **kwargs: legacy())
     def test_run_strategy_core_skips_cash_sweep_sale_when_targets_are_below_one_share(self):
         sent_messages = []
         submitted_orders = []
@@ -3099,7 +3107,7 @@ def test_A_no_order_dry_run_and_error_controls_keep_existing_policy(monkeypatch)
 
 
 def test_A_native_pending_sender_and_complete_raw9_remain_stable(tmp_path, monkeypatch):
-    """Real engine/old notification route/renderer/adapter, fake external ports.
+    """Real engine, daily routing, renderer and receipt adapter with fake ports.
 
     The producer actually returns accepted, pending reconciliation. Other status
     shapes belong to the eligibility test, not a claimed real fill producer.
@@ -3117,6 +3125,7 @@ def test_A_native_pending_sender_and_complete_raw9_remain_stable(tmp_path, monke
     class CAS:
         def __init__(self):
             self.rows = {}
+            self.candidates = []
 
         def read(self, key):
             return copy.deepcopy(self.rows.get(key, (None, None)))
@@ -3128,7 +3137,8 @@ def test_A_native_pending_sender_and_complete_raw9_remain_stable(tmp_path, monke
             self.rows[key] = ((prior or 0) + 1, copy.deepcopy(value))
             return True
 
-        def persist(self, *_):
+        def persist(self, fact, projection):
+            self.candidates.append((fact, projection))
             return True
 
     fixed = datetime(2026, 9, 30, 15, tzinfo=timezone.utc)
@@ -3139,6 +3149,7 @@ def test_A_native_pending_sender_and_complete_raw9_remain_stable(tmp_path, monke
             return fixed.astimezone(tz) if tz else fixed.replace(tzinfo=None)
 
     monkeypatch.setattr(execution_receipts, "datetime", FixedDatetime)
+    monkeypatch.setattr(unified, "datetime", FixedDatetime)
     monkeypatch.setenv("DIGEST_OPAQUE_ACCOUNT_UID", "synthetic-A-opaque")
     monkeypatch.setenv("DIGEST_TARGET_ID", "synthetic-A-target")
     outputs, attempts = [], []
@@ -3157,19 +3168,31 @@ def test_A_native_pending_sender_and_complete_raw9_remain_stable(tmp_path, monke
                 runtime = replace(case.runtime, notifications=CallableNotificationPort(lambda text: sent.append(text) or True))
                 store = CAS()
                 monkeypatch.setattr(unified, "GCSNotificationStore", lambda *a, **kw: store)
-                with patch("application.signal_snapshot._utcnow", return_value=fixed), unified.notification_context(
-                        {"started_at": fixed.isoformat(), "run_id": "synthetic-A-fixed-run"}):
+                notification_target = {"platform_id": "schwab", "strategy_profile": case.scope.profile_id,
+                    "service_name": "synthetic-service", "account_scope": "live", "account_selector": ["live"],
+                    "deployment_selector": "live", "dry_run_only": False}
+                notification_report = {"schema_version": "runtime_report.v1", "platform": "charles_schwab",
+                    "strategy_profile": case.scope.profile_id, "service_name": "synthetic-service",
+                    "runtime_target": notification_target, "dry_run": False,
+                    "started_at": fixed.isoformat(), "run_id": "synthetic-A-fixed-run"}
+                with patch("application.signal_snapshot._utcnow", return_value=fixed), unified.notification_context(notification_report):
                     result = run_strategy_core(runtime=runtime, config=case.config)
-                assert len(sent) == 1, label
+                assert sent == [], label
                 assert len(case.calls) == len(result.submitted_orders) == 1
                 assert result.submitted_orders[0]["status"] == "accepted"
                 assert result.execution["execution_status"] == "pending_reconciliation"
-                assert "submitted; fill not confirmed" in sent[0].lower()
-                if unified_flag == "true":
-                    markers = [value for _, value in store.rows.values()
-                               if value.get("schema_version") == "qsl.notification_incident.v1"]
-                    assert len(markers) == 1 and markers[0]["delivery_status"] == "uncertain"
-                    assert markers[0]["receipt_id"] is None
+                assert len(store.candidates) == 1
+                fact, projection = store.candidates[0]
+                assert fact["event_kind"] == "order_submitted" and fact["coverage_status"] == "known"
+                assert projection["runs"][0]["source_run_id"] == "synthetic-A-fixed-run"
+                assert projection["runs"][0]["order_count"] == 1
+                assert projection["runs"][0]["fill_count"] is None
+                from notifications.renderers import render_trade_notification
+                rendered = render_trade_notification(translator=case.config.translator,
+                    strategy_display_name=case.config.strategy_display_name, dry_run_only=False,
+                    extra_notification_lines=case.config.extra_notification_lines,
+                    execution=result.execution, trade_logs=result.trade_logs)
+                assert "submitted; fill not confirmed" in rendered.detailed_text.lower()
                 report = {"platform": "schwab", "strategy_profile": case.scope.profile_id, "dry_run": False,
                           "runtime_target": case.context.runtime_target.to_dict(),
                           "runtime_release_receipt": case.context.runtime_release_receipt}
@@ -3194,7 +3217,7 @@ def test_A_native_pending_sender_and_complete_raw9_remain_stable(tmp_path, monke
     if os.environ.get("DP01_A_ORACLE_OUTPUT"):
         Path(os.environ["DP01_A_ORACLE_OUTPUT"]).write_text(json.dumps({
             "same_head_comparison_equal": True, "complete_output_sha256": hashlib.sha256(outputs[0].encode()).hexdigest(),
-            "combinations": attempts, "scope": "Synthetic pending producer; real engine+old route+renderer+adapter, no full handler or actual delivery."},
+            "combinations": attempts, "scope": "Synthetic pending producer; real engine+daily route+renderer+adapter, no full handler or actual delivery."},
             indent=2) + "\n")
 
 
