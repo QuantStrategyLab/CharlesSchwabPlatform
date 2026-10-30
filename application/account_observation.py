@@ -239,6 +239,22 @@ def build_account_observation(
             "available_for_withdrawal_source": (
                 "cashAvailableForWithdrawal" if available_for_withdrawal is not None else None
             ),
+            # This report projection is not a full account-risk snapshot.
+            # Absence here says nothing about other broker APIs or ledgers.
+            "account_risk_fact_readiness": {
+                "schema_version": "schwab.account_risk_fact_readiness.v1",
+                "scope": "SNAPSHOT_REPORT_ONLY",
+                "admission": "NOT_EVALUATED",
+                "status": "NOT_READY",
+                "snapshot_observed_at": observed_at.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+                "settled_cash": "NOT_PROJECTED_IN_OBSERVATION",
+                "broker_freshness": "UNVERIFIED",
+                "fee_schedule": "UNVERIFIED",
+                "quantity_permissions": "UNVERIFIED",
+                "order_observation_watermark": "MISSING",
+                "account_domain_and_approved_budget": "UNVERIFIED",
+                "full_account_positions": "UNVERIFIED",
+            },
         }
         if cash_balance is not None and raw_cash_balance_source == "cashBalance":
             observation["cash_balance"] = cash_balance

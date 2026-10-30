@@ -227,6 +227,20 @@
         "available_for_trading_source": null,
         "available_for_withdrawal": null,
         "available_for_withdrawal_source": null,
+        "account_risk_fact_readiness": {
+          "schema_version": "schwab.account_risk_fact_readiness.v1",
+          "scope": "SNAPSHOT_REPORT_ONLY",
+          "admission": "NOT_EVALUATED",
+          "status": "NOT_READY",
+          "snapshot_observed_at": "2026-10-16T19:45:00Z",
+          "settled_cash": "NOT_PROJECTED_IN_OBSERVATION",
+          "broker_freshness": "UNVERIFIED",
+          "fee_schedule": "UNVERIFIED",
+          "quantity_permissions": "UNVERIFIED",
+          "order_observation_watermark": "MISSING",
+          "account_domain_and_approved_budget": "UNVERIFIED",
+          "full_account_positions": "UNVERIFIED"
+        },
         "broker_reported_positions": [
           {
             "symbol": "SPY",
@@ -471,6 +485,20 @@
         "available_for_trading_source": null,
         "available_for_withdrawal": null,
         "available_for_withdrawal_source": null,
+        "account_risk_fact_readiness": {
+          "schema_version": "schwab.account_risk_fact_readiness.v1",
+          "scope": "SNAPSHOT_REPORT_ONLY",
+          "admission": "NOT_EVALUATED",
+          "status": "NOT_READY",
+          "snapshot_observed_at": "2026-10-16T19:45:00Z",
+          "settled_cash": "NOT_PROJECTED_IN_OBSERVATION",
+          "broker_freshness": "UNVERIFIED",
+          "fee_schedule": "UNVERIFIED",
+          "quantity_permissions": "UNVERIFIED",
+          "order_observation_watermark": "MISSING",
+          "account_domain_and_approved_budget": "UNVERIFIED",
+          "full_account_positions": "UNVERIFIED"
+        },
         "broker_reported_positions": [
           {
             "symbol": "SPY",
@@ -717,6 +745,20 @@
         "available_for_trading_source": null,
         "available_for_withdrawal": null,
         "available_for_withdrawal_source": null,
+        "account_risk_fact_readiness": {
+          "schema_version": "schwab.account_risk_fact_readiness.v1",
+          "scope": "SNAPSHOT_REPORT_ONLY",
+          "admission": "NOT_EVALUATED",
+          "status": "NOT_READY",
+          "snapshot_observed_at": "2026-10-16T19:45:00Z",
+          "settled_cash": "NOT_PROJECTED_IN_OBSERVATION",
+          "broker_freshness": "UNVERIFIED",
+          "fee_schedule": "UNVERIFIED",
+          "quantity_permissions": "UNVERIFIED",
+          "order_observation_watermark": "MISSING",
+          "account_domain_and_approved_budget": "UNVERIFIED",
+          "full_account_positions": "UNVERIFIED"
+        },
         "broker_reported_positions": [
           {
             "symbol": "SPY",
@@ -963,6 +1005,20 @@
         "available_for_trading_source": null,
         "available_for_withdrawal": null,
         "available_for_withdrawal_source": null,
+        "account_risk_fact_readiness": {
+          "schema_version": "schwab.account_risk_fact_readiness.v1",
+          "scope": "SNAPSHOT_REPORT_ONLY",
+          "admission": "NOT_EVALUATED",
+          "status": "NOT_READY",
+          "snapshot_observed_at": "2026-10-16T19:45:00Z",
+          "settled_cash": "NOT_PROJECTED_IN_OBSERVATION",
+          "broker_freshness": "UNVERIFIED",
+          "fee_schedule": "UNVERIFIED",
+          "quantity_permissions": "UNVERIFIED",
+          "order_observation_watermark": "MISSING",
+          "account_domain_and_approved_budget": "UNVERIFIED",
+          "full_account_positions": "UNVERIFIED"
+        },
         "broker_reported_positions": [
           {
             "symbol": "SPY",
@@ -1249,6 +1305,20 @@
         "available_for_trading_source": null,
         "available_for_withdrawal": null,
         "available_for_withdrawal_source": null,
+        "account_risk_fact_readiness": {
+          "schema_version": "schwab.account_risk_fact_readiness.v1",
+          "scope": "SNAPSHOT_REPORT_ONLY",
+          "admission": "NOT_EVALUATED",
+          "status": "NOT_READY",
+          "snapshot_observed_at": "2026-10-16T19:45:00Z",
+          "settled_cash": "NOT_PROJECTED_IN_OBSERVATION",
+          "broker_freshness": "UNVERIFIED",
+          "fee_schedule": "UNVERIFIED",
+          "quantity_permissions": "UNVERIFIED",
+          "order_observation_watermark": "MISSING",
+          "account_domain_and_approved_budget": "UNVERIFIED",
+          "full_account_positions": "UNVERIFIED"
+        },
         "broker_reported_positions": [
           {
             "symbol": "SPY",
@@ -1535,6 +1605,20 @@
         "available_for_trading_source": null,
         "available_for_withdrawal": null,
         "available_for_withdrawal_source": null,
+        "account_risk_fact_readiness": {
+          "schema_version": "schwab.account_risk_fact_readiness.v1",
+          "scope": "SNAPSHOT_REPORT_ONLY",
+          "admission": "NOT_EVALUATED",
+          "status": "NOT_READY",
+          "snapshot_observed_at": "2026-10-16T19:45:00Z",
+          "settled_cash": "NOT_PROJECTED_IN_OBSERVATION",
+          "broker_freshness": "UNVERIFIED",
+          "fee_schedule": "UNVERIFIED",
+          "quantity_permissions": "UNVERIFIED",
+          "order_observation_watermark": "MISSING",
+          "account_domain_and_approved_budget": "UNVERIFIED",
+          "full_account_positions": "UNVERIFIED"
+        },
         "broker_reported_positions": [
           {
             "symbol": "SPY",
@@ -1782,6 +1866,20 @@
         "available_for_trading_source": null,
         "available_for_withdrawal": null,
         "available_for_withdrawal_source": null,
+        "account_risk_fact_readiness": {
+          "schema_version": "schwab.account_risk_fact_readiness.v1",
+          "scope": "SNAPSHOT_REPORT_ONLY",
+          "admission": "NOT_EVALUATED",
+          "status": "NOT_READY",
+          "snapshot_observed_at": "2026-10-16T19:45:00Z",
+          "settled_cash": "NOT_PROJECTED_IN_OBSERVATION",
+          "broker_freshness": "UNVERIFIED",
+          "fee_schedule": "UNVERIFIED",
+          "quantity_permissions": "UNVERIFIED",
+          "order_observation_watermark": "MISSING",
+          "account_domain_and_approved_budget": "UNVERIFIED",
+          "full_account_positions": "UNVERIFIED"
+        },
         "broker_reported_positions": [
           {
             "symbol": "SPY",
@@ -2029,6 +2127,20 @@
         "available_for_trading_source": null,
         "available_for_withdrawal": null,
         "available_for_withdrawal_source": null,
+        "account_risk_fact_readiness": {
+          "schema_version": "schwab.account_risk_fact_readiness.v1",
+          "scope": "SNAPSHOT_REPORT_ONLY",
+          "admission": "NOT_EVALUATED",
+          "status": "NOT_READY",
+          "snapshot_observed_at": "2026-10-16T19:45:00Z",
+          "settled_cash": "NOT_PROJECTED_IN_OBSERVATION",
+          "broker_freshness": "UNVERIFIED",
+          "fee_schedule": "UNVERIFIED",
+          "quantity_permissions": "UNVERIFIED",
+          "order_observation_watermark": "MISSING",
+          "account_domain_and_approved_budget": "UNVERIFIED",
+          "full_account_positions": "UNVERIFIED"
+        },
         "broker_reported_positions": [
           {
             "symbol": "SPY",

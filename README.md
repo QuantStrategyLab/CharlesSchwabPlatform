@@ -69,6 +69,18 @@ uv run --no-sync python scripts/check_qpk_pin_consistency.py
 
 ## Inspect inventory in an existing report
 
+The existing account observation can include `account_risk_fact_readiness`
+with schema `schwab.account_risk_fact_readiness.v1`. Its scope is
+`SNAPSHOT_REPORT_ONLY`, admission is `NOT_EVALUATED`, and status is `NOT_READY`:
+these describe this report, not the separate execution gate. The timestamp is
+the snapshot observation time; broker freshness is `UNVERIFIED`. Settled cash
+is `NOT_PROJECTED_IN_OBSERVATION`, full-account positions, fees, quantity
+permissions and account domain and approved budget are `UNVERIFIED`, and the
+order observation watermark is `MISSING`. This does not assert that another
+broker API lacks these facts. Stock inventory completeness applies only to its
+stated stock scope. A missing observation or receipt, including in a legacy
+report, is `NOT_REPORTED` and cannot establish readiness.
+
 Natural-cycle reports use bounded native stock inventory from the same snapshot
 when the installed QPK reader supplies `broker_stock_inventory` metadata and the
 account currency is explicitly declared USD. This adds no broker read; NAV and
