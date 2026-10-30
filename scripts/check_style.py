@@ -36,6 +36,7 @@ import sys
 import unicodedata
 import urllib.parse
 from pathlib import Path
+from typing import NamedTuple
 
 SKIP_DIRS = {
     ".git", "node_modules", ".venv", "venv", "__pycache__", "build", "dist",
@@ -83,41 +84,128 @@ FILLER_PHRASES = [
     "needless to say", "at the end of the day",
 ]
 
+# Section 13 says "non-placeholder buckets" and section 7 line 104 says the
+# placeholder form is `<bucket>`, `<project-id>`, `$PROJECTS_ROOT`. So a
+# `gs://` URI whose bucket segment is a placeholder is the correct form, not a
+# finding.
+PLACEHOLDER_BUCKET = re.compile(
+    r"^[<{$]|[<>{}]|\.\.\."
+    r"|^(?:your|my|example|sample|placeholder|shared)[-_]"
+    r"|^bucket(?:-|$)"
+)
+
+URL_TOKEN = re.compile(r"https?://[^\s)\]\"'<>`]+")
+FENCED_BLOCK = re.compile(r"^```.*?^```", re.DOTALL | re.MULTILINE)
+
+
+class FileContext(NamedTuple):
+    """Per-file material the leak predicates need to judge a match."""
+
+    url_spans: list[tuple[int, int]]
+    prose: str  # the text with fenced blocks blanked out, offsets preserved
+
+
+def bucket_is_real(text: str, match: re.Match, ctx: FileContext) -> bool:
+    bucket = match.group(0)[len("gs://"):].split("/", 1)[0]
+    # A sentence-final period is punctuation, not part of the name. An ellipsis
+    # is the placeholder, so it must survive this.
+    if bucket.endswith(".") and not bucket.endswith("..."):
+        bucket = bucket[:-1]
+    return bool(bucket) and not PLACEHOLDER_BUCKET.search(bucket)
+
+
+def hex_is_prose(text: str, match: re.Match, ctx: FileContext) -> bool:
+    """Section 5 forbids 40-character hex *in prose* — CI head SHAs pasted in.
+
+    A revision reference is a different thing and the guide asks for it: line
+    377 writes `<40-char sha>` and the cross-repo links pin `blob/<sha>/`. So
+    the three forms that carry a revision are exempt, and what is left is the
+    case the rule was written for.
+    """
+    if ctx.prose[match.start()] == " ":
+        return False  # inside a fenced block: a contract example, not prose
+    for start, end in ctx.url_spans:
+        if start <= match.start() < end:
+            return False  # a link target
+    line_start = text.rfind("\n", 0, match.start()) + 1
+    line_end = text.find("\n", match.end())
+    line = text[line_start: line_end if line_end != -1 else len(text)]
+    column = match.start() - line_start
+    if line[:column].count("`") % 2 == 1:
+        return False  # a quoted identifier
+    if text[match.end(): match.end() + 2] == "](":
+        return False  # the label of a link whose target carries the same sha
+    return len(set(match.group(0))) != 1  # 000...0 and friends, a placeholder
+
+
 # Section 13 grep list plus section 5 categories that are recognisable.
 # The lookbehind keeps URL paths such as https://example.com/home/legal/ out of
 # the results; "/home/" inside a URL is not a local path.
 #
 # Two categories, because they carry different weight. A real home path is
 # evidence that something leaked from a workstation. The rest are the guide's
-# own "prompt to check, not a certain failure" greps: a 40-character hex string
-# is usually a commit SHA, but it can also be a checksum in a contract.
+# own "prompt to check, not a certain failure" greps.
+#
+# The last column is a predicate deciding whether a match is a finding at all.
+# Both heuristics in this list match far more than they mean: `gs://` matches
+# `gs://<bucket>/...`, which is the form section 13 asks for, and a 40-character
+# hex string matches every commit SHA, which is how a cross-repository reference
+# is supposed to be pinned. Without the predicates the two rules reported 522
+# findings across the organisation and not one of them was a defect, which is
+# the same as having no rule: the report gets scrolled past.
 LEAK_PATTERNS = [
     (re.compile(r"(?<![\w.])/(?:Users|home)/[^\s`)\]\"'<>|]{2,}"),
-     "paths", "absolute home path (section 13)"),
-    (re.compile(r"\bgs://[^\s`)\]]+"), "content", "non-placeholder bucket (section 13)"),
-    (re.compile(r"\b[\w-]+\.workers\.dev\b"), "content", "personal subdomain (section 13)"),
-    (re.compile(r"\b[0-9a-f]{40}\b"), "content", "40-character hex string (section 5)"),
-    (re.compile(r"\|\s*(PR\b|#\d+)"), "content", "PR-number status table (section 5)"),
+     "paths", "absolute home path (section 13)", None),
+    (re.compile(r"\bgs://[^\s`)\]\"'<>]+"),
+     "content", "non-placeholder bucket (section 13)", bucket_is_real),
+    (re.compile(r"\b[\w-]+\.workers\.dev\b"),
+     "content", "personal subdomain (section 13)", None),
+    (re.compile(r"\b[0-9a-f]{40}\b"),
+     "content", "40-character hex string in prose (section 5)", hex_is_prose),
+    (re.compile(r"\|\s*(PR\b|#\d+)"),
+     "content", "PR-number status table (section 5)", None),
     (re.compile(r"\b(this round|this task|in this task)\b", re.IGNORECASE),
-     "content", "task-scope wording (section 5)"),
+     "content", "task-scope wording (section 5)", None),
     (re.compile(r"\b(the owner approved|approved by)\b", re.IGNORECASE),
-     "content", "owner approval note (section 5)"),
+     "content", "owner approval note (section 5)", None),
 ]
 
-# Section 6: paths for notes that must never be committed.
-INTERNAL_NOTE_GITIGNORE = [".local/", "ops-notes/", "*.local.md", "*.internal.md"]
+
+# Section 6: paths for notes that must never be committed. The four wildcard
+# entries are spelled with [Aa] character classes because .gitignore is
+# case-sensitive on some platforms and `*audit*.md` alone lets `Audit.md` past.
+INTERNAL_NOTE_GITIGNORE = [
+    "*[Aa][Uu][Dd][Ii][Tt]*.md",
+    "*[Hh][Aa][Nn][Dd][Oo][Ff][Ff]*.md",
+    "*-[Rr][Ee][Vv][Ii][Ee][Ww]-*.md",
+    "*_[Rr][Ee][Vv][Ii][Ee][Ww]_*.md",
+    "docs/audits/",
+    "docs/plans/",
+    "docs/handoffs/",
+    "docs/superpowers/",
+    ".local/",
+    "ops-notes/",
+    "*.local.md",
+    "*.internal.md",
+]
+
+# Directories whose contents are working material, never reader-facing docs.
+INTERNAL_NOTE_DIRS = re.compile(
+    r"(^|/)(docs/plans|docs/handoffs|docs/superpowers|docs/audits)/"
+)
 
 DATED_TITLE = re.compile(r"(audit|acceptance).*20\d{2}-\d{2}-\d{2}", re.IGNORECASE)
 
 # Blocking categories per phase.
 #
 # Phase 1 blocks only what is unambiguous: a leaked local path, a link a reader
-# cannot follow, a missing rules file. Everything else is reported as NOTE.
-# Phase 2 blocks the rest once the naming cleanup is done. README structure
-# never blocks, because section 3 is a default and section 4 says so.
+# cannot follow, a missing rules file, a .gitignore that has stopped keeping
+# working notes out. Everything else is reported as NOTE. Phase 2 blocks the
+# rest once the naming cleanup is done. README structure never blocks, because
+# section 3 is a default and section 4 says so.
 PHASE_BLOCKING = {
-    1: {"paths", "links", "agents"},
-    2: {"paths", "links", "agents", "content", "naming", "language"},
+    1: {"paths", "links", "agents", "hygiene"},
+    2: {"paths", "links", "agents", "hygiene", "content", "naming", "language"},
 }
 
 
@@ -292,14 +380,33 @@ def check_language(root: Path, report: Report) -> None:
                 report.add("language", f"{rel}:{number}: dated title in a reader-facing doc (section 5)")
 
 
+def blank_fenced_blocks(text: str) -> str:
+    """Replace fenced blocks with spaces, keeping every offset in place.
+
+    `hex_is_prose` needs to know whether a match sits in a contract example or
+    in running text, and it needs the character offsets to stay usable for the
+    line and backtick lookups that follow.
+    """
+    def blank(match: re.Match) -> str:
+        return re.sub(r"[^\n]", " ", match.group(0))
+
+    return FENCED_BLOCK.sub(blank, text)
+
+
 def check_leaks(root: Path, report: Report) -> None:
     for path in iter_files(root):
         if not is_markdown(path):
             continue
         rel = path.relative_to(root).as_posix()
         text = path.read_text(encoding="utf-8", errors="ignore")
-        for pattern, category, label in LEAK_PATTERNS:
+        ctx = FileContext(
+            url_spans=[(m.start(), m.end()) for m in URL_TOKEN.finditer(text)],
+            prose=blank_fenced_blocks(text),
+        )
+        for pattern, category, label, predicate in LEAK_PATTERNS:
             for match in pattern.finditer(text):
+                if predicate is not None and not predicate(text, match, ctx):
+                    continue
                 report.add(category, f"{rel}: {label}: {match.group(0)[:40]}")
 
 
@@ -308,8 +415,13 @@ def check_internal_paths(root: Path, report: Report) -> None:
     text = gitignore.read_text(encoding="utf-8", errors="ignore") if gitignore.exists() else ""
     missing = [pattern for pattern in INTERNAL_NOTE_GITIGNORE if pattern not in text]
     if missing:
+        # Blocking in both phases. This is the first of the three layers that
+        # keep working notes out of a public repository, and it is the only one
+        # that acts before the note is committed at all. A repository that
+        # loses it stops preventing the mistake and starts detecting it, which
+        # is a different and much later guarantee.
         report.add(
-            "content",
+            "hygiene",
             ".gitignore: internal note paths not ignored — " + ", ".join(missing),
         )
 
@@ -317,7 +429,7 @@ def check_internal_paths(root: Path, report: Report) -> None:
         if not is_markdown(path):
             continue
         rel = path.relative_to(root).as_posix()
-        if re.search(r"(^|/)(docs/plans|docs/handoffs|docs/superpowers)/", rel):
+        if INTERNAL_NOTE_DIRS.search(rel):
             report.add("content", f"{rel}: plan/handoff directory in a public repo (section 5)")
         if re.search(r"(^|/)(out|output)/[^/]+/", rel):
             report.add("content", f"{rel}: committed output directory (section 5)")
