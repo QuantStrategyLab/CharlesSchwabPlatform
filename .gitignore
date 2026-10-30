@@ -36,3 +36,17 @@ venv/
 ops-notes/
 *.local.md
 *.internal.md
+
+# Process notes stay out of the repository, see section 5.
+# An audit, a handoff or a review describes one moment; the code moves on and
+# the document does not, so what is left behind reads as current long after it
+# stopped being true. Commit history is where to look instead. The [Aa]
+# spelling is because .gitignore is case-sensitive on some platforms.
+*[Aa][Uu][Dd][Ii][Tt]*.md
+*[Hh][Aa][Nn][Dd][Oo][Ff][Ff]*.md
+*-[Rr][Ee][Vv][Ii][Ee][Ww]-*.md
+*_[Rr][Ee][Vv][Ii][Ee][Ww]_*.md
+docs/audits/
+docs/plans/
+docs/handoffs/
+docs/superpowers/
