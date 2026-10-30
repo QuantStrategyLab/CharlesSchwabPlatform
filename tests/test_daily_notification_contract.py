@@ -39,6 +39,35 @@ def test_empty_execution_is_not_invented_as_a_completed_cycle():
     assert cycle_notification_evidence({"notification_cycle_completed": True}, [])["routine"] is True
 
 
+@pytest.mark.parametrize("flag", [None, "false", "true"])
+def test_healthy_dry_run_does_not_require_candidate_or_send(flag, monkeypatch):
+    from notifications.unified import publish_cycle
+    from types import SimpleNamespace
+    if flag is None:
+        monkeypatch.delenv("SCHWAB_UNIFIED_NOTIFICATION_ENABLED", raising=False)
+    else:
+        monkeypatch.setenv("SCHWAB_UNIFIED_NOTIFICATION_ENABLED", flag)
+    calls = []
+    result = SimpleNamespace(execution={"execution_status": "dry_run", "signal_metadata": {}},
+                             submitted_orders=[{"status": "dry_run"}])
+    config = SimpleNamespace(dry_run_only=True, strategy_profile="synthetic", notification_attention_reason_codes=())
+    monkeypatch.setattr("notifications.unified.GCSNotificationStore", lambda *a: pytest.fail("preview tried to access storage"))
+    assert publish_cycle(result, config=config, legacy=lambda: calls.append("normal"),
+                         coverage_failure=lambda: calls.append("coverage")) is None
+    assert calls == []
+
+
+def test_uncertain_dry_run_keeps_existing_error_route(monkeypatch):
+    from notifications.unified import publish_cycle
+    from types import SimpleNamespace
+    monkeypatch.setenv("SCHWAB_UNIFIED_NOTIFICATION_ENABLED", "false")
+    calls = []
+    result = SimpleNamespace(execution={"execution_status": "unknown"}, submitted_orders=[])
+    config = SimpleNamespace(dry_run_only=True, strategy_profile="synthetic", notification_attention_reason_codes=())
+    publish_cycle(result, config=config, legacy=lambda: calls.append("attention"))
+    assert calls == ["attention"]
+
+
 def test_archived_ack_proof_preserves_unknown_fill_and_rejects_conflicts():
     from types import SimpleNamespace
     from application.runtime_report_summary import summarize_execution_cycle_result

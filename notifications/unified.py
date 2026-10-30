@@ -291,8 +291,13 @@ def publish_cycle(result, *, config, legacy, coverage_failure=None):
         healthy = False
     status = str(execution.get("execution_status") or ("no_action" if cycle_facts.get("routine") is True else "unknown"))
     reason = str(execution.get("no_op_reason") or status)
-    dry_run_healthy = config.dry_run_only and not getattr(config, "notification_attention_reason_codes", ()) and status in {"dry_run", "dry_run_completed"} and metadata_healthy and defer_routine_cycle_to_digest(
+    preview_status = str(execution.get("execution_status") or "").lower()
+    dry_run_healthy = config.dry_run_only and not getattr(config, "notification_attention_reason_codes", ()) and not execution.get("notification_order_issue") and preview_status in {"", "no_action", "no_op", "completed", "dry_run", "dry_run_completed"} and metadata_healthy and defer_routine_cycle_to_digest(
         {**execution, "execution_status": "no_action"}, submitted_order_count=0, mode="daily_digest", include_orders=True)
+    if dry_run_healthy:
+        # A preview is not an archived live run and must not demand live digest
+        # coverage or emit a normal notification.
+        return None
     if orders and healthy and not config.dry_run_only:
         kind = "order_submitted"
     elif dry_run_healthy or approved:
