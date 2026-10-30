@@ -102,7 +102,7 @@ def test_completed_archive_counts_runs_once_and_attaches_noncounting_facts(missi
         if args[0] == "ls":
             if "/notification-events/" in args[-1]:
                 pytest.fail("archive projection must not list notification staging")
-            return [{"url": "gs://synthetic-store/archive/schwab/strategy-a/2026-10/" + name + ".json", "metadata": {"updated": NOW.isoformat()}}
+            return [{"url": "gs://synthetic-store/archive/charles_schwab/strategy-a/2026-10/" + name + ".json", "metadata": {"updated": NOW.isoformat()}}
                 for name in (["source", "copy"] if duplicate_source else ["source"])]
         if "/notification-events/" in args[-1]:
             pytest.fail("archive projection must use its archived event facts")
@@ -129,7 +129,8 @@ def test_completed_archive_counts_runs_once_and_attaches_noncounting_facts(missi
         assert row["reason_code"] == "notification_source_report_missing"
 
 
-def test_archive_off_delegates_without_any_added_event_reads():
+def test_archive_off_rejects_missing_target_without_event_reads():
     def forbidden(*a):
         pytest.fail("OFF must not do event/storage I/O")
-    assert unified.emit_completed_candidates({}, read=forbidden, upload=forbidden) == {"status": "disabled", "uploaded": False}
+    with pytest.raises(ValueError, match="candidate_target_enablement_unknown"):
+        unified.emit_completed_candidates({}, read=forbidden, upload=forbidden)

@@ -37,6 +37,9 @@ def test_empty_execution_is_not_invented_as_a_completed_cycle():
     assert cycle_notification_evidence({"notification_cycle_completed": True, "errors": ["error"]}, [])["routine"] is False
     assert cycle_notification_evidence({"notification_cycle_completed": True, "signal_metadata": {"errors": ["error"]}}, [])["routine"] is False
     assert cycle_notification_evidence({"notification_cycle_completed": True}, [])["routine"] is True
+    blocked = cycle_notification_evidence({"execution_status": "blocked"}, [])
+    assert blocked["routine"] is False
+    assert blocked["order_count"] is None and blocked["fill_count"] is None
 
 
 @pytest.mark.parametrize("flag", [None, "false", "true"])
@@ -343,10 +346,15 @@ def test_actual_heartbeat_uses_archived_ack_as_routine(monkeypatch, unified):
 @pytest.mark.parametrize("status", ["submitted", "broker_acknowledged", "partially_filled", "pending"])
 @pytest.mark.parametrize("unified", [False, True])
 def test_legacy_complete_unambiguous_status_stays_routine(monkeypatch, status, unified):
-    from tests.test_notification_quiet import NOW, mock_heartbeat, report
+    from test_notification_quiet import NOW, mock_heartbeat, report
     from scripts import execution_report_heartbeat as heartbeat
+    from quant_platform_kit.common.execution_receipts import build_execution_receipt
     payload = report()
     payload["summary"].update(execution_status=status, orders_submitted_count=1)
+    payload["platform"] = "charles_schwab"
+    outcome = status if status in {"submitted", "broker_acknowledged", "partially_filled"} else "submitted"
+    payload["execution_receipt"] = build_execution_receipt(platform="schwab", strategy_profile=payload["strategy_profile"],
+        strategy_revision="a" * 40, execution_mode="live", outcome=outcome, observed_at=NOW)
     sent = mock_heartbeat(monkeypatch, payload)
     staged = []
     monkeypatch.setattr(heartbeat, "unified_enabled", lambda: unified)

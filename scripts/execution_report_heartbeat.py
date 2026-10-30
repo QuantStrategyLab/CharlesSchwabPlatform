@@ -839,6 +839,9 @@ def _send_normal_heartbeat(name: str, detail: str, *, quiet_eligible: bool = Tru
     if not unified_enabled() and not quiet_eligible:
         return legacy()
     healthy = quiet_eligible and not attention_reason
+    if unified_enabled() and healthy and source_reports and any(not report.get("execution_receipt") for report in source_reports):
+        healthy = False
+        attention_reason = "receipt_missing"
     message = render_receipt_alert(locale=_notification_locale(), unconfirmed=True,
                                    workflow_url=_workflow_run_url(), attention_reason=attention_reason)
     if healthy and source_reports:

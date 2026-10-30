@@ -51,4 +51,8 @@ def cycle_notification_evidence(execution, orders, *, dry_run=False):
         submitted_order_count=0, mode="daily_digest", include_orders=True,
     ):
         facts["routine"] = False
+    if facts.get("routine") is not True and not orders:
+        # A blocked or incomplete cycle does not establish a zero-order day.
+        facts["order_count"] = None
+        facts["fill_count"] = None
     return facts
