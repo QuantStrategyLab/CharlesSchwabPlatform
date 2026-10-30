@@ -9,7 +9,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 
 def render_receipt_alert(*, locale, observations=(), workflow_url="", scheduler_error=False,
-                         list_failed=False, missing=False, due_at=None, unconfirmed=False):
+                         list_failed=False, missing=False, due_at=None, unconfirmed=False,
+                         attention_reason=""):
     zh = str(locale).startswith("zh")
     counts = Counter(item["category"] for item in observations)
     labels = {
@@ -29,8 +30,12 @@ def render_receipt_alert(*, locale, observations=(), workflow_url="", scheduler_
         lines.append("缺少可接受的执行回执；保护保持生效。" if zh else
                      "An acceptable execution receipt is missing; protections remain active.")
     if unconfirmed:
-        lines.append("运行检查证据待核对；请查看该次运行记录。" if zh else
-                     "Runtime check evidence is unconfirmed; inspect the workflow run.")
+        if attention_reason == "order_status_unknown":
+            lines.append("订单状态尚待核对；请在券商核对订单及成交记录。" if zh else
+                         "Order status needs review; check orders and fills with the broker.")
+        else:
+            lines.append("运行检查证据待核对；请查看该次运行记录。" if zh else
+                         "Runtime check evidence is unconfirmed; inspect the workflow run.")
     for category, (cn, en) in labels.items():
         if counts[category]:
             lines.append(f"{counts[category]} 份{cn}" if zh else f"{counts[category]} report(s) {en}")
