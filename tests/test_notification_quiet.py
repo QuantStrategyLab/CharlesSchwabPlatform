@@ -166,7 +166,7 @@ def test_unscoped_mixed_services_unknown_is_visible(monkeypatch):
     assert 'unknown' in '\n'.join(diagnostics)
     assert heartbeat._notice('status_normal') not in sent[0]
     assert 'gs://mock/' not in sent[0]
-    assert ('运行检查证据待核对' if heartbeat._notification_locale() == 'zh' else 'Runtime check evidence is unconfirmed') in sent[0]
+    assert ('订单状态尚待核对；请在券商核对订单及成交记录。' if heartbeat._notification_locale() == 'zh' else 'Order status needs review; check orders and fills with the broker.') in sent[0]
 
 
 def test_conflicting_latest_identity_cannot_be_hidden_by_old_healthy(monkeypatch):

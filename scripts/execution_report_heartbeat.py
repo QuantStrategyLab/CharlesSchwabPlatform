@@ -792,8 +792,7 @@ def _send_normal_heartbeat_legacy(name: str, detail: str, *, quiet_eligible: boo
 def _send_normal_heartbeat(name: str, detail: str, *, quiet_eligible: bool = True,
                            recovery_at=None, attention_reason="", source_reports=()) -> int:
     def legacy():
-        return _send_normal_heartbeat_legacy(name, detail,
-                                             quiet_eligible=quiet_eligible and attention_reason != "order_status_unknown",
+        return _send_normal_heartbeat_legacy(name, detail, quiet_eligible=quiet_eligible,
                                              attention_reason=attention_reason)
     if not unified_enabled():
         return legacy()

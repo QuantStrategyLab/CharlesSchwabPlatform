@@ -8,7 +8,7 @@ from scripts import execution_report_heartbeat as heartbeat
 
 
 @pytest.mark.parametrize("unified", [False, True])
-@pytest.mark.parametrize("execution_status", ["pending_reconciliation", "pending", "submitted"])
+@pytest.mark.parametrize("execution_status", ["pending_reconciliation", "unknown", "pending", "submitted", "broker_acknowledged", "partially_filled"])
 @pytest.mark.parametrize("locale,expected", [
     ("zh", "订单状态尚待核对；请在券商核对订单及成交记录。"),
     ("en", "Order status needs review; check orders and fills with the broker."),
@@ -22,7 +22,8 @@ def test_pending_report_explains_uncertain_order_status(monkeypatch, unified, ex
         "summary": {"execution_status": execution_status, "orders_submitted_count": 1},
         "diagnostics": {},
     }
-    assert heartbeat._is_quiet_report(report, now=now) is (execution_status != "pending_reconciliation")
+    quiet = execution_status in {"pending", "submitted", "broker_acknowledged", "partially_filled"}
+    assert heartbeat._is_quiet_report(report, now=now) is quiet
     sent, published = [], []
     monkeypatch.setenv("NOTIFY_LANG", locale)
     monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.com")
@@ -46,6 +47,9 @@ def test_pending_report_explains_uncertain_order_status(monkeypatch, unified, ex
     monkeypatch.setattr(heartbeat, "publish_receipt", publish)
 
     assert heartbeat.main(now=now) == 0
+    if quiet and not unified:
+        assert sent == []
+        return
     assert len(sent) == 1
     assert expected in sent[0]
     assert "https://github.com/example/repo/actions/runs/123" in sent[0]
@@ -76,11 +80,11 @@ def test_healthy_heartbeat_remains_quiet(monkeypatch, unified):
     assert heartbeat._send_normal_heartbeat("example", "healthy") == 0
 
 
-def test_newly_visible_legacy_attention_preserves_delivery_failure_result(monkeypatch):
+def test_nonquiet_legacy_attention_preserves_delivery_failure_result(monkeypatch):
     monkeypatch.setattr(heartbeat, "unified_enabled", lambda: False)
     monkeypatch.setattr(heartbeat, "_send_telegram", lambda _: False)
     assert heartbeat._send_normal_heartbeat(
-        "example", "detail", quiet_eligible=True, attention_reason="order_status_unknown",
+        "example", "detail", quiet_eligible=False, attention_reason="order_status_unknown",
     ) == 1
 
 

@@ -10,10 +10,11 @@ immediate confirmed order notices. Failed, pending, uncertain, risk, persistence
 and authentication outcomes retain immediate alerts. Healthy idle cycles and
 routine plugin observations do not produce individual pushes.
 
-Execution-report heartbeats retain attention for pending or unknown order states
-in both legacy and unified modes. The alert directs the operator to check the
-broker's order and fill records; it does not assert that an order filled. Its
-workflow link remains available without a web preview.
+When an execution-report heartbeat sends an order-status attention alert, it
+directs the operator to check the broker's order and fill records without
+asserting that an order filled. In legacy mode, complete submitted, acknowledged,
+partially filled and pending reports remain quiet to avoid repeating the trade
+notice. The workflow link remains available without a web preview.
 
 QPK source reference: `4cc5e55251269923771f90cd661bb62a5cfdf0cd` (notification modules only).
 
