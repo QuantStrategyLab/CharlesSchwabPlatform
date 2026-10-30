@@ -40,6 +40,12 @@ def test_empty_execution_is_not_invented_as_a_completed_cycle():
     blocked = cycle_notification_evidence({"execution_status": "blocked"}, [])
     assert blocked["routine"] is False
     assert blocked["order_count"] is None and blocked["fill_count"] is None
+    approved = {"execution_status": "blocked", "no_op_reason": "strategy_risk_rejected",
+        "broker_submission_done": False, "notification_approved_gates": [
+            {"reason_code": "consecutive_loss_limit_exceeded", "observed_value": 6, "limit": 5}]}
+    facts = cycle_notification_evidence(approved, [])
+    assert facts["order_count"] == 0 and facts["fill_count"] is None
+    assert cycle_notification_evidence({**approved, "order_errors": ["error"]}, [])["order_count"] is None
 
 
 @pytest.mark.parametrize("flag", [None, "false", "true"])

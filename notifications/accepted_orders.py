@@ -51,7 +51,9 @@ def cycle_notification_evidence(execution, orders, *, dry_run=False):
         submitted_order_count=0, mode="daily_digest", include_orders=True,
     ):
         facts["routine"] = False
-    if facts.get("routine") is not True and not orders:
+    from .approved_gates import approved_block_reasons
+    approved_zero = bool(approved_block_reasons(execution, order_count=len(orders), dry_run=dry_run))
+    if facts.get("routine") is not True and not orders and not approved_zero:
         # A blocked or incomplete cycle does not establish a zero-order day.
         facts["order_count"] = None
         facts["fill_count"] = None
