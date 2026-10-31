@@ -281,6 +281,37 @@ class CrossRepositoryTest(CheckerTestCase):
         self.assertEqual(report.blocking_findings(), [])
 
 
+class DocsBaselineTest(CheckerTestCase):
+    def test_public_repository_needs_the_reader_file_set(self):
+        self.write("LICENSE", "MIT\n")
+        report = self.report()
+        check_style.check_docs_baseline(self.root, report)
+        found = self.messages(report, "docs")
+        self.assertTrue(any("CONTRIBUTING.md" in m for m in found))
+        self.assertTrue(any("CODE_OF_CONDUCT.md" in m for m in found))
+
+    def test_public_repository_with_the_file_set_passes(self):
+        self.write("LICENSE", "MIT\n")
+        for name in ("CONTRIBUTING.md", "SECURITY.md", "CODE_OF_CONDUCT.md"):
+            self.write(name, "# " + name + "\n")
+        report = self.report()
+        check_style.check_docs_baseline(self.root, report)
+        self.assertEqual(self.messages(report, "docs"), [])
+
+    def test_private_repository_needs_only_the_credential_doc(self):
+        # No LICENSE means the repository grants nothing to outside readers, so
+        # a public disclosure process would be a document nobody runs.
+        self.write("SECURITY.md", "# Credentials\n")
+        report = self.report()
+        check_style.check_docs_baseline(self.root, report)
+        self.assertEqual(self.messages(report, "docs"), [])
+
+    def test_private_repository_without_the_credential_doc_is_reported(self):
+        report = self.report()
+        check_style.check_docs_baseline(self.root, report)
+        self.assertTrue(any("SECURITY.md" in m for m in self.messages(report, "docs")))
+
+
 class PhaseTest(CheckerTestCase):
     def test_phase_one_does_not_block_naming(self):
         self.write("docs/hk_equity_runtime.md", "# x\n")
