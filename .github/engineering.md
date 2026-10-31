@@ -2,9 +2,10 @@
 
 AI agents develop and review this repository. Code acceptance relies on
 automated checks, independent AI review and risk tiers, without a human code
-review requirement. Owner approval is reserved for live trading, deployment,
-accounts, risk controls and keys. These conventions do not grant operational
-authority or authorize a merge.
+review requirement. Live trading, deployment, accounts, risk controls and keys
+require owner approval. Owner-only governance labels remain subject to the
+delivery rules below. These conventions do not grant operational authority or
+authorize a merge.
 
 ## Before editing
 
@@ -122,6 +123,13 @@ independent AI review.
   Commits prefix, imperative mood and 72 characters or fewer. A PR description
   states the problem, resulting behaviour, verification performed and remaining
   limits. Identify the AI tools used and the scope of independent AI review.
+- Only the repository owner may apply `owner-approved`. AI agents must never
+  add that label, including through a shared owner identity. When a governance
+  check requires it, stop advancement of that PR, keep it as a draft and list it
+  for owner approval. An agent that previously added the label must remove its
+  own addition and report the affected PR; a shared login alone does not prove
+  who added it. Do not remove an owner's label or treat the label as evidence of
+  replay equivalence, successful checks or operational authorization.
 - Do not push to the default branch directly and do not force-push a branch
   under review. Keep required checks and branch protection; never merge through
   an administrator bypass, rewrite the required-check list or weaken an assertion
