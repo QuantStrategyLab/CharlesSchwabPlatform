@@ -1,0 +1,3 @@
+# Exact historical false positive over fourteen snapshot-field names.
+# See docs/adr/gitleaks-snapshot-field-false-positive.md.
+8f0541e2322ce2b6e5df1be1716f37157b44da50:application/joint_account_facts.py:generic-api-key:75
