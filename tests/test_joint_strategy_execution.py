@@ -96,7 +96,8 @@ def test_joint_account_facts_reserve_real_journal_and_keep_unknown(tmp_path):
         "leverage_hitl_approved": False, "account_budget_policy": {"preference": "CAPITAL_PRESERVATION",
         "version": "one", "source": "synthetic", "per_trade_fraction": 0.005,
         "total_future_risk_limit": 1000, "contract_floor": None, "floor": 25000, "cost_buffer": 0}}
-    frozen = lambda value: json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    def frozen(value):
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
     facts = JointAccountFacts(frozen(snapshot), 0, {session.order_binding_digest(order): risk})
     binding = {"context": ctx, "account_facts": facts, "strategy_state_sha256": transition.transition_sha256,
         "strategy_intent_sha256": submission_binding_digest(transition.state["pending_intent"]),
