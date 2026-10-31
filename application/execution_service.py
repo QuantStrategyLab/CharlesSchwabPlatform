@@ -788,9 +788,11 @@ def execute_rebalance_cycle(
                     intent_continuity.reasons.append("sell_resource_evidence_required")
                     return False
             if execution_port is not None:
-                submit = lambda: execution_port.submit_order(order_intent)
+                def submit():
+                    return execution_port.submit_order(order_intent)
             elif submit_equity_order is not None:
-                submit = lambda: submit_equity_order(client, plan["account_hash"], order_intent)
+                def submit():
+                    return submit_equity_order(client, plan["account_hash"], order_intent)
             else:
                 raise ValueError("Schwab execution requires execution_port or submit_equity_order")
 
