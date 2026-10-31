@@ -30,6 +30,13 @@ the failing step logs a fixed marker-unavailable reason; duplicate suppression
 cannot then be guaranteed. Other urgent alerts are unaffected. Separate job
 attempts and target binding configurations use separate temporary markers.
 
+Completed-window archive projection covers live execution reports. It excludes
+explicit dry runs and successful balance-only probe reports identified by the
+existing producer's account-observation, buying-power and total-equity fields,
+without execution receipts, signal diagnostics or notification facts. Missing
+execution evidence alone is not a probe: such a live report remains an unknown
+or alert row. Excluded reports cannot satisfy required live-run coverage.
+
 中文：这份草稿只接入已有日报，不启用生产开关。正常无单消息可进入一份日报；
 风控拒绝、订单结果未知、待对账、运行异常和真实订单仍即时通知。
 负责人核验候选日期、覆盖和真实送达后，再批准部署及单平台切换。

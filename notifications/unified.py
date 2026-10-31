@@ -542,6 +542,23 @@ def emit_completed_candidates(env, *, now=None, read=None, upload=None, required
     configured = {**env, "QSL_ROUTINE_NOTIFICATION_MODE": "daily_digest"}
     published_runs = set()
 
+    def project_completed(reports, **kwargs):
+        selected = []
+        for report in reports:
+            if report.get("dry_run") is True:
+                continue
+            summary = report.get("summary") or {}
+            diagnostics = report.get("diagnostics") or {}
+            # Existing /probe reports have this producer-specific balance-only
+            # shape. Missing execution evidence alone never identifies a probe.
+            probe = (report.get("status") == "ok" and "execution_receipt" not in report
+                and {"account_observation", "buying_power", "total_equity"} <= summary.keys()
+                and not {"notification_digest", "notification_events", "routine_observation_counts", "result"} & summary.keys()
+                and "signal" not in diagnostics)
+            if not probe:
+                selected.append(report)
+        return _project_runs(selected, **kwargs)
+
     def write(uri, body):
         payload = json.loads(body)
         rows = payload.get("runs", [])
@@ -575,7 +592,7 @@ def emit_completed_candidates(env, *, now=None, read=None, upload=None, required
             return _notification_report(value)
         return value
 
-    result = digest_archive.emit(configured, now=now, read=notification_read, upload=write, projector=_project_runs)
+    result = digest_archive.emit(configured, now=now, read=notification_read, upload=write, projector=project_completed)
     if not set(required_runs) <= published_runs:
         raise ValueError("notification_observed_run_not_covered")
     return result
