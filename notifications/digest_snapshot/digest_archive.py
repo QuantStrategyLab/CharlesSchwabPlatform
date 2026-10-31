@@ -91,7 +91,8 @@ def emit(env, *, now=None, read=_read, upload=None, projector=project_reports):
             raise ValueError("candidate_source_time_invalid")
         if start <= source_stamp < end:
             reports.append(source)
-    if not reports:
+    payload = projector(reports, expected_target=target, opaque_account_uid=uid, target_id=tid, now=current) if reports else {"runs": []}
+    if not payload["runs"]:
         schedule_raw = env.get("DIGEST_NOTIFICATION_SCHEDULE_JSON", "").strip()
         if not schedule_raw:
             raise ValueError("candidate_source_absent")
@@ -105,10 +106,11 @@ def emit(env, *, now=None, read=_read, upload=None, projector=project_reports):
             "platform_id": platform, "strategy_profile": target["strategy_profile"],
             "opaque_account_uid": uid, "target_id": tid, "business_day": day.isoformat(),
             "actually_ran": False, "status": "ok", "scheduled_idle": True,
+            "execution_status": "not_run", "reason_code": "not_due", "cycle_count": 0,
+            "order_count": None, "fill_count": None,
+            "field_status": {"order_count": "unknown", "fill_count": "unknown", "cycle_count": "known"},
             "evidence_provenance": "candidates",
         }]}
-    else:
-        payload = projector(reports, expected_target=target, opaque_account_uid=uid, target_id=tid, now=current)
     if upload is None:
         from google.cloud import storage
         def upload(uri, body):
@@ -116,7 +118,8 @@ def emit(env, *, now=None, read=_read, upload=None, projector=project_reports):
                 body, content_type="application/json", retry=None, timeout=30)
     # Never retry an unknown write result. Public output contains no identities.
     upload(f"{destination}/{platform}/{day.isoformat()}/{slot}.json", json.dumps(payload, allow_nan=False))
-    return {"status": "projected", "uploaded": True, "runs": len(reports)}
+    return {"status": "projected", "uploaded": True,
+            "runs": sum(row.get("cycle_count") or 0 for row in payload["runs"] if row.get("actually_ran") is True)}
 
 
 def main():

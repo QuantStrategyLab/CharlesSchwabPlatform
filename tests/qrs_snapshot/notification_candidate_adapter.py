@@ -12,7 +12,7 @@ from notification_snapshot.unified_contract import NotificationEvent, sgt_busine
 from notification_approved_gates import merge_reasons, validated_reasons
 
 PLATFORMS = ("ibkr", "schwab", "longbridge", "binance", "firstrade", "qrs")
-ROUTINE_KINDS = {"routine_cycle", "healthy_heartbeat"}
+ROUTINE_KINDS = {"routine_cycle", "healthy_heartbeat", "order_submitted", "fill"}
 IDENTITY = ("platform_id", "opaque_account_uid", "target_id", "strategy_profile", "source_run_id")
 
 
@@ -70,6 +70,10 @@ def _bind_identity(row, events):
 def validate_run_row(raw: Mapping[str, Any]) -> dict[str, Any]:
     """Validate one business run; never accept a window aggregate as a run."""
     row = dict(raw)
+    if "routine_observation_counts" in row:
+        row["routine_observation_counts"] = digest.parse_routine_observation_counts(
+            row["routine_observation_counts"]
+        )
     events = events_for(row)
     _bind_identity(row, events)
     if type(row.get("actually_ran")) is not bool:
@@ -133,6 +137,7 @@ def aggregate(rows: Sequence[Mapping[str, Any]], expected: Sequence[Mapping[str,
     event_ids = set()
     immediate_ids = set()
     unknown_event = False
+    non_execution_counts_unknown = False
     observed_targets = set()
     run_counts = defaultdict(int)
     unknown_run_platforms = set()
@@ -154,6 +159,8 @@ def aggregate(rows: Sequence[Mapping[str, Any]], expected: Sequence[Mapping[str,
             # An explicit not-due row covers a target but is never a run.
             if row.get("actually_ran") is False and all(row.get(name) for name in IDENTITY[:4]):
                 observed_targets.add(tuple(str(row[name]) for name in IDENTITY[:4]))
+                non_execution_counts_unknown |= any(
+                    digest.resolve_count_field(row, name)[1] != "known" for name in ("order_count", "fill_count"))
             continue
         identity = tuple(str(row.get(name) or "") for name in IDENTITY)
         known_identity = all(identity)
@@ -185,6 +192,20 @@ def aggregate(rows: Sequence[Mapping[str, Any]], expected: Sequence[Mapping[str,
             elif old_status != "known" and status == "known":
                 merged[name] = value
                 merged["field_status"] = {**merged.get("field_status", {}), name: "known"}
+        # Candidate, archive and heartbeat observations describe the same run.
+        # A repeated category is never added twice; a disagreement stays unknown.
+        old_observations = previous.get("routine_observation_counts")
+        new_observations = row.get("routine_observation_counts")
+        observations = dict(old_observations or new_observations or {})
+        if old_observations is not None and new_observations is not None:
+            for name in old_observations.keys() | new_observations.keys():
+                old_value, value = old_observations.get(name, 0), new_observations.get(name, 0)
+                observations[name] = value if old_value == value else None
+        if ("routine_observation_counts" in previous
+                or "routine_observation_counts" in row):
+            merged["routine_observation_counts"] = (
+                observations if old_observations is not None or new_observations is not None else None
+            )
         # Keep only this run's events, including later monitor observations.
         facts = {}
         for raw_fact in (*event_facts_for(previous), *event_facts_for(row)):
@@ -217,8 +238,7 @@ def aggregate(rows: Sequence[Mapping[str, Any]], expected: Sequence[Mapping[str,
             if not routine:
                 urgent = True
                 immediate_ids.add(event_key or ("unknown", key, index))
-                if event.event_kind not in {"order_submitted", "fill"}:
-                    row["status"] = "alert"
+                row["status"] = "alert"
                 if event.event_kind == "blocked_run":
                     row["rebalance_conclusion"] = "blocked"
         blocked = bool(row.get("block_reason")) or row.get("rebalance_conclusion") in {"blocked", "risk_blocked"} or row.get("signal_summary") in {"blocked", "risk_blocked"}
@@ -229,7 +249,7 @@ def aggregate(rows: Sequence[Mapping[str, Any]], expected: Sequence[Mapping[str,
     count_fields = ("order_count", "fill_count", "cycle_count")
     conflicts = sum(bool(row.get("_conflict_" + name))
                     for row in grouped.values() for name in count_fields)
-    unknown = unknown_event or bool(unknown_run_platforms) or any(
+    unknown = unknown_event or non_execution_counts_unknown or bool(unknown_run_platforms) or any(
         digest.resolve_count_field(row, name)[1] != "known"
         for row in grouped.values() for name in count_fields
     )

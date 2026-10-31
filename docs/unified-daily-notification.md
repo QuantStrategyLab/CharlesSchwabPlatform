@@ -85,6 +85,15 @@ The existing generation checks and source-conflict protection also apply to
 these non-execution rows. Failed persistence leaves coverage unknown. No
 retrospective report is inferred from a probe or an HTTP success.
 
+Completed-window exports also preserve explicit `market_closed` skip reports
+as non-run evidence with the archive's actual source ID and unknown trade
+counts. A schedule-proven idle window has no source run ID. Both forms survive
+the generation-checked store without inventing a trade count. The QRS receiver
+keeps unknown counts separate from target coverage; its test-only snapshot
+records the base source and any exact per-file source commit in
+`tests/qrs_snapshot/provenance.json`. The runtime QPK snapshot and dependency
+pins are unchanged.
+
 Runtime Guard notifications keep the localized summary and workflow link. Raw
 provider audit entries remain in their original restricted logs and are not
 passed as Telegram technical details, including when the deployed formatter is
