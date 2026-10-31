@@ -69,3 +69,19 @@ jobs:
           printf '%s\n' "module.exports = {extends: [require.resolve('@commitlint/config-conventional')]};" > "$tool/commitlint.config.cjs"
           node "$tool/node_modules/@commitlint/cli/cli.js" \
             --config "$tool/commitlint.config.cjs" --from "$PR_BASE" --to "$PR_HEAD" --verbose
+
+  governance-contracts:
+    name: Offline governance contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Test offline evidence contracts without granting acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p 'test_gitleaks_report_evidence.py' -q
+          python3 -m unittest discover -s tests -p 'test_ai_review_evidence.py' -q
+          python3 -m unittest discover -s tests -p 'test_governance_evidence_gate.py' -q

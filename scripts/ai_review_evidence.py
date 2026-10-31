@@ -245,8 +245,8 @@ def _result(status, structure, reasons, tier=None):
     }
 
 
-def validate_evidence(document):
-    """Pure structural validator. Trusted provenance is deliberately unavailable."""
+def validate_evidence(document, *, expected_base=None, expected_head=None):
+    """Check structure and optional event revisions without authenticating them."""
     try:
         _bounded(document)
         _keys(document, ("schema_version", "base_sha", "head_sha", "changed_files",
@@ -257,6 +257,11 @@ def validate_evidence(document):
         _require(_revision(document["base_sha"]) and _revision(document["head_sha"]),
                  "invalid_revision")
         _require(document["base_sha"] != document["head_sha"], "invalid_revision_range")
+        if expected_base is not None or expected_head is not None:
+            _require(_revision(expected_base) and _revision(expected_head)
+                     and expected_base != expected_head, "invalid_expected_revision_range")
+            _require(document["base_sha"] == expected_base
+                     and document["head_sha"] == expected_head, "expected_revision_mismatch")
         _require(_matches(TOKEN, document["author_id"]), "invalid_author")
         tier = _inventory(document)
         failures = set()
@@ -288,8 +293,8 @@ def _nonfinite(_value):
     raise _Invalid("nonfinite_json_number")
 
 
-def load_and_validate(path):
-    """Read a bounded regular file without following a final-component symlink."""
+def load_and_validate(path, *, expected_base=None, expected_head=None):
+    """Read once without following a final symlink; bind optional event revisions."""
     try:
         path = os.fspath(path)
         _require(type(path) is str and path and path != "-"
@@ -306,7 +311,7 @@ def load_and_validate(path):
         _require(len(raw) <= MAX_BYTES, "input_limits_exceeded")
         document = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object,
                               parse_constant=_nonfinite)
-        return validate_evidence(document)
+        return validate_evidence(document, expected_base=expected_base, expected_head=expected_head)
     except _Invalid as error:
         return _result("FAIL", "INCONSISTENT", {str(error)})
     except OSError as error:
