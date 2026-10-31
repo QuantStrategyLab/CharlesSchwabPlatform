@@ -271,7 +271,10 @@ class CrossRepositoryTest(CheckerTestCase):
     def test_cross_repository_reference_never_blocks(self):
         # The scheduled link job resolves these against the sibling's default
         # branch. A finding that says "not checked" cannot block a merge.
-        self.write("docs/note.md", "# Note\n\n[peer](../Sibling/docs/x.md)\n")
+        # Two levels up: one level stays inside the repository, and on macOS
+        # `/tmp` resolves through a symlink, so a one-level fixture passed here
+        # and failed on the Linux runner.
+        self.write("docs/note.md", "# Note\n\n[peer](../../Sibling/docs/x.md)\n")
         report = self.report(phase=2)
         check_style.check_links(self.root, report)
         self.assertTrue(any(c == "xref" for c, _ in report.findings))
