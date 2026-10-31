@@ -18,6 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from scripts.digest_coverage_warning import warn_coverage_unconfirmed
 from notifications.receipt_alerts import render_receipt_alert
 from notifications.unified import enabled as unified_enabled, publish_receipt, publish_approved_receipts
 from notifications.approved_gates import report_gate_reasons
@@ -850,9 +851,7 @@ def _send_normal_heartbeat(name: str, detail: str, *, quiet_eligible: bool = Tru
                 recovered=recovery_at is not None, observed_at=recovery_at, source_report=report)
                 for report in source_reports]
         except Exception:
-            text = ("⚠️ 每日摘要记录未确认；请检查运行记录和摘要存储。" if _notification_locale() == "zh" else
-                    "⚠️ Daily digest coverage is unconfirmed; check the run and digest storage.")
-            _send_telegram(text)
+            warn_coverage_unconfirmed(_send_telegram, _notification_locale())
             return 1
         return next((value for value in results if type(value) is int and value), 0)
     if healthy:

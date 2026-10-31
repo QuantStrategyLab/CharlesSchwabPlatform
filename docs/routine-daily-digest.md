@@ -21,6 +21,15 @@ delivery. Retain legacy delivery until replacement is verified. Configure
 `NOTIFY_LANG=zh-CN` or `en` independently; the central renderer already supports
 both languages. Stale/unknown evidence must stay visibly stale/unknown.
 
+The heartbeat and completed-window export still run independently and retain
+their failure statuses. Within the heartbeat Actions job they share one local
+attempt marker for candidate-coverage warnings, created before notification.
+The marker records an attempt, not delivery; an uncertain send is not retried
+automatically. If the marker is unavailable, the original warning is sent and
+the failing step logs a fixed marker-unavailable reason; duplicate suppression
+cannot then be guaranteed. Other urgent alerts are unaffected. Separate job
+attempts and target binding configurations use separate temporary markers.
+
 中文：这份草稿只接入已有日报，不启用生产开关。正常无单消息可进入一份日报；
 风控拒绝、订单结果未知、待对账、运行异常和真实订单仍即时通知。
 负责人核验候选日期、覆盖和真实送达后，再批准部署及单平台切换。

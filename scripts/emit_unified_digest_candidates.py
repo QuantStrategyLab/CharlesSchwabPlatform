@@ -6,6 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import json
 import os
 from notifications.unified import emit_completed_candidates  # noqa: E402
+from scripts.digest_coverage_warning import warn_coverage_unconfirmed  # noqa: E402
 
 
 def main():
@@ -15,9 +16,7 @@ def main():
     except Exception:
         print(json.dumps({"status": "blocked", "uploaded": False, "reason": "candidate_projection_failed"}))
         from scripts.execution_report_heartbeat import _notification_locale, _send_telegram
-        message = ("⚠️ 每日摘要记录未确认；请检查运行记录和摘要存储。" if _notification_locale() == "zh" else
-                   "⚠️ Daily digest coverage is unconfirmed; check the run and digest storage.")
-        _send_telegram(message)
+        warn_coverage_unconfirmed(_send_telegram, _notification_locale())
         return 1
 
 
