@@ -90,7 +90,7 @@ as non-run evidence with the archive's actual source ID and unknown trade
 counts. A schedule-proven idle window has no source run ID. Both forms survive
 the generation-checked store without inventing a trade count. The QRS receiver
 keeps unknown counts separate from target coverage; its test-only snapshot
-records the base source and any exact per-file source commit in
+records the base source and exact backported patch source and hash in
 `tests/qrs_snapshot/provenance.json`. The runtime QPK snapshot and dependency
 pins are unchanged.
 

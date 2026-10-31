@@ -191,3 +191,20 @@ def test_shared_qrs_snapshot_never_turns_non_execution_into_zero_fills(monkeypat
     receipt = aggregator.build_receipt(payload, collected, message_chars=0)
     assert receipt["run_count"] == 0
     assert receipt["total_fills"] is None and receipt["total_fills_status"] == "unknown"
+
+
+def test_shared_qrs_patch_reverses_exactly_to_recorded_snapshot_base(tmp_path):
+    import hashlib
+    from pathlib import Path
+    import subprocess
+    snapshot = Path(__file__).parent / "qrs_snapshot"
+    provenance = json.loads((snapshot / "provenance.json").read_text())
+    metadata = provenance["files"]["notification_candidate_adapter.py"]
+    patch = snapshot / metadata["patch"]
+    assert hashlib.sha256(patch.read_bytes()).hexdigest() == metadata["patch_sha256"]
+    target = tmp_path / "notification_candidate_adapter.py"
+    target.write_bytes((snapshot / target.name).read_bytes())
+    result = subprocess.run(["git", "apply", "--reverse", "-p3", str(patch.resolve())],
+        cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode == 0
+    assert hashlib.sha256(target.read_bytes()).hexdigest() == metadata["base_sha256"]
