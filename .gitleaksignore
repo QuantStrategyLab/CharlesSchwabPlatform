@@ -1,3 +1,7 @@
 # Exact historical false positive over fourteen snapshot-field names.
 # See docs/adr/gitleaks-snapshot-field-false-positive.md.
 8f0541e2322ce2b6e5df1be1716f37157b44da50:application/joint_account_facts.py:generic-api-key:75
+
+# Exact historical unkeyed review-deduplication digest; see the ADR below.
+# See docs/adr/gitleaks-deduplication-digest.md.
+6169934e220f335f8aadae6a435f34a5242d4092:docs/d1_integration_manifest.json:generic-api-key:57
