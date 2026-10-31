@@ -1395,3 +1395,20 @@ def test_probe_external_flow_empty_source_is_not_complete():
     projected = attach_external_flow_snapshot({"account_hash": raw["account_hash"], "observed_finished_at": END}, raw, enabled=True)
     assert projected["externalFlow"]["windows"][0]["coverage"] == "incomplete"
     assert projected["externalFlow"]["windows"][0]["records"] == []
+
+
+def test_main_cycle_uses_one_clock_for_plugin_load_core_and_report():
+    module = load_module()
+    observed = {}
+    module.get_client_from_secret = lambda *args, **kwargs: object()
+    module._schwab_market_open_now = lambda: (True, None)
+    module.load_strategy_plugin_signals = lambda: (observed.setdefault("loader_clock", module.current_cycle()["decision_time"]) and (), None)
+    module.attach_strategy_plugin_report = lambda *args, **kwargs: None
+    module.run_strategy_core = lambda *args, **kwargs: observed.setdefault("core_clock", module.current_cycle()["decision_time"]) and None
+    module.persist_execution_report = lambda report: observed.setdefault("report", report) or "/tmp/report.json"
+    with module.app.test_request_context("/", method="POST"):
+        _, status = module.handle_schwab()
+    assert status == 200
+    assert observed["loader_clock"] == observed["core_clock"]
+    assert observed["report"]["decision_at"] == observed["loader_clock"].isoformat()
+    assert module.current_cycle() is None

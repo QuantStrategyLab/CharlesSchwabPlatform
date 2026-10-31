@@ -1,4 +1,6 @@
 import json
+
+from application.decision_cycle import attach_cycle_decision_receipt, cycle_handler, current_cycle
 import importlib
 import os
 import tempfile
@@ -835,8 +837,14 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
     reporting_adapters = composer.build_reporting_adapters()
     log_context = reporting_adapters.build_log_context()
     report = build_execution_report(log_context, dry_run_only_override=dry_run_only_override)
+    if current_cycle() is not None:
+        report["decision_at"] = current_cycle()["decision_time"].isoformat()
+        current_cycle()["report"] = report
     signal_provenance.reset()
     strategy_plugin_signals, strategy_plugin_error = load_strategy_plugin_signals()
+    if current_cycle() is not None:
+        current_cycle()["plugin_signals"] = strategy_plugin_signals
+        current_cycle()["plugin_error"] = strategy_plugin_error
     attach_strategy_plugin_report(
         report,
         signals=strategy_plugin_signals,
@@ -1025,6 +1033,7 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
                 # An unattested legacy target remains evidence-missing; the
                 # report-only path must not alter execution behavior.
                 pass
+        attach_cycle_decision_receipt(report)
         try:
             if dry_run_only_override is None:
                 report_path = persist_execution_report(report)
@@ -1039,6 +1048,9 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
             print(f"failed to persist execution report: {persist_exc}", flush=True)
             if _report_requires_digest_coverage(report):
                 _notify_digest_coverage_failure()
+
+
+_handle_schwab_cycle = cycle_handler(_handle_schwab_cycle)
 
 
 def _paper_command_consumer_runtime_is_isolated() -> bool:
