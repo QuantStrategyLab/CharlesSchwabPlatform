@@ -49,8 +49,14 @@ commit, merge, release, deployment or real-trading authority.
 
 The public runtime-configuration scan provisions ripgrep in CI before inspecting
 workflow files. A missing executable or any scanner error fails the job; only a
-completed scan with no matches passes. Run its offline regression tests with
-`python -m unittest discover -s tests -p test_public_runtime_configuration_scan.py`.
+completed scan with no matches passes. CI runs the offline regression cases
+before scanning the repository, including a missing-tool failure and a real clean
+scan. The scan writes its completion output only after the no-match result; a
+following assertion requires both a successful step outcome and that output.
+Missing, failed and skipped scans therefore cannot satisfy the assertion.
+
+Run the offline regression tests with
+`python -m unittest discover -s tests -p test_public_runtime_configuration_scan.py -v`.
 
 ## Pull requests and delivery
 
