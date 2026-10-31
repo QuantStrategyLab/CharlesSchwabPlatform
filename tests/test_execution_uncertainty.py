@@ -83,7 +83,7 @@ def run_cycle(submit, *, sell=False, notional=False, notify=lambda _: None, tran
 
 def report(intent, status="accepted", **kwargs):
     return ExecutionReport(symbol=intent.symbol, side=intent.side, quantity=intent.quantity,
-                           status=status, broker_order_id="synthetic-order", **kwargs)
+                           status=status, broker_order_id="123456789", **kwargs)
 
 
 @pytest.mark.parametrize("sell,notional", [(False, False), (True, False), (False, True)])
@@ -116,7 +116,8 @@ def test_uncertain_submission_stops_cycle_and_preserves_original_intent(tmp_path
     assert "synthetic-private-provider-detail" not in str(result.trade_logs)
 
 
-@pytest.mark.parametrize("outcome", ["unknown", "malformed", "server_error"])
+@pytest.mark.parametrize("outcome", ["unknown", "malformed", "server_error", "missing_order_id",
+                                      "redirect", "accepted_server_error", "invalid_status_code"])
 def test_unconfirmed_reports_also_stop_further_submissions(outcome):
     calls = []
 
@@ -126,13 +127,22 @@ def test_unconfirmed_reports_also_stop_further_submissions(outcome):
             return None
         if outcome == "server_error":
             return report(intent, "rejected", raw_payload={"status_code": 500})
+        if outcome == "missing_order_id":
+            from dataclasses import replace
+            return replace(report(intent), broker_order_id=None)
+        if outcome == "redirect":
+            return report(intent, "rejected", raw_payload={"status_code": 302})
+        if outcome == "accepted_server_error":
+            return report(intent, "accepted", raw_payload={"status_code": 503})
+        if outcome == "invalid_status_code":
+            return report(intent, "accepted", raw_payload={"status_code": 201.5})
         return report(intent, "unknown")
 
     result = run_cycle(submit)
     assert len(calls) == 1
     assert result.submitted_orders[0]["status"] == "unknown"
     if outcome == "unknown":
-        assert result.submitted_orders[0]["broker_order_id"] == "synthetic-order"
+        assert result.submitted_orders[0]["broker_order_id"] == "123456789"
 
 
 def test_explicit_rejection_remains_distinct_from_unknown():
@@ -145,6 +155,41 @@ def test_explicit_rejection_remains_distinct_from_unknown():
     result = run_cycle(submit)
     assert len(calls) == 3
     assert all(order["status"] == "accepted" for order in result.submitted_orders)
+
+
+@pytest.mark.parametrize("order_id", ["orders", "/orders", "order-123", "", "0", 0, -1,
+                                      True, 1.0, "0123", " 123 ", "１２３"])
+def test_invalid_schwab_order_identity_halts_and_retains_original_fact(order_id):
+    from dataclasses import replace
+    calls = []
+
+    def submit(intent):
+        calls.append(intent)
+        return replace(report(intent), broker_order_id=order_id)
+
+    result = run_cycle(submit)
+    assert len(calls) == 1
+    assert result.execution["execution_status"] == "pending_reconciliation"
+    assert result.execution["broker_submission_done"] is False
+    assert result.submitted_orders[0]["status"] == "unknown"
+    if order_id:
+        assert result.submitted_orders[0]["broker_order_id"] == order_id
+
+
+@pytest.mark.parametrize("identifier_type", [int, str])
+def test_valid_schwab_integer_and_canonical_string_identities_remain_accepted(identifier_type):
+    from dataclasses import replace
+    calls = []
+
+    def submit(intent):
+        calls.append(intent)
+        return replace(report(intent), broker_order_id=identifier_type(123456789 + len(calls)))
+
+    result = run_cycle(submit)
+    assert len(calls) == 3
+    assert all(order["status"] == "accepted" for order in result.submitted_orders)
+    assert [order["broker_order_id"] for order in result.submitted_orders] == [
+        identifier_type(123456789 + n) for n in range(1, 4)]
 
 
 def test_notification_failure_does_not_drop_unknown_or_resume():
@@ -175,7 +220,7 @@ def test_post_ack_failure_preserves_ack_without_resubmission():
     result = run_cycle(lambda intent: (calls.append(intent), report(intent))[1], translator=fail_after_ack)
     assert len(calls) == 1
     assert result.submitted_orders[0]["status"] == "accepted"
-    assert result.submitted_orders[0]["broker_order_id"] == "synthetic-order"
+    assert result.submitted_orders[0]["broker_order_id"] == "123456789"
 
 
 def test_unknown_outcome_preserves_claim_and_durable_intent(tmp_path):

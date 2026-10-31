@@ -178,3 +178,42 @@ def test_receipt_does_not_pair_artifact_with_changed_injected_payload(tmp_path):
         ctx = StrategyContext(as_of=clock.date().isoformat(), portfolio=portfolio)
         row, = receipt_capabilities(ctx)["decision_consumption_receipt"]["observations"]
     assert row["status"] == "unavailable" and row["artifact_sha256"] is None
+
+
+def test_real_order_fact_is_linked_without_inventing_fills():
+    from application.daily_strategy_state import evaluate_with_daily_state
+    from application.decision_cycle import attach_cycle_decision_receipt, capture_cycle_result_evidence, capture_decision
+    from quant_platform_kit.common.execution_receipts import build_execution_receipt
+    from quant_platform_kit.common.models import PortfolioSnapshot
+    from quant_platform_kit.common.strategy_contracts import StrategyContext
+    from us_equity_strategies.entrypoints import compute_tqqq_growth_income_decision
+    clock = datetime.now(timezone.utc).replace(microsecond=0)
+    report = {"run_id": "synthetic-run", "strategy_profile": "tqqq_growth_income", "decision_at": clock.isoformat()}
+    ctx = StrategyContext(as_of=clock.date().isoformat(), portfolio=PortfolioSnapshot(as_of=clock, total_equity=100000., buying_power=100000.),
+        market_data={"benchmark_history": [{"close": 100+i*.5} for i in range(260)]}, runtime_config={"income_layer_enabled": False})
+    entrypoint = SimpleNamespace(manifest=SimpleNamespace(profile="tqqq_growth_income"), evaluate=compute_tqqq_growth_income_decision)
+    order = {"symbol": "TQQQ", "side": "buy", "status": "accepted", "broker_order_id": "synthetic-order"}
+    source = SimpleNamespace(execution={"broker_submission_done": True}, submitted_orders=(order,))
+    with decision_cycle(decision_time=clock) as cycle:
+        cycle["report"] = report
+        capture_decision(evaluate_with_daily_state(entrypoint, ctx, None))
+        capture_cycle_result_evidence(source, dry_run=False)
+        report["execution_receipt"] = build_execution_receipt(platform="schwab", strategy_profile="tqqq_growth_income",
+            strategy_revision="a"*40, execution_mode="live", outcome="reconciliation_required", observed_at=clock)
+        attach_cycle_decision_receipt(report)
+    link = report["decision_execution_link"]
+    expected = hashlib.sha256(json.dumps([order], sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode()).hexdigest()
+    assert link["order_records_sha256"] == expected and link["fill_records_sha256"] is None
+    assert link["provenance_status"] == "partial"
+
+
+def test_evidence_extraction_failure_remains_unknown(monkeypatch):
+    import application.execution_evidence as evidence
+    from application.decision_cycle import capture_cycle_result_evidence
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("synthetic read failure")
+    monkeypatch.setattr(evidence, "extract_execution_evidence", unavailable)
+    with decision_cycle() as cycle:
+        capture_cycle_result_evidence(object(), dry_run=False)
+        assert cycle["execution_order_records"] is None
+        assert cycle["execution_fill_records"] is None

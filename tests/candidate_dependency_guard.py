@@ -9,6 +9,8 @@ def require_candidate_dependencies():
     requirements = {
         "quant_platform_kit.common.strategy_risk_state": (
             "DailyRiskStateBootstrapAuthorization", "coordinate_daily_strategy_risk_state"),
+        "quant_platform_kit.common.execution_state": ("ConditionalPlanningHandle",),
+        "us_equity_strategies.conditional_tqqq_candidate": ("build_tqqq_conditional_candidate",),
         "quant_platform_kit.common.decision_consumption_receipts": (
             "attach_decision_consumption_receipt", "attach_decision_execution_link"),
         "us_equity_strategies.tqqq_daily_state": (

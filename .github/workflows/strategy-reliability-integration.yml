@@ -11,8 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      QPK_STRATEGY_RELIABILITY_SHA: 4f687c62ee82559c701e1aabe87c2edc767f0242
-      UES_STRATEGY_RELIABILITY_SHA: a3a791e1362e65f5a4fd8e626d617b4aefabe052
+      QPK_STRATEGY_RELIABILITY_SHA: 0774bae67bebaa7783386b22fc874986614779e5
+      UES_STRATEGY_RELIABILITY_SHA: 287fd3a8e993f09ae46f60efbc56b0088ef30b85
       REQUIRE_QSL_STRATEGY_INTEGRATION: "1"
       PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
     steps:
@@ -46,6 +46,10 @@ jobs:
           PYTHONPATH=. .venv/bin/python -m pytest -q -rs \
             tests/test_decision_cycle.py \
             tests/test_daily_strategy_state.py \
+            tests/test_optional_daily_state_loading.py \
+            tests/test_joint_strategy_execution.py \
+            tests/test_joint_execution_e2e.py \
+            tests/test_execution_evidence.py \
             tests/test_strategy_runtime.py::test_loaded_runtime_accepts_explicit_daily_state_binding \
             tests/test_receipt_projection_stages.py \
             tests/test_request_handling.py::test_main_cycle_uses_one_clock_for_plugin_load_core_and_report \

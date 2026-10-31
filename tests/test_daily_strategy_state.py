@@ -5,6 +5,8 @@ require_candidate_dependencies()
 from datetime import date
 from types import SimpleNamespace
 
+import pytest
+
 from application.daily_strategy_state import DailyStateBinding, evaluate_with_daily_state
 from quant_platform_kit.common.strategy_contracts import StrategyContext, StrategyDecision
 from quant_platform_kit.common.strategy_risk_state import (
@@ -22,6 +24,23 @@ class Entrypoint:
         result = finish_tqqq_daily_state(prepared, request, alpha_active=True, volatility_latch=False)
         return StrategyDecision(diagnostics={"tqqq_daily_state_transition": result["transition"],
             "increase": result["risk_increase_allowed"], "reduction_retained": True})
+
+
+@pytest.mark.parametrize("profile", ["soxl_soxx_trend_income", "hk_equity", "unknown_profile"])
+@pytest.mark.parametrize("joint", [False, True])
+def test_explicit_daily_state_binding_cannot_call_an_unsupported_strategy(tmp_path, profile, joint):
+    identity = StrategyRiskStateIdentity(profile, "synthetic", "candidate", "a" * 64)
+    binding = DailyStateBinding(StrategyRiskStateStore(local_dir=tmp_path), identity,
+        "2026-06-19", "b" * 64, None, joint_planning_session=object() if joint else None)
+    ctx = StrategyContext(as_of=date(2026, 6, 19))
+    calls = []
+    legacy_decision = StrategyDecision(diagnostics={"ignores_tqqq_daily_state": True})
+    entrypoint = SimpleNamespace(manifest=SimpleNamespace(profile=profile),
+        evaluate=lambda value: (calls.append(value), legacy_decision)[1])
+    assert evaluate_with_daily_state(entrypoint, ctx, None) is legacy_decision
+    with pytest.raises(RuntimeError, match="daily state binding requires the tqqq_growth_income entrypoint"):
+        evaluate_with_daily_state(entrypoint, ctx, binding)
+    assert len(calls) == 1
 
 
 def test_confirmed_state_still_preserves_reductions_without_execution_fence(tmp_path):

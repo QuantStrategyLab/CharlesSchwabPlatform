@@ -19,6 +19,8 @@ class DailyStateBinding:
     expected_previous_session: str | None
     bootstrap_authorization: Any = None
     fresh_intent: Mapping[str, Any] | None = None
+    joint_planning_session: Any = None
+    joint_account_facts: Any = None
 
 
 def evaluate_with_daily_state(entrypoint, ctx, binding: DailyStateBinding | None):
@@ -33,6 +35,25 @@ def evaluate_with_daily_state(entrypoint, ctx, binding: DailyStateBinding | None
     ctx = replace(ctx, capabilities={**dict(ctx.capabilities), **receipt_capabilities(ctx)})
     if binding is None:
         return entrypoint.evaluate(ctx)
+    if getattr(getattr(entrypoint, "manifest", None), "profile", None) != "tqqq_growth_income":
+        raise RuntimeError("daily state binding requires the tqqq_growth_income entrypoint")
+    try:
+        from us_equity_strategies import tqqq_daily_state as state_contract
+        if not all(callable(getattr(state_contract, name, None)) for name in (
+            "prepare_tqqq_daily_state", "finish_tqqq_daily_state",
+        )):
+            raise ImportError("daily state contract unavailable")
+    except ImportError as exc:
+        # A legacy strategy may ignore the unavailable-state marker entirely.
+        # Explicit enrollment must never fall back to that unguarded decision.
+        raise RuntimeError("supported daily state strategy contract required") from exc
+    if binding.joint_planning_session is not None:
+        try:
+            from application.joint_strategy_execution import evaluate_joint_tqqq
+            return evaluate_joint_tqqq(entrypoint, ctx, binding)
+        except Exception:
+            return entrypoint.evaluate(replace(ctx, state={**dict(ctx.state),
+                "tqqq_daily_state": {"status": "unavailable"}}))
     try:
         from quant_platform_kit.common.strategy_risk_state import (
             StrategyRiskStateIdentity, StrategyRiskStateTransition,

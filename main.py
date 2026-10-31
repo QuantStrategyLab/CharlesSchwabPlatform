@@ -1,6 +1,8 @@
 import json
 
-from application.decision_cycle import attach_cycle_decision_receipt, cycle_handler, current_cycle
+from application.decision_cycle import (
+    attach_cycle_decision_receipt, capture_cycle_result_evidence, cycle_handler, current_cycle,
+)
 import importlib
 import os
 import tempfile
@@ -922,6 +924,7 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
                 strategy_plugin_error=strategy_plugin_error,
                 dry_run_only_override=dry_run_only_override,
             )
+        capture_cycle_result_evidence(execution_result, dry_run=bool(report.get("dry_run")))
         signal_diagnostics = _signal_diagnostics_from_result(execution_result)
         execution_payload = getattr(execution_result, "execution", None)
         signal_snapshot = (

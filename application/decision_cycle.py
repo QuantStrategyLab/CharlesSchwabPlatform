@@ -127,6 +127,24 @@ def capture_decision(decision):
     return decision
 
 
+def capture_cycle_execution_evidence(order_records, fill_records):
+    """Retain broker facts only for the current report's in-memory linkage."""
+    cycle = current_cycle()
+    if cycle is not None:
+        cycle["execution_order_records"] = order_records
+        cycle["execution_fill_records"] = fill_records
+
+
+def capture_cycle_result_evidence(result, *, dry_run):
+    """Observe cycle facts without changing the execution outcome on failure."""
+    try:
+        from application.execution_evidence import extract_execution_evidence
+        orders, fills = extract_execution_evidence(result, dry_run=dry_run)
+    except Exception:
+        orders, fills = None, None
+    capture_cycle_execution_evidence(orders, fills)
+
+
 def attach_cycle_decision_receipt(report):
     cycle = current_cycle()
     if cycle is None or cycle.get("report") is not report:
@@ -143,7 +161,9 @@ def attach_cycle_decision_receipt(report):
         if report.get("execution_receipt") is not None:
             try:
                 from quant_platform_kit.common.decision_consumption_receipts import attach_decision_execution_link
-                attach_decision_execution_link(report, receipt)
+                attach_decision_execution_link(report, receipt,
+                    order_records=cycle.get("execution_order_records"),
+                    fill_records=cycle.get("execution_fill_records"))
             except Exception:
                 report.setdefault("diagnostics", {})["decision_execution_link_status"] = "unavailable"
     except Exception:
