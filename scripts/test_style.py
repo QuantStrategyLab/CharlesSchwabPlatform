@@ -216,6 +216,71 @@ class AgentFileTest(CheckerTestCase):
         self.assertTrue(any("@AGENTS.md" in m for m in self.messages(report, "agents")))
 
 
+class LanguageTest(CheckerTestCase):
+    """Section 2 — the word list reports usage, not mention."""
+
+    def test_marketing_word_in_prose_is_reported(self):
+        self.write("docs/note.md", "# Note\n\nA seamless handover.\n")
+        report = self.report()
+        check_style.check_language(self.root, report)
+        self.assertTrue(any("seamless" in m for m in self.messages(report, "language")))
+
+    def test_marketing_word_in_a_code_span_is_a_mention(self):
+        # The guide writes the words it forbids. Reporting them there makes the
+        # guide the largest offender in the organisation.
+        self.write("docs/note.md", "# Note\n\nAvoid `seamless` and `world-class`.\n")
+        report = self.report()
+        check_style.check_language(self.root, report)
+        self.assertEqual(self.messages(report, "language"), [])
+
+    def test_marketing_word_in_a_fenced_block_is_a_mention(self):
+        self.write("docs/note.md", "# Note\n\n```markdown\nA seamless handover.\n```\n")
+        report = self.report()
+        check_style.check_language(self.root, report)
+        self.assertEqual(self.messages(report, "language"), [])
+
+    def test_technical_terms_are_not_marketing(self):
+        # A robust estimator and statistical power are terms of art; the list
+        # that flagged them reported twelve non-defects in the research docs.
+        self.write(
+            "docs/note.md",
+            "# Note\n\nThe robust plateau holds, and the test is more powerful "
+            "than the Reality Check.\n",
+        )
+        report = self.report()
+        check_style.check_language(self.root, report)
+        self.assertEqual(self.messages(report, "language"), [])
+
+    def test_dated_section_heading_is_not_a_dated_title(self):
+        self.write(
+            "docs/note.md",
+            "# Contract acceptance\n\n## Bounded run acceptance (2026-10-05)\n",
+        )
+        report = self.report()
+        check_style.check_language(self.root, report)
+        self.assertEqual(self.messages(report, "language"), [])
+
+    def test_dated_document_title_is_reported(self):
+        self.write("docs/note.md", "# Console audit, 2026-10-15\n")
+        report = self.report()
+        check_style.check_language(self.root, report)
+        self.assertTrue(any("dated title" in m for m in self.messages(report, "language")))
+
+
+class CrossRepositoryTest(CheckerTestCase):
+    def test_cross_repository_reference_never_blocks(self):
+        # The scheduled link job resolves these against the sibling's default
+        # branch. A finding that says "not checked" cannot block a merge.
+        # Two levels up: one level stays inside the repository, and on macOS
+        # `/tmp` resolves through a symlink, so a one-level fixture passed here
+        # and failed on the Linux runner.
+        self.write("docs/note.md", "# Note\n\n[peer](../../Sibling/docs/x.md)\n")
+        report = self.report(phase=2)
+        check_style.check_links(self.root, report)
+        self.assertTrue(any(c == "xref" for c, _ in report.findings))
+        self.assertEqual(report.blocking_findings(), [])
+
+
 class PhaseTest(CheckerTestCase):
     def test_phase_one_does_not_block_naming(self):
         self.write("docs/hk_equity_runtime.md", "# x\n")
