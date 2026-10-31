@@ -118,7 +118,7 @@ def _records(*, status="pending_reconciliation", order_status="unknown", signal=
     return key, claim, outcome
 
 
-def _probe(source, target, *, store=None, replies=None, env=None, factory=None, history_reader=None):
+def _probe(source, target, *, store=None, replies=None, env=None, factory=None, history_reader=None, origin_reader=None):
     store = Store() if store is None else store
     events = []
     replies = [_service(), _revision(target, env), _service(), _service()] if replies is None else replies
@@ -135,7 +135,30 @@ def _probe(source, target, *, store=None, replies=None, env=None, factory=None, 
         return store if factory is None else factory(**kwargs)
 
     options = {"history_reader": history_reader} if history_reader is not None else {}
+    if origin_reader is not None:
+        options["origin_reader"] = origin_reader
     return reader.diagnose_state(source, describe=describe, store_factory=create, **options), events, store
+
+
+def test_active_outcome_origin_uses_only_scanned_rejected_locator_without_history_or_recovery(source, target):
+    target["live_continuity"]["state"] = "ACTIVE_LKG"
+    source["RUNTIME_TARGET_JSON"] = json.dumps(target)
+    source["PILOT_STATE_INSPECT_OUTCOME_ORIGIN"] = "true"
+    key, claim, outcome = _records()
+    outcome["metadata"].pop("submitted_orders")
+    seen = []
+    def inspect(**kwargs):
+        seen.append(kwargs)
+        assert len(kwargs["outcomes"]) == 1
+        assert set(kwargs["outcomes"][0]) == {"uri", "size", "md5"}
+        return reader.origin_projection(enabled=True)
+    result, _, _ = _probe(source, target,
+        store=_entry_store([(Store.namespace, key, claim), (Store.outcome_namespace, key, outcome)]), origin_reader=inspect)
+    assert len(seen) == 1 and result["continuity"]["state"] == "ACTIVE_LKG"
+    assert result["status"] == "partial_state"
+    assert result["historical_outcome"]["enabled"] is False and result["reports_read"] is False
+    assert result["recovery_qualified"] is False and result["claims_changed"] is False
+    assert "canary" not in json.dumps(result)
 
 
 def test_history_is_default_off_and_does_not_consume_a_report_reader(source, target):

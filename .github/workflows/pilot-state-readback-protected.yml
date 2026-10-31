@@ -7,6 +7,10 @@ on:
         type: boolean
         required: false
         default: false
+      inspect_outcome_origin:
+        type: boolean
+        required: false
+        default: false
     secrets:
       inventory:
         required: false
@@ -61,6 +65,7 @@ jobs:
           CLOUD_RUN_REGION: ${{ secrets.region }}
           PILOT_STATE_RESULT_PATH: ${{ runner.temp }}/schwab-pilot-state.safe.json
           PILOT_STATE_INSPECT_HISTORY: ${{ inputs.inspect_historical_outcome && 'true' || 'false' }}
+          PILOT_STATE_INSPECT_OUTCOME_ORIGIN: ${{ inputs.inspect_outcome_origin && 'true' || 'false' }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: uv run --no-sync python -m scripts.diagnose_pilot_state
 
