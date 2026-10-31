@@ -114,10 +114,14 @@ jobs:
           uv sync --frozen --no-dev
 
       - name: Check recent execution report
+        env:
+          DIGEST_COVERAGE_ALERT_ATTEMPT_PATH: ${{ runner.temp }}/schwab-digest-coverage-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
         run: uv run --no-sync python scripts/execution_report_heartbeat.py
 
       - name: Publish completed-window candidates
         if: ${{ !cancelled() && steps.install_runtime_deps.outcome == 'success' }}
+        env:
+          DIGEST_COVERAGE_ALERT_ATTEMPT_PATH: ${{ runner.temp }}/schwab-digest-coverage-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
         run: |
           uv run --no-sync python scripts/emit_unified_digest_candidates.py
 
