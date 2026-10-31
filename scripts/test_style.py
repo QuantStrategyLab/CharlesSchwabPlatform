@@ -112,7 +112,7 @@ class LeakTest(CheckerTestCase):
                 self.assertEqual(self.findings(text), [])
 
     def test_real_bucket_is_reported(self):
-        found = self.findings("Default root `gs://research-inputs/research/v2/input/`.\n")
+        found = self.findings("Default root `gs://acme-prod-inputs/research/v2/input/`.\n")
         self.assertTrue(any("non-placeholder bucket" in m for m in found))
 
     def test_sha_in_url_is_not_reported(self):
@@ -184,13 +184,27 @@ class AgentFileTest(CheckerTestCase):
         self.assertTrue(any("not tracked by Git" in m for m in found))
 
     def test_tracked_agents_md_passes(self):
-        self.write("AGENTS.md", "# rules\n")
+        self.write("AGENTS.md", "# rules\n\n" + check_style.CONTENT_BOUNDARY + "\n")
         self.write("CLAUDE.md", "@AGENTS.md\n")
         self.git("init", "--quiet")
         self.git("add", "AGENTS.md", "CLAUDE.md")
         report = self.report()
         check_style.check_agent_files(self.root, report)
         self.assertEqual(self.messages(report, "agents"), [])
+
+    def test_content_boundary_block_is_required(self):
+        # A rule that lives only in the guide is read by whoever opens the
+        # guide. The block is the copy that reaches an agent before it writes,
+        # so its absence is a finding rather than a preference.
+        self.write("AGENTS.md", "# rules\n")
+        self.write("CLAUDE.md", "@AGENTS.md\n")
+        self.git("init", "--quiet")
+        self.git("add", "AGENTS.md", "CLAUDE.md")
+        report = self.report()
+        check_style.check_agent_files(self.root, report)
+        self.assertTrue(
+            any("content-boundary" in m for m in self.messages(report, "agents"))
+        )
 
     def test_claude_must_be_the_single_line(self):
         self.write("AGENTS.md", "# rules\n")

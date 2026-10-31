@@ -56,6 +56,11 @@ CONVENTIONAL_UPPER = {
 
 DATE_IN_NAME = re.compile(r"(?<!\d)20\d{2}[-_]?\d{2}[-_]?\d{2}(?!\d)")
 
+# The block `tools/sync_agents.py` writes into AGENTS.md. A rule stated only in
+# the guide is read by whoever opens the guide; this one is read by every agent
+# that opens the repository, which is the only point early enough to matter.
+CONTENT_BOUNDARY = "<!-- content-boundary:begin -->"
+
 # A date in the name is a defect when the file describes something that keeps
 # changing, because the date goes stale while the name stays. It is the
 # identity of the record when the file is a snapshot of one date: two analyses
@@ -354,6 +359,15 @@ def check_agent_files(root: Path, report: Report) -> None:
         content = claude.read_text(encoding="utf-8", errors="ignore").strip()
         if content != "@AGENTS.md":
             report.add("agents", "CLAUDE.md must contain the single line @AGENTS.md")
+
+    agents = root / "AGENTS.md"
+    if agents.exists():
+        text = agents.read_text(encoding="utf-8", errors="ignore")
+        if CONTENT_BOUNDARY not in text:
+            report.add(
+                "agents",
+                "AGENTS.md is missing the content-boundary block, see section 5",
+            )
 
 
 def check_language(root: Path, report: Report) -> None:
