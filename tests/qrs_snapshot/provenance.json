@@ -1,7 +1,7 @@
 {
   "repository": "QuantStrategyLab/QuantRuntimeSettings",
   "source_commit": "bd3dc79f10b2c0b8048721695885c3f9333a53c6",
-  "method": "exact test-only source snapshot; no runtime dependency or network in tests",
+  "method": "test-only base source snapshot with exact recorded count-semantics patch backport; no runtime dependency or network in tests",
   "files": {
     "unified_daily_digest.py": {
       "source": "python/scripts/unified_daily_digest.py",
@@ -29,7 +29,11 @@
     },
     "notification_candidate_adapter.py": {
       "source": "python/scripts/notification_candidate_adapter.py",
-      "sha256": "f4c3494667b44da9365ae0d6101a42cf855cdbd76ff36d85f62f19a56e1cca8f"
+      "sha256": "dce774d63c0fb38bc5c66fb3e1a93e8ead71e8af2e4e1583610205d06d4ec5d3",
+      "base_sha256": "f4c3494667b44da9365ae0d6101a42cf855cdbd76ff36d85f62f19a56e1cca8f",
+      "patch_source_commit": "29d47a111cd1a5c80b5f00377f3ec5637fdb2172",
+      "patch": "non-execution-counts.patch",
+      "patch_sha256": "edbc53421171acc6762800340479844659da572471df158d1da8bfb89b324f64"
     },
     "merge_digest_candidates.py": {
       "source": "python/scripts/merge_digest_candidates.py",

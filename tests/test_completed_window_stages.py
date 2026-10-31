@@ -27,15 +27,15 @@ def archive():
     return env, live, preview, probe
 
 
-def export(env, reports, **kwargs):
+def export(env, reports, *, now=None, persist=False, **kwargs):
     def read(args):
         if args[0] == "ls":
             return [{"url": f"gs://synthetic/archive/charles_schwab/synthetic/2026-10/{i}.json",
                      "metadata": {"updated": r["started_at"]}} for i, r in enumerate(reports)]
         return deepcopy(reports[int(args[-1].rsplit("/", 1)[1].split(".")[0])])
     uploads = []
-    unified.emit_completed_candidates(env, now=datetime(2026, 10, 31, 1, tzinfo=timezone.utc),
-        read=read, upload=lambda uri, body: uploads.append(json.loads(body)), **kwargs)
+    unified.emit_completed_candidates(env, now=now or datetime(2026, 10, 31, 1, tzinfo=timezone.utc),
+        read=read, upload=None if persist else lambda uri, body: uploads.append(json.loads(body)), **kwargs)
     return uploads
 
 
@@ -60,3 +60,151 @@ def test_excluded_preview_cannot_satisfy_required_live_coverage():
     required = ("schwab", "synthetic", "synthetic", "synthetic", "preview")
     with pytest.raises(ValueError, match="notification_observed_run_not_covered"):
         export(env, [probe, preview, live], required_runs=[required])
+
+
+def weekend(stage):
+    env, live, preview, probe = archive()
+    report = deepcopy({"probe": probe, "preview": preview}[stage])
+    report["started_at"] = "2026-11-01T12:00:00+00:00"
+    return env, report, datetime(2026, 11, 2, 1, tzinfo=timezone.utc)
+
+
+@pytest.mark.parametrize("stage", ["probe", "preview"])
+def test_weekend_non_live_only_needs_schedule_evidence(stage):
+    env, report, now = weekend(stage)
+    with pytest.raises(ValueError, match="candidate_source_absent"):
+        export(env, [report], now=now)
+
+
+@pytest.mark.parametrize("stage", ["probe", "preview"])
+@pytest.mark.parametrize("schedule", [{}, {"scheduler": {"main_time": "0 12 * * *", "timezone": "UTC"}}])
+def test_empty_live_window_with_unknown_or_due_schedule_is_not_idle(stage, schedule):
+    env, report, now = weekend(stage)
+    env["DIGEST_NOTIFICATION_SCHEDULE_JSON"] = json.dumps(schedule)
+    with pytest.raises(ValueError, match="candidate_due_source_absent"):
+        export(env, [report], now=now)
+
+
+@pytest.mark.parametrize("stage", ["probe", "preview"])
+def test_weekend_not_due_is_target_evidence_without_a_run_or_zero_trades(stage):
+    env, report, now = weekend(stage)
+    env["DIGEST_NOTIFICATION_SCHEDULE_JSON"] = json.dumps({"scheduler": {
+        "main_time": "45 15 * * 1-5", "timezone": "America/New_York"}})
+    row = export(env, [report], now=now)[0]["runs"][0]
+    assert row["actually_ran"] is False and row["scheduled_idle"] is True
+    assert row["reason_code"] == "not_due" and row["business_day"] == "2026-11-01"
+    assert not row.get("source_run_id") and not row.get("notification_events")
+    assert row.get("order_count") is None and row.get("fill_count") is None
+
+
+def test_market_closed_skip_keeps_real_source_and_unknown_trade_counts():
+    env, live, _, _ = archive()
+    live.update(status="skipped", summary={}, diagnostics={"skip_reason": "market_closed"})
+    row = export(env, [live])[0]["runs"][0]
+    assert row["actually_ran"] is False and row["cycle_count"] == 0
+    assert row["source_run_id"] == "live" and row["reason_code"] == "market_closed"
+    assert row["order_count"] is None and row["fill_count"] is None
+
+
+def test_probe_shaped_report_with_errors_is_kept_as_alert():
+    env, _, _, probe = archive()
+    probe["error_summary"] = {"errors": ["synthetic probe error"]}
+    row = export(env, [probe])[0]["runs"][0]
+    assert row["source_run_id"] == "probe" and row["status"] == "alert"
+    assert row["order_count"] is None and row["fill_count"] is None
+
+
+@pytest.mark.parametrize("conflict", ["errors", "submitted", "pending"])
+def test_market_closed_skip_with_conflicting_execution_evidence_is_rejected(conflict):
+    env, live, _, _ = archive()
+    live.update(status="skipped", summary={}, diagnostics={"skip_reason": "market_closed"})
+    if conflict == "errors":
+        live["error_summary"] = {"errors": ["synthetic"]}
+    else:
+        live["summary"]["orders_submitted_count" if conflict == "submitted" else "orders_pending_count"] = 1
+    with pytest.raises(ValueError, match="candidate_non_execution_conflict"):
+        export(env, [live])
+
+
+def test_not_due_row_cannot_satisfy_required_live_run_before_persistence(monkeypatch):
+    env, report, now = weekend("probe")
+    env["DIGEST_NOTIFICATION_SCHEDULE_JSON"] = json.dumps({"scheduler": {
+        "main_time": "45 15 * * 1-5", "timezone": "America/New_York"}})
+    def forbidden(*args, **kwargs):
+        pytest.fail("uncovered required run must stop before storage")
+    monkeypatch.setattr(unified, "persist_projected_candidate", forbidden)
+    required = ("schwab", "synthetic", "synthetic", "synthetic", "missing-live")
+    with pytest.raises(ValueError, match="notification_observed_run_not_covered"):
+        export(env, [report], now=now, persist=True, required_runs=[required])
+
+
+@pytest.mark.parametrize("kind", ["idle", "market_closed"])
+def test_non_execution_rows_survive_real_persistence_contract(monkeypatch, kind):
+    from test_unified_notification_storage import fake_gcs
+    objects, calls, _, _ = fake_gcs.__wrapped__(monkeypatch)
+    env, report, now = weekend("probe")
+    env["DIGEST_NOTIFICATION_SCHEDULE_JSON"] = json.dumps({"scheduler": {
+        "main_time": "45 15 * * 1-5", "timezone": "America/New_York"}})
+    if kind == "market_closed":
+        report.update(status="skipped", summary={}, diagnostics={"skip_reason": "market_closed"})
+    store = unified.GCSNotificationStore(env, client=object())
+    monkeypatch.setattr(unified, "GCSNotificationStore", lambda env=None: store)
+    export(env, [report], now=now, persist=True)
+    before = deepcopy(objects)
+    export(env, [report], now=now, persist=True)
+    assert objects == before and len(objects) == 1
+    saved = next(json.loads(body) for _, body in objects.values())["runs"][0]
+    assert saved["actually_ran"] is False
+    assert not saved.get("source_run_id") if kind == "idle" else saved["source_run_id"] == report["run_id"]
+    assert saved.get("order_count") is None and saved.get("fill_count") is None
+    writes = [kw for method, _, kw in calls if method == "upload"]
+    assert len(writes) == 1 and writes[0]["if_generation_match"] == 0 and writes[0]["retry"] is None
+
+
+@pytest.mark.parametrize("kind", ["idle", "market_closed"])
+def test_shared_qrs_snapshot_never_turns_non_execution_into_zero_fills(monkeypatch, kind):
+    from pathlib import Path
+    monkeypatch.syspath_prepend(str(Path(__file__).parent / "qrs_snapshot"))
+    monkeypatch.setenv("QRS_UNIFIED_NOTIFICATION_ENABLED", "true")
+    import daily_digest_aggregator as aggregator
+    import daily_digest_notify as digest
+    import merge_digest_candidates as intake
+    import notification_candidate_adapter as adapter
+
+    env, report, now = weekend("probe")
+    env["DIGEST_NOTIFICATION_SCHEDULE_JSON"] = json.dumps({"scheduler": {
+        "main_time": "45 15 * * 1-5", "timezone": "America/New_York"}})
+    if kind == "market_closed":
+        report.update(status="skipped", summary={}, diagnostics={"skip_reason": "market_closed"})
+    exported = export(env, [report], now=now)[0]
+    row = exported["runs"][0]
+    current, stale = adapter.partition(intake._rows(exported), row["business_day"])
+    assert not stale
+    expected = [{key: row[key] for key in adapter.IDENTITY[:4]}]
+    runs, summary = adapter.aggregate(current, expected)
+    assert runs == [] and summary["source_inventory"]["schwab"]["runs"] == 0
+    assert summary["source_inventory"]["schwab"]["covered_targets"] == 1
+    coverage = digest.EvidenceCoverage(candidates_loaded=True)
+    payload = digest.DailyDigestInput(business_day=row["business_day"], runs=[],
+        evidence_coverage=coverage, notification_summary=summary)
+    collected = aggregator.CollectResult(runs=[], coverage=coverage, merged_rows=[], notification_summary=summary)
+    receipt = aggregator.build_receipt(payload, collected, message_chars=0)
+    assert receipt["run_count"] == 0
+    assert receipt["total_fills"] is None and receipt["total_fills_status"] == "unknown"
+
+
+def test_shared_qrs_patch_reverses_exactly_to_recorded_snapshot_base(tmp_path):
+    import hashlib
+    from pathlib import Path
+    import subprocess
+    snapshot = Path(__file__).parent / "qrs_snapshot"
+    provenance = json.loads((snapshot / "provenance.json").read_text())
+    metadata = provenance["files"]["notification_candidate_adapter.py"]
+    patch = snapshot / metadata["patch"]
+    assert hashlib.sha256(patch.read_bytes()).hexdigest() == metadata["patch_sha256"]
+    target = tmp_path / "notification_candidate_adapter.py"
+    target.write_bytes((snapshot / target.name).read_bytes())
+    result = subprocess.run(["git", "apply", "--reverse", "-p3", str(patch.resolve())],
+        cwd=tmp_path, capture_output=True, text=True)
+    assert result.returncode == 0
+    assert hashlib.sha256(target.read_bytes()).hexdigest() == metadata["base_sha256"]

@@ -454,13 +454,17 @@ def persist_projected_candidate(payload, *, env=None, store=None):
     for row in [*((previous or {}).get("runs") or []), *rows]:
         executed = row.get("actually_ran") is True and row.get("cycle_count") == 1 if isinstance(row, dict) else False
         not_run = (isinstance(row, dict) and row.get("actually_ran") is False and row.get("cycle_count") == 0
-                   and row.get("execution_status") == "not_run" and row.get("reason_code") == "runtime_execution_not_admitted"
+                   and row.get("execution_status") == "not_run" and row.get("reason_code") in {"runtime_execution_not_admitted", "market_closed"}
                    and row.get("order_count") is None and row.get("fill_count") is None)
+        idle = (isinstance(row, dict) and row.get("actually_ran") is False and row.get("scheduled_idle") is True
+                and row.get("reason_code") == "not_due" and row.get("cycle_count") == 0
+                and row.get("order_count") is None and row.get("fill_count") is None
+                and not row.get("source_run_id") and not row.get("notification_events"))
         if (not isinstance(row, dict) or tuple(row.get(k) for k in scope) != identity
-                or not (executed or not_run)
-                or not isinstance(row.get("source_run_id"), str) or not row["source_run_id"]):
+                or not (executed or not_run or idle)
+                or (not idle and (not isinstance(row.get("source_run_id"), str) or not row["source_run_id"]))):
             raise ValueError("notification_candidate_scope_conflict")
-        key = row["source_run_id"]
+        key = ("idle", "") if idle else ("run", row["source_run_id"])
         current = dict(row)
         events = current.pop("notification_events", [])
         prior = dict(merged.get(key) or {})
@@ -470,7 +474,7 @@ def persist_projected_candidate(payload, *, env=None, store=None):
         facts = {}
         for event in [*prior_events, *events]:
             if (not isinstance(event, dict) or not event.get("dedupe_key")
-                    or tuple(event.get(k) for k in (*scope, "source_run_id")) != (*identity, key)):
+                    or tuple(event.get(k) for k in (*scope, "source_run_id")) != (*identity, row.get("source_run_id"))):
                 raise ValueError("notification_event_identity_unknown")
             fact = dict(event)
             for nullable in ("incident_reason", "order_execution_digest", "expected_block_evidence", "order_count", "fill_count"):
@@ -552,6 +556,7 @@ def emit_completed_candidates(env, *, now=None, read=None, upload=None, required
             # Existing /probe reports have this producer-specific balance-only
             # shape. Missing execution evidence alone never identifies a probe.
             probe = (report.get("status") == "ok" and "execution_receipt" not in report
+                and not report.get("errors") and not (report.get("error_summary") or {}).get("errors")
                 and {"account_observation", "buying_power", "total_equity"} <= summary.keys()
                 and not {"notification_digest", "notification_events", "routine_observation_counts", "result"} & summary.keys()
                 and "signal" not in diagnostics)
@@ -577,7 +582,7 @@ def emit_completed_candidates(env, *, now=None, read=None, upload=None, required
             row["notification_events"] = list(facts.values())
         identities = {_run_identity(row) for row in rows if row.get("actually_ran") is True}
         for required in required_runs:
-            if any(value[:4] == required[:4] for value in identities) and required not in identities:
+            if any(_run_identity(row)[:4] == required[:4] for row in rows) and required not in identities:
                 raise ValueError("notification_observed_run_not_covered")
         projected = json.dumps(payload, allow_nan=False)
         if upload:

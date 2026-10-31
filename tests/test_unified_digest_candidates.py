@@ -100,7 +100,8 @@ def test_configured_closed_session_proves_idle_without_inventing_runs(monkeypatc
     uploads = []
     emit(env, now=NOW, read=lambda args: [], upload=lambda *args: uploads.append(args))
     row = json.loads(uploads[0][1])["runs"][0]
-    assert row["actually_ran"] is False and "order_count" not in row and "fill_count" not in row
+    assert row["actually_ran"] is False and row["order_count"] is None and row["fill_count"] is None
+    assert not row.get("source_run_id") and row["reason_code"] == "not_due"
     monkeypatch.setattr(policy, "filter_due_targets", lambda *args, **kwargs: ([{}], True))
     with pytest.raises(ValueError, match="candidate_due_source_absent"):
         emit(env, now=NOW, read=lambda args: [], upload=lambda *args: uploads.append(args))

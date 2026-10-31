@@ -83,8 +83,9 @@ def project_reports(reports: Sequence[Mapping], *, expected_target: Mapping,
         stamp = datetime.fromisoformat(str(report.get("started_at", "")).replace("Z", "+00:00"))
         if stamp.tzinfo is None or not timedelta(0) <= now - stamp <= timedelta(hours=36):
             raise ValueError("candidate_source_time_invalid")
+        skip_reason = (report.get("diagnostics") or {}).get("skip_reason")
         not_run = (report.get("status") == "skipped"
-                   and (report.get("diagnostics") or {}).get("skip_reason") == "runtime_execution_not_admitted")
+                   and skip_reason in {"runtime_execution_not_admitted", "market_closed"})
         if not not_run and report.get("status") not in {"ok", "completed", "success", "error", "aborted", "failed"}:
             raise ValueError("candidate_source_incomplete")
         run_id = report.get("run_id")
@@ -95,15 +96,18 @@ def project_reports(reports: Sequence[Mapping], *, expected_target: Mapping,
         seen.add(run_id)
         day = (stamp.astimezone(ZoneInfo("Asia/Singapore")) - timedelta(hours=6)).date().isoformat()
         if not_run:
-            if (report.get("summary") or {}).get("notification_digest"):
+            summary = report.get("summary") or {}
+            if (summary.get("notification_digest")
+                    or any(summary.get(k) for k in ("broker_submission_done", "orders_submitted_count", "orders_pending_count"))
+                    or report.get("errors") or (report.get("error_summary") or {}).get("errors")):
                 raise ValueError("candidate_non_execution_conflict")
             not_run_rows[day] = {
                 "platform_id": expected_target["platform_id"], "strategy_profile": expected_target["strategy_profile"],
                 "opaque_account_uid": opaque_account_uid, "target_id": target_id, "business_day": day,
-                "actually_ran": False, "as_of": stamp.isoformat(), "status": "alert",
+                "actually_ran": False, "as_of": stamp.isoformat(), "status": "ok" if skip_reason == "market_closed" else "alert",
                 "fill_count": None, "order_count": None, "cycle_count": 0,
                 "field_status": {"fill_count": "unknown", "order_count": "unknown", "cycle_count": "known"},
-                "execution_status": "not_run", "reason_code": "runtime_execution_not_admitted",
+                "execution_status": "not_run", "reason_code": skip_reason,
                 "evidence_provenance": "candidates", "persistence_status": "persisted",
                 "delivery_status": "pending_central",
             }

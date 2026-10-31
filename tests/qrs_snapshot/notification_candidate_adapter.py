@@ -133,6 +133,7 @@ def aggregate(rows: Sequence[Mapping[str, Any]], expected: Sequence[Mapping[str,
     event_ids = set()
     immediate_ids = set()
     unknown_event = False
+    non_execution_counts_unknown = False
     observed_targets = set()
     run_counts = defaultdict(int)
     unknown_run_platforms = set()
@@ -154,6 +155,8 @@ def aggregate(rows: Sequence[Mapping[str, Any]], expected: Sequence[Mapping[str,
             # An explicit not-due row covers a target but is never a run.
             if row.get("actually_ran") is False and all(row.get(name) for name in IDENTITY[:4]):
                 observed_targets.add(tuple(str(row[name]) for name in IDENTITY[:4]))
+                non_execution_counts_unknown |= any(
+                    digest.resolve_count_field(row, name)[1] != "known" for name in ("order_count", "fill_count"))
             continue
         identity = tuple(str(row.get(name) or "") for name in IDENTITY)
         known_identity = all(identity)
@@ -229,7 +232,7 @@ def aggregate(rows: Sequence[Mapping[str, Any]], expected: Sequence[Mapping[str,
     count_fields = ("order_count", "fill_count", "cycle_count")
     conflicts = sum(bool(row.get("_conflict_" + name))
                     for row in grouped.values() for name in count_fields)
-    unknown = unknown_event or bool(unknown_run_platforms) or any(
+    unknown = unknown_event or non_execution_counts_unknown or bool(unknown_run_platforms) or any(
         digest.resolve_count_field(row, name)[1] != "known"
         for row in grouped.values() for name in count_fields
     )
