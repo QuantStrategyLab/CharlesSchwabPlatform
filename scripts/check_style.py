@@ -234,7 +234,7 @@ DATED_TITLE = re.compile(r"(audit|acceptance).*20\d{2}-\d{2}-\d{2}", re.IGNORECA
 # section 3 is a default and section 4 says so.
 PHASE_BLOCKING = {
     1: {"paths", "links", "agents", "hygiene"},
-    2: {"paths", "links", "agents", "hygiene", "content", "naming", "language"},
+    2: {"paths", "links", "agents", "hygiene", "content", "naming", "language", "docs"},
 }
 
 
@@ -398,6 +398,30 @@ def check_agent_files(root: Path, report: Report) -> None:
             )
 
 
+def check_docs_baseline(root: Path, report: Report) -> None:
+    """The file set a reader expects, split by what the repository is.
+
+    A LICENSE is the signal: a repository that grants rights to outside readers
+    owes them a contribution path, a way to report a vulnerability, and a
+    conduct policy. A repository that does not grant them is internal, and an
+    internal repository needs one thing from this list — where credentials live
+    and what to do when one leaks — not a public disclosure process it will
+    never run.
+    """
+    if (root / "LICENSE").exists():
+        required = ["CONTRIBUTING.md", "SECURITY.md", "CODE_OF_CONDUCT.md"]
+        kind = "public"
+    else:
+        required = ["SECURITY.md"]
+        kind = "private"
+    missing = [name for name in required if not (root / name).exists()]
+    if missing:
+        report.add(
+            "docs",
+            f"{kind} repository is missing {', '.join(missing)} (section 14)",
+        )
+
+
 def check_language(root: Path, report: Report) -> None:
     marketing = re.compile(
         r"\b(" + "|".join(re.escape(w) for w in MARKETING_WORDS) + r")\b", re.IGNORECASE
@@ -522,6 +546,7 @@ def main() -> int:
     check_links(root, report)
     check_agent_files(root, report)
     check_language(root, report)
+    check_docs_baseline(root, report)
     check_leaks(root, report)
     check_internal_paths(root, report)
 
