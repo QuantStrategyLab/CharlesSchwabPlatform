@@ -64,7 +64,9 @@ def test_qpk_dependent_heartbeats_use_locked_uv_runtime() -> None:
         assert workflow.count("uv sync --frozen --no-dev") == 1
         assert "python -m pip install" not in workflow
         assert "pandas-market-calendars==5.4.0" not in workflow
-        assert "uv run --no-sync python scripts/execution_report_heartbeat.py" in workflow
+        command = ("scripts/with_heartbeat_digest_binding.py heartbeat" if name == "execution-report-heartbeat.yml"
+                   else "scripts/execution_report_heartbeat.py")
+        assert "uv run --no-sync python " + command in workflow
 
 
 def test_lifecycle_classifies_import_failures_as_unavailable() -> None:
@@ -176,6 +178,6 @@ def test_manual_quiet_control_preserves_existing_alert_and_report_steps() -> Non
     alert_block = _manual_input_block(workflow, "fail_workflow_on_alert")
     assert 'default: "true"' in alert_block
     assert "RUNTIME_HEARTBEAT_FAIL_WORKFLOW_ON_ALERT: ${{ inputs.fail_workflow_on_alert || vars.RUNTIME_HEARTBEAT_FAIL_WORKFLOW_ON_ALERT || 'true' }}" in workflow
-    assert "uv run --no-sync python scripts/execution_report_heartbeat.py" in workflow
+    assert "uv run --no-sync python scripts/with_heartbeat_digest_binding.py heartbeat" in workflow
     assert "Publish read-only runtime execution evidence" in workflow
     assert 'cron: "20 22 * * *"' in workflow
