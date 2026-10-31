@@ -454,13 +454,17 @@ def persist_projected_candidate(payload, *, env=None, store=None):
     for row in [*((previous or {}).get("runs") or []), *rows]:
         executed = row.get("actually_ran") is True and row.get("cycle_count") == 1 if isinstance(row, dict) else False
         not_run = (isinstance(row, dict) and row.get("actually_ran") is False and row.get("cycle_count") == 0
-                   and row.get("execution_status") == "not_run" and row.get("reason_code") == "runtime_execution_not_admitted"
+                   and row.get("execution_status") == "not_run" and row.get("reason_code") in {"runtime_execution_not_admitted", "market_closed"}
                    and row.get("order_count") is None and row.get("fill_count") is None)
+        idle = (isinstance(row, dict) and row.get("actually_ran") is False and row.get("scheduled_idle") is True
+                and row.get("reason_code") == "not_due" and row.get("cycle_count") == 0
+                and row.get("order_count") is None and row.get("fill_count") is None
+                and not row.get("source_run_id") and not row.get("notification_events"))
         if (not isinstance(row, dict) or tuple(row.get(k) for k in scope) != identity
-                or not (executed or not_run)
-                or not isinstance(row.get("source_run_id"), str) or not row["source_run_id"]):
+                or not (executed or not_run or idle)
+                or (not idle and (not isinstance(row.get("source_run_id"), str) or not row["source_run_id"]))):
             raise ValueError("notification_candidate_scope_conflict")
-        key = row["source_run_id"]
+        key = ("idle", "") if idle else ("run", row["source_run_id"])
         current = dict(row)
         events = current.pop("notification_events", [])
         prior = dict(merged.get(key) or {})
@@ -470,7 +474,7 @@ def persist_projected_candidate(payload, *, env=None, store=None):
         facts = {}
         for event in [*prior_events, *events]:
             if (not isinstance(event, dict) or not event.get("dedupe_key")
-                    or tuple(event.get(k) for k in (*scope, "source_run_id")) != (*identity, key)):
+                    or tuple(event.get(k) for k in (*scope, "source_run_id")) != (*identity, row.get("source_run_id"))):
                 raise ValueError("notification_event_identity_unknown")
             fact = dict(event)
             for nullable in ("incident_reason", "order_execution_digest", "expected_block_evidence", "order_count", "fill_count"):
@@ -576,6 +580,7 @@ def emit_completed_candidates(env, *, now=None, read=None, upload=None, required
     read = read or digest_archive._read
     configured = {**env, "QSL_ROUTINE_NOTIFICATION_MODE": "daily_digest"}
     published_runs = set()
+    pending_writes = []
 
     def write(uri, body):
         payload = json.loads(body)
@@ -594,17 +599,8 @@ def emit_completed_candidates(env, *, now=None, read=None, upload=None, required
                 facts[key] = fact
             row["notification_events"] = list(facts.values())
         identities = {_run_identity(row) for row in rows if row.get("actually_ran") is True}
-        for required in required_runs:
-            if any(value[:4] == required[:4] for value in identities) and required not in identities:
-                raise ValueError("notification_observed_run_not_covered")
         projected = json.dumps(payload, allow_nan=False)
-        try:
-            if upload:
-                upload(uri, projected)
-            else:
-                persist_projected_candidate(payload, env=configured)
-        except Exception as exc:
-            raise _projection_stage_error("receipt_archive_write_unconfirmed", exc) from None
+        pending_writes.append((uri, projected, payload))
         published_runs.update(identities)
 
     def notification_read(args):
@@ -626,6 +622,7 @@ def emit_completed_candidates(env, *, now=None, read=None, upload=None, required
             # A balance-only probe has a known producer-specific shape. Missing
             # execution evidence alone never identifies a probe.
             probe = (report.get("status") == "ok" and "execution_receipt" not in report
+                and not report.get("errors") and not (report.get("error_summary") or {}).get("errors")
                 and {"account_observation", "buying_power", "total_equity"} <= summary.keys()
                 and not {"notification_digest", "notification_events", "routine_observation_counts", "result"} & summary.keys()
                 and "signal" not in diagnostics)
@@ -639,6 +636,47 @@ def emit_completed_candidates(env, *, now=None, read=None, upload=None, required
     result = digest_archive.emit(configured, now=now, read=notification_read, upload=write, projector=project)
     if not set(required_runs) <= published_runs:
         raise ReceiptProjectionStageError("receipt_run_coverage_unconfirmed", "notification_observed_run_not_covered")
+    # The archive iterates target bindings internally. Associate every staged
+    # payload with its exact target binding before any write, rather than using
+    # the outer environment's slot for all targets.
+    raw_bindings = configured.get("DIGEST_TARGET_BINDINGS_JSON", "").strip()
+    bindings = json.loads(raw_bindings) if raw_bindings else None
+    staged_environments = []
+    for uri, _, payload in pending_writes:
+        if upload or bindings is None:
+            staged_environments.append(configured)
+            continue
+        rows = payload.get("runs") or []
+        if not rows or not isinstance(bindings, list):
+            raise ReceiptProjectionStageError("receipt_target_binding_unavailable")
+        row = rows[0]
+        matches = []
+        for binding in bindings:
+            if not isinstance(binding, dict):
+                continue
+            values = {**configured, **binding, "DIGEST_TARGET_BINDINGS_JSON": ""}
+            try:
+                target = json.loads(values.get("RUNTIME_TARGET_JSON", ""))
+            except (TypeError, ValueError):
+                continue
+            destination = str(values.get("DIGEST_CANDIDATES_GCS_URI", "")).rstrip("/")
+            expected_uri = f"{destination}/{row.get('platform_id')}/{row.get('business_day')}/{values.get('DIGEST_STORE_TARGET')}.json"
+            if (isinstance(target, dict) and target.get("platform_id") == row.get("platform_id")
+                    and target.get("strategy_profile") == row.get("strategy_profile")
+                    and values.get("DIGEST_OPAQUE_ACCOUNT_UID") == row.get("opaque_account_uid")
+                    and values.get("DIGEST_TARGET_ID") == row.get("target_id") and uri == expected_uri):
+                matches.append(values)
+        if len(matches) != 1:
+            raise ReceiptProjectionStageError("receipt_target_binding_unavailable")
+        staged_environments.append(matches[0])
+    for (uri, projected, payload), values in zip(pending_writes, staged_environments):
+        try:
+            if upload:
+                upload(uri, projected)
+            else:
+                persist_projected_candidate(payload, env=values)
+        except Exception as exc:
+            raise _projection_stage_error("receipt_archive_write_unconfirmed", exc) from None
     return result
 
 

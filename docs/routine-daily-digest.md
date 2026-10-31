@@ -37,6 +37,15 @@ without execution receipts, signal diagnostics or notification facts. Missing
 execution evidence alone is not a probe: such a live report remains an unknown
 or alert row. Excluded reports cannot satisfy required live-run coverage.
 
+After filtering, an empty live set uses the same completed-window schedule
+evaluation as an archive with no reports. Only an evaluated not-due window
+produces target-level `scheduled_idle` evidence, without a source run ID and
+with unknown order/fill counts. Missing, unevaluated or due schedules remain
+unconfirmed and publish no candidate. Explicit archived `market_closed` skips
+retain their actual request ID as non-run evidence, with unknown trade counts.
+Probe-shaped reports containing errors are retained as alerts. Both idle and
+skip rows use the existing generation-checked, idempotent candidate store.
+
 中文：这份草稿只接入已有日报，不启用生产开关。正常无单消息可进入一份日报；
 风控拒绝、订单结果未知、待对账、运行异常和真实订单仍即时通知。
 负责人核验候选日期、覆盖和真实送达后，再批准部署及单平台切换。
