@@ -254,7 +254,7 @@ class RebalanceServiceTests(unittest.TestCase):
                         side=order_intent.side,
                         quantity=order_intent.quantity,
                         status="accepted",
-                        broker_order_id="schwab-order-1",
+                        broker_order_id="100000001",
                     ),
                 )[-1]
             ),
@@ -619,7 +619,7 @@ class RebalanceServiceTests(unittest.TestCase):
                         side=order_intent.side,
                         quantity=order_intent.quantity,
                         status="accepted",
-                        broker_order_id="schwab-order-1",
+                        broker_order_id="100000001",
                     ),
                 )[-1]
             ),
@@ -744,7 +744,7 @@ class RebalanceServiceTests(unittest.TestCase):
                         side=order_intent.side,
                         quantity=order_intent.quantity,
                         status="accepted",
-                        broker_order_id="schwab-order-1",
+                        broker_order_id="100000001",
                     ),
                 )[-1]
             ),
@@ -817,7 +817,7 @@ class RebalanceServiceTests(unittest.TestCase):
                         side=order_intent.side,
                         quantity=order_intent.quantity,
                         status="accepted",
-                        broker_order_id="schwab-order-1",
+                        broker_order_id="100000001",
                     ),
                 )[-1]
             ),
@@ -882,7 +882,7 @@ class RebalanceServiceTests(unittest.TestCase):
                         side=order_intent.side,
                         quantity=order_intent.quantity,
                         status="accepted",
-                        broker_order_id="schwab-order-1",
+                        broker_order_id="100000001",
                     ),
                 )[-1]
             ),
@@ -978,7 +978,7 @@ class RebalanceServiceTests(unittest.TestCase):
                             side=order_intent.side,
                             quantity=order_intent.quantity,
                             status="accepted",
-                            broker_order_id="schwab-order-1",
+                            broker_order_id="100000001",
                         ),
                     )[-1]
                 ),
@@ -1154,7 +1154,7 @@ class RebalanceServiceTests(unittest.TestCase):
             )[-1],
             submit_equity_order=lambda *_args, **_kwargs: SimpleNamespace(
                 status="accepted",
-                broker_order_id="order-1",
+                broker_order_id="100000001",
                 raw_payload={},
             ),
             send_tg_message=sent_messages.append,
@@ -1247,7 +1247,7 @@ class RebalanceServiceTests(unittest.TestCase):
             resolve_rebalance_plan=lambda *, qqq_history, snapshot: plan,
             submit_equity_order=lambda *_args, **_kwargs: SimpleNamespace(
                 status="accepted",
-                broker_order_id="order-1",
+                broker_order_id="100000001",
                 raw_payload={},
             ),
             send_tg_message=sent_messages.append,
@@ -1454,7 +1454,7 @@ class RebalanceServiceTests(unittest.TestCase):
             submitted_orders.append(order_intent)
             return SimpleNamespace(
                 status="accepted",
-                broker_order_id=f"order-{len(submitted_orders)}",
+                broker_order_id=str(100000000 + len(submitted_orders)),
                 raw_payload={},
             )
 
@@ -1906,7 +1906,7 @@ class RebalanceServiceTests(unittest.TestCase):
             submitted_orders.append(order_intent)
             return SimpleNamespace(
                 status="accepted",
-                broker_order_id=f"order-{len(submitted_orders)}",
+                broker_order_id=str(100000000 + len(submitted_orders)),
                 raw_payload={},
             )
 
@@ -2055,12 +2055,12 @@ class RebalanceServiceTests(unittest.TestCase):
             submitted_orders.append(order_intent)
             return SimpleNamespace(
                 status="accepted",
-                broker_order_id=f"order-{len(submitted_orders)}",
+                broker_order_id=str(100000000 + len(submitted_orders)),
                 raw_payload={},
             )
 
         def fetch_order_status(_client, _account_hash, order_id):
-            if order_id != "order-1":
+            if order_id != "100000001":
                 return None
             return {"status": "FILLED", "executed_qty": 8.0, "executed_price": 100.0}
 
@@ -2265,7 +2265,7 @@ class RebalanceServiceTests(unittest.TestCase):
                             side=order_intent.side,
                             quantity=order_intent.quantity,
                             status="accepted",
-                            broker_order_id="schwab-order-1",
+                            broker_order_id="100000001",
                         ),
                     )[-1]
                 ),
@@ -2368,7 +2368,7 @@ class RebalanceServiceTests(unittest.TestCase):
                             side=order_intent.side,
                             quantity=order_intent.quantity,
                             status="accepted",
-                            broker_order_id="schwab-order-1",
+                            broker_order_id="100000001",
                         ),
                     )[-1]
                 ),
@@ -2488,7 +2488,7 @@ def continuity_case(root, day="2026-09-30", *, kind="SELL", branch="port", selec
             stream.write(json.dumps(ci.asdict(intent))+"\n")
         if fault:
             return fault(intent)
-        return ExecutionReport(intent.symbol, intent.side, intent.quantity, "accepted", broker_order_id="SYNTH_ACK")
+        return ExecutionReport(intent.symbol, intent.side, intent.quantity, "accepted", broker_order_id="200000001")
     runtime = SchwabRebalanceRuntime(fetch_reference_history=lambda: None,
         portfolio_port=CallablePortfolioPort(lambda: snapshot),
         market_data_port=CallableMarketDataPort(quote_loader=lambda symbol: QuoteSnapshot(symbol, day, 100, ask_price=100)),
@@ -2551,7 +2551,7 @@ def test_managed_caller_all_final_orders_and_both_transports(tmp_path, kind, bra
     assert replay.calls == []
     assert result2.submitted_orders == ()
     assert result2.execution["broker_submission_done"] is False
-    assert result2.execution["continuity_prior_orders"][0]["broker_order_id"] == "SYNTH_ACK"
+    assert result2.execution["continuity_prior_orders"][0]["broker_order_id"] == "200000001"
     assert result.execution["execution_status"] == "pending_reconciliation"
 
 
@@ -2630,7 +2630,7 @@ def continuity_process_worker(root, day, kind, branch, fault):
             raise SystemExit(73) # after durable claim, before any broker receipt
         if fault == "lost":
             raise TimeoutError("synthetic lost reply")
-        return ExecutionReport(_.symbol, _.side, _.quantity, "accepted", broker_order_id="SYNTH_ACK")
+        return ExecutionReport(_.symbol, _.side, _.quantity, "accepted", broker_order_id="200000001")
     c = continuity_case(root, day, kind=kind, branch=branch, fault=response)
     from contextlib import ExitStack
     with ExitStack() as faults, patch.object(rebalance_service, "try_record_platform_execution", return_value=False), \
@@ -2709,7 +2709,7 @@ def test_selected_same_cycle_keeps_existing_replay_reason_and_current_submission
     assert replay.calls == [] and result.submitted_orders == ()
     assert result.execution["no_op_reason"] == "recorded_pending_reconciliation"
     assert result.execution["broker_submission_done"] is False
-    assert result.execution["continuity_prior_orders"][0]["broker_order_id"] == "SYNTH_ACK"
+    assert result.execution["continuity_prior_orders"][0]["broker_order_id"] == "200000001"
 
 
 @pytest.fixture(autouse=True)
@@ -3017,7 +3017,7 @@ def test_resolution_receipt_collection_requires_unique_broker_binding(tmp_path,b
     def first_transport(intent):
         if len(box["original"].calls)==1:
             return ExecutionReport(intent.symbol,intent.side,intent.quantity,"accepted",
-                broker_order_id="SYNTH_FIRST_ORDER" if known_first_identity else None)
+                broker_order_id="300000001" if known_first_identity else None)
         raise TimeoutError("synthetic second response loss")
     original=continuity_case(tmp_path,branch=branch,fault=first_transport)
     box["original"]=original
@@ -3029,7 +3029,7 @@ def test_resolution_receipt_collection_requires_unique_broker_binding(tmp_path,b
     # Explicit historical native attempts, each with its own validated proposal.
     # This is not a same-cycle multi-SELL executor witness.
     seed_synthetic_native_sell(original, OrderIntent("SOXL", "sell", 4),
-                               broker_order_id="SYNTH_FIRST_ORDER" if known_first_identity else None)
+                               broker_order_id="300000001" if known_first_identity else None)
     seed_synthetic_native_sell(original, OrderIntent("TQQQ", "sell", 4), unknown=True)
     assert len(original.calls)==2
     version=original.locator.read_registered();payload=json.loads(version.payload_json)
@@ -3044,7 +3044,7 @@ def test_resolution_receipt_collection_requires_unique_broker_binding(tmp_path,b
         fixture_original=SimpleNamespace(store=original.store,locator=SimpleNamespace(read_registered=lambda one=one:one))
         fixture_current=SimpleNamespace(**{**vars(current),"root":tmp_path/f"source{i}"})
         fixture_current.root.mkdir()
-        broker_id="SYNTH_FIRST_ORDER" if conflict or i==0 else "SYNTH_SECOND_ORDER"
+        broker_id="300000001" if conflict or i==0 else "300000002"
         body,_=resolution_material(fixture_original,fixture_current,order_id=broker_id)
         uri=f"synthetic-evidence://qualified/receipt{i}";raw=_canonical_json(body)
         sources[uri]=_digest(raw);receipts[uri]=raw
@@ -3365,7 +3365,7 @@ def test_verified_original_closure_does_not_reenter_sell_resource_obligations(tm
     from quant_platform_kit.common.models import OrderIntent
     original = qualify_synthetic_sell(continuity_case(tmp_path, branch=branch))
     first = run_strategy_core(runtime=original.runtime, config=original.config)
-    assert len(original.calls) == 1 and first.submitted_orders[0]["broker_order_id"] == "SYNTH_ACK"
+    assert len(original.calls) == 1 and first.submitted_orders[0]["broker_order_id"] == "200000001"
     sell_log = next(line for line in first.trade_logs if "Market Sell" in line)
     assert "accepted by broker" in sell_log
     assert "fill not confirmed" in sell_log
@@ -3377,7 +3377,7 @@ def test_verified_original_closure_does_not_reenter_sell_resource_obligations(tm
     if qualification == "partial":
         old = _IntentSession(original.context, snapshot=original.snapshot, profile_id=original.scope.profile_id)
         assert original.store.append_event(old.originals[0][0], next_state=ExecutionCommandState.PARTIALLY_FILLED,
-            details={"broker_order_id": "SYNTH_ACK", "filled_quantity": 2}) is not None
+            details={"broker_order_id": "200000001", "filled_quantity": 2}) is not None
         quantity = 2
         current.snapshot = replace(current.snapshot, positions=(Position("SOXL", 2, 200),))
         current.plan["portfolio"].update(quantities={"SOXL": 2}, market_values={"SOXL": 200})
@@ -3385,7 +3385,7 @@ def test_verified_original_closure_does_not_reenter_sell_resource_obligations(tm
     context = current.context
     if qualification not in {"pending", "partial"}:
         terminal = "PENDING_CANCEL" if qualification == "cancel_pending" else "CANCELED"
-        body, _ = resolution_material(original, current, terminal=terminal, filled="0", order_id="SYNTH_ACK")
+        body, _ = resolution_material(original, current, terminal=terminal, filled="0", order_id="200000001")
         if qualification == "wrong_identity":
             body["identity_binding"]["order_id"] = "OTHER_SYNTHETIC_ORDER"
         context = with_resolution_source(current.context, body)
@@ -3403,7 +3403,7 @@ def test_verified_original_closure_does_not_reenter_sell_resource_obligations(tm
     result = run_strategy_core(runtime=current.runtime, config=current.config)
     assert len(current.calls) == int(qualification == "closed")
     assert len(result.submitted_orders) == int(qualification == "closed")
-    assert result.execution["continuity_prior_orders"][0]["broker_order_id"] == "SYNTH_ACK"
+    assert result.execution["continuity_prior_orders"][0]["broker_order_id"] == "200000001"
     restored = _IntentSession(original.context, snapshot=original.snapshot, profile_id=original.scope.profile_id)
     assert restored.originals[0][1] == old_events
 

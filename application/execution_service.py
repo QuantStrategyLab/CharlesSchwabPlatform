@@ -449,6 +449,8 @@ def execute_rebalance_cycle(
     cash_only_execution=True,
     notional_buy_execution: bool = False,
     intent_continuity: _IntentSession | None = None,
+    joint_execution_state_store=None,
+    joint_strategy_profile: str = "",
 ) -> ExecutionCycleResult:
     if intent_continuity is not None:
         intent_continuity.select_plan_source(plan)
@@ -723,6 +725,13 @@ def execute_rebalance_cycle(
             else:
                 return False
 
+            if execution.get("joint_execution_required") is True:
+                from dataclasses import replace
+                account_id = plan.get("account_hash")
+                if not isinstance(account_id, str) or not account_id:
+                    raise ValueError("joint submission account unavailable")
+                order_intent = replace(order_intent, account_id=account_id)
+
             if dry_run_only:
                 if action_type == "SELL":
                     trade_logs.append(
@@ -779,22 +788,64 @@ def execute_rebalance_cycle(
                     intent_continuity.reasons.append("sell_resource_evidence_required")
                     return False
             if execution_port is not None:
-                submission_attempted = True
-                report = execution_port.submit_order(order_intent)
+                def submit():
+                    return execution_port.submit_order(order_intent)
             elif submit_equity_order is not None:
-                submission_attempted = True
-                report = submit_equity_order(client, plan["account_hash"], order_intent)
+                def submit():
+                    return submit_equity_order(client, plan["account_hash"], order_intent)
             else:
                 raise ValueError("Schwab execution requires execution_port or submit_equity_order")
-            # The pinned adapter labels HTTP errors rejected, including responses
-            # that do not establish whether the broker accepted the request.
-            status_code = report.raw_payload.get("status_code")
-            if report.status not in {"accepted", "rejected"} or (
-                report.status == "rejected"
-                and status_code is not None
-                and (int(status_code) >= 500 or int(status_code) == 408)
-            ):
-                raise RuntimeError("submission outcome unconfirmed")
+
+            def submit_with_confirmed_outcome():
+                nonlocal report
+                from application.broker_order_identity import is_valid_schwab_order_id
+
+                report = submit()
+                code = report.raw_payload.get("status_code")
+                if report.status not in {"accepted", "rejected"} or (
+                    report.status == "accepted" and not is_valid_schwab_order_id(report.broker_order_id)
+                ):
+                    raise RuntimeError("submission outcome unconfirmed")
+                if code is not None and (
+                    type(code) is not int
+                    or (report.status == "accepted" and code not in {200, 201})
+                    or (report.status == "rejected" and (not 400 <= code < 500 or code == 408))
+                ):
+                    raise RuntimeError("submission outcome unconfirmed")
+                return report
+
+            from application.decision_cycle import current_cycle
+            cycle = current_cycle()
+            joint = cycle.get("joint_strategy_binding") if cycle is not None else None
+            required = execution.get("joint_execution_required") is True
+            if required != (joint is not None):
+                raise RuntimeError("joint strategy execution binding unavailable")
+            if required:
+                from quant_platform_kit.common.execution_state import submission_intent_digest, submission_release_digest
+                planning = joint["planning_session"]
+                release = (cycle.get("report") or {}).get("runtime_release_receipt")
+                if (planning.broker != "schwab" or planning.account_id != str(plan.get("account_hash") or "")
+                        or planning.profile != joint_strategy_profile or planning.release_id != submission_release_digest(release)
+                        or joint_execution_state_store is None or planning.store is not joint_execution_state_store):
+                    raise RuntimeError("joint account or release binding mismatch")
+                metadata = {**dict(execution), "allocation": dict(allocation)}
+                active_session = planning.for_intent(submission_intent_digest(metadata, joint_strategy_profile))
+                from quant_platform_kit.common.execution_state import submission_binding_digest
+                if joint.get("allocation_sha256") != submission_binding_digest(allocation):
+                    raise RuntimeError("joint post-risk allocation changed")
+                from application.joint_account_facts import reserve_joint_order
+                from us_equity_strategies.conditional_tqqq_candidate import canonical_tqqq_context_sha256
+                if canonical_tqqq_context_sha256(joint["context"]) != joint["input_sha256"]:
+                    raise RuntimeError("joint strategy inputs changed")
+                grant = reserve_joint_order(active_session, order_intent, joint)
+                if (canonical_tqqq_context_sha256(joint["context"]) != joint["input_sha256"]
+                        or joint.get("allocation_sha256") != submission_binding_digest(allocation)):
+                    raise RuntimeError("joint inputs changed during reservation")
+                submission_attempted = True
+                report = active_session.dispatch(grant, order_intent, submit_with_confirmed_outcome)
+            else:
+                submission_attempted = True
+                report = submit_with_confirmed_outcome()
             outcome_confirmed = True
             success = report.status == "accepted"
             if success:

@@ -1,0 +1,62 @@
+name: Strategy reliability integration
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  strategy-reliability:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      QPK_STRATEGY_RELIABILITY_SHA: 0774bae67bebaa7783386b22fc874986614779e5
+      UES_STRATEGY_RELIABILITY_SHA: 01ad9843f5e93a88dabebaffc9ddf47bc1725c1c
+      REQUIRE_QSL_STRATEGY_INTEGRATION: "1"
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Install isolated candidate dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip uv
+          uv sync --frozen --extra test
+          uv --no-config pip install --python .venv/bin/python --no-deps \
+            "us-equity-strategies @ git+https://github.com/QuantStrategyLab/UsEquityStrategies.git@${UES_STRATEGY_RELIABILITY_SHA}" \
+            "quant-platform-kit @ git+https://github.com/QuantStrategyLab/QuantPlatformKit.git@${QPK_STRATEGY_RELIABILITY_SHA}"
+          .venv/bin/python - <<'PY'
+          import json, os
+          from importlib.metadata import distribution
+          for name, key in (("us-equity-strategies", "UES_STRATEGY_RELIABILITY_SHA"),
+                            ("quant-platform-kit", "QPK_STRATEGY_RELIABILITY_SHA")):
+              installed = json.loads(distribution(name).read_text("direct_url.json"))
+              assert installed["vcs_info"]["commit_id"] == os.environ[key]
+          PY
+      - name: Run required platform and strategy contracts
+        run: |
+          set -euo pipefail
+          PYTHONPATH=. .venv/bin/python -m pytest -q -rs \
+            tests/test_decision_cycle.py \
+            tests/test_daily_strategy_state.py \
+            tests/test_optional_daily_state_loading.py \
+            tests/test_joint_strategy_execution.py \
+            tests/test_joint_execution_e2e.py \
+            tests/test_execution_evidence.py \
+            tests/test_strategy_runtime.py::test_loaded_runtime_accepts_explicit_daily_state_binding \
+            tests/test_receipt_projection_stages.py \
+            tests/test_request_handling.py::test_main_cycle_uses_one_clock_for_plugin_load_core_and_report \
+            --junitxml=strategy-reliability-tests.xml
+          .venv/bin/python - <<'PY'
+          import xml.etree.ElementTree as ET
+          cases = list(ET.parse("strategy-reliability-tests.xml").getroot().iter("testcase"))
+          assert cases, "required candidate tests were not collected"
+          assert not any(c.find(tag) is not None for c in cases for tag in ("skipped", "failure", "error"))
+          PY

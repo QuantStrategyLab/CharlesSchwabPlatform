@@ -538,6 +538,41 @@ def stage_approved_gate_observation(*, profile, reasons):
         return False
 
 
+class ReceiptProjectionStageError(ValueError):
+    """A bounded projection stage, without disclosing source paths or errors."""
+
+    def __init__(self, stage, message=None):
+        super().__init__(message or stage)
+        self.stage = stage
+
+
+_LEGACY_PROJECTION_REASONS = frozenset({
+    "notification_source_run_conflict", "notification_event_identity_unknown",
+    "notification_event_conflict", "notification_observed_run_not_covered",
+    "candidate_plugin_observations_invalid", "candidate_duplicate_run",
+    "candidate_identity_or_time_missing", "candidate_non_execution_conflict",
+    "candidate_run_id_missing", "candidate_source_identity_mismatch",
+    "candidate_source_incomplete", "candidate_source_invalid",
+    "candidate_source_time_invalid", "candidate_target_invalid",
+    "invalid_business_date", "invalid_observed_at", "invalid_target",
+    "notification_candidate_invalid", "notification_candidate_identity_unknown",
+    "notification_candidate_budget_exceeded", "notification_candidate_history_unknown",
+    "notification_candidate_scope_conflict", "notification_candidate_source_conflict",
+    "notification_target_not_enabled", "notification_candidate_conflict",
+    "candidate_archive_read_failed", "candidate_bindings_invalid",
+    "candidate_target_enablement_unknown", "candidate_store_identity_missing",
+    "candidate_identity_missing", "candidate_store_configuration_missing",
+    "candidate_archive_budget_exceeded", "candidate_source_locator_mismatch",
+    "candidate_archive_time_missing", "candidate_source_absent", "candidate_due_source_absent",
+})
+
+
+def _projection_stage_error(stage, exc):
+    # Preserve only known constant contract reasons; never echo arbitrary errors.
+    reason = str(exc) if isinstance(exc, ValueError) and str(exc) in _LEGACY_PROJECTION_REASONS else None
+    return ReceiptProjectionStageError(stage, reason)
+
+
 def emit_completed_candidates(env, *, now=None, read=None, upload=None, required_runs=(), observed_events=()):
     """Export one archive-authoritative row per business run, with own facts."""
     from .digest_snapshot import digest_archive
@@ -545,24 +580,7 @@ def emit_completed_candidates(env, *, now=None, read=None, upload=None, required
     read = read or digest_archive._read
     configured = {**env, "QSL_ROUTINE_NOTIFICATION_MODE": "daily_digest"}
     published_runs = set()
-
-    def project_completed(reports, **kwargs):
-        selected = []
-        for report in reports:
-            if report.get("dry_run") is True:
-                continue
-            summary = report.get("summary") or {}
-            diagnostics = report.get("diagnostics") or {}
-            # Existing /probe reports have this producer-specific balance-only
-            # shape. Missing execution evidence alone never identifies a probe.
-            probe = (report.get("status") == "ok" and "execution_receipt" not in report
-                and not report.get("errors") and not (report.get("error_summary") or {}).get("errors")
-                and {"account_observation", "buying_power", "total_equity"} <= summary.keys()
-                and not {"notification_digest", "notification_events", "routine_observation_counts", "result"} & summary.keys()
-                and "signal" not in diagnostics)
-            if not probe:
-                selected.append(report)
-        return _project_runs(selected, **kwargs)
+    pending_writes = []
 
     def write(uri, body):
         payload = json.loads(body)
@@ -581,25 +599,84 @@ def emit_completed_candidates(env, *, now=None, read=None, upload=None, required
                 facts[key] = fact
             row["notification_events"] = list(facts.values())
         identities = {_run_identity(row) for row in rows if row.get("actually_ran") is True}
-        for required in required_runs:
-            if any(_run_identity(row)[:4] == required[:4] for row in rows) and required not in identities:
-                raise ValueError("notification_observed_run_not_covered")
         projected = json.dumps(payload, allow_nan=False)
-        if upload:
-            upload(uri, projected)
-        else:
-            persist_projected_candidate(payload, env=configured)
+        pending_writes.append((uri, projected, payload))
         published_runs.update(identities)
 
     def notification_read(args):
-        value = read(args)
+        try:
+            value = read(args)
+        except Exception as exc:
+            raise _projection_stage_error("receipt_archive_read_unavailable", exc) from None
         if args[0] == "cat" and isinstance(value, dict) and value.get("schema_version") == "runtime_report.v1":
             return _notification_report(value)
         return value
 
-    result = digest_archive.emit(configured, now=now, read=notification_read, upload=write, projector=project_completed)
+    def project(reports, **kwargs):
+        selected = []
+        for report in reports:
+            if report.get("dry_run") is True:
+                continue
+            summary = report.get("summary") or {}
+            diagnostics = report.get("diagnostics") or {}
+            # A balance-only probe has a known producer-specific shape. Missing
+            # execution evidence alone never identifies a probe.
+            probe = (report.get("status") == "ok" and "execution_receipt" not in report
+                and not report.get("errors") and not (report.get("error_summary") or {}).get("errors")
+                and {"account_observation", "buying_power", "total_equity"} <= summary.keys()
+                and not {"notification_digest", "notification_events", "routine_observation_counts", "result"} & summary.keys()
+                and "signal" not in diagnostics)
+            if not probe:
+                selected.append(report)
+        try:
+            return _project_runs(selected, **kwargs)
+        except Exception as exc:
+            raise _projection_stage_error("receipt_projection_invalid", exc) from None
+
+    result = digest_archive.emit(configured, now=now, read=notification_read, upload=write, projector=project)
     if not set(required_runs) <= published_runs:
-        raise ValueError("notification_observed_run_not_covered")
+        raise ReceiptProjectionStageError("receipt_run_coverage_unconfirmed", "notification_observed_run_not_covered")
+    # The archive iterates target bindings internally. Associate every staged
+    # payload with its exact target binding before any write, rather than using
+    # the outer environment's slot for all targets.
+    raw_bindings = configured.get("DIGEST_TARGET_BINDINGS_JSON", "").strip()
+    bindings = json.loads(raw_bindings) if raw_bindings else None
+    staged_environments = []
+    for uri, _, payload in pending_writes:
+        if upload or bindings is None:
+            staged_environments.append(configured)
+            continue
+        rows = payload.get("runs") or []
+        if not rows or not isinstance(bindings, list):
+            raise ReceiptProjectionStageError("receipt_target_binding_unavailable")
+        row = rows[0]
+        matches = []
+        for binding in bindings:
+            if not isinstance(binding, dict):
+                continue
+            values = {**configured, **binding, "DIGEST_TARGET_BINDINGS_JSON": ""}
+            try:
+                target = json.loads(values.get("RUNTIME_TARGET_JSON", ""))
+            except (TypeError, ValueError):
+                continue
+            destination = str(values.get("DIGEST_CANDIDATES_GCS_URI", "")).rstrip("/")
+            expected_uri = f"{destination}/{row.get('platform_id')}/{row.get('business_day')}/{values.get('DIGEST_STORE_TARGET')}.json"
+            if (isinstance(target, dict) and target.get("platform_id") == row.get("platform_id")
+                    and target.get("strategy_profile") == row.get("strategy_profile")
+                    and values.get("DIGEST_OPAQUE_ACCOUNT_UID") == row.get("opaque_account_uid")
+                    and values.get("DIGEST_TARGET_ID") == row.get("target_id") and uri == expected_uri):
+                matches.append(values)
+        if len(matches) != 1:
+            raise ReceiptProjectionStageError("receipt_target_binding_unavailable")
+        staged_environments.append(matches[0])
+    for (uri, projected, payload), values in zip(pending_writes, staged_environments):
+        try:
+            if upload:
+                upload(uri, projected)
+            else:
+                persist_projected_candidate(payload, env=values)
+        except Exception as exc:
+            raise _projection_stage_error("receipt_archive_write_unconfirmed", exc) from None
     return result
 
 
@@ -645,21 +722,25 @@ def publish_approved_receipts(reports):
 def publish_receipt(legacy, *, kind, reason, recovered=False, observed_at=None, source_report=None):
     """Receipt acceptance and workflow disposition remain authoritative."""
     if kind == "healthy_heartbeat":
+        stage = "receipt_source_identity_unavailable"
         try:
             event = _receipt_event(source_report, kind, reason)
+            stage = "receipt_candidate_write_unconfirmed"
             store = GCSNotificationStore()
             if store.persist(event.to_candidate()) is not True:
                 raise CandidatePersistenceError("notification_receipt_fact_unconfirmed")
             # Publish after staging the observation, so the very same export
             # includes this receipt-linked fact rather than a monitor-only row.
+            stage = "receipt_archive_projection_unconfirmed"
             if emit_completed_candidates(os.environ, required_runs=[_run_identity(event.to_candidate())], observed_events=[event.to_candidate()]).get("uploaded") is not True:
                 raise CandidatePersistenceError("notification_archive_write_unconfirmed")
             if recovered:
+                stage = "receipt_recovery_unconfirmed"
                 _incident(replace(event, occurred_at=observed_at or event.occurred_at), stream="receipt",
                     state="healthy", severity=0, recovered=True, sender=lambda: False, store=store)
             return None
-        except Exception:
-            _log_failure("receipt_candidate_projection_failed")
+        except Exception as exc:
+            _log_failure(exc.stage if isinstance(exc, ReceiptProjectionStageError) else stage)
             raise CandidatePersistenceError("notification_receipt_coverage_unconfirmed")
     if not enabled():
         return legacy()
