@@ -90,6 +90,14 @@ partial 及配对/UNKNOWN 等 null 保留，不将缺字段补为零或空数组
 始终 false；账本 partial、null 配对和 UNKNOWN 总数、PAUSED 保持。此诊断只能缩小可检查归档，
 不能补写旧 outcome 或替代对应券商订单、执行报告与独立来源核验。
 
+## 单个坏 outcome 的对象来源观察
+
+`inspect_outcome_origin` 默认关闭。开启后仅复用本次稳定账本窗口中恰好一条、首错为 outcome_shape 的原对象定位；不接受外部 URI、账户或日期，不新增金融正文读取。先 GET 同桶原前缀对象 metadata，比较 size/MD5 与已扫描正文的一致性，要求 generation 存在。MD5 只作字节一致性检查，不作为来源认证。变化、缺失或不可读保持未知。
+
+只投影元数据是否存在、固定字段内合法 code SHA/run 声明；不输出对象名、账户、日期、generation、principal 或原文。以对象 metadata 的创建时间前后各五分钟，对同一精确 resourceName 的 create/update AuditLog 仅读最多 20 条，第 21 条用于识别截断；缺创建时间、权限拒绝、失败、截断或错 scope 保留未知，不重试、不扩大查询。空窗口不证明未发生写入，服务身份存在也不证明原应用 writer、源码或业务结果。无论读回结果如何，writer 验证、业务结果验证、恢复资格均保持 false。
+
+该观察可在 ACTIVE 声明下读取存储 metadata，不访问历史业务报告，不调用券商、不读/刷新 token、不改账本/claim/账户状态。原 `inspect_historical_outcome` 的 PAUSED 条件和历史正文窗口完全保留，不能借此取得等效恢复或业务证明。
+
 ## 对账 namespace 修正与证据边界
 
 原执行器按券商原生账户 hash 写 execution claim/outcome，但对账候选曾用控制面 `account_scope`（常为 `live`）读账本，可能错误看到空范围。现在只在观察身份明确匹配且原生 hash 有效时读取正确范围，缺失或不匹配就拒绝，不回退 `live`。控制面身份及 broker evidence 的账户摘要合同不变。回归覆盖了旧 scope 为 0、原生 hash 下有 UNKNOWN 提交结果时旧空基线必须不匹配；不消除原有 UNKNOWN、partial 或缺失成交覆盖。
