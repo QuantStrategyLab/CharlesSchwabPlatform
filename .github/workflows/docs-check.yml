@@ -30,4 +30,4 @@ jobs:
       - name: Test the documentation checker
         run: python scripts/test_style.py
       - name: Check documentation rules
-        run: python scripts/check_style.py
+        run: python scripts/check_style.py --phase 2
