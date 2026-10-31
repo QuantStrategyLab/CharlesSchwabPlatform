@@ -542,6 +542,33 @@ class ReceiptProjectionStageError(ValueError):
         self.stage = stage
 
 
+_LEGACY_PROJECTION_REASONS = frozenset({
+    "notification_source_run_conflict", "notification_event_identity_unknown",
+    "notification_event_conflict", "notification_observed_run_not_covered",
+    "candidate_plugin_observations_invalid", "candidate_duplicate_run",
+    "candidate_identity_or_time_missing", "candidate_non_execution_conflict",
+    "candidate_run_id_missing", "candidate_source_identity_mismatch",
+    "candidate_source_incomplete", "candidate_source_invalid",
+    "candidate_source_time_invalid", "candidate_target_invalid",
+    "invalid_business_date", "invalid_observed_at", "invalid_target",
+    "notification_candidate_invalid", "notification_candidate_identity_unknown",
+    "notification_candidate_budget_exceeded", "notification_candidate_history_unknown",
+    "notification_candidate_scope_conflict", "notification_candidate_source_conflict",
+    "notification_target_not_enabled", "notification_candidate_conflict",
+    "candidate_archive_read_failed", "candidate_bindings_invalid",
+    "candidate_target_enablement_unknown", "candidate_store_identity_missing",
+    "candidate_identity_missing", "candidate_store_configuration_missing",
+    "candidate_archive_budget_exceeded", "candidate_source_locator_mismatch",
+    "candidate_archive_time_missing", "candidate_source_absent", "candidate_due_source_absent",
+})
+
+
+def _projection_stage_error(stage, exc):
+    # Preserve only known constant contract reasons; never echo arbitrary errors.
+    reason = str(exc) if isinstance(exc, ValueError) and str(exc) in _LEGACY_PROJECTION_REASONS else None
+    return ReceiptProjectionStageError(stage, reason)
+
+
 def emit_completed_candidates(env, *, now=None, read=None, upload=None, required_runs=(), observed_events=()):
     """Export one archive-authoritative row per business run, with own facts."""
     from .digest_snapshot import digest_archive
@@ -577,14 +604,14 @@ def emit_completed_candidates(env, *, now=None, read=None, upload=None, required
             else:
                 persist_projected_candidate(payload, env=configured)
         except Exception as exc:
-            raise ReceiptProjectionStageError("receipt_archive_write_unconfirmed") from exc
+            raise _projection_stage_error("receipt_archive_write_unconfirmed", exc) from None
         published_runs.update(identities)
 
     def notification_read(args):
         try:
             value = read(args)
         except Exception as exc:
-            raise ReceiptProjectionStageError("receipt_archive_read_unavailable") from exc
+            raise _projection_stage_error("receipt_archive_read_unavailable", exc) from None
         if args[0] == "cat" and isinstance(value, dict) and value.get("schema_version") == "runtime_report.v1":
             return _notification_report(value)
         return value
@@ -607,7 +634,7 @@ def emit_completed_candidates(env, *, now=None, read=None, upload=None, required
         try:
             return _project_runs(selected, **kwargs)
         except Exception as exc:
-            raise ReceiptProjectionStageError("receipt_projection_invalid") from exc
+            raise _projection_stage_error("receipt_projection_invalid", exc) from None
 
     result = digest_archive.emit(configured, now=now, read=notification_read, upload=write, projector=project)
     if not set(required_runs) <= published_runs:
