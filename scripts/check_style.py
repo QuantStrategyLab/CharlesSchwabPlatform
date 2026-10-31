@@ -80,8 +80,15 @@ README_OUTLINE = [
 ]
 
 # Section 2, "Habits to avoid".
+#
+# `robust` and `powerful` are deliberately absent. Both are technical terms in
+# this corpus — a robust estimator, statistical power — and a rule that flags
+# them reported twelve non-defects in the research docs and one quotation of
+# Hansen's SPA test. A word that is marketing in a landing page and a term of
+# art in a research note cannot be decided by a word list, so the list keeps
+# only the words that have no technical sense here.
 MARKETING_WORDS = [
-    "powerful", "seamless", "robust", "cutting-edge", "comprehensive",
+    "seamless", "cutting-edge", "comprehensive",
     "world-class", "next-generation", "state-of-the-art", "best-in-class",
 ]
 FILLER_PHRASES = [
@@ -92,10 +99,12 @@ FILLER_PHRASES = [
 # Section 13 says "non-placeholder buckets" and section 7 line 104 says the
 # placeholder form is `<bucket>`, `<project-id>`, `$PROJECTS_ROOT`. So a
 # `gs://` URI whose bucket segment is a placeholder is the correct form, not a
-# finding.
+# finding. `synthetic-` is on the list because the organisation's fixtures are
+# named that way; without it every fixture a doc quotes becomes a finding the
+# day the doc is written.
 PLACEHOLDER_BUCKET = re.compile(
     r"^[<{$]|[<>{}]|\.\.\."
-    r"|^(?:your|my|example|sample|placeholder|shared)[-_]"
+    r"|^(?:your|my|example|sample|placeholder|shared|synthetic)[-_]"
     r"|^bucket(?:-|$)"
 )
 
@@ -108,6 +117,18 @@ class FileContext(NamedTuple):
 
     url_spans: list[tuple[int, int]]
     prose: str  # the text with fenced blocks blanked out, offsets preserved
+    masked: str  # `prose` with inline code blanked out too
+
+
+def phrase_is_prose(text: str, match: re.Match, ctx: FileContext) -> bool:
+    """A rule about phrasing describes prose; backticks name the phrase.
+
+    The style guide writes `this round` when it means the words, and a value
+    rule such as `gs://` is the opposite case: a bucket inside backticks is
+    still a bucket. That is why this is a per-rule predicate and not a blanket
+    skip on code spans.
+    """
+    return bool(ctx.masked[match.start():match.end()].strip())
 
 
 def bucket_is_real(text: str, match: re.Match, ctx: FileContext) -> bool:
@@ -167,12 +188,15 @@ LEAK_PATTERNS = [
      "content", "personal subdomain (section 13)", None),
     (re.compile(r"\b[0-9a-f]{40}\b"),
      "content", "40-character hex string in prose (section 5)", hex_is_prose),
-    (re.compile(r"\|\s*(PR\b|#\d+)"),
+    # `| PR |` is a table header; `| PR #12 |` and `| #12 |` are the rows this
+    # rule is about. Matching the header too reported the guide's own row
+    # describing the rule.
+    (re.compile(r"\|\s*(?:PR\s*#?\d+|#\d+)"),
      "content", "PR-number status table (section 5)", None),
     (re.compile(r"\b(this round|this task|in this task)\b", re.IGNORECASE),
-     "content", "task-scope wording (section 5)", None),
+     "content", "task-scope wording (section 5)", phrase_is_prose),
     (re.compile(r"\b(the owner approved|approved by)\b", re.IGNORECASE),
-     "content", "owner approval note (section 5)", None),
+     "content", "owner approval note (section 5)", phrase_is_prose),
 ]
 
 
@@ -328,8 +352,12 @@ def check_links(root: Path, report: Report) -> None:
             # cannot verify. Reporting it as broken makes the check unusable in
             # CI while passing locally, which is the worst of both.
             if not resolved.is_relative_to(root):
+                # `xref` is not in PHASE_BLOCKING, so this stays a note in
+                # both phases. `tools/check_cross_repo_links.py` resolves these
+                # against the sibling's default branch on a schedule; a check
+                # that says "not checked" has no standing to block.
                 report.add(
-                    "content",
+                    "xref",
                     f"{path.relative_to(root).as_posix()}: cross-repository reference, not checked -> {target}",
                 )
                 continue
@@ -381,17 +409,38 @@ def check_language(root: Path, report: Report) -> None:
         if not is_markdown(path):
             continue
         rel = path.relative_to(root).as_posix()
-        for number, line in enumerate(
-            path.read_text(encoding="utf-8", errors="ignore").splitlines(), 1
-        ):
+        # A word inside a fenced block or a code span is being named, not used.
+        # The guide lists the words it forbids, and without this the guide is
+        # the largest offender in the organisation.
+        text = blank_code_spans(blank_fenced_blocks(path.read_text(encoding="utf-8", errors="ignore")))
+        first_heading = True
+        for number, line in enumerate(text.splitlines(), 1):
             for match in marketing.finditer(line):
                 report.add("language", f"{rel}:{number}: marketing word '{match.group(0)}' (section 2)")
             for match in filler.finditer(line):
                 report.add("language", f"{rel}:{number}: filler phrase '{match.group(0)}' (section 2)")
             if line.startswith("#") and has_emoji(line):
                 report.add("language", f"{rel}:{number}: emoji in heading (section 2)")
-            if line.startswith("#") and DATED_TITLE.search(line):
-                report.add("language", f"{rel}:{number}: dated title in a reader-facing doc (section 5)")
+            if line.startswith("#"):
+                # Section 5 is about the title a reader sees in a list of
+                # documents. A dated section inside a research log is a
+                # chronology, not a title.
+                if first_heading and DATED_TITLE.search(line):
+                    report.add("language", f"{rel}:{number}: dated title in a reader-facing doc (section 5)")
+                first_heading = False
+
+
+CODE_SPAN = re.compile(r"`[^`\n]+`")
+
+
+def blank_code_spans(text: str) -> str:
+    """Replace inline code with spaces, keeping offsets.
+
+    A word in backticks is a mention: the style guide writes `robust` when it
+    means the word, and a research note writes a commit id as a value. Neither
+    is prose, and both were reported as prose.
+    """
+    return CODE_SPAN.sub(lambda m: " " * len(m.group(0)), text)
 
 
 def blank_fenced_blocks(text: str) -> str:
@@ -413,12 +462,19 @@ def check_leaks(root: Path, report: Report) -> None:
             continue
         rel = path.relative_to(root).as_posix()
         text = path.read_text(encoding="utf-8", errors="ignore")
+        prose = blank_fenced_blocks(text)
         ctx = FileContext(
             url_spans=[(m.start(), m.end()) for m in URL_TOKEN.finditer(text)],
-            prose=blank_fenced_blocks(text),
+            prose=prose,
+            masked=blank_code_spans(prose),
         )
         for pattern, category, label, predicate in LEAK_PATTERNS:
             for match in pattern.finditer(text):
+                # A pattern without a predicate describes prose, and a fenced
+                # block is not prose. The style guide shows each of these
+                # shapes as an example of what to avoid.
+                if predicate is None and not ctx.prose[match.start():match.end()].strip():
+                    continue
                 if predicate is not None and not predicate(text, match, ctx):
                     continue
                 report.add(category, f"{rel}: {label}: {match.group(0)[:40]}")
