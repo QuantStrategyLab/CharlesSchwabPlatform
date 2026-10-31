@@ -58,3 +58,10 @@ and never establish a confirmed acknowledgement. This
 validation also applies to adapters that previously labelled every HTTP error
 as a rejection. The cycle stops with reconciliation pending; reconstruction of
 the session does not release the original order reservation.
+
+The receipt extractor uses the same order-identity rule as submission. An
+adapter result with an `accepted` label and a malformed identifier cannot
+establish complete order evidence, even if its cycle summary claims submission
+is done. Integer and string forms of the same canonical identifier are treated
+as duplicates. Rejected evidence remains in the original runtime result for
+reconciliation; extraction does not alter broker facts or manufacture fills.

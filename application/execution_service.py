@@ -798,15 +798,12 @@ def execute_rebalance_cycle(
 
             def submit_with_confirmed_outcome():
                 nonlocal report
+                from application.broker_order_identity import is_valid_schwab_order_id
+
                 report = submit()
                 code = report.raw_payload.get("status_code")
-                order_id = report.broker_order_id
-                valid_order_id = (type(order_id) is int and order_id > 0) or (
-                    isinstance(order_id, str) and order_id.isascii() and order_id.isdecimal()
-                    and not order_id.startswith("0")
-                )
                 if report.status not in {"accepted", "rejected"} or (
-                    report.status == "accepted" and not valid_order_id
+                    report.status == "accepted" and not is_valid_schwab_order_id(report.broker_order_id)
                 ):
                     raise RuntimeError("submission outcome unconfirmed")
                 if code is not None and (

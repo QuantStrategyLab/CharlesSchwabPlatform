@@ -1417,7 +1417,7 @@ def test_main_cycle_uses_one_clock_for_plugin_load_core_and_report():
 def test_main_captures_accepted_order_without_claiming_fill():
     module = load_module()
     observed = {}
-    order = {"symbol": "TQQQ", "side": "buy", "status": "accepted", "broker_order_id": "synthetic-order"}
+    order = {"symbol": "TQQQ", "side": "buy", "status": "accepted", "broker_order_id": "123456789"}
     cycle_result = types.SimpleNamespace(execution={"broker_submission_done": True}, submitted_orders=(order,),
         allocation={}, portfolio={}, plan={}, trade_logs=())
     module.get_client_from_secret = lambda *args, **kwargs: object()

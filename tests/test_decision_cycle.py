@@ -192,7 +192,7 @@ def test_real_order_fact_is_linked_without_inventing_fills():
     ctx = StrategyContext(as_of=clock.date().isoformat(), portfolio=PortfolioSnapshot(as_of=clock, total_equity=100000., buying_power=100000.),
         market_data={"benchmark_history": [{"close": 100+i*.5} for i in range(260)]}, runtime_config={"income_layer_enabled": False})
     entrypoint = SimpleNamespace(manifest=SimpleNamespace(profile="tqqq_growth_income"), evaluate=compute_tqqq_growth_income_decision)
-    order = {"symbol": "TQQQ", "side": "buy", "status": "accepted", "broker_order_id": "synthetic-order"}
+    order = {"symbol": "TQQQ", "side": "buy", "status": "accepted", "broker_order_id": "123456789"}
     source = SimpleNamespace(execution={"broker_submission_done": True}, submitted_orders=(order,))
     with decision_cycle(decision_time=clock) as cycle:
         cycle["report"] = report

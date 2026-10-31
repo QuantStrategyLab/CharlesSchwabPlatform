@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping
 
+from application.broker_order_identity import is_valid_schwab_order_id
+
 
 def extract_execution_evidence(result, *, dry_run):
     """Return accepted order records; acceptance never proves individual fills."""
@@ -13,7 +15,7 @@ def extract_execution_evidence(result, *, dry_run):
             or execution.get("notification_order_issue") or not isinstance(records, (tuple, list)) or not records):
         return None, None
     if any(not isinstance(order, Mapping) or str(order.get("status") or "").lower() != "accepted"
-           or not order.get("broker_order_id") for order in records):
+           or not is_valid_schwab_order_id(order.get("broker_order_id")) for order in records):
         return None, None
     identities = [str(order["broker_order_id"]) for order in records]
     if len(identities) != len(set(identities)):
