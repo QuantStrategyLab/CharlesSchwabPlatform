@@ -44,7 +44,41 @@ jobs:
             echo "No base commit is available for this event" >&2
             exit 1
           fi
-          "$RUNNER_TEMP/gitleaks-bin/gitleaks" git . --redact --no-banner --log-opts="$base..$head"
+          python3 scripts/retain_native_scan.py \
+            --binary "$RUNNER_TEMP/gitleaks-bin/gitleaks" \
+            --output "$RUNNER_TEMP/gitleaks-evidence/event-range" \
+            --base "$base" --head "$head" --scope event-range
+      - name: Retain the original contract review range retrospectively
+        shell: bash
+        env:
+          REVIEW_BASE: 842acc62956b745df1725374913915dce25875a5
+          REVIEW_HEAD: 3a4875b7494e687c8f9c703f45b4f4900be443d2
+        run: |
+          set -euo pipefail
+          python3 scripts/retain_native_scan.py \
+            --binary "$RUNNER_TEMP/gitleaks-bin/gitleaks" \
+            --output "$RUNNER_TEMP/gitleaks-evidence/retrospective-review-range" \
+            --base "$REVIEW_BASE" --head "$REVIEW_HEAD" --scope retrospective-review-range
+          cp docs/evidence/offline-governance-review-v1.json "$RUNNER_TEMP/gitleaks-evidence/review-v1.json"
+          cp docs/evidence/offline-governance-review-provenance.md "$RUNNER_TEMP/gitleaks-evidence/review-provenance.md"
+      - name: Retain redacted native scan observations
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: native-governance-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            ${{ runner.temp }}/gitleaks-evidence/event-range/report.json
+            ${{ runner.temp }}/gitleaks-evidence/event-range/scanner-exit.txt
+            ${{ runner.temp }}/gitleaks-evidence/event-range/invocation.json
+            ${{ runner.temp }}/gitleaks-evidence/event-range/capture.json
+            ${{ runner.temp }}/gitleaks-evidence/retrospective-review-range/report.json
+            ${{ runner.temp }}/gitleaks-evidence/retrospective-review-range/scanner-exit.txt
+            ${{ runner.temp }}/gitleaks-evidence/retrospective-review-range/invocation.json
+            ${{ runner.temp }}/gitleaks-evidence/retrospective-review-range/capture.json
+            ${{ runner.temp }}/gitleaks-evidence/review-v1.json
+            ${{ runner.temp }}/gitleaks-evidence/review-provenance.md
 
   commitlint:
     name: Commit message convention
@@ -85,3 +119,4 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_gitleaks_report_evidence.py' -q
           python3 -m unittest discover -s tests -p 'test_ai_review_evidence.py' -q
           python3 -m unittest discover -s tests -p 'test_governance_evidence_gate.py' -q
+          python3 -m unittest discover -s tests -p 'test_retain_native_scan.py' -q

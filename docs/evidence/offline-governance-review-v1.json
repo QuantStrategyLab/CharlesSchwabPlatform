@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "base_sha": "842acc62956b745df1725374913915dce25875a5",
+  "head_sha": "3a4875b7494e687c8f9c703f45b4f4900be443d2",
+  "changed_files": 6,
+  "inventory_complete": true,
+  "files": [
+    {
+      "path": ".github/engineering.md",
+      "status": "modified"
+    },
+    {
+      "path": ".github/workflows/engineering-governance.yml",
+      "status": "modified"
+    },
+    {
+      "path": "docs/adr/offline-governance-contracts.md",
+      "status": "added"
+    },
+    {
+      "path": "scripts/ai_review_evidence.py",
+      "status": "modified"
+    },
+    {
+      "path": "scripts/governance_evidence_gate.py",
+      "status": "added"
+    },
+    {
+      "path": "tests/test_governance_evidence_gate.py",
+      "status": "added"
+    }
+  ],
+  "author_id": "github:20649888",
+  "required_checks": [],
+  "checks": [],
+  "review": {
+    "reviewer_id": "agent:root.phase1f_longbridge_review",
+    "base_sha": "842acc62956b745df1725374913915dce25875a5",
+    "head_sha": "3a4875b7494e687c8f9c703f45b4f4900be443d2",
+    "scope_sha256": "427f7dafd4d4c00bed8f63232ad56d479871941027ab214342076a391a60ae45",
+    "status": "completed",
+    "findings": []
+  }
+}

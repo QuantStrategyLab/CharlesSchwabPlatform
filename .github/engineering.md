@@ -90,8 +90,8 @@ python scripts/gitleaks_report_evidence.py \
 python scripts/ai_review_evidence.py local-review-evidence.json
 ```
 
-Replace the uppercase arguments with separately captured observations. Keep the
-input evidence files outside Git. Validation invocations return JSON and use
+Replace the uppercase arguments with separately captured observations. Keep native scan output and private input evidence outside Git. The versioned
+source-only historical review document described below is a scoped exception. Validation invocations return JSON and use
 exit code `1` for invalid evidence, contradictions or observed failures, and `2`
 for evidence that remains blocked.
 The `--help` option prints usage text and exits `0`; it is not a validation
@@ -132,10 +132,21 @@ assert those outcomes, including missing evidence, contradictions, native scanne
 errors and caller-supplied approval flags. The workflow does not reinterpret
 either exit code as approval.
 
-The native Gitleaks and commit-message jobs remain unchanged and run separately.
-No evidence adapter is inserted into their acceptance steps. The trusted risk
+The native Gitleaks job retains its redacted JSON report and original process
+exit in a bounded Actions artifact. `scripts/retain_native_scan.py` preserves
+native failure codes; a zero exit with missing or unusable evidence fails
+collection. It also records a separate retrospective scan of the immutable
+original contract-review range after the current event scan succeeds. This is a
+new execution, not a recovered artifact from the original run or a scan of the
+broader strategy work. The commit-message job remains unchanged.
+
+No evidence adapter is inserted into either acceptance step. The trusted risk
 gate, workflow permissions, triggers and owner-only label rule are unchanged.
-No real review document is fabricated or fetched by the contract-test job.
+The contract tests inspect a versioned source-only historical review document;
+they do not fabricate a review of the current child PR. Its
+[provenance record](../docs/evidence/offline-governance-review-provenance.md)
+explains the unsigned identity mapping and unavailable required-check policy.
+The review-v1 document remains structurally consistent but blocked.
 
 Authenticated acceptance integration remains unavailable: there is no trusted
 provider binding a complete inventory, required-check policy and independent AI
