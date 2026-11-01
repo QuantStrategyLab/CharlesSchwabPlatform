@@ -121,6 +121,33 @@ workflows or grant merge or operational authority. Adopting an evidence contract
 in a gate is a separate implementation change with its own automated checks and
 independent AI review.
 
+### Offline contract checks in CI
+
+The `Offline governance contracts` job runs synthetic regression suites for the
+two inspectors and their bounded aggregate adapter. It uses the standard library
+and does not install or change production dependencies. A successful job means
+the contract tests passed; it is not an authenticated scanner, independent-review
+or operational acceptance result.
+
+`scripts/governance_evidence_gate.py` reads each bounded local evidence file once,
+checks declared revisions against explicit expected base and head revisions, and
+emits fixed summaries without private values or locations. It retains `BLOCKED`
+with exit code `2`, or `FAIL` with exit code `1`. It has no acceptance path. Tests
+assert those outcomes, including missing evidence, contradictions, native scanner
+errors and caller-supplied approval flags. The workflow does not reinterpret
+either exit code as approval.
+
+The native Gitleaks and commit-message jobs remain unchanged and run separately.
+No evidence adapter is inserted into their acceptance steps. The trusted risk
+gate, workflow permissions, triggers and label handling are unchanged.
+No real review document is fabricated or fetched by the contract-test job.
+
+Authenticated acceptance integration remains unavailable: there is no trusted
+provider binding a complete inventory, required-check policy and independent AI
+review provenance to the candidate. See the
+[architecture decision](../docs/adr/offline-governance-contracts.md) for that
+boundary and the requirements for future integration.
+
 ## Pull requests and delivery
 
 - Commit messages, PR titles, PR descriptions and review notes must use
