@@ -126,7 +126,7 @@ jobs:
           uv run --no-sync python scripts/with_heartbeat_digest_binding.py candidates
 
       - name: Publish read-only runtime execution evidence
-        uses: QuantStrategyLab/QuantRuntimeSettings/actions/publish-runtime-execution-evidence@c97752202670fac58db797c01596d11dd105a94b
+        uses: QuantStrategyLab/QuantRuntimeSettings/actions/publish-runtime-execution-evidence@5fc2a320cf0903fb0475f8bf1d891d47d2d8bd93
         with:
           source-id: runtime-reports-schwab
           report-platform: charles_schwab
