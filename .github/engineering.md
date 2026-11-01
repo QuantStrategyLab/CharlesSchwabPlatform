@@ -95,8 +95,9 @@ python scripts/gitleaks_report_evidence.py \
 python scripts/ai_review_evidence.py local-review-evidence.json
 ```
 
-Replace the uppercase arguments with separately captured observations. Keep the
-input evidence files outside Git. Validation invocations return JSON and use
+Replace the uppercase arguments with separately captured observations. Keep native
+scan output and private input evidence outside Git. The versioned source-only
+historical review document described below is a scoped exception. Validation invocations return JSON and use
 exit code `1` for invalid evidence, contradictions or observed failures, and `2`
 for evidence that remains blocked.
 The `--help` option prints usage text and exits `0`; it is not a validation
@@ -137,10 +138,22 @@ assert those outcomes, including missing evidence, contradictions, native scanne
 errors and caller-supplied approval flags. The workflow does not reinterpret
 either exit code as approval.
 
-The native Gitleaks and commit-message jobs remain unchanged and run separately.
-No evidence adapter is inserted into their acceptance steps. The trusted risk
-gate, workflow permissions, triggers and label handling are unchanged.
-No real review document is fabricated or fetched by the contract-test job.
+The native Gitleaks job runs through `scripts/retain_native_scan.py`, which keeps the
+redacted JSON report and the scanner's original exit code only in the runner's
+temporary directory. The report is not uploaded as an artifact, because these
+repositories are public. The job summary shows counts only: the native exit code,
+the number of findings and whether capture completed, with no paths, rule names,
+line numbers or commit metadata. The scan range comes only from the event's base
+and head revisions. Native failure codes are preserved; a zero exit with a missing
+or unusable report fails collection. The commit-message job remains unchanged.
+
+No evidence adapter is inserted into either acceptance step. The trusted risk
+gate, workflow permissions, triggers and label handling are unchanged. The
+contract tests inspect a versioned source-only historical review document; they do
+not fabricate a review of the current PR. Its
+[provenance record](../docs/evidence/offline-governance-review-provenance.md)
+explains the unsigned identity mapping and unavailable required-check policy. The
+review-v1 document remains structurally consistent but blocked.
 
 Authenticated acceptance integration remains unavailable: there is no trusted
 provider binding a complete inventory, required-check policy and independent AI

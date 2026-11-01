@@ -53,6 +53,28 @@ acceptance implementation are available, the standalone inspectors and adapter
 remain blocked or failed. Contract-test wiring is complete only for engineering
 correctness; authenticated acceptance wiring is not claimed.
 
+## Native scan evidence in the job log
+
+The native Gitleaks step runs through `scripts/retain_native_scan.py`. It adds the
+pinned CLI's JSON report options, writes the report, the scanner's original exit
+code and an unsigned receipt under the runner's temporary directory, and uploads
+nothing. These repositories are public, so a retained report could expose paths or
+commit metadata. The job summary instead records counts only: native exit code,
+number of findings and capture status, with no paths, rule names, line numbers or
+commit metadata. Scan revisions come only from the pull request or push event; no
+fixed commit range is embedded in the workflow.
+
+Before scanning, the helper requires both revisions to be full nonzero commit
+identifiers that resolve in the checkout, because the pinned scanner can return zero
+with an empty report after a Git range error. Each collection uses a new directory.
+Native nonzero exits keep their original code even when collection fails, a zero
+exit with an absent, malformed or oversized report fails collection, and a summary
+write failure never changes the result. Collector success is not authenticated
+scanner or review acceptance. The versioned
+[review-v1](../evidence/offline-governance-review-v1.json) document and its
+[provenance record](../evidence/offline-governance-review-provenance.md) stay
+source-only and blocked; the required-check policy remains unavailable.
+
 ## Alternatives and consequences
 
 Putting the non-accepting adapter after every native scan would permanently fail
@@ -69,6 +91,7 @@ its advancement stops.
 
 ## Rollback
 
-Remove the new contract-test job and the bounded adapter changes. Existing scan,
+Restore the original native scan command and remove the helper and its tests. To
+revert the contract-wiring job, remove it and the bounded adapter changes. The
 commit-message and risk gates continue unchanged. No dependency, trading,
 account, risk-control, production configuration or deployment rollback is needed.
