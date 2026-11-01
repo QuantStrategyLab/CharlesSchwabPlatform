@@ -4,9 +4,10 @@
 # Required CI and investment/runtime authorization remain independently enforced.
 
 # Risk-sensitive changes require the repository owner.
+# Workflow changes are not listed here: risk-gate and the owner-approved label gate them,
+# and a CODEOWNERS entry only caused review-request emails on bot workflow PRs.
 /.env.example @Pigbibi
 /.github/CODEOWNERS @Pigbibi
-/.github/workflows/ @Pigbibi
 /application/account_new_risk_gate_support.py @Pigbibi
 /application/execution_claim.py @Pigbibi
 /application/execution_event_accounting.py @Pigbibi
