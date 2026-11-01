@@ -212,6 +212,26 @@ jobs:
           PYTHONPATH: .
         run: uv run --no-sync python -m pytest -q tests
 
+      - name: Measure coverage against the production source layout
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+          PYTHONPATH: .
+        run: |
+          set -euo pipefail
+          uv run --no-sync python -m coverage run -m pytest -q tests
+          uv run --no-sync python -m coverage report --show-missing
+          uv run --no-sync python - <<'PY'
+          from coverage import CoverageData
+
+          data = CoverageData(basename=".coverage")
+          data.read()
+          files = sorted(data.measured_files())
+          if not files:
+              raise SystemExit("coverage measured no files")
+          for path in files:
+              print(path)
+          PY
+
       - name: Run ruff
         run: |
           set -euo pipefail
