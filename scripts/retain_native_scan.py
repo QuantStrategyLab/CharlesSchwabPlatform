@@ -3,6 +3,10 @@
 The scanner still decides its own result. Its original process return code is
 retained separately, including nonzero exits. Collection errors cannot turn a
 failed scan into success; a successful scan with incomplete evidence also fails.
+
+Raw report bytes stay in the runner's temporary directory and are never uploaded.
+Only counts (finding total, native exit code, capture status) reach the job
+summary, with no paths, rule names, line numbers or commit metadata.
 """
 
 import argparse
@@ -44,10 +48,25 @@ def _report_identity(path):
         if not stat.S_ISREG(details.st_mode) or details.st_size > MAX_REPORT_BYTES:
             raise ValueError("report is not a bounded regular file")
         raw = stream.read(MAX_REPORT_BYTES + 1)
-    if len(raw) > MAX_REPORT_BYTES or type(json.loads(
-            raw, parse_float=_finite_float, parse_constant=_invalid_constant)) is not list:
+    document = None
+    if len(raw) <= MAX_REPORT_BYTES:
+        document = json.loads(raw, parse_float=_finite_float, parse_constant=_invalid_constant)
+    if type(document) is not list:
         raise ValueError("report is not a bounded JSON array")
-    return {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+    return {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest(), "findings": len(document)}
+
+
+def _write_summary(lines):
+    """Append counts-only lines to the job summary when the runner provides one."""
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as stream:
+            stream.write("### Native scan evidence (counts only)\n\n")
+            stream.write("".join("- %s\n" % line for line in lines))
+    except OSError:
+        print("Job summary could not be written", file=sys.stderr)
 
 
 def _revision_preflight(base, head):
@@ -97,11 +116,13 @@ def retain_scan(binary, output, base, head, *, scope):
         return 1
     if invocation["revision_preflight"]["status"] != "passed":
         print("Revision preflight failed; native scanner was not started", file=sys.stderr)
+        _write_summary(["scope: %s" % scope, "native scanner started: no (revision preflight failed)"])
         return 1
     try:
         completed = subprocess.run(arguments, check=False)
     except OSError as error:
         print("Native scanner could not be started; no process exit was fabricated", file=sys.stderr)
+        _write_summary(["scope: %s" % scope, "native scanner started: no"])
         return 127 if isinstance(error, FileNotFoundError) else 126
 
     raw_exit = completed.returncode
@@ -132,6 +153,9 @@ def retain_scan(binary, output, base, head, *, scope):
     except OSError:
         capture_complete = False
     print("Native scan returned %d; evidence capture complete: %s" % (raw_exit, capture_complete))
+    _write_summary(["scope: %s" % scope, "native exit code: %d" % raw_exit,
+                    "findings in report: %s" % (identity["findings"] if identity else "unavailable"),
+                    "capture complete: %s" % ("yes" if capture_complete else "no")])
     if shell_exit:
         return shell_exit
     return 0 if capture_complete else 1
@@ -143,7 +167,7 @@ def main(arguments=None):
     parser.add_argument("--output", required=True)
     parser.add_argument("--base", required=True)
     parser.add_argument("--head", required=True)
-    parser.add_argument("--scope", choices=("event-range", "retrospective-review-range"), required=True)
+    parser.add_argument("--scope", choices=("event-range",), required=True)
     args = parser.parse_args(arguments)
     return retain_scan(args.binary, args.output, args.base, args.head, scope=args.scope)
 

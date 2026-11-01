@@ -1,11 +1,11 @@
 # Engineering conventions for AI-developed work
 
 AI agents develop and review this repository. Code acceptance relies on
-automated checks, independent AI review and risk tiers, without a human code
-review requirement. Live trading, deployment, accounts, risk controls and keys
-require owner approval. Owner-only governance labels remain subject to the
-delivery rules below. These conventions do not grant operational authority or
-authorize a merge.
+automated checks, independent AI review and risk tiers. Code review is performed
+by the review bot acting under the repository owner's authorization. Live
+trading, deployment, accounts, risk controls and keys require owner approval.
+The `owner-approved` label follows the delivery rules below. These conventions do
+not grant operational authority or authorize a merge.
 
 ## Before editing
 
@@ -50,6 +50,11 @@ authorize a merge.
 - Report local checks, remote CI, merge, deployment and business acceptance as
   distinct facts. Claim only what you observed.
 
+The public runtime-configuration scan provisions ripgrep in CI before inspecting
+workflow files. A missing executable or any scanner error fails the job; only a
+completed scan with no matches passes. Run its offline regression tests with
+`python -m unittest discover -s tests -p test_public_runtime_configuration_scan.py`.
+
 ## Independent AI review and risk tiers
 
 Classify the complete PR, including previous paths for renamed files. A small
@@ -90,8 +95,9 @@ python scripts/gitleaks_report_evidence.py \
 python scripts/ai_review_evidence.py local-review-evidence.json
 ```
 
-Replace the uppercase arguments with separately captured observations. Keep native scan output and private input evidence outside Git. The versioned
-source-only historical review document described below is a scoped exception. Validation invocations return JSON and use
+Replace the uppercase arguments with separately captured observations. Keep native
+scan output and private input evidence outside Git. The versioned source-only
+historical review document described below is a scoped exception. Validation invocations return JSON and use
 exit code `1` for invalid evidence, contradictions or observed failures, and `2`
 for evidence that remains blocked.
 The `--help` option prints usage text and exits `0`; it is not a validation
@@ -132,21 +138,22 @@ assert those outcomes, including missing evidence, contradictions, native scanne
 errors and caller-supplied approval flags. The workflow does not reinterpret
 either exit code as approval.
 
-The native Gitleaks job retains its redacted JSON report and original process
-exit in a bounded Actions artifact. `scripts/retain_native_scan.py` preserves
-native failure codes; a zero exit with missing or unusable evidence fails
-collection. It also records a separate retrospective scan of the immutable
-original contract-review range after the current event scan succeeds. This is a
-new execution, not a recovered artifact from the original run or a scan of the
-broader strategy work. The commit-message job remains unchanged.
+The native Gitleaks job runs through `scripts/retain_native_scan.py`, which keeps the
+redacted JSON report and the scanner's original exit code only in the runner's
+temporary directory. The report is not uploaded as an artifact, because these
+repositories are public. The job summary shows counts only: the native exit code,
+the number of findings and whether capture completed, with no paths, rule names,
+line numbers or commit metadata. The scan range comes only from the event's base
+and head revisions. Native failure codes are preserved; a zero exit with a missing
+or unusable report fails collection. The commit-message job remains unchanged.
 
 No evidence adapter is inserted into either acceptance step. The trusted risk
-gate, workflow permissions, triggers and owner-only label rule are unchanged.
-The contract tests inspect a versioned source-only historical review document;
-they do not fabricate a review of the current child PR. Its
+gate, workflow permissions, triggers and label handling are unchanged. The
+contract tests inspect a versioned source-only historical review document; they do
+not fabricate a review of the current PR. Its
 [provenance record](../docs/evidence/offline-governance-review-provenance.md)
-explains the unsigned identity mapping and unavailable required-check policy.
-The review-v1 document remains structurally consistent but blocked.
+explains the unsigned identity mapping and unavailable required-check policy. The
+review-v1 document remains structurally consistent but blocked.
 
 Authenticated acceptance integration remains unavailable: there is no trusted
 provider binding a complete inventory, required-check policy and independent AI
@@ -161,13 +168,15 @@ boundary and the requirements for future integration.
   Commits prefix, imperative mood and 72 characters or fewer. A PR description
   states the problem, resulting behaviour, verification performed and remaining
   limits. Identify the AI tools used and the scope of independent AI review.
-- Only the repository owner may apply `owner-approved`. AI agents must never
-  add that label, including through a shared owner identity. When a governance
-  check requires it, stop advancement of that PR, keep it as a draft and list it
-  for owner approval. An agent that previously added the label must remove its
-  own addition and report the affected PR; a shared login alone does not prove
-  who added it. Do not remove an owner's label or treat the label as evidence of
-  replay equivalence, successful checks or operational authorization.
+- Agents may add `owner-approved` only on the repository owner's explicit or
+  standing authorization, and only for a PR whose independent AI review and
+  required checks are clean. The review bot acts under that authorization as the
+  code reviewer. Record each addition in the ledger with the PR, the head
+  reviewed and the authorization relied on. Without that authorization, stop
+  advancement of the PR, keep it as a draft and list it for owner approval. A
+  shared login does not prove who added the label, so the ledger entry is the
+  provenance record. Do not treat the label as evidence of replay equivalence,
+  successful checks or operational authorization.
 - Do not push to the default branch directly and do not force-push a branch
   under review. Keep required checks and branch protection; never merge through
   an administrator bypass, rewrite the required-check list or weaken an assertion

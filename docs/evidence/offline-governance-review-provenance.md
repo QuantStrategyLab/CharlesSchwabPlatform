@@ -13,7 +13,7 @@ findings. Its test receipt records 81 standard-library test methods passing in
 three suites (26, 33 and 22), with no failures or skips. These are historical
 observations from that review, not newly executed tests or a claim about current
 required checks. The previous review described publication as a draft and left
-remote CI and owner-only gates pending at that time.
+remote CI and owner-approval gates pending at that time.
 
 ## Exact reviewed source
 
@@ -96,5 +96,5 @@ operational authority `NONE`. The remaining reason codes are:
 
 The document resolves the missing review-v1 representation. It does not resolve
 trusted provenance or required-policy evidence. No validator, acceptance rule,
-review finding, branch policy or owner-only label is changed by this document.
+review finding, branch policy or owner-approved label is changed by this document.
 A future provider/verifier implementation remains separate work.

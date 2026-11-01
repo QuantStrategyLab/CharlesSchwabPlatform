@@ -47,6 +47,7 @@ class NativeRetentionTests(unittest.TestCase):
             "target = pathlib.Path(next(x.split('=', 1)[1] for x in sys.argv if x.startswith('--report-path=')))\n"
             "kind = os.environ.get('SYNTHETIC_REPORT', 'valid')\n"
             "if kind == 'valid': target.write_text('[]')\n"
+            "elif kind == 'finding': target.write_text('[{\"File\": \"private/path.txt\", \"StartLine\": 7, \"RuleID\": \"rule\"}]')\n"
             "elif kind == 'malformed': target.write_text('{')\n"
             "elif kind == 'object': target.write_text('{}')\n"
             "elif kind == 'symlink': target.symlink_to(pathlib.Path(__file__))\n"
@@ -93,6 +94,22 @@ class NativeRetentionTests(unittest.TestCase):
         self.assertEqual(invocation["revision_preflight"]["status"], "passed")
         self.assertEqual(len(invocation["binary_sha256"]), 64)
         self.assertNotIn("[]", result.stdout + result.stderr)
+
+    def test_job_summary_has_counts_only(self):
+        summary = self.root / "summary.md"
+        result = self.invoke(code=1, report="finding", GITHUB_STEP_SUMMARY=str(summary))
+        self.assertEqual(result.returncode, 1)
+        text = summary.read_text()
+        self.assertIn("findings in report: 1", text)
+        self.assertIn("native exit code: 1", text)
+        self.assertIn("capture complete: yes", text)
+        for private in ("private/path.txt", "StartLine", "rule", self.base, self.head):
+            self.assertNotIn(private, text)
+            self.assertNotIn(private, result.stdout + result.stderr)
+
+    def test_summary_failure_does_not_change_the_result(self):
+        result = self.invoke(GITHUB_STEP_SUMMARY=str(self.root))
+        self.assertEqual(result.returncode, 0)
 
     def test_native_failure_codes_survive_complete_capture(self):
         for code in (1, 2, 7, 127):
@@ -207,6 +224,22 @@ class NativeRetentionTests(unittest.TestCase):
                         code = retain_native_scan.retain_scan(self.binary, self.output, BASE, HEAD, scope="event-range")
         self.assertEqual(code, 1)
         run.assert_not_called()
+
+
+class WorkflowPrivacyTests(unittest.TestCase):
+    def setUp(self):
+        self.workflow = (ROOT / ".github/workflows/engineering-governance.yml").read_text()
+
+    def test_no_report_artifact_is_uploaded_from_a_public_repository(self):
+        self.assertNotIn("upload-artifact", self.workflow)
+        self.assertNotIn("gitleaks-evidence/retrospective", self.workflow)
+
+    def test_scan_revisions_come_from_the_event_only(self):
+        self.assertNotIn("REVIEW_BASE", self.workflow)
+        self.assertNotIn("REVIEW_HEAD", self.workflow)
+        self.assertNotIn("retrospective-review-range", self.workflow)
+        self.assertIn("github.event.pull_request.base.sha", self.workflow)
+        self.assertIn("github.event.pull_request.head.sha", self.workflow)
 
 
 class RecordedReviewTests(unittest.TestCase):

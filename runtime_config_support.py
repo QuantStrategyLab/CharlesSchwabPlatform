@@ -338,59 +338,7 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
             or os.getenv("QSL_STRATEGY_PLUGIN_MOUNTS_JSON")
             or os.getenv("STRATEGY_PLUGIN_MOUNTS_JSON")
         ),
-        strategy_plugin_alert_channels=resolve_split_env_list("STRATEGY_PLUGIN_ALERT_CHANNELS"),
-        strategy_plugin_alert_email_recipients=resolve_split_env_list("STRATEGY_PLUGIN_ALERT_EMAIL_RECIPIENTS"),
-        strategy_plugin_alert_email_sender_email=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_EMAIL_SENDER_EMAIL")),
-        strategy_plugin_alert_email_sender_password=_first_non_empty(
-            os.getenv("STRATEGY_PLUGIN_ALERT_EMAIL_SENDER_PASSWORD")
-        ),
-        strategy_plugin_alert_email_smtp_host=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_EMAIL_SMTP_HOST")),
-        strategy_plugin_alert_email_smtp_port=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_EMAIL_SMTP_PORT")),
-        strategy_plugin_alert_email_smtp_security=_first_non_empty(
-            os.getenv("STRATEGY_PLUGIN_ALERT_EMAIL_SMTP_SECURITY")
-        ),
-        strategy_plugin_alert_sms_recipients=resolve_split_env_list("STRATEGY_PLUGIN_ALERT_SMS_RECIPIENTS"),
-        strategy_plugin_alert_sms_provider=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_SMS_PROVIDER")),
-        strategy_plugin_alert_sms_account_id=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_SMS_ACCOUNT_ID")),
-        strategy_plugin_alert_sms_auth_token=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_SMS_AUTH_TOKEN")),
-        strategy_plugin_alert_sms_sender=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_SMS_SENDER")),
-        strategy_plugin_alert_sms_messaging_service_id=_first_non_empty(
-            os.getenv("STRATEGY_PLUGIN_ALERT_SMS_MESSAGING_SERVICE_ID")
-        ),
-        strategy_plugin_alert_sms_api_base_url=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_SMS_API_BASE_URL")),
-        strategy_plugin_alert_sms_body_max_chars=_first_non_empty(
-            os.getenv("STRATEGY_PLUGIN_ALERT_SMS_BODY_MAX_CHARS")
-        ),
-        strategy_plugin_alert_push_recipients=resolve_split_env_list("STRATEGY_PLUGIN_ALERT_PUSH_RECIPIENTS"),
-        strategy_plugin_alert_push_provider=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_PROVIDER")),
-        strategy_plugin_alert_push_app_token=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_APP_TOKEN")),
-        strategy_plugin_alert_push_access_token=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_ACCESS_TOKEN")),
-        strategy_plugin_alert_push_api_base_url=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_API_BASE_URL")),
-        strategy_plugin_alert_push_device=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_DEVICE")),
-        strategy_plugin_alert_push_priority=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_PRIORITY")),
-        strategy_plugin_alert_push_tags=_first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_TAGS")),
-        strategy_plugin_alert_push_body_max_chars=_first_non_empty(
-            os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_BODY_MAX_CHARS")
-        ),
-        strategy_plugin_alert_telegram_chat_ids=resolve_split_env_list(
-            "STRATEGY_PLUGIN_ALERT_TELEGRAM_CHAT_IDS"
-        ),
-        strategy_plugin_alert_telegram_bot_token=_first_non_empty(
-            os.getenv("QSL_STRATEGY_PLUGIN_ALERT_TELEGRAM_BOT_TOKEN")
-            or os.getenv("STRATEGY_PLUGIN_ALERT_TELEGRAM_BOT_TOKEN")
-        ),
-        strategy_plugin_alert_telegram_api_base_url=_first_non_empty(
-            os.getenv("STRATEGY_PLUGIN_ALERT_TELEGRAM_API_BASE_URL")
-        ),
-        strategy_plugin_alert_telegram_parse_mode=_first_non_empty(
-            os.getenv("STRATEGY_PLUGIN_ALERT_TELEGRAM_PARSE_MODE")
-        ),
-        strategy_plugin_alert_telegram_disable_web_page_preview=_first_non_empty(
-            os.getenv("STRATEGY_PLUGIN_ALERT_TELEGRAM_DISABLE_WEB_PAGE_PREVIEW")
-        ),
-        strategy_plugin_alert_telegram_body_max_chars=_first_non_empty(
-            os.getenv("STRATEGY_PLUGIN_ALERT_TELEGRAM_BODY_MAX_CHARS")
-        ),
+        **_load_strategy_plugin_alert_settings(),
         notification_channel=os.getenv("NOTIFICATION_CHANNEL", "telegram"),
         wecom_webhook_url=os.getenv("NOTIFICATION_WECOM_WEBHOOK_URL"),
         dingtalk_webhook_url=os.getenv("NOTIFICATION_DINGTALK_WEBHOOK_URL"),
@@ -399,3 +347,61 @@ def load_platform_runtime_settings() -> PlatformRuntimeSettings:
         runtime_target=runtime_target,
         trusted_runtime_risk_policy=trusted_runtime_risk_policy,
     )
+
+
+def _load_strategy_plugin_alert_settings() -> dict[str, object]:
+    return {
+        'strategy_plugin_alert_channels': resolve_split_env_list("STRATEGY_PLUGIN_ALERT_CHANNELS"),
+        'strategy_plugin_alert_email_recipients': resolve_split_env_list("STRATEGY_PLUGIN_ALERT_EMAIL_RECIPIENTS"),
+        'strategy_plugin_alert_email_sender_email': _first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_EMAIL_SENDER_EMAIL")),
+        'strategy_plugin_alert_email_sender_password': _first_non_empty(
+            os.getenv("STRATEGY_PLUGIN_ALERT_EMAIL_SENDER_PASSWORD")
+        ),
+        'strategy_plugin_alert_email_smtp_host': _first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_EMAIL_SMTP_HOST")),
+        'strategy_plugin_alert_email_smtp_port': _first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_EMAIL_SMTP_PORT")),
+        'strategy_plugin_alert_email_smtp_security': _first_non_empty(
+            os.getenv("STRATEGY_PLUGIN_ALERT_EMAIL_SMTP_SECURITY")
+        ),
+        'strategy_plugin_alert_sms_recipients': resolve_split_env_list("STRATEGY_PLUGIN_ALERT_SMS_RECIPIENTS"),
+        'strategy_plugin_alert_sms_provider': _first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_SMS_PROVIDER")),
+        'strategy_plugin_alert_sms_account_id': _first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_SMS_ACCOUNT_ID")),
+        'strategy_plugin_alert_sms_auth_token': _first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_SMS_AUTH_TOKEN")),
+        'strategy_plugin_alert_sms_sender': _first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_SMS_SENDER")),
+        'strategy_plugin_alert_sms_messaging_service_id': _first_non_empty(
+            os.getenv("STRATEGY_PLUGIN_ALERT_SMS_MESSAGING_SERVICE_ID")
+        ),
+        'strategy_plugin_alert_sms_api_base_url': _first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_SMS_API_BASE_URL")),
+        'strategy_plugin_alert_sms_body_max_chars': _first_non_empty(
+            os.getenv("STRATEGY_PLUGIN_ALERT_SMS_BODY_MAX_CHARS")
+        ),
+        'strategy_plugin_alert_push_recipients': resolve_split_env_list("STRATEGY_PLUGIN_ALERT_PUSH_RECIPIENTS"),
+        'strategy_plugin_alert_push_provider': _first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_PROVIDER")),
+        'strategy_plugin_alert_push_app_token': _first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_APP_TOKEN")),
+        'strategy_plugin_alert_push_access_token': _first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_ACCESS_TOKEN")),
+        'strategy_plugin_alert_push_api_base_url': _first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_API_BASE_URL")),
+        'strategy_plugin_alert_push_device': _first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_DEVICE")),
+        'strategy_plugin_alert_push_priority': _first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_PRIORITY")),
+        'strategy_plugin_alert_push_tags': _first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_TAGS")),
+        'strategy_plugin_alert_push_body_max_chars': _first_non_empty(
+            os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_BODY_MAX_CHARS")
+        ),
+        'strategy_plugin_alert_telegram_chat_ids': resolve_split_env_list(
+            "STRATEGY_PLUGIN_ALERT_TELEGRAM_CHAT_IDS"
+        ),
+        'strategy_plugin_alert_telegram_bot_token': _first_non_empty(
+            os.getenv("QSL_STRATEGY_PLUGIN_ALERT_TELEGRAM_BOT_TOKEN")
+            or os.getenv("STRATEGY_PLUGIN_ALERT_TELEGRAM_BOT_TOKEN")
+        ),
+        'strategy_plugin_alert_telegram_api_base_url': _first_non_empty(
+            os.getenv("STRATEGY_PLUGIN_ALERT_TELEGRAM_API_BASE_URL")
+        ),
+        'strategy_plugin_alert_telegram_parse_mode': _first_non_empty(
+            os.getenv("STRATEGY_PLUGIN_ALERT_TELEGRAM_PARSE_MODE")
+        ),
+        'strategy_plugin_alert_telegram_disable_web_page_preview': _first_non_empty(
+            os.getenv("STRATEGY_PLUGIN_ALERT_TELEGRAM_DISABLE_WEB_PAGE_PREVIEW")
+        ),
+        'strategy_plugin_alert_telegram_body_max_chars': _first_non_empty(
+            os.getenv("STRATEGY_PLUGIN_ALERT_TELEGRAM_BODY_MAX_CHARS")
+        ),
+    }
