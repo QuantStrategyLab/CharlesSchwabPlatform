@@ -35,11 +35,12 @@ schwab-d1-no-order-acceptance = "scripts.run_d1_no_order_acceptance:main"
 
 [tool.coverage.run]
 branch = true
-source = ["src"]
-omit = ["tests/*", "*/external/*"]
+source = ["."]
+omit = ["tests/*", "*/external/*", ".venv/*", "build/*", "dist/*", "release-overlays/*", "research/*"]
 
 [tool.coverage.report]
 show_missing = true
+include_namespace_packages = true
 
 [tool.setuptools]
 py-modules = [
