@@ -1,8 +1,11 @@
-# Engineering conventions for AI-assisted work
+# Engineering conventions for AI-developed work
 
-This repository is maintained by its owner together with AI assistants. These
-conventions describe how to produce reviewable changes. They do not grant
-commit, merge, release, deployment or real-trading authority.
+AI agents develop and review this repository. Code acceptance relies on
+automated checks, independent AI review and risk tiers. Code review is performed
+by the review bot acting under the repository owner's authorization. Live
+trading, deployment, accounts, risk controls and keys require owner approval.
+The `owner-approved` label follows the delivery rules below. These conventions do
+not grant operational authority or authorize a merge.
 
 ## Before editing
 
@@ -47,16 +50,98 @@ commit, merge, release, deployment or real-trading authority.
 - Report local checks, remote CI, merge, deployment and business acceptance as
   distinct facts. Claim only what you observed.
 
+The public runtime-configuration scan provisions ripgrep in CI before inspecting
+workflow files. A missing executable or any scanner error fails the job; only a
+completed scan with no matches passes. Run its offline regression tests with
+`python -m unittest discover -s tests -p test_public_runtime_configuration_scan.py`.
+
+## Independent AI review and risk tiers
+
+Classify the complete PR, including previous paths for renamed files. A small
+final commit does not reduce the risk of earlier changes in the same PR.
+
+| Tier | Typical scope | Review focus |
+| --- | --- | --- |
+| Low | Documentation and synthetic tests | Accuracy, scope and sensitive-data boundaries |
+| Standard | Ordinary code and offline tooling | Interfaces, regression coverage and malformed inputs |
+| High | Runtime, execution, broker, risk, workflow or permission changes | Failure paths, authorization boundaries and adverse outcomes |
+
+Path-based classification provides a minimum tier. Reviewers must raise it when
+the contents affect a more sensitive boundary.
+
+Each non-trivial change needs review by an AI agent separate from its author.
+Record the reviewed base and head, the complete file inventory, review scope,
+findings and disposition, and the automated checks actually observed. The review
+must cover the candidate being accepted. Any later change needs review of its
+impact and evidence tied to the resulting candidate.
+
+A separate agent name, shared GitHub login, PR checkbox or caller-provided
+`reviewed` flag does not authenticate independent review. Establish provenance
+from the actual review process before using its result as gate evidence. Missing,
+stale, pending, skipped or failed checks cannot be reported as successful.
+Unresolved findings remain visible; neither a risk tier nor an approval label
+turns an unknown state into success. Code review does not approve an operational
+action, even when all code checks pass.
+
+## Offline governance evidence inspection
+
+Two standard-library tools inspect local evidence without running Git, a
+scanner, a workflow or any network request:
+
+```bash
+python scripts/gitleaks_report_evidence.py \
+  --report local-redacted-report.json \
+  --scanner-exit-code CAPTURED_EXIT_CODE --base BASE_SHA --head HEAD_SHA
+python scripts/ai_review_evidence.py local-review-evidence.json
+```
+
+Replace the uppercase arguments with separately captured observations. Keep the
+input evidence files outside Git. Validation invocations return JSON and use
+exit code `1` for invalid evidence, contradictions or observed failures, and `2`
+for evidence that remains blocked.
+The `--help` option prints usage text and exits `0`; it is not a validation
+result. Neither command returns an authenticated acceptance result.
+
+The Gitleaks inspector accepts the pinned 8.30.1 JSON report shape and retains
+only validated rule, repository-relative path, line and commit metadata. It does
+not emit secret matches, author details or free-form scanner fields. Its output
+still needs privacy review because location metadata can identify private
+material. An empty report and a supplied zero exit code do not prove that a
+scanner ran, that its inputs were complete or that no secrets exist.
+
+The AI-review inspector binds a complete file inventory, check observations and
+review scope to declared base and head revisions. It computes risk from current
+and previous paths; a declared tier may raise but cannot lower that risk. A
+structurally consistent document remains blocked while inventory coverage,
+required-check policy and review provenance are unauthenticated. The tool does
+not trust caller assertions as proof of independence.
+
+These tools do not publish check statuses, add approval labels, modify active
+workflows or grant merge or operational authority. Adopting an evidence contract
+in a gate is a separate implementation change with its own automated checks and
+independent AI review.
+
 ## Pull requests and delivery
 
-- Commit subjects and PR titles and descriptions are normally English:
-  Conventional Commits prefix, imperative mood, 72 characters or fewer. A PR
-  description states the problem, the resulting behaviour, the verification
-  performed and the limits that remain.
+- Commit messages, PR titles, PR descriptions and review notes must use
+  professional English. Commit subjects and PR titles use a Conventional
+  Commits prefix, imperative mood and 72 characters or fewer. A PR description
+  states the problem, resulting behaviour, verification performed and remaining
+  limits. Identify the AI tools used and the scope of independent AI review.
+- Agents may add `owner-approved` only on the repository owner's explicit or
+  standing authorization, and only for a PR whose independent AI review and
+  required checks are clean. The review bot acts under that authorization as the
+  code reviewer. Record each addition in the ledger with the PR, the head
+  reviewed and the authorization relied on. Without that authorization, stop
+  advancement of the PR, keep it as a draft and list it for owner approval. A
+  shared login does not prove who added the label, so the ledger entry is the
+  provenance record. Do not treat the label as evidence of replay equivalence,
+  successful checks or operational authorization.
 - Do not push to the default branch directly and do not force-push a branch
   under review. Keep required checks and branch protection; never merge through
   an administrator bypass, rewrite the required-check list or weaken an assertion
-  to pass. Changing protection needs the owner's authorization for that goal.
+  to pass. Changing protection is outside an ordinary patch and requires an
+  explicit task for that change.
 - Dependency automation, workflow permissions and release configuration change
   only when the task asks for it. Do not widen auto-merge scope or credential
   access as part of unrelated work.
