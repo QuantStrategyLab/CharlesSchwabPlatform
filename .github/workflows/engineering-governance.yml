@@ -44,7 +44,10 @@ jobs:
             echo "No base commit is available for this event" >&2
             exit 1
           fi
-          "$RUNNER_TEMP/gitleaks-bin/gitleaks" git . --redact --no-banner --log-opts="$base..$head"
+          python3 scripts/retain_native_scan.py \
+            --binary "$RUNNER_TEMP/gitleaks-bin/gitleaks" \
+            --output "$RUNNER_TEMP/gitleaks-evidence/event-range" \
+            --base "$base" --head "$head" --scope event-range
 
   commitlint:
     name: Commit message convention
@@ -85,3 +88,4 @@ jobs:
           python3 -m unittest discover -s tests -p 'test_gitleaks_report_evidence.py' -q
           python3 -m unittest discover -s tests -p 'test_ai_review_evidence.py' -q
           python3 -m unittest discover -s tests -p 'test_governance_evidence_gate.py' -q
+          python3 -m unittest discover -s tests -p 'test_retain_native_scan.py' -q

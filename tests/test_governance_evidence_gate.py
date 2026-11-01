@@ -231,13 +231,19 @@ class WorkflowCommandBoundaryTests(unittest.TestCase):
             binary = temporary / "gitleaks-bin/gitleaks"
             binary.parent.mkdir()
             called = temporary / "called.json"
+            git = temporary / "git"
+            git.write_text("#!/usr/bin/env python3\nimport sys\n"
+                           "assert sys.argv[1:3] == ['cat-file', '-t']\nprint('commit')\n")
+            git.chmod(0o700)
             if not missing_tool:
                 binary.write_text(
                     "#!/usr/bin/env python3\nimport json, os, pathlib, sys\n"
                     "pathlib.Path(os.environ['RUNNER_TEMP'], 'called.json').write_text(json.dumps(sys.argv[1:]))\n"
+                    "report = next(x.split('=', 1)[1] for x in sys.argv if x.startswith('--report-path='))\n"
+                    "pathlib.Path(report).write_text('[]')\n"
                     "sys.exit(int(os.environ['SYNTHETIC_SCANNER_EXIT']))\n")
                 binary.chmod(0o700)
-            environment = {"PATH": os.environ["PATH"], "RUNNER_TEMP": directory,
+            environment = {"PATH": str(temporary) + os.pathsep + os.environ["PATH"], "RUNNER_TEMP": directory,
                            "PR_BASE": base if pull_request else "",
                            "PR_HEAD": HEAD if pull_request else "",
                            "PUSH_BASE": "" if pull_request else base,
@@ -248,30 +254,31 @@ class WorkflowCommandBoundaryTests(unittest.TestCase):
                 cwd=ROOT, env=environment, capture_output=True, text=True,
                 check=False, timeout=5)
             arguments = json.loads(called.read_text()) if called.exists() else None
-            return completed.returncode, arguments
+            return completed.returncode, arguments, str(temporary / "gitleaks-evidence/event-range/report.json")
 
     def test_native_scanner_exit_codes_are_preserved(self):
         for code in (0, 1, 2, 7, 127):
             with self.subTest(code=code):
-                actual, arguments = self.run_scan(code=code)
+                actual, arguments, report = self.run_scan(code=code)
                 self.assertEqual(actual, code)
                 self.assertEqual(arguments, ["git", ".", "--redact", "--no-banner",
-                                             "--log-opts=" + BASE + ".." + HEAD])
+                                             "--log-opts=" + BASE + ".." + HEAD,
+                                             "--report-format=json", "--report-path=" + report])
 
     def test_push_range_uses_the_existing_event_fallback(self):
-        code, arguments = self.run_scan(pull_request=False)
+        code, arguments, _report = self.run_scan(pull_request=False)
         self.assertEqual(code, 0)
         self.assertIn("--log-opts=" + BASE + ".." + HEAD, arguments)
 
     def test_missing_or_zero_base_stops_before_scanning(self):
         for base in ("", "0" * 40):
             with self.subTest(base=base):
-                code, arguments = self.run_scan(base=base)
+                code, arguments, _report = self.run_scan(base=base)
                 self.assertEqual(code, 1)
                 self.assertIsNone(arguments)
 
     def test_missing_scanner_is_not_a_successful_contract_result(self):
-        code, arguments = self.run_scan(missing_tool=True)
+        code, arguments, _report = self.run_scan(missing_tool=True)
         self.assertEqual(code, 127)
         self.assertIsNone(arguments)
 
