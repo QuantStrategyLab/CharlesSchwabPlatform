@@ -2,6 +2,12 @@ name: PAPER Notification Preview
 
 on:
   workflow_dispatch:
+    inputs:
+      send:
+        description: Send the rendered preview message to Telegram (false prints the preview to the job log only)
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -12,7 +18,7 @@ concurrency:
 
 jobs:
   preview:
-    name: Send PAPER Telegram notification preview pack
+    name: Render PAPER notification preview (optional send)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -25,6 +31,7 @@ jobs:
       # Production runtime target stays fail-closed for this manual preview path.
       RUNTIME_TARGET_ENABLED: "false"
       NOTIFY_LANG: ${{ vars.NOTIFY_LANG || 'zh' }}
+      PREVIEW_SEND: ${{ inputs.send }}
       GLOBAL_TELEGRAM_CHAT_ID: ${{ secrets.GLOBAL_TELEGRAM_CHAT_ID }}
       TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
       TELEGRAM_TOKEN_SECRET_NAME: ${{ vars.TELEGRAM_TOKEN_SECRET_NAME }}
@@ -38,14 +45,14 @@ jobs:
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
 
       - name: Authenticate to Google Cloud for existing Telegram secret access
-        if: ${{ env.TELEGRAM_TOKEN == '' && env.TELEGRAM_TOKEN_SECRET_NAME != '' }}
+        if: ${{ inputs.send == true && env.TELEGRAM_TOKEN == '' && env.TELEGRAM_TOKEN_SECRET_NAME != '' }}
         uses: google-github-actions/auth@v3
         with:
           workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
 
       - name: Set up gcloud for existing Telegram secret access
-        if: ${{ env.TELEGRAM_TOKEN == '' && env.TELEGRAM_TOKEN_SECRET_NAME != '' }}
+        if: ${{ inputs.send == true && env.TELEGRAM_TOKEN == '' && env.TELEGRAM_TOKEN_SECRET_NAME != '' }}
         uses: google-github-actions/setup-gcloud@v3
         with:
           project_id: ${{ env.GCP_PROJECT_ID }}
@@ -55,5 +62,5 @@ jobs:
           set -euo pipefail
           uv sync --frozen --no-dev
 
-      - name: Send PAPER notification preview pack
+      - name: Render PAPER notification preview (sends only when requested)
         run: uv run --no-sync python scripts/send_paper_notification_preview.py
