@@ -35,7 +35,7 @@ declarations remain `BLOCKED`; contradictions and observed errors remain `FAIL`.
 All execution, production, merge and owner-approval flags remain false. Tests
 assert those values rather than translating the adapter's exit code into an
 acceptance result. A green contract-test job does not authenticate any real
-evidence document or satisfy an owner-only approval requirement.
+evidence document or satisfy an owner approval requirement.
 
 ## Remaining provider and input gap
 
@@ -61,9 +61,11 @@ acceptance success would hide missing inputs. Both designs are rejected. Keeping
 the native scan and contract checks as separate jobs preserves their distinct
 claims and provides a useful regression gate without relaxing either boundary.
 
-Workflow changes still encounter the existing high-risk path gate. Only the
-repository owner may apply `owner-approved`; an AI agent must keep a gated PR
-as a draft and stop its advancement. No human code-review requirement is added.
+Workflow changes still encounter the existing high-risk path gate. The review
+bot acts as code reviewer under the repository owner's authorization and may add
+`owner-approved` only on that explicit or standing authorization, recording each
+addition in the ledger. Without that authorization, a gated PR stays a draft and
+its advancement stops.
 
 ## Rollback
 

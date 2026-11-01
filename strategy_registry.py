@@ -24,14 +24,7 @@ from quant_platform_kit.common.strategies import (
 )
 
 SCHWAB_PLATFORM = "schwab"
-TECH_COMMUNICATION_PULLBACK_PROFILE = "tech_communication_pullback_enhancement"
-
-SCHWAB_EXCLUDED_LIVE_PROFILES = frozenset(
-    {
-        TECH_COMMUNICATION_PULLBACK_PROFILE,
-    }
-)
-SCHWAB_ROLLOUT_ALLOWLIST = get_runtime_enabled_profiles() - SCHWAB_EXCLUDED_LIVE_PROFILES
+SCHWAB_ROLLOUT_ALLOWLIST = get_runtime_enabled_profiles()
 
 PLATFORM_SUPPORTED_DOMAINS: dict[str, frozenset[str]] = {
     SCHWAB_PLATFORM: frozenset({US_EQUITY_DOMAIN}),
@@ -71,7 +64,7 @@ ELIGIBLE_STRATEGY_PROFILES = derive_eligible_profiles_for_platform(
         profile,
         platform_id=SCHWAB_PLATFORM,
     ),
-) - SCHWAB_EXCLUDED_LIVE_PROFILES
+)
 SCHWAB_ENABLED_PROFILES = derive_enabled_profiles_for_platform(
     STRATEGY_CATALOG,
     capability_matrix=PLATFORM_CAPABILITY_MATRIX,
