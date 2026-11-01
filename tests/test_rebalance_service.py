@@ -2555,6 +2555,45 @@ def test_managed_caller_all_final_orders_and_both_transports(tmp_path, kind, bra
     assert result.execution["execution_status"] == "pending_reconciliation"
 
 
+@pytest.mark.parametrize("branch", ["port", "fallback"])
+@pytest.mark.parametrize("case", ["rejected_missing", "rejected_null", "rejected_boolean",
+                                  "rejected_string", "rejected_408", "rejected_500",
+                                  "accepted_null", "accepted_boolean", "accepted_float",
+                                  "accepted_500", "accepted_200", "accepted_201", "rejected_400"])
+def test_submission_status_evidence_survives_session_restoration(tmp_path, branch, case):
+    from application.execution_intent_continuity import _IntentSession
+
+    status, _, suffix = case.partition("_")
+    codes = {"null": None, "boolean": True, "string": "400", "float": 200.0,
+             "408": 408, "500": 500, "200": 200, "201": 201, "400": 400}
+    payload = {} if suffix == "missing" else {"status_code": codes[suffix]}
+
+    def submit(intent):
+        return ExecutionReport(intent.symbol, intent.side, intent.quantity, status,
+                               broker_order_id="200000001" if status == "accepted" else None,
+                               raw_payload=payload)
+
+    first = continuity_case(tmp_path, kind="BUY_LIMIT", branch=branch, fault=submit)
+    result = run_strategy_core(runtime=first.runtime, config=first.config)
+    assert len(first.calls) == 1
+    restored_case = continuity_case(tmp_path, "2026-10-01", kind="BUY_LIMIT", branch=branch, fault=submit)
+    restored = _IntentSession(restored_case.context, snapshot=restored_case.snapshot,
+                              profile_id=restored_case.scope.profile_id)
+    assert len(restored.originals) == 1
+    state = restored.originals[0][1][-1].state.value
+    if case == "rejected_400":
+        assert state == "rejected"
+    else:
+        accepted = case in {"accepted_200", "accepted_201"}
+        assert result.submitted_orders[0]["status"] == ("accepted" if accepted else "unknown")
+        assert state == ("accepted" if accepted else "reconciliation_required")
+        replay = run_strategy_core(runtime=restored_case.runtime, config=restored_case.config)
+        assert restored_case.calls == []
+        assert replay.submitted_orders == ()
+        assert replay.execution["broker_submission_done"] is False
+        assert replay.execution["continuity_prior_orders"][0]["state"] == state
+
+
 @pytest.mark.parametrize("invalid", ["account", "profile", "release", "cohort", "enrollment", "provider", "missing_locator", "clock", "receipt", "route"])
 def test_selected_invalid_context_stops_actual_caller(tmp_path, invalid):
     c = continuity_case(tmp_path)
@@ -3250,10 +3289,10 @@ def test_resource_refusal_keeps_native_old_sell_obligation_and_known_identity(tm
     ticket = session.prepare(order=OrderIntent("SOXL", "sell", 4), plan=old.plan, action_type="SELL")
     assert ticket is not None
     assert session.record_outcome(ticket, accepted=None if state == "unknown" else True,
-                                  broker_order_id=None if state == "unknown" else "SYNTH_OLD_ACK")
+                                  broker_order_id=None if state == "unknown" else "200000001")
     if state == "partially_filled":
         assert old.store.append_event(ticket.command, next_state=ExecutionCommandState.PARTIALLY_FILLED,
-                                      details={"filled_quantity": 2, "broker_order_id": "SYNTH_OLD_ACK"}) is not None
+                                      details={"filled_quantity": 2, "broker_order_id": "200000001"}) is not None
     # Cancel requested is still an accepted, potentially fillable order; there
     # is deliberately no CANCELLED event or resource release.
     before = old.store.events(ticket.command)
@@ -3266,9 +3305,27 @@ def test_resource_refusal_keeps_native_old_sell_obligation_and_known_identity(tm
         prior = result.execution["continuity_prior_orders"][0]
         assert prior["command_id"] == ticket.command.command_id
         assert prior["order"]["quantity"] == 4
-        assert prior["broker_order_id"] == (None if state == "unknown" else "SYNTH_OLD_ACK")
+        assert prior["broker_order_id"] == (None if state == "unknown" else "200000001")
         assert result.execution["broker_submission_done"] is False
         assert current.store.events(ticket.command) == before
+
+
+@pytest.mark.parametrize("order_id", [None, "", "   ", "abc", 0, True])
+def test_continuity_invalid_acceptance_id_requires_reconciliation(order_id):
+    from application.execution_intent_continuity import _IntentSession
+    from quant_platform_kit.common.execution_commands import ExecutionCommandState
+
+    events = []
+
+    class Store:
+        def append_event(self, command, *, next_state, details):
+            events.append(next_state)
+            return object()
+
+    session = SimpleNamespace(context=SimpleNamespace(command_store=Store()), reasons=[])
+    assert _IntentSession.record_outcome(session, SimpleNamespace(command=object()),
+                                         accepted=True, broker_order_id=order_id)
+    assert events == [ExecutionCommandState.RECONCILIATION_REQUIRED]
 
 
 def qualify_synthetic_sell(case, order=None, *, context=None):

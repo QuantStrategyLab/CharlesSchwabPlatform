@@ -806,10 +806,10 @@ def execute_rebalance_cycle(
                     report.status == "accepted" and not is_valid_schwab_order_id(report.broker_order_id)
                 ):
                     raise RuntimeError("submission outcome unconfirmed")
-                if code is not None and (
-                    type(code) is not int
-                    or (report.status == "accepted" and code not in {200, 201})
-                    or (report.status == "rejected" and (not 400 <= code < 500 or code == 408))
+                if (report.status == "accepted" and "status_code" in report.raw_payload
+                        and (type(code) is not int or code not in {200, 201})) or (
+                    report.status == "rejected"
+                    and (type(code) is not int or not 400 <= code < 500 or code == 408)
                 ):
                     raise RuntimeError("submission outcome unconfirmed")
                 return report

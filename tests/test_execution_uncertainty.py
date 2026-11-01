@@ -117,7 +117,9 @@ def test_uncertain_submission_stops_cycle_and_preserves_original_intent(tmp_path
 
 
 @pytest.mark.parametrize("outcome", ["unknown", "malformed", "server_error", "missing_order_id",
-                                      "redirect", "accepted_server_error", "invalid_status_code"])
+                                      "redirect", "accepted_server_error", "invalid_status_code",
+                                      "rejection_missing_status", "rejection_null_status",
+                                      "accepted_null_status"])
 def test_unconfirmed_reports_also_stop_further_submissions(outcome):
     calls = []
 
@@ -127,6 +129,12 @@ def test_unconfirmed_reports_also_stop_further_submissions(outcome):
             return None
         if outcome == "server_error":
             return report(intent, "rejected", raw_payload={"status_code": 500})
+        if outcome == "rejection_missing_status":
+            return report(intent, "rejected", raw_payload={})
+        if outcome == "rejection_null_status":
+            return report(intent, "rejected", raw_payload={"status_code": None})
+        if outcome == "accepted_null_status":
+            return report(intent, "accepted", raw_payload={"status_code": None})
         if outcome == "missing_order_id":
             from dataclasses import replace
             return replace(report(intent), broker_order_id=None)
@@ -150,7 +158,7 @@ def test_explicit_rejection_remains_distinct_from_unknown():
 
     def submit(intent):
         calls.append(intent)
-        return report(intent, "rejected" if len(calls) == 1 else "accepted")
+        return report(intent, "rejected", raw_payload={"status_code": 400}) if len(calls) == 1 else report(intent)
 
     result = run_cycle(submit)
     assert len(calls) == 3

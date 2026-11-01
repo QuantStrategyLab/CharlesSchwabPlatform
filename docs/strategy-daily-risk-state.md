@@ -36,6 +36,12 @@ Receipt observation failures identify the source, candidate write, archive
 read, projection, coverage, archive write or recovery stage without exposing
 private source paths. A healthy receipt keeps its original business-run identity.
 
+For Schwab submission, acceptance requires a canonical broker order ID. If an
+HTTP status is supplied with acceptance, it must be the integer 200 or 201.
+Rejection is confirmed only by an integer HTTP status from 400 through 499,
+excluding 408. Missing rejection status, or invalid or contradictory status
+evidence, requires reconciliation; unresolved continuity prevents replay.
+
 The execution link may include a digest of broker-identified order records
 observed in the completed strategy cycle. Missing, incomplete, duplicate,
 unknown-outcome and dry-run records remain unknown. An order acknowledgement
