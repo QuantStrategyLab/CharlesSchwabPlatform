@@ -1,0 +1,15 @@
+# Keep the shared ref pinned to a reviewed full commit SHA.
+name: Required secret scan
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  secret-scan:
+    name: Secret scan
+    uses: QuantStrategyLab/.github/.github/workflows/gitleaks.yml@0da4da68433b803cda17d3f84e29875a94a32273
