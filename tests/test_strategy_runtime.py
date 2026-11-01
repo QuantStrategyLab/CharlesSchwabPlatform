@@ -59,11 +59,11 @@ class _SoxlEntrypoint:
         return StrategyDecision()
 
 
-class _TechEntrypoint:
+class _SyntheticSnapshotEntrypoint:
     manifest = StrategyManifest(
-        profile="tech_communication_pullback_enhancement",
+        profile="synthetic_snapshot",
         domain="us_equity",
-        display_name="Tech/Communication Pullback Enhancement",
+        display_name="Synthetic Snapshot",
         description="test entrypoint",
         required_inputs=frozenset({"feature_snapshot"}),
         default_config={"safe_haven": "BOXX", "benchmark_symbol": "QQQ"},
@@ -115,7 +115,7 @@ def _build_runtime_settings(
     return PlatformRuntimeSettings(
         strategy_profile=profile,
         strategy_display_name=(
-            "Tech/Communication Pullback Enhancement" if profile == "tech_communication_pullback_enhancement" else "TQQQ Growth Income"
+            "Synthetic Snapshot" if profile == "synthetic_snapshot" else "TQQQ Growth Income"
         ),
         strategy_domain="us_equity",
         notify_lang="en",
@@ -751,7 +751,7 @@ class StrategyRuntimeTests(unittest.TestCase):
         self.assertEqual(runtime.merged_runtime_config["cash_reserve_ratio"], 0.03)
 
     def test_feature_snapshot_runtime_loads_snapshot_into_context(self):
-        entrypoint = _TechEntrypoint()
+        entrypoint = _SyntheticSnapshotEntrypoint()
         runtime = strategy_runtime_module.LoadedStrategyRuntime(
             entrypoint=entrypoint,
             runtime_adapter=StrategyRuntimeAdapter(
@@ -763,8 +763,8 @@ class StrategyRuntimeTests(unittest.TestCase):
                 portfolio_input_name="portfolio_snapshot",
             ),
             runtime_settings=_build_runtime_settings(
-                "tech_communication_pullback_enhancement",
-                feature_snapshot_path="gs://bucket/tech.csv",
+                "synthetic_snapshot",
+                feature_snapshot_path="gs://bucket/synthetic.csv",
             ),
             merged_runtime_config={"safe_haven": "BOXX", "benchmark_symbol": "QQQ"},
             logger=lambda _message: None,

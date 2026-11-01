@@ -50,6 +50,11 @@ authorize a merge.
 - Report local checks, remote CI, merge, deployment and business acceptance as
   distinct facts. Claim only what you observed.
 
+The public runtime-configuration scan provisions ripgrep in CI before inspecting
+workflow files. A missing executable or any scanner error fails the job; only a
+completed scan with no matches passes. Run its offline regression tests with
+`python -m unittest discover -s tests -p test_public_runtime_configuration_scan.py`.
+
 ## Independent AI review and risk tiers
 
 Classify the complete PR, including previous paths for renamed files. A small
