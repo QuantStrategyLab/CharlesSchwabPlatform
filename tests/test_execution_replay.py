@@ -46,7 +46,7 @@ def setup_cycle(tmp_path, monkeypatch):
         if outcome["kind"] == "unknown":
             raise TimeoutError("synthetic-private-provider-detail")
         return ExecutionReport(symbol=intent.symbol, side=intent.side, quantity=intent.quantity,
-            status="accepted", broker_order_id="synthetic-order-" + intent.symbol)
+            status="accepted", broker_order_id={"SOXL": "400000001", "SOXX": "400000002"}[intent.symbol])
     from test_rebalance_service import synthetic_sell_session
     native, _session = synthetic_sell_session(tmp_path / "native", plan(), OrderIntent("SOXL", "sell", 4),
                                               profile_id="soxl_soxx_trend_income")
