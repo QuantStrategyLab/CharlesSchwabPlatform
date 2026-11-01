@@ -16,12 +16,29 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Reject public runtime configuration bindings
+      - name: Install public configuration scan tools
+        shell: bash
         run: |
           set -euo pipefail
-          if rg -n '\$\{\{[[:space:]]*vars\.(GLOBAL_TELEGRAM_CHAT_ID|CLOUD_RUN_SERVICES|CLOUD_RUN_SERVICE|RUNTIME_HEARTBEAT_REQUIRED_SERVICES|RUNTIME_GUARD_SCHEDULER_JOB_PATTERN)([[:space:]]|\}\}|\|\|)' .github/workflows; then
+          command -v sudo
+          command -v apt-get
+          sudo apt-get update
+          sudo apt-get install -y ripgrep
+          command -v rg
+
+      - name: Reject public runtime configuration bindings
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v rg
+          if rg -l '\$\{\{[[:space:]]*vars\.(GLOBAL_TELEGRAM_CHAT_ID|CLOUD_RUN_SERVICES|CLOUD_RUN_SERVICE|RUNTIME_HEARTBEAT_REQUIRED_SERVICES|RUNTIME_GUARD_SCHEDULER_JOB_PATTERN)([[:space:]]|\}\}|\|\|)' .github/workflows; then
             echo "Sensitive operational runtime configuration must use GitHub Secrets, not GitHub Variables." >&2
             exit 1
+          else
+            status=$?
+            if [ "$status" -ne 1 ]; then
+              exit "$status"
+            fi
           fi
 
       - name: Resolve QuantPlatformKit ref
