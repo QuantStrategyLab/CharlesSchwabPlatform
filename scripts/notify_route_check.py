@@ -303,6 +303,8 @@ def _report() -> dict:
 
 
 def main() -> int:
+    from quant_platform_kit.notifications import install_log_redaction
+    install_log_redaction()
     report = _report()
     text = json.dumps(report, ensure_ascii=False, indent=2)
     print(text)
