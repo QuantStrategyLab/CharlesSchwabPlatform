@@ -52,7 +52,15 @@ def _get(url: str, token: str | None) -> tuple[int, dict]:
 
 def main() -> int:
     token = subprocess.run(
-        ["gcloud", "auth", "print-access-token"], check=True, capture_output=True, text=True
+        [
+            "gcloud",
+            "auth",
+            "print-access-token",
+            "--account=" + os.environ["GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT"],
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout.strip()
     query = urllib.parse.urlencode([("permissions", p) for p in PERMS])
     code, body = _get(f"{API}/iam/testPermissions?{query}", token)
