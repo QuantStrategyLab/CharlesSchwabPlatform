@@ -100,6 +100,28 @@ passed as Telegram technical details, including when the deployed formatter is
 pinned to an older shared package. Guard detection, deduplication and failure
 exit codes are unchanged.
 
+## Scheduled heartbeat identity resolution
+
+The heartbeat and completed-window projector use
+`scripts/with_heartbeat_digest_binding.py` when running from the heartbeat workflow.
+Existing complete workflow bindings and multi-target bindings retain their
+current validation path. For an enabled single target with missing digest values,
+the wrapper reads the sole 100% serving Cloud Run revision using the existing
+workflow principal and explicit account. Its runtime identity must exactly match
+the configured platform, profile, service, account selectors, scope and dry-run
+mode. Only the existing plain-text digest UID, target, slot and destination are
+consumed, in process memory; Secret Manager references are never dereferenced.
+Configured values must agree with the serving binding. A changing traffic
+observation is rejected. A missing schedule is taken only from the configured
+runtime target's main schedule and timezone.
+
+Missing source values return `digest_identity_owner_input_required` or
+`digest_schedule_owner_input_required`. The owner must supply the approved
+private binding; do not generate a UID or infer an identity from an account label.
+Metadata read failures and identity conflicts remain explicit failures. This
+wrapper does not change GitHub settings, runtime flags, receiver bindings,
+notification routes or cloud permissions. It does not establish delivery success.
+
 ## Publication before the central daily read
 
 GitHub schedule events can start late. A heartbeat workflow is therefore not a
