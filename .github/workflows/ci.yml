@@ -24,7 +24,13 @@ jobs:
             sudo apt-get install --yes --no-install-recommends ripgrep
           fi
 
+      - name: Verify public configuration scanner failure behavior
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s tests -p test_public_runtime_configuration_scan.py -v
+
       - name: Reject public runtime configuration bindings
+        id: public-config-scan
         run: |
           set -euo pipefail
           if ! command -v rg >/dev/null 2>&1; then
@@ -40,6 +46,21 @@ jobs:
               echo "Public configuration scan failed (exit ${scan_status})." >&2
               exit "$scan_status"
             fi
+          fi
+          printf '%s\n' 'scan_completed=true' >> "$GITHUB_OUTPUT"
+          echo "Public configuration scan completed without matches."
+
+      - name: Assert public configuration scan completed
+        if: ${{ always() }}
+        env:
+          PUBLIC_CONFIG_SCAN_OUTCOME: ${{ steps.public-config-scan.outcome }}
+          PUBLIC_CONFIG_SCAN_COMPLETED: ${{ steps.public-config-scan.outputs.scan_completed }}
+        run: |
+          set -euo pipefail
+          if [ "${PUBLIC_CONFIG_SCAN_OUTCOME:-}" != "success" ] ||
+             [ "${PUBLIC_CONFIG_SCAN_COMPLETED:-}" != "true" ]; then
+            echo "Public configuration scan completion was not verified." >&2
+            exit 1
           fi
 
       - name: Resolve QuantPlatformKit ref
