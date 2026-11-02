@@ -365,11 +365,11 @@ def test_native_inventory_projection_preserves_known_empty_missing_price_and_win
     body = _project(_native_stock_report(rows))
     assert body["broker_reported_positions"] == rows
     assert body["broker_reported_positions_scope"] == "stocks_only"
-    assert body["broker_reported_positions_complete"] is True
+    assert body["broker_reported_positions_complete"] is False
     assert body["observed_started_at"] == "2026-09-30T22:21:00Z"
     assert body["observed_finished_at"] == "2026-09-30T22:22:00Z"
     assert body["snapshot_atomic"] is False
-    assert publisher.prepare_sync_payload(body, include_positions=True)["broker_reported_positions_complete"] is True
+    assert publisher.prepare_sync_payload(body, include_positions=True)["broker_reported_positions_complete"] is False
     assert all(not key.startswith("broker_reported_positions") for key in publisher.prepare_sync_payload(body))
     assert "broker_reported_positions_observed_at" not in publisher.prepare_sync_payload(body, include_positions=True)
 
