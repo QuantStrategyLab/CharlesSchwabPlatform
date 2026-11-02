@@ -12,7 +12,8 @@ calls read-only Cloud Storage APIs:
   and a metadata-only ``objects.get`` on the first object (no content);
 * an anonymous ``objects.list`` (expect 401/403 for a private bucket).
 
-Prints a single JSON line of booleans / status codes. Never writes.
+Prints a single JSON line of booleans, counts and status codes. Never writes.
+Resource names and object metadata stay in memory.
 """
 
 from __future__ import annotations
@@ -52,14 +53,20 @@ def _get(url: str, token: str | None) -> tuple[int, dict]:
 
 def main() -> int:
     token = subprocess.run(
-        ["gcloud", "auth", "print-access-token"], check=True, capture_output=True, text=True
+        [
+            "gcloud",
+            "auth",
+            "print-access-token",
+            "--account=" + os.environ["GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT"],
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
     ).stdout.strip()
     query = urllib.parse.urlencode([("permissions", p) for p in PERMS])
     code, body = _get(f"{API}/iam/testPermissions?{query}", token)
     granted = set(body.get("permissions") or [])
     result: dict[str, object] = {
-        "bucket": BUCKET,
-        "prefix": PREFIX,
         "test_permissions_http": code,
         **{p.replace("storage.", "").replace(".", "_"): (p in granted) for p in PERMS},
     }
@@ -83,11 +90,8 @@ def main() -> int:
     result["prefix_list_http"] = code
     items = listing.get("items") or [] if code == 200 else []
     result["prefix_has_objects"] = bool(items) if code == 200 else None
-    # Object names/sizes/timestamps only (names carry platform/business_day/target, no values).
-    result["prefix_objects"] = [
-        {"name": item.get("name"), "size": int(item.get("size") or 0), "updated": item.get("updated")}
-        for item in items
-    ]
+    # Report counts only; resource and object names stay in memory.
+    result["listed_object_count"] = len(items) if code == 200 else None
     if items:
         name = urllib.parse.quote(str(items[0].get("name")), safe="")
         # Metadata-only GET (alt=json default): proves objects.get without reading content.
