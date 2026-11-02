@@ -30,8 +30,10 @@ The audited selection is exactly the three tests in
 `tests/test_shared_import_contract.py`: safe pinned URI/profile parsers and one
 explicit, restored test double. Checks run in that pytest process at session start,
 after collection, before and after setup/call/teardown, and at successful completion.
-They include preloaded `sys.modules` entries and all shared modules present at each
-boundary, including parser implementation modules. No shared namespace is exempted.
+Session start rejects any preloaded shared `sys.modules` entry as unverified:
+current disk bytes cannot establish what an earlier module object executed, even
+when its path/spec metadata agrees. No module is reloaded or evicted. Later checks
+cover all shared modules present at each boundary, including parser implementations. No shared namespace is exempted.
 A scoped double replaces one previously verified module, is counted separately,
 cannot count toward real-source completion, and must restore the original identity.
 An undeclared or leaked double fails the strict lane. The lane never imports broker

@@ -301,3 +301,18 @@ def test_incomplete_pytest_collection_is_rejected(tmp_path):
     with pytest.raises(pytest.UsageError, match="incomplete_audited_selection"):
         plugin.pytest_collection_finish(SimpleNamespace(config=config, items=[item]))
     assert config._shared_failed
+
+
+
+def test_same_path_stale_executed_content_is_unverified(fixture):
+    name = "quant_platform_kit"
+    path = fixture.site / name / "__init__.py"
+    expected_bytes = path.read_bytes()
+    path.write_text("SOURCE = 'stale-preloaded'\n")
+    stale = module_at(name, path)
+    path.write_bytes(expected_bytes)
+    assert stale.SOURCE == "stale-preloaded"
+    assert stale.__file__ == fixture.modules[name].__file__
+    with pytest.raises(ProvenanceError, match="preloaded_shared_modules_unverified"):
+        fixture.audit.require_fresh_process({name: stale})
+    fixture.audit.require_fresh_process({"unrelated_module": object()})

@@ -46,7 +46,12 @@ def checked(config):
 
 
 def pytest_sessionstart(session):
-    checked(session.config)  # Includes stale, preloaded sys.modules entries.
+    try:
+        session.config._shared_audit.require_fresh_process()
+    except ProvenanceError:
+        session.config._shared_failed = True
+        raise pytest.UsageError("shared import provenance: preloaded_shared_modules_unverified") from None
+    checked(session.config)
 
 
 def pytest_collection_finish(session):

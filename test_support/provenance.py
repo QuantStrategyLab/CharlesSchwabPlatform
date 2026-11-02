@@ -123,6 +123,12 @@ class Audit:
             raise ProvenanceError("symlink_escape")
         return resolved
 
+    def require_fresh_process(self, modules=None):
+        # Files on disk cannot prove what an earlier module object executed.
+        modules = sys.modules if modules is None else modules
+        if any(name.split(".")[0] in SPECS for name in modules):
+            raise ProvenanceError("preloaded_shared_modules_unverified")
+
     def audit(self, modules=None):
         modules = dict(sys.modules if modules is None else modules)
         sources = {namespace: (self._distribution(namespace) if self.source_modes[namespace] == "installed-lock"
