@@ -152,6 +152,17 @@ jobs:
           test "$(git -C external/UsEquityStrategies rev-parse HEAD)" = "${UES_REF}"
           uv pip install --no-deps -e external/QuantPlatformKit -e external/UsEquityStrategies
 
+      - name: Verify editable lane shared test imports
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+          PYTHONPATH: .
+        run: |
+          set -euo pipefail
+          uv run --no-sync python -m pytest -q -p test_support.pytest_provenance \
+            --shared-import-mode pinned-checkout \
+            --qpk-source installed-lock --ues-source pinned-checkout \
+            --ues-checkout external/UsEquityStrategies tests/test_shared_import_contract.py
+
       - name: Run PAPER admission integration contract tests
         run: |
           set -euo pipefail
