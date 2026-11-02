@@ -82,7 +82,11 @@ def _project_positions(observation: Mapping[str, Any]) -> list[dict[str, Any]] |
     """Validate runtime ``broker_reported_positions``; None (omit) on any doubt."""
     raw = observation.get("broker_reported_positions")
     scope = observation.get("broker_reported_positions_scope")
-    native_stocks = scope == "stocks_only" and observation.get("broker_reported_positions_complete") is True
+    native_stocks = scope == "stocks_only" and (
+        observation.get("broker_reported_positions_complete") is True
+        or (observation.get("broker_reported_positions_complete") is False
+            and observation.get("broker_stock_inventory_status") == "available")
+    )
     if scope != POSITIONS_SCOPE and not native_stocks:
         return None
     if not isinstance(raw, list) or (not raw and not native_stocks) or len(raw) > _MAX_POSITIONS:
@@ -412,7 +416,7 @@ def project_schwab_account_facts_history(
             return_body["broker_reported_positions"] = positions
             return_body["broker_reported_positions_scope"] = observation["broker_reported_positions_scope"]
             if positions_observed_at is not None:
-                return_body["broker_reported_positions_complete"] = True
+                return_body["broker_reported_positions_complete"] = False
                 return_body["observed_finished_at"] = observation["broker_reported_positions_observed_at"]
         if external_flow_enabled is True:
             from application.external_flow_snapshot import attach_external_flow_snapshot
@@ -422,6 +426,9 @@ def project_schwab_account_facts_history(
                 )
             except (TypeError, ValueError, AttributeError):
                 raise _ProjectionError("external_flow_invalid") from None
+        from application.forward_account_qualification import FORWARD_START, qualify_forward_account_report
+        if observed_at >= FORWARD_START:
+            return_body["forward_reconciliation"] = qualify_forward_account_report(report, observation, return_body)
         return return_body
     except _ProjectionError as exc:
         return {"status": "skipped", "reason": exc.reason}
