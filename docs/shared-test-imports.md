@@ -32,8 +32,11 @@ explicit, restored test double. Checks run in that pytest process at session sta
 after collection, before and after setup/call/teardown, and at successful completion.
 Session start rejects any preloaded shared `sys.modules` entry as unverified:
 current disk bytes cannot establish what an earlier module object executed, even
-when its path/spec metadata agrees. No module is reloaded or evicted. Later checks
-cover all shared modules present at each boundary, including parser implementations. No shared namespace is exempted.
+when its path/spec metadata agrees. No module is reloaded or evicted. Each boundary
+also requires a standard Python source loader and compares its code with a fresh compile of the verified
+source. Stale timestamp caches (including equal-size/mtime collisions) and
+unchecked-hash bytecode cannot pass merely because the `.py` file is correct.
+Later checks cover all shared modules present at each boundary, including parser implementations. No shared namespace is exempted.
 A scoped double replaces one previously verified module, is counted separately,
 cannot count toward real-source completion, and must restore the original identity.
 An undeclared or leaked double fails the strict lane. The lane never imports broker

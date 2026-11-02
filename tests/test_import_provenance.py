@@ -3,7 +3,9 @@ import base64
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
+import py_compile
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -316,3 +318,38 @@ def test_same_path_stale_executed_content_is_unverified(fixture):
     with pytest.raises(ProvenanceError, match="preloaded_shared_modules_unverified"):
         fixture.audit.require_fresh_process({name: stale})
     fixture.audit.require_fresh_process({"unrelated_module": object()})
+
+
+@pytest.mark.parametrize("fixture_name", ["fixture", "checkout_fixture"])
+@pytest.mark.parametrize("namespace", SPECS)
+@pytest.mark.parametrize("cache_mode", ["TIMESTAMP", "UNCHECKED_HASH"])
+def test_stale_bytecode_cannot_pass_source_audit(request, fixture_name, namespace, cache_mode):
+    f = request.getfixturevalue(fixture_name)
+    path = Path(f.modules[namespace].__file__)
+    expected_bytes = path.read_bytes()
+    # Equal size and restored mtime make timestamp caches appear current.
+    path.write_bytes(b"STALE = True\n".ljust(len(expected_bytes), b" "))
+    stale_stat = path.stat()
+    cached = py_compile.compile(path, doraise=True,
+                               invalidation_mode=getattr(py_compile.PycInvalidationMode, cache_mode))
+    path.write_bytes(expected_bytes)
+    os.utime(path, ns=(stale_stat.st_atime_ns, stale_stat.st_mtime_ns))
+    assert Path(cached).is_file()
+    # A new module object executes the stale cache even though source is pristine.
+    stale = module_at(namespace, path)
+    assert stale.STALE is True
+    assert stale.__file__ == str(path)
+    f.modules[namespace] = stale
+    with pytest.raises(ProvenanceError, match="bytecode_source_mismatch"):
+        f.audit.audit(f.modules)
+
+
+@pytest.mark.parametrize("fixture_name", ["fixture", "checkout_fixture"])
+@pytest.mark.parametrize("cache_mode", list(py_compile.PycInvalidationMode))
+def test_matching_bytecode_passes_source_audit(request, fixture_name, cache_mode):
+    f = request.getfixturevalue(fixture_name)
+    for namespace, module in f.modules.items():
+        path = Path(module.__file__)
+        py_compile.compile(path, doraise=True, invalidation_mode=cache_mode)
+        f.modules[namespace] = module_at(namespace, path)
+    assert f.audit.audit(f.modules) == set(SPECS)

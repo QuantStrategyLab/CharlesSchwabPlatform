@@ -5,6 +5,7 @@ import base64
 from contextlib import contextmanager
 import hashlib
 from importlib import metadata
+from importlib.machinery import SourceFileLoader
 import json
 from pathlib import Path
 import re
@@ -151,6 +152,15 @@ class Audit:
             if not file.is_absolute() or file.resolve() != Path(origin).resolve():
                 raise ProvenanceError("origin_disagreement")
             checked = self._file(file, namespace, sources[namespace])
+            loader = getattr(spec, "loader", None)
+            if (type(loader) is not SourceFileLoader or file.suffix != ".py"
+                    or loader.name != name or Path(loader.path).resolve() != checked):
+                raise ProvenanceError("unproven_source_loader")
+            # A valid source hash does not validate a timestamp or unchecked-hash
+            # .pyc. Compare the code Python would load with a fresh source compile.
+            expected_code = compile(file.read_bytes(), str(file), "exec", dont_inherit=True)
+            if loader.get_code(name) != expected_code:
+                raise ProvenanceError("bytecode_source_mismatch")
             if hasattr(module, "__path__"):
                 paths = tuple(Path(p).resolve() for p in module.__path__)
                 locations = tuple(Path(p).resolve() for p in (spec.submodule_search_locations or ()))
