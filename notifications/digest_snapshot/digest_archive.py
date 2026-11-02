@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import subprocess
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -17,11 +16,49 @@ from .digest_candidates import project_reports
 _SAFE = re.compile(r"[a-z0-9][a-z0-9_-]{0,40}\Z")
 
 
+class ArchiveReader:
+    """Native Storage reads with the job identity; no gcloud or secret access."""
+
+    def __init__(self, client):
+        self.client = client
+
+    def read(self, args):
+        uri = args[-1]
+        if not uri.startswith("gs://"):
+            raise ValueError("candidate_archive_uri_invalid")
+        bucket, separator, key = uri[5:].partition("/")
+        if not bucket or not separator or not key:
+            raise ValueError("candidate_archive_uri_invalid")
+        if args[0] == "ls":
+            blobs = self.client.list_blobs(
+                bucket, prefix=key.split("*", 1)[0], match_glob=key,
+                max_results=10001, retry=None, timeout=30,
+            )
+            rows = []
+            for blob in blobs:
+                rows.append({"url": f"gs://{bucket}/{blob.name}",
+                             "metadata": {"updated": blob.updated.isoformat()}})
+                if len(rows) > 10000:
+                    raise ValueError("candidate_archive_budget_exceeded")
+            return rows
+        if args[0] != "cat":
+            raise ValueError("candidate_archive_operation_invalid")
+        blob = self.client.bucket(bucket).blob(key)
+        blob.reload(retry=None, timeout=30)
+        if blob.size is None or blob.size > 2 * 1024**2:
+            raise ValueError("candidate_archive_object_too_large")
+        return json.loads(blob.download_as_bytes(
+            if_generation_match=int(blob.generation), retry=None, timeout=30,
+        ))
+
+
 def _read(args):
-    result = subprocess.run(["gcloud", "storage", *args], capture_output=True, text=True, check=False)
-    if result.returncode:
-        raise ValueError("candidate_archive_read_failed")
-    return json.loads(result.stdout)
+    from google.cloud import storage
+    try:
+        return ArchiveReader(storage.Client()).read(args)
+    except Exception as error:
+        # Empty SDK listings return []; all failed reads remain failures.
+        raise ValueError("candidate_archive_read_failed") from error
 
 
 def emit(env, *, now=None, read=_read, upload=None, projector=project_reports):
