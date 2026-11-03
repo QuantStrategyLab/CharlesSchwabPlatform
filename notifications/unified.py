@@ -409,7 +409,7 @@ def _project_runs(reports, **kwargs):
             raise ValueError("notification_source_run_conflict")
         unique[key] = report
     rows = []
-    for run_id, report in unique.items():
+    for run_id, report in sorted(unique.items()):
         payload = project_reports([_notification_report(report)], **kwargs)
         for row in payload["runs"]:
             row["source_run_id"] = run_id
@@ -428,6 +428,35 @@ def _project_runs(reports, **kwargs):
             row["notification_events"] = copy.deepcopy(events)
             row["field_status"] = {name: "known" if row.get(name) is not None else "unknown"
                 for name in ("order_count", "fill_count", "cycle_count")}
+            # The archive's outer success describes report completion, not the
+            # inner execution outcome. Only change this notification copy.
+            summary = report.get("summary") or {}
+            statuses = {str(value).strip().lower() for value in
+                        (summary.get("execution_status"), report.get("execution_status")) if value}
+            if len(statuses) > 1:
+                row.update(status="alert", execution_status="execution_unknown",
+                           reason_code="inner_execution_conflict")
+            elif statuses:
+                status = statuses.pop()
+                row["execution_status"] = status
+                if status in {"submitted", "broker_acknowledged", "pending", "partially_filled", "pending_reconciliation"}:
+                    row["execution_status"] = "order_submitted"
+                elif status in {"blocked", "error", "failed", "failure", "strategy_risk_rejected",
+                                "unknown", "execution_unknown", "reconciliation_required"} or status.endswith("_blocked"):
+                    row.update(status="alert", reason_code="execution_evidence_missing_or_attention")
+            receipt = report.get("execution_receipt")
+            if isinstance(receipt, dict):
+                try:
+                    observed = _stamp(receipt.get("observed_at"))
+                    started, finished = _stamp(report.get("started_at")), _stamp(report.get("finished_at"))
+                    time_known = started.replace(microsecond=0) <= observed <= finished <= kwargs["now"]
+                except (ValueError, TypeError, AttributeError):
+                    time_known = False
+                if not time_known:
+                    # Do not move the business window, invent a tolerance or
+                    # make a skewed receipt acceptable to live processing.
+                    reason = row.get("reason_code")
+                    row.update(status="alert", reason_code="+".join(filter(None, (reason, "receipt_time_unconfirmed"))))
             from .approved_gates import report_gate_reasons, render_gate_reasons
             approved = report_gate_reasons(report, observed_at=kwargs.get("now"))
             if approved:
@@ -440,6 +469,25 @@ def _project_runs(reports, **kwargs):
 def _run_identity(value):
     return tuple(value.get(name) for name in
         ("platform_id", "opaque_account_uid", "target_id", "strategy_profile", "source_run_id"))
+
+
+def _canonical_candidate_row(row):
+    """Normalize equivalent representations, retaining every factual field."""
+    value = copy.deepcopy(row)
+    for name in ("block_reason", "routine_observation_counts"):
+        if value.get(name) is None:
+            value.pop(name, None)
+    statuses = dict(value.get("field_status") or {})
+    for name in ("order_count", "fill_count", "cycle_count"):
+        status = statuses.get(name)
+        if status is None:
+            statuses[name] = "known" if type(value.get(name)) is int else "unknown"
+        elif status == "counts_unknown":
+            statuses[name] = "unknown"
+    value["field_status"] = statuses
+    if value.get("as_of"):
+        value["as_of"] = _stamp(value["as_of"]).astimezone(timezone.utc).isoformat()
+    return value
 
 
 def persist_projected_candidate(payload, *, env=None, store=None):
@@ -490,7 +538,7 @@ def persist_projected_candidate(payload, *, env=None, store=None):
                 or (not idle and (not isinstance(row.get("source_run_id"), str) or not row["source_run_id"]))):
             raise ValueError("notification_candidate_scope_conflict")
         key = ("idle", "") if idle else ("run", row["source_run_id"])
-        current = dict(row)
+        current = _canonical_candidate_row(row)
         events = current.pop("notification_events", [])
         prior = dict(merged.get(key) or {})
         prior_events = prior.pop("notification_events", [])

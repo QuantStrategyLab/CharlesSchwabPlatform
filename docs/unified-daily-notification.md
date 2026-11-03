@@ -222,3 +222,16 @@ format until a coordinated pin update. The review bot should adopt the QPK
 format change before updating the consumer pin. No pin, deployment or live/risk
 switch is changed by this patch. A run-specific console link requires the console
 producer to supply `console_run_url`; an account overview URL is not a run link.
+
+## Summary projection of archived execution facts
+
+The notification projection preserves inner execution attention even if report
+persistence completed successfully. Receipt publication after a scheduled time
+is distinct from a receipt outside its recorded source run interval; the latter
+is flagged `receipt_time_unconfirmed` without moving the source business window
+or changing heartbeat acceptance. Missing fills remain unknown.
+
+Candidate merging normalizes documented optional null defaults, count-status
+spelling and equivalent timestamp offsets. Identity, counters, execution state
+and other factual differences still fail before the generation-guarded upload.
+This projection does not change reconciliation, broker calls or alert routing.
