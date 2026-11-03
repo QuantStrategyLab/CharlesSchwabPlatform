@@ -26,6 +26,23 @@ FLAG = "SCHWAB_UNIFIED_NOTIFICATION_ENABLED"
 _context = ContextVar("schwab_notification_report", default=None)
 
 
+class CandidateStorageError(RuntimeError):
+    """Bounded persistence diagnostics; never retain provider text for output."""
+
+    def __init__(self, stage, error):
+        from google.api_core.exceptions import (
+            DeadlineExceeded, Forbidden, PreconditionFailed, Unauthorized,
+        )
+        self.stage = stage
+        self.category = ("permission_denied" if isinstance(error, (Forbidden, Unauthorized)) else
+                         "generation_conflict" if isinstance(error, PreconditionFailed) else
+                         "timeout_unknown" if isinstance(error, (TimeoutError, DeadlineExceeded)) else
+                         "json_invalid" if isinstance(error, json.JSONDecodeError) else
+                         "serialization_invalid" if isinstance(error, (TypeError, ValueError)) else
+                         "storage_unknown")
+        super().__init__("candidate_persistence_failed")
+
+
 def enabled(env=None):
     return unified_notification_enabled(os.environ if env is None else env, FLAG)
 
@@ -452,6 +469,8 @@ def persist_projected_candidate(payload, *, env=None, store=None):
         previous = json.loads(blob.download_as_text(if_generation_match=generation, retry=None, timeout=30))
     except NotFound:
         generation, previous = 0, None
+    except Exception as error:
+        raise CandidateStorageError("candidate_read", error) from error
     if previous is not None and (not isinstance(previous, dict)
             or previous.get("schema_version") != "qsl.digest_candidates.v1"
             or not isinstance(previous.get("runs"), list)):
@@ -497,8 +516,11 @@ def persist_projected_candidate(payload, *, env=None, store=None):
     body = json.dumps(final, sort_keys=True, allow_nan=False)
     if len(body.encode()) > 2 * 1024**2 or len(merged) > 10000:
         raise ValueError("notification_candidate_budget_exceeded")
-    blob.upload_from_string(body, content_type="application/json", if_generation_match=generation,
-                            retry=None, timeout=30)
+    try:
+        blob.upload_from_string(body, content_type="application/json", if_generation_match=generation,
+                                retry=None, timeout=30)
+    except Exception as error:
+        raise CandidateStorageError("candidate_write", error) from error
     return True
 
 

@@ -136,6 +136,12 @@ or access Secret Manager. Archive reads use the Storage SDK and the job's
 attached identity; the image does not need gcloud. Existing candidate writes,
 merge semantics and identity checks remain authoritative.
 
+The heartbeat candidate publisher uses the same bounded SDK archive reader.
+A successfully listed empty month is empty input, including when a completed
+window spans two UTC months. Permission, timeout and JSON failures still abort
+publication. An empty window produces idle evidence only after the existing
+schedule check confirms that no run was due.
+
 Use one job per existing central target, with its exact protected runtime JSON,
 archive prefix, opaque UID, target ID, destination and slot. No identifiers can
 be inferred from a display label. Supply the existing notification schedule so
@@ -187,6 +193,17 @@ old candidates, zeros, or an artificial `not_due` result.
 
 References: [GitHub schedule timing](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#schedule)
 and [Cloud Run scheduled jobs](https://docs.cloud.google.com/run/docs/execute/jobs-on-schedule).
+
+The heartbeat `scripts.emit_unified_digest_candidates` command reports fixed
+`stage` and `error_code` values for archive reads, candidate reads, projection,
+merge and candidate writes. It also identifies binding, source-selection,
+schedule and output-serialization failures. Only exact local codes and fixed
+storage categories are exposed; unknown errors use `unexpected_error`.
+Raw exception text, object paths and credential context stay out of output,
+including output from the existing coverage-alert fallback.
+`uploaded=false` is the failure flag, not proof that no write took effect.
+Candidate writes retain one generation-conditional attempt with retries disabled;
+inspect existing evidence before retrying an uncertain result.
 
 ## Shared risk-block message format
 

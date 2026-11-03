@@ -7,6 +7,8 @@ import signal
 from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+from notifications.digest_snapshot.digest_archive import ArchiveReader
+
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 PLATFORM = "schwab"
 
@@ -22,42 +24,6 @@ def publication_day(now):
     if not time(6) <= local.time() < time(6, 40):
         raise ValueError("candidate_publication_window_closed")
     return (local.date() - timedelta(days=1)).isoformat()
-
-
-class ArchiveReader:
-    """Native Storage reads with the job identity; no gcloud or secret access."""
-
-    def __init__(self, client):
-        self.client = client
-
-    def read(self, args):
-        uri = args[-1]
-        if not uri.startswith("gs://"):
-            raise ValueError("candidate_archive_uri_invalid")
-        bucket, separator, key = uri[5:].partition("/")
-        if not bucket or not separator or not key:
-            raise ValueError("candidate_archive_uri_invalid")
-        if args[0] == "ls":
-            blobs = self.client.list_blobs(
-                bucket, prefix=key.split("*", 1)[0], match_glob=key,
-                max_results=10001, retry=None, timeout=30,
-            )
-            rows = []
-            for blob in blobs:
-                rows.append({"url": f"gs://{bucket}/{blob.name}",
-                             "metadata": {"updated": blob.updated.isoformat()}})
-                if len(rows) > 10000:
-                    raise ValueError("candidate_archive_budget_exceeded")
-            return rows
-        if args[0] != "cat":
-            raise ValueError("candidate_archive_operation_invalid")
-        blob = self.client.bucket(bucket).blob(key)
-        blob.reload(retry=None, timeout=30)
-        if blob.size is None or blob.size > 2 * 1024**2:
-            raise ValueError("candidate_archive_object_too_large")
-        return json.loads(blob.download_as_bytes(
-            if_generation_match=int(blob.generation), retry=None, timeout=30,
-        ))
 
 
 def _emit(env, *, now, read):
