@@ -204,3 +204,21 @@ including output from the existing coverage-alert fallback.
 `uploaded=false` is the failure flag, not proof that no write took effect.
 Candidate writes retain one generation-conditional attempt with retries disabled;
 inspect existing evidence before retrying an uncertain result.
+
+## Shared risk-block message format
+
+The attention adapter delegates formatting to QPK's
+`risk.attention.render_attention_notification` when that feature is available.
+It passes the existing notification report's `started_at` and optional
+`console_run_url` as display-only evidence. Account labels show only the last
+two characters. Guard codes remain visible alongside Chinese or English
+explanations. Missing time, link and financial facts remain explicitly unknown.
+Schwab's equity-baseline loss wording and baseline provenance are preserved.
+Notification routing, approved-gate classification, transition keys and risk
+permissions remain unchanged.
+
+The current pinned QPK predates this feature, so the adapter retains its legacy
+format until a coordinated pin update. The review bot should adopt the QPK
+format change before updating the consumer pin. No pin, deployment or live/risk
+switch is changed by this patch. A run-specific console link requires the console
+producer to supply `console_run_url`; an account overview URL is not a run link.

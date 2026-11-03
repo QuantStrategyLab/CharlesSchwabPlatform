@@ -67,6 +67,12 @@ def notification_context(report):
         _context.reset(token)
 
 
+def attention_run_context():
+    """Pass actual run metadata to display; do not invent a console route."""
+    report = _context.get() or {}
+    return {"occurred_at": report.get("started_at"), "run_url": report.get("console_run_url")}
+
+
 class GCSNotificationStore:
     """Generation-conditional JSON writes; no local/in-process fallback."""
     def __init__(self, env=None, client=None):

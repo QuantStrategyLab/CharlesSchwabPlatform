@@ -24,7 +24,7 @@ def localize_guard_reason(lang, code):
     return localize_attention_reason_code(lang, code)
 
 
-def render_attention(*, decision, platform, account_alias, strategy_profile, guard_reason_codes=(), locale=None, daily_loss_context=None):
+def _render_legacy_attention(*, decision, platform, account_alias, strategy_profile, guard_reason_codes=(), locale=None, daily_loss_context=None):
     lang = resolve_operational_notification_locale(locale or os.getenv("QSL_NOTIFY_LANG") or os.getenv("NOTIFY_LANG"))
     zh = lang == "zh"
     platform_name = display_name("platforms", platform, lang, fallback="交易平台" if zh else "Trading platform")
@@ -82,6 +82,29 @@ def render_attention(*, decision, platform, account_alias, strategy_profile, gua
     ))
 
 
+def render_attention(*, decision, platform, account_alias, strategy_profile,
+                     guard_reason_codes=(), locale=None, daily_loss_context=None,
+                     occurred_at=None, run_url=None):
+    """Use the shared format once the coordinated QPK pin is available."""
+    try:
+        from quant_platform_kit.risk.attention import render_attention_notification
+    except ImportError:
+        # Current production pin predates the shared evidence fields. Keep delivery
+        # working until the review bot coordinates the consumer pin separately.
+        return _render_legacy_attention(
+            decision=decision, platform=platform, account_alias=account_alias,
+            strategy_profile=strategy_profile, guard_reason_codes=guard_reason_codes,
+            locale=locale, daily_loss_context=daily_loss_context,
+        )
+    lang = locale or os.getenv("QSL_NOTIFY_LANG") or os.getenv("NOTIFY_LANG")
+    return render_attention_notification(
+        decision=decision, platform=platform, account_alias=account_alias,
+        strategy_profile=strategy_profile, guard_reason_codes=guard_reason_codes,
+        locale=lang, daily_loss_context=daily_loss_context,
+        occurred_at=occurred_at, run_url=run_url,
+    )
+
+
 def publish_attention_telegram_transition(**kwargs):
     from quant_platform_kit.risk import attention_notify
     from .unified import enabled, event_for, route, observe_attention_recovery, stage_approved_gate_observation
@@ -89,7 +112,9 @@ def publish_attention_telegram_transition(**kwargs):
     approved = kwargs.pop("approved_gate_reasons", [])
     daily_loss_context = kwargs.pop("daily_loss_context", None)
     sender = kwargs.get("telegram_sender") or attention_notify._default_telegram_sender
-    text = render_attention(daily_loss_context=daily_loss_context, **{key: kwargs[key] for key in (
+    from .unified import attention_run_context
+    run_context = attention_run_context()
+    text = render_attention(daily_loss_context=daily_loss_context, **run_context, **{key: kwargs[key] for key in (
         "decision", "platform", "account_alias", "strategy_profile", "guard_reason_codes", "locale",
     ) if key in kwargs})
 

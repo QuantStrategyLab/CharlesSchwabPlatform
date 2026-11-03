@@ -146,7 +146,7 @@ def _attach_positions(observation: dict[str, object], snapshot: Any) -> None:
 
 def _attach_native_inventory(observation: dict[str, object], snapshot: Any) -> None:
     """Project the same account response without making a reporting broker read."""
-    from application.stock_inventory import project_stock_inventory
+    from application.stock_inventory import project_native_position_facts, project_stock_inventory
 
     native = snapshot.metadata.get("broker_stock_inventory")
     diagnostics: dict[str, object] = {
@@ -164,6 +164,7 @@ def _attach_native_inventory(observation: dict[str, object], snapshot: Any) -> N
     diagnostics["positions_field_present"] = present
     diagnostics["native_positions_count"] = count if isinstance(count, int) and not isinstance(count, bool) and count >= 0 else None
     account = {"positions": native.get("positions")} if present else {}
+    observation["broker_native_position_facts"] = project_native_position_facts({"securitiesAccount": account})
     rows = project_stock_inventory(
         {"securitiesAccount": account}, currency=observation.get("net_assets_currency"),
         diagnostics=diagnostics,
@@ -177,9 +178,32 @@ def _attach_native_inventory(observation: dict[str, object], snapshot: Any) -> N
         "broker_stock_inventory_status": "available",
         "broker_reported_positions": rows,
         "broker_reported_positions_scope": "stocks_only",
-        "broker_reported_positions_complete": True,
+        "broker_reported_positions_complete": False,
         "broker_reported_positions_observed_at": observation["observed_at"],
     })
+
+
+def _attach_collection_window(observation: dict[str, object], metadata: Mapping, observed_at: datetime) -> None:
+    """Retain the pinned adapter's same-response client window, never broker time."""
+    facts = metadata.get("schwab_position_quantities")
+    digest = metadata.get("source_digest_sha256")
+    if (not isinstance(facts, Mapping) or not isinstance(digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+            or facts.get("source_digest_sha256") != digest
+            or facts.get("time_semantics") != "client_observation_window"
+            or facts.get("observation_window_valid") is not True):
+        return
+    from application.forward_account_qualification import parse_observation_instant
+
+    start = parse_observation_instant(facts.get("observation_started_at"))
+    end = parse_observation_instant(facts.get("observation_completed_at"))
+    if start is None or end is None or not start <= end == observed_at:
+        return
+    observation["broker_collection_window"] = {
+        "started_at": start.isoformat().replace("+00:00", "Z"),
+        "finished_at": end.isoformat().replace("+00:00", "Z"),
+        "time_semantics": "client_observation_window",
+    }
 
 
 def build_account_observation(
@@ -256,6 +280,7 @@ def build_account_observation(
                 "full_account_positions": "UNVERIFIED",
             },
         }
+        _attach_collection_window(observation, metadata, observed_at)
         if cash_balance is not None and raw_cash_balance_source == "cashBalance":
             observation["cash_balance"] = cash_balance
             observation["cash_balance_source"] = "cashBalance"

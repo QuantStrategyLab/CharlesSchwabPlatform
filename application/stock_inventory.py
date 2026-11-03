@@ -88,6 +88,34 @@ def project_stock_inventory(
     return sorted(rows, key=lambda row: row["symbol"])
 
 
+def project_native_position_facts(payload: Any) -> list[dict[str, Any]] | None:
+    """Preserve bounded native type, symbol and long/short facts, without coverage claims.
+
+    These private report facts are not execution positions or a qualified ledger.
+    Unsupported/malformed rows invalidate the projection rather than becoming zero.
+    """
+    if not isinstance(payload, Mapping) or not isinstance(payload.get("securitiesAccount"), Mapping):
+        return None
+    native = payload["securitiesAccount"].get("positions")
+    if not isinstance(native, list) or len(native) > 512:
+        return None
+    rows = []
+    for position in native:
+        if not isinstance(position, Mapping) or not isinstance(position.get("instrument"), Mapping):
+            return None
+        instrument = position["instrument"]
+        kind, symbol = instrument.get("assetType"), instrument.get("symbol")
+        if not isinstance(kind, str) or kind not in _NON_STOCK_TYPES | {"EQUITY"} or not isinstance(symbol, str) or _SYMBOL.fullmatch(symbol) is None:
+            return None
+        long_quantity, short_quantity = _decimal(position.get("longQuantity")), _decimal(position.get("shortQuantity"))
+        if long_quantity is None or short_quantity is None or min(long_quantity, short_quantity) < 0:
+            return None
+        rows.append({"asset_type": kind, "symbol": symbol,
+                     "long_quantity": format(long_quantity, "f"), "short_quantity": format(short_quantity, "f"),
+                     "quantity": format(long_quantity - short_quantity, "f")})
+    return rows
+
+
 def _single_linked_account_payload(
     client: Any, account_hash: str, *, diagnostics: dict[str, Any],
 ) -> Mapping[str, Any] | None:
@@ -142,14 +170,17 @@ def collect_stock_inventory(client: Any, *, account_hash: str, currency: str | N
         "fallback_reason": "not_needed",
         "linked_positions_field_present": None,
     }
-    rows = project_stock_inventory(response.json(), currency=currency, diagnostics=diagnostics)
+    payload = response.json()
+    rows = project_stock_inventory(payload, currency=currency, diagnostics=diagnostics)
     if diagnostics.get("reason") == "positions_field_missing":
         linked = _single_linked_account_payload(client, account_hash, diagnostics=diagnostics)
         if linked is not None:
-            rows = project_stock_inventory(linked, currency=currency, diagnostics=diagnostics)
+            payload = linked
+            rows = project_stock_inventory(payload, currency=currency, diagnostics=diagnostics)
     state = {
         "broker_stock_inventory_status": "available" if rows is not None else "unknown",
         "broker_stock_inventory_diagnostics": diagnostics,
+        "broker_native_position_facts": project_native_position_facts(payload),
     }
     if rows is None:
         return state
@@ -157,6 +188,6 @@ def collect_stock_inventory(client: Any, *, account_hash: str, currency: str | N
         **state,
         "broker_reported_positions": rows,
         "broker_reported_positions_scope": "stocks_only",
-        "broker_reported_positions_complete": True,
+        "broker_reported_positions_complete": False,
         "broker_reported_positions_observed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     }

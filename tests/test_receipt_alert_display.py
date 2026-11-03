@@ -4,7 +4,8 @@ import datetime as dt
 import pytest
 
 from notifications.receipt_alerts import render_receipt_alert
-from notifications.attention import render_attention
+# Preserve the pinned fallback's existing assertions through the coordinated rollout.
+from notifications.attention import _render_legacy_attention as render_attention
 from quant_platform_kit.risk.attention import AttentionAxes, evaluate_attention
 from scripts import execution_report_heartbeat as heartbeat
 

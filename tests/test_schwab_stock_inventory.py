@@ -55,7 +55,7 @@ def test_native_read_uses_only_selected_account_and_requests_positions():
     client = Mock(); client.get_account.return_value = response
     result = collect_stock_inventory(client, account_hash="synthetic-bound-hash", currency="USD")
     assert result["broker_reported_positions_scope"] == "stocks_only"
-    assert result["broker_reported_positions_complete"] is True
+    assert result["broker_reported_positions_complete"] is False
     assert result["broker_reported_positions"][0]["quantity"] == "2"
     assert result["broker_reported_positions_observed_at"].endswith("Z")
     assert client.get_account.call_count == 1
@@ -87,7 +87,7 @@ def test_missing_field_can_use_explicit_inventory_for_the_single_verified_linked
     client.get_accounts.return_value.json.return_value = [
         {"securitiesAccount": {"accountNumber": "synthetic-account", "positions": positions}}]
     result = collect_stock_inventory(client, account_hash="synthetic-bound-hash", currency="USD")
-    assert result["broker_reported_positions_complete"] is True
+    assert result["broker_reported_positions_complete"] is False
     assert len(result["broker_reported_positions"]) == len(positions)
     diagnostics = result["broker_stock_inventory_diagnostics"]
     assert diagnostics["fallback_attempted"] is True

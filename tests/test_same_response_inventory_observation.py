@@ -25,7 +25,7 @@ def test_same_response_unfiltered_inventory_is_reported_at_snapshot_time():
     original = deepcopy(source)
     observation = build_account_observation(source, net_assets_currency="USD")
     assert observation["broker_reported_positions_scope"] == "stocks_only"
-    assert observation["broker_reported_positions_complete"] is True
+    assert observation["broker_reported_positions_complete"] is False
     assert observation["broker_reported_positions_observed_at"] == observation["observed_at"] == "2026-10-28T00:00:00Z"
     assert observation["broker_reported_positions"][0]["quantity"] == "1.12345678"
     assert observation["broker_reported_positions"][1]["quantity"] == "-3"
@@ -50,7 +50,7 @@ def test_missing_invalid_and_true_empty_are_distinct(native, expected, present):
         assert "broker_reported_positions_complete" not in observation
     else:
         assert observation["broker_reported_positions"] == []
-        assert observation["broker_reported_positions_complete"] is True
+        assert observation["broker_reported_positions_complete"] is False
 
 
 def test_unknown_currency_is_not_substituted_with_usd():
