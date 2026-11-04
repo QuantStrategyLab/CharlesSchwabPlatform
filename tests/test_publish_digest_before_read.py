@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import fnmatch
 from types import SimpleNamespace
@@ -114,10 +114,10 @@ def test_configuration_failure_prevents_io(key, value):
                           emit=lambda *a, **kw: pytest.fail("producer must not run"))
 
 
-def test_due_but_absent_does_not_publish_idle(client):
+def test_due_but_absent_does_not_publish_idle(client, wait_clock):
     env = {**ENV, "DIGEST_NOTIFICATION_SCHEDULE_JSON": json.dumps({"scheduler": {
         "main_time": "45 15 * * *", "timezone": "America/New_York"}})}
-    with pytest.raises(ValueError, match="candidate_due_source_absent"):
+    with pytest.raises(ValueError, match="candidate_publication_wait_timeout"):
         publisher.publish(env, now=lambda: NOW, client=client)
     assert not any(blob.writes for blob in client.blobs.values())
 
@@ -126,17 +126,18 @@ def test_due_but_absent_does_not_publish_idle(client):
     {"runs": []}, {"runs": [{"actually_ran": False, "business_day": "2026-10-30"}]},
     {"runs": [{"actually_ran": False, "business_day": "2026-10-31", "target_id": "wrong"}]},
 ])
-def test_success_without_valid_readback_fails(client, body):
+@pytest.mark.parametrize("uploaded", [True, False])
+def test_success_without_valid_readback_fails(client, body, uploaded):
     def emit(*a, **kw):
         uri = f"gs://synthetic-candidates/digest/{PLATFORM}/2026-10-31/synthetic-slot.json"
         client.blob(uri).upload_from_string(json.dumps(body), retry=None)
-        return {"status": "projected", "uploaded": True}
+        return {"status": "projected", "uploaded": uploaded}
     with pytest.raises(ValueError, match="readback_invalid"):
         publisher.publish(ENV, now=lambda: NOW, client=client, emit=emit)
 
 
-def test_unconfirmed_upload_never_reports_success(client):
-    with pytest.raises(ValueError, match="publication_unconfirmed"):
+def test_unconfirmed_upload_never_reports_success_without_readback(client, wait_clock):
+    with pytest.raises(ValueError, match="publication_wait_timeout"):
         publisher.publish(ENV, now=lambda: NOW, client=client,
                           emit=lambda *a, **kw: {"status": "projected", "uploaded": False})
 
@@ -221,3 +222,150 @@ def test_invalid_runtime_identity_is_rejected_before_idle_projection(key, value)
     with pytest.raises(ValueError, match="target_invalid"):
         publisher.publish({**ENV, "RUNTIME_TARGET_JSON": json.dumps(target)}, now=lambda: NOW,
                           emit=lambda *a, **kw: pytest.fail("must not project an invalid target"))
+
+
+class WaitClock:
+    def __init__(self):
+        self.elapsed = 0
+        self.sleeps = []
+
+    def monotonic(self):
+        return self.elapsed
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.elapsed += seconds
+
+
+@pytest.fixture
+def wait_clock(monkeypatch):
+    clock = WaitClock()
+    monkeypatch.setattr(publisher, "monotonic", clock.monotonic, raising=False)
+    monkeypatch.setattr(publisher, "sleep", clock.sleep, raising=False)
+    return clock
+
+
+@pytest.mark.parametrize("uploaded", [True, False])
+def test_missing_candidate_waits_for_publication_without_reemitting(client, wait_clock, monkeypatch, uploaded):
+    emissions = []
+
+    def emit(*args, **kwargs):
+        emissions.append(1)
+        return {"status": "projected", "uploaded": uploaded}
+
+    def arrive(seconds):
+        wait_clock.sleep(seconds)
+        publisher._emit(ENV, now=NOW, read=publisher.ArchiveReader(client).read)
+
+    monkeypatch.setattr(publisher, "sleep", arrive)
+    result = publisher.publish(ENV, now=lambda: NOW, client=client, emit=emit)
+    assert result["readback_verified"] is True
+    assert emissions == [1] and wait_clock.sleeps == [30]
+
+
+def test_missing_candidate_has_bounded_explicit_timeout(client, wait_clock):
+    emissions = []
+
+    def emit(*args, **kwargs):
+        emissions.append(1)
+        return {"status": "projected", "uploaded": False}
+
+    with pytest.raises(ValueError, match="candidate_publication_wait_timeout"):
+        publisher.publish(ENV, now=lambda: NOW, client=client, emit=emit)
+    assert emissions == [1]
+    assert wait_clock.elapsed == 480 and len(wait_clock.sleeps) == 16
+    assert not any(blob.writes for blob in client.blobs.values())
+
+
+def test_source_arrival_retries_prewrite_projection_with_fresh_time(client, wait_clock):
+    attempts = []
+
+    def emit(env, *, now, read):
+        attempts.append(now)
+        if len(attempts) == 1:
+            raise ValueError("candidate_due_source_absent")
+        return publisher._emit(env, now=now, read=read)
+
+    result = publisher.publish(ENV, now=lambda: NOW + timedelta(
+        seconds=wait_clock.elapsed), client=client, emit=emit)
+    assert result["status"] == "published"
+    assert attempts == [NOW, NOW + timedelta(seconds=30)]
+
+
+@pytest.mark.parametrize("error", [
+    Forbidden("<PROJECT_ID>-private"), TimeoutError("<PROJECT_ID>-private"),
+    PreconditionFailed("<PROJECT_ID>-private"),
+    ValueError("notification_candidate_source_conflict"),
+    ValueError("candidate_source_incomplete"),
+])
+def test_nonpending_failures_do_not_wait_or_retry(client, wait_clock, error):
+    attempts = []
+
+    def emit(*args, **kwargs):
+        attempts.append(1)
+        raise error
+
+    with pytest.raises(type(error)):
+        publisher.publish(ENV, now=lambda: NOW, client=client, emit=emit)
+    assert attempts == [1] and wait_clock.sleeps == []
+
+
+def test_waiting_read_permission_failure_does_not_retry(client, wait_clock, monkeypatch):
+    monkeypatch.setattr(publisher.ArchiveReader, "read", lambda *args: (
+        _ for _ in ()).throw(Forbidden("<PROJECT_ID>-private")))
+    with pytest.raises(Forbidden):
+        publisher.publish(ENV, now=lambda: NOW, client=client,
+                          emit=lambda *a, **kw: {"status": "projected", "uploaded": False})
+    assert wait_clock.sleeps == []
+
+
+def test_wait_rechecks_wall_deadline_before_another_attempt(client, wait_clock):
+    moments = iter([NOW, NOW.replace(hour=22, minute=55)])
+    with pytest.raises(ValueError, match="candidate_publication_deadline_missed"):
+        publisher.publish(ENV, now=lambda: next(moments), client=client,
+                          emit=lambda *a, **kw: {"status": "projected", "uploaded": False})
+    assert wait_clock.sleeps == []
+
+
+def test_main_reports_wait_timeout_without_private_details(monkeypatch, capsys):
+    monkeypatch.setattr(publisher.signal, "signal", lambda *a: None)
+    monkeypatch.setattr(publisher.signal, "alarm", lambda *a: None)
+    monkeypatch.setattr(publisher, "publish", lambda *a: (_ for _ in ()).throw(
+        publisher.PublicationWaitTimeout()))
+    assert publisher.main() == 1
+    assert json.loads(capsys.readouterr().out) == {
+        "status": "failed", "reason_code": "candidate_publication_wait_timeout"}
+
+
+@pytest.mark.parametrize("result", [
+    {"status": "blocked", "uploaded": False}, {"status": "disabled", "uploaded": False},
+    {"status": "projected", "uploaded": None}, {"status": "projected", "uploaded": 1}, None,
+])
+def test_unknown_producer_result_never_becomes_readback_success(client, wait_clock, result):
+    publisher._emit(ENV, now=NOW, read=publisher.ArchiveReader(client).read)
+    with pytest.raises(ValueError, match="candidate_publication_unconfirmed"):
+        publisher.publish(ENV, now=lambda: NOW, client=client, emit=lambda *a, **kw: result)
+    assert wait_clock.sleeps == []
+
+
+def test_readback_after_monotonic_budget_cannot_be_success(client, wait_clock):
+    def emit(*args, **kwargs):
+        result = publisher._emit(*args, **kwargs)
+        wait_clock.elapsed = 481
+        return result
+
+    with pytest.raises(ValueError, match="candidate_publication_wait_timeout"):
+        publisher.publish(ENV, now=lambda: NOW, client=client, emit=emit)
+
+
+def test_main_does_not_echo_timeout_exception_text(monkeypatch, capsys):
+    monkeypatch.setattr(publisher.signal, "signal", lambda *a: None)
+    monkeypatch.setattr(publisher.signal, "alarm", lambda *a: None)
+    def fail(*args):
+        error = publisher.PublicationWaitTimeout()
+        error.args = ("<PROJECT_ID>-private",)
+        raise error
+    monkeypatch.setattr(publisher, "publish", fail)
+    assert publisher.main() == 1
+    assert json.loads(capsys.readouterr().out) == {
+        "status": "failed", "reason_code": "candidate_publication_wait_timeout"}

@@ -172,11 +172,26 @@ The deployment proposal is:
 | Readback deadline | Before 06:55, leaving five minutes before the reader |
 
 The business day is the day before the job's Shanghai date, for the completed
-[06:00, 06:00) window. A normal run starts at 06:10 and finishes by 06:20. A late
-start, disabled/missing binding, due-but-absent report, unconfirmed write, wrong
-business day or identity, failed readback, or expired deadline exits nonzero.
-An interrupted write remains unknown and must be inspected before any retry.
+[06:00, 06:00) window. A normal run starts at 06:10 and finishes by 06:20.
+The publisher does not depend on the Actions `Digest Candidates Daily` workflow,
+whose schedule can be delayed beyond the central read. It projects from the
+archive itself and waits up to 480 seconds, polling every 30 seconds, for source
+or candidate readiness within the existing 600-second watchdog. Only the exact
+pre-write `candidate_source_absent` and `candidate_due_source_absent` errors permit
+another projection, with a fresh archive read and current time. Once projection
+returns, only a missing exact candidate object is polled; publication is never
+repeated. A negative upload acknowledgement alone is not success: the dated slot
+must pass the same schema, identity and nonempty-row readback checks.
+
+Persistent absence exits nonzero with `candidate_publication_wait_timeout`.
+The wall clock is checked after every wait and before success; crossing 06:55 or
+the original local date returns `candidate_publication_deadline_missed`.
+The process watchdog returns `candidate_publication_watchdog_timeout`.
+Disabled/missing bindings, invalid objects, permission/transport failures and
+source conflicts still fail immediately. An interrupted write remains unknown
+and is never retried. No missing due report becomes idle evidence.
 The success record contains only the business day and a verified-readback flag.
+These source changes do not update the deployed image or job configuration.
 
 Deployment, Scheduler creation and IAM are separate operations requiring their
 own authorization. The Scheduler identity needs permission to execute only the
