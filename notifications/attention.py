@@ -85,24 +85,15 @@ def _render_legacy_attention(*, decision, platform, account_alias, strategy_prof
 def render_attention(*, decision, platform, account_alias, strategy_profile,
                      guard_reason_codes=(), locale=None, daily_loss_context=None,
                      occurred_at=None, run_url=None):
-    """Use the shared format once the coordinated QPK pin is available."""
-    try:
-        from quant_platform_kit.risk.attention import render_attention_notification
-    except ImportError:
-        # Current production pin predates the shared evidence fields. Keep delivery
-        # working until the review bot coordinates the consumer pin separately.
-        return _render_legacy_attention(
-            decision=decision, platform=platform, account_alias=account_alias,
-            strategy_profile=strategy_profile, guard_reason_codes=guard_reason_codes,
-            locale=locale, daily_loss_context=daily_loss_context,
-        )
-    lang = locale or os.getenv("QSL_NOTIFY_LANG") or os.getenv("NOTIFY_LANG")
-    return render_attention_notification(
-        decision=decision, platform=platform, account_alias=account_alias,
-        strategy_profile=strategy_profile, guard_reason_codes=guard_reason_codes,
-        locale=lang, daily_loss_context=daily_loss_context,
-        occurred_at=occurred_at, run_url=run_url,
-    )
+    """Keep structured guard wording and evidence in the fixed P10 body."""
+    from .receipt_alerts import render_runtime_error
+    lines = _render_legacy_attention(decision=decision, platform=platform,
+        account_alias=account_alias, strategy_profile=strategy_profile,
+        guard_reason_codes=guard_reason_codes, locale=locale,
+        daily_loss_context=daily_loss_context).splitlines()
+    return render_runtime_error(locale=locale, reason="blocked_run", profile=strategy_profile,
+        occurred_at=occurred_at, workflow_url=run_url,
+        problem="；".join(lines[1:-1]), action=lines[-1])
 
 
 def publish_attention_telegram_transition(**kwargs):

@@ -825,7 +825,7 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(body, "Error")
         self.assertEqual(len(observed["payloads"]), 1)
         self.assertEqual(observed["payloads"][0][0]["chat_id"], "chat-1")
-        self.assertIn("Schwab strategy run failed", observed["payloads"][0][0]["text"])
+        self.assertTrue(observed["payloads"][0][0]["text"].startswith("[Asset management | Runtime error]"))
         self.assertNotIn("boom", observed["payloads"][0][0]["text"])
 
     def test_handle_schwab_runtime_error_fallback_uses_chinese_copy(self):
@@ -851,9 +851,9 @@ class RequestHandlingTests(unittest.TestCase):
         self.assertEqual(status, 500)
         self.assertEqual(body, "Error")
         text = observed["payloads"][0][0]["text"]
-        self.assertIn("Schwab 策略运行失败", text)
-        self.assertIn("运行目标：", text)
-        self.assertIn("未正常结束", text)
+        self.assertTrue(text.startswith("【资产管理｜运行错误】"))
+        self.assertIn("平台 / 策略：Schwab", text)
+        self.assertIn("是否提交订单：未知", text)
 
     def test_handle_schwab_sends_escalated_strategy_plugin_alert(self):
         module = load_module()

@@ -22,8 +22,9 @@ def test_runtime_context_reaches_rendered_notification_without_mutation(monkeypa
             telegram_sender=lambda **kwargs: sent.append(kwargs) or True,
         )
     assert result == {"sent": 1, "skipped": 0, "failed": 0}
-    assert "••42" in sent[0]["text"]
-    assert "DAILY_LOSS_UNKNOWN_FAIL_CLOSED" in sent[0]["text"]
+    assert sent[0]["text"].startswith("【资产管理｜运行错误】")
+    assert "••42" not in sent[0]["text"]
+    assert "当日亏损或上限无法核实" in sent[0]["text"]
     assert "2026-11-02 22:05:00 SGT" in sent[0]["text"]
     assert source["console_run_url"] in sent[0]["text"]
     assert source == original
@@ -38,7 +39,6 @@ def test_old_pin_keeps_delivery_available(monkeypatch):
         decision=decision, platform="schwab", account_alias="fake42",
         strategy_profile="soxl_soxx_trend_income", guard_reason_codes=("OBSERVATION_NOT_COMPLETE",), locale="en",
     )
-    assert text == attention._render_legacy_attention(
-        decision=decision, platform="schwab", account_alias="fake42",
-        strategy_profile="soxl_soxx_trend_income", guard_reason_codes=("OBSERVATION_NOT_COMPLETE",), locale="en",
-    )
+    assert text.startswith("[Asset management | Runtime error]")
+    assert "account snapshot is incomplete" in text
+    assert "fake42" not in text
