@@ -5,16 +5,35 @@ import json
 import os
 import signal
 from datetime import datetime, time, timedelta, timezone
+from time import monotonic, sleep
 from zoneinfo import ZoneInfo
+
+from google.api_core.exceptions import NotFound
 
 from notifications.digest_snapshot.digest_archive import ArchiveReader
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 PLATFORM = "schwab"
+WAIT_SECONDS = 480
+POLL_SECONDS = 30
 
 
 class DeadlineExceeded(BaseException):
     """Escape producer catch-all handlers; an interrupted write stays unknown."""
+
+
+class PublicationWaitTimeout(ValueError):
+    """A candidate remained absent for the bounded readiness wait."""
+
+    def __init__(self):
+        super().__init__("candidate_publication_wait_timeout")
+
+
+class PublicationDeadlineMissed(ValueError):
+    """No attempt or success is allowed after the central read deadline."""
+
+    def __init__(self):
+        super().__init__("candidate_publication_deadline_missed")
 
 
 def publication_day(now):
@@ -34,6 +53,7 @@ def _emit(env, *, now, read):
 def publish(env, *, now=None, client=None, emit=None):
     clock = now or (lambda: datetime.now(timezone.utc))
     started = clock()
+    wait_deadline = monotonic() + WAIT_SECONDS
     day = publication_day(started)
     if (env.get("DIGEST_PUBLISH_ENABLED") != "true"
             or env.get("QSL_ROUTINE_NOTIFICATION_MODE") != "daily_digest"
@@ -57,16 +77,57 @@ def publish(env, *, now=None, client=None, emit=None):
         from google.cloud import storage
         client = storage.Client()
     reader = ArchiveReader(client)
-    result = (emit or _emit)(env, now=started, read=reader.read)
-    if result.get("status") != "projected" or result.get("uploaded") is not True:
-        raise ValueError("candidate_publication_unconfirmed")
     identity = {"platform_id": target["platform_id"],
                 "strategy_profile": target["strategy_profile"],
                 "opaque_account_uid": env["DIGEST_OPAQUE_ACCOUNT_UID"],
                 "target_id": env["DIGEST_TARGET_ID"], "business_day": day}
     uri = (f"{env['DIGEST_CANDIDATES_GCS_URI'].rstrip('/')}/{identity['platform_id']}/"
            f"{day}/{env['DIGEST_STORE_TARGET']}.json")
-    body = reader.read(["cat", uri])
+
+    def check_deadline(current):
+        local = current.astimezone(SHANGHAI)
+        if local.date() != started.astimezone(SHANGHAI).date() or local.time() >= time(6, 55):
+            raise PublicationDeadlineMissed()
+
+    attempt_time = started
+    projected = False
+    while True:
+        if projected:
+            # Fresh generation-bound read on every attempt; never replay a write.
+            try:
+                body = reader.read(["cat", uri])
+                break
+            except NotFound:
+                pass
+        else:
+            try:
+                result = (emit or _emit)(env, now=attempt_time, read=reader.read)
+            except ValueError as error:
+                # These exact producer errors occur before its upload callback.
+                # Storage errors, conflicts and unknown writes must escape.
+                if type(error) is not ValueError or str(error) not in {
+                    "candidate_source_absent", "candidate_due_source_absent",
+                }:
+                    raise
+            else:
+                if (not isinstance(result, dict) or result.get("status") != "projected"
+                        or type(result.get("uploaded")) is not bool):
+                    raise ValueError("candidate_publication_unconfirmed")
+                # Even an explicit negative acknowledgement needs an exact-object
+                # readback. It does not permit another write or imply success.
+                projected = True
+                continue
+        current = clock()
+        check_deadline(current)
+        remaining = wait_deadline - monotonic()
+        if remaining <= 0:
+            raise PublicationWaitTimeout()
+        sleep(min(POLL_SECONDS, remaining))
+        attempt_time = clock()
+        check_deadline(attempt_time)
+        if monotonic() >= wait_deadline:
+            raise PublicationWaitTimeout()
+
     rows = body.get("runs")
     if (body.get("schema_version") != "qsl.digest_candidates.v1"
             or not isinstance(rows, list) or not rows
@@ -74,9 +135,9 @@ def publish(env, *, now=None, client=None, emit=None):
                    or any(row.get(key) != value for key, value in identity.items())
                    or type(row.get("actually_ran")) is not bool for row in rows)):
         raise ValueError("candidate_publication_readback_invalid")
-    finished = clock().astimezone(SHANGHAI)
-    if finished.date() != started.astimezone(SHANGHAI).date() or finished.time() >= time(6, 55):
-        raise ValueError("candidate_publication_deadline_missed")
+    check_deadline(clock())
+    if monotonic() > wait_deadline:
+        raise PublicationWaitTimeout()
     return {"status": "published", "business_day": day, "readback_verified": True}
 
 
@@ -89,7 +150,16 @@ def main():
     try:
         print(json.dumps(publish(os.environ), sort_keys=True))
         return 0
-    except (Exception, DeadlineExceeded):
+    except PublicationWaitTimeout:
+        print(json.dumps({"status": "failed", "reason_code": "candidate_publication_wait_timeout"}))
+        return 1
+    except PublicationDeadlineMissed:
+        print(json.dumps({"status": "failed", "reason_code": "candidate_publication_deadline_missed"}))
+        return 1
+    except DeadlineExceeded:
+        print(json.dumps({"status": "failed", "reason_code": "candidate_publication_watchdog_timeout"}))
+        return 1
+    except Exception:
         # Never expose exception messages, private locators or credentials.
         print(json.dumps({"status": "failed", "reason_code": "candidate_publication_unconfirmed"}))
         return 1
