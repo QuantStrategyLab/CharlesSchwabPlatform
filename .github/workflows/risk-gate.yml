@@ -193,12 +193,13 @@ jobs:
               if (!commits.length || commits.length >= 250) return false;
               // `author.login` is the account GitHub links from the commit email,
               // and the author name is free text; a human can set either. A
-              // verified signature only proves some key signed it, so the
-              // committer must also be Dependabot's authenticated bot account.
-              // Web-interface commits do not qualify. One commit outside that
-              // shape sends the PR down the normal review path.
+              // verified signature only proves some key signed it, so the rest
+              // of the shape has to match a commit GitHub itself made for the
+              // bot: committer `web-flow` from `noreply@github.com`. This is the
+              // same identity `scripts/dependabot_auto_merge_gate.py` accepts.
               return commits.every(commit => commit.author?.login === 'dependabot[bot]'
-                && commit.committer?.login === 'dependabot[bot]'
+                && commit.committer?.login === 'web-flow'
+                && commit.commit?.committer?.email === 'noreply@github.com'
                 && commit.commit?.verification?.verified === true);
             }
             // The dependency policy names the workflows whose action updates may
@@ -302,26 +303,46 @@ jobs:
               // description always names which one applied, so an agent-cleared
               // high-risk merge is visible instead of passing as a human review.
               const APPROVAL_LABELS = ['owner-approved', 'agent-approved'];
+              // A label lives on the pull request, not on a commit, so a push
+              // after the label leaves it looking current. The run GitHub starts
+              // for the `labeled` event knows from its payload which head the
+              // label was added to, and records that head as a commit status.
+              // Every later evaluation, including a sweep or a Codex-comment
+              // run, credits the label only when the current head carries the
+              // record. Commit dates cannot prove which revision was current,
+              // and a status is keyed by the SHA it names.
+              const CLEARING_RECORD = 'clearing-label';
               let approval = null;
               if (pr.labels.some(label => APPROVAL_LABELS.includes(label.name))) {
                 const events = await github.paginate(github.rest.issues.listEvents, { ...repo, issue_number: number, per_page: 100 });
-                const { data: headCommit } = await github.rest.repos.getCommit({ ...repo, ref: sha });
-                const headTime = Date.parse(headCommit.commit?.committer?.date || headCommit.commit?.author?.date || '');
                 const liveLabel = name => {
                   const latest = events.filter(event => ['labeled', 'unlabeled'].includes(event.event)
                     && event.label?.name === name).sort((a, b) => b.id - a.id)[0];
-                  // A label only clears the head it was added to. The label list
-                  // still shows it after a later push, so the event time is
-                  // compared with the head commit date; an unreadable date fails
-                  // closed and clears nothing.
-                  const addedAt = Date.parse(latest?.created_at || '');
                   return latest?.event === 'labeled' && APPROVAL_OWNER !== ''
-                    && latest.actor?.login === APPROVAL_OWNER
-                    && Number.isFinite(headTime) && Number.isFinite(addedAt) && addedAt >= headTime;
+                    && latest.actor?.login === APPROVAL_OWNER ? latest : null;
                 };
                 // A human confirmation outranks an agent's when both are present.
-                if (liveLabel('owner-approved')) approval = 'owner';
-                else if (liveLabel('agent-approved')) approval = 'agent';
+                const live = liveLabel('owner-approved') || liveLabel('agent-approved');
+                if (live) {
+                  const name = live.label.name;
+                  const record = `${name} on this head`;
+                  const labeledHead = context.payload.action === 'labeled'
+                    && context.payload.label?.name === name
+                    ? context.payload.pull_request?.head?.sha : null;
+                  if (labeledHead === sha) {
+                    // This run is the label's own event, so the payload's head is
+                    // the authenticated answer: record it for later evaluations.
+                    await status(CLEARING_RECORD, 'success', record);
+                    approval = name === 'owner-approved' ? 'owner' : 'agent';
+                  } else {
+                    const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef,
+                      { ...repo, ref: sha, per_page: 100 });
+                    if (statuses.some(entry => entry.context === CLEARING_RECORD
+                      && entry.state === 'success' && entry.description === record)) {
+                      approval = name === 'owner-approved' ? 'owner' : 'agent';
+                    }
+                  }
+                }
               }
               const { data: current } = await github.rest.pulls.get({ ...repo, pull_number: number });
               if (current.head.sha !== sha || current.body !== pr.body
