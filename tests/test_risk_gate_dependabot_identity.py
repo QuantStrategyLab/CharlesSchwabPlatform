@@ -42,24 +42,32 @@ dependabotHead(1).then(value => process.stdout.write(JSON.stringify(value)))
         return json.loads(result.stdout)
 
     @staticmethod
-    def commit(*, author="dependabot[bot]", committer="dependabot[bot]",
-               verified=True):
+    def commit(*, author="dependabot[bot]", committer="web-flow",
+               email="noreply@github.com", verified=True):
         return {
             "author": {"login": author}, "committer": {"login": committer},
-            "commit": {"verification": {"verified": verified}},
+            "commit": {
+                "committer": {"email": email},
+                "verification": {"verified": verified},
+            },
         }
 
     def test_authentic_verified_dependabot_commits_are_eligible(self):
         self.assertTrue(self.evaluate([self.commit(), self.commit()]))
 
-    def test_web_interface_committer_cannot_impersonate_dependabot(self):
-        self.assertFalse(self.evaluate([self.commit(committer="web-flow")]))
-
-    def test_unsigned_invalid_or_human_commits_are_ineligible(self):
+    def test_a_commit_outside_the_bot_identity_is_ineligible(self):
+        # Dependabot's own commits are authored by the bot and committed by
+        # GitHub as `web-flow` from `noreply@github.com`; anything else either
+        # was not the bot or was not made by GitHub for it.
         for commit in (
-            self.commit(verified=False), self.commit(verified="true"),
             self.commit(author="example-human"),
-            self.commit(committer="example-human"), {},
+            self.commit(committer="dependabot[bot]"),
+            self.commit(committer="example-human"),
+            self.commit(email="example@example.com"),
+            self.commit(email=None),
+            self.commit(verified=False),
+            self.commit(verified="true"),
+            {},
             {"author": {"login": "dependabot[bot]"}},
         ):
             with self.subTest(commit=commit):
@@ -72,3 +80,7 @@ dependabotHead(1).then(value => process.stdout.write(JSON.stringify(value)))
 
     def test_transport_failure_remains_an_error(self):
         self.evaluate(transport_error=True)
+
+
+if __name__ == "__main__":
+    unittest.main()

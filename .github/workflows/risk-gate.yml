@@ -32,13 +32,80 @@ permissions:
   actions: write
 
 jobs:
+  # The `labeled` payload is the only authenticated record of which head a
+  # clearing label was added to. It is written here, in its own job with no
+  # concurrency group, because an evaluation can be superseded by a later event
+  # and the evidence must not depend on that run reaching its next step.
+  record_label:
+    name: Record the head a clearing label was added to
+    if: github.event_name == 'pull_request_target' && github.event.action == 'labeled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: read
+      pull-requests: read
+      statuses: write
+    steps:
+      - name: Publish the label's head as an immutable commit status
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          APPROVAL_OWNER: ${{ vars.RISK_GATE_OWNER }}
+        with:
+          script: |
+            const label = context.payload.label?.name;
+            if (!['owner-approved', 'agent-approved'].includes(label)) return;
+            // Only the configured approver's label carries a claim.
+            if (!process.env.APPROVAL_OWNER || context.payload.sender?.login !== process.env.APPROVAL_OWNER) return;
+            const sha = context.payload.pull_request?.head?.sha;
+            // A closed pull request keeps no authority over a commit that
+            // another pull request may now use.
+            if (!sha || context.payload.pull_request?.state !== 'open') return;
+            // The pull request is part of the record: two PRs can share a
+            // commit, and an approval given on one must not clear the other.
+            const number = context.payload.pull_request?.number;
+            if (!number) return;
+            // The event id is part of the record too. A label can be revoked
+            // and added again later; without the id, moving the head back would
+            // revive the revoked approval, because the record and the live
+            // event would not be the same approval.
+            //
+            // The id has to come from this delivery, not from the newest event
+            // at execution time: a run queued for head A can start after the
+            // label was revoked and added again on head B, and taking the
+            // newest event would stamp B's approval onto A. The payload carries
+            // no event id, but a label change bumps `pull_request.updated_at`
+            // to the addition's own time, and that snapshot arrived with the
+            // head it records, so matching on that time names this addition.
+            const addedAt = context.payload.pull_request?.updated_at;
+            if (!addedAt) return;
+            const events = await github.paginate(github.rest.issues.listEvents, {
+              ...context.repo, issue_number: number, per_page: 100,
+            });
+            const matches = events.filter(event => event.event === 'labeled'
+              && event.label?.name === label
+              && event.actor?.login === process.env.APPROVAL_OWNER
+              && event.created_at === addedAt);
+            // Two additions in the same second cannot be told apart; recording
+            // either could credit the wrong head, so this delivery records
+            // nothing and the gate stays closed until a later addition.
+            if (matches.length !== 1) return;
+            const record = matches[0];
+            await github.rest.repos.createCommitStatus({
+              ...context.repo, sha, context: 'clearing-label', state: 'success',
+              description: `${label} for PR ${number} at event ${record.id} on this head`,
+            });
+
   evaluate:
     name: Evaluate PR governance
-    if: github.event_name != 'issue_comment' || (github.event.issue.pull_request && (github.event.comment.user.login == 'chatgpt-codex-connector[bot]' || github.event.comment.user.login == 'chatgpt-codex-connector'))
+    needs: record_label
+    # A skipped recorder is the normal case for every other event.
+    if: always() && needs.record_label.result != 'cancelled'
+      && (github.event_name != 'issue_comment' || (github.event.issue.pull_request && (github.event.comment.user.login == 'chatgpt-codex-connector[bot]' || github.event.comment.user.login == 'chatgpt-codex-connector')))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     # Job-level, so a comment from anyone else skips the job without cancelling
-    # an evaluation already running for this PR.
+    # an evaluation already running for this PR. Label evidence no longer rides
+    # on this run, so a superseded evaluation costs nothing.
     concurrency:
       group: risk-gate-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
       cancel-in-progress: true
@@ -101,7 +168,7 @@ jobs:
             const isWorkflow = path => path.startsWith('.github/workflows/');
             function highRisk(path) {
               const p = path.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
-              if (/(^|\/)codeowners$/.test(p)) return true;
+              if (p.startsWith('.github/governance/') || /(^|\/)codeowners$/.test(p)) return true;
               if (/(^|\/)(docs?|tests?|examples?|fixtures)(\/|$)/.test(p)) return false;
               if (/(^|\/)\.env(?:[./_-]|$)/.test(p)) return true;
               // Runtime configuration decides behaviour the diff does not show.
@@ -113,9 +180,11 @@ jobs:
               // workflow file, and a diff alone cannot show who calls it.
               if (/^\.github\/scripts\//.test(path)) return true;
               if (/^scripts\/[^/]*(?:check|verify|validate|hygiene|lint)[^/]*\.(?:py|sh|js|cjs|mjs|ts)$/.test(p)) return true;
-              if (/(^|[\/_.-])(trad(?:e|es|ing)|execution|executors?|orders?|brokers?|risk|deploy(?:ment)?|secrets?|credentials?|iam|runtime|strateg(?:y|ies))([\/_.-]|$)/.test(p)) return true;
+              // Release, deployment, credential and live-trading tooling are named here
+              // because a diff alone rarely shows what a script changes at run time.
+              if (/(^|[\/_.-])(ai_service|aiservice|kelly|stop_loss|trad(?:e|es|ing)|execution|executors?|orders?|brokers?|risk|release|deploy(?:ment)?|secrets?|credentials?|iam|service_account|serviceaccount|permission|role_binding|k8s|kubernetes|runtime|strateg(?:y|ies))([\/_.-]|$)/.test(p)) return true;
               return /(^|\/)(dockerfile(?:\..*)?|docker-compose[^/]*|compose\.ya?ml|vercel\.json|wrangler\.(?:toml|jsonc?)|firebase\.json)$/.test(p)
-                || /\.(?:tf|tfvars)$/.test(p);
+                || /\.(?:tf|tfvars|pem|key|p12|pfx)$/.test(p);
             }
             // A repin keeps the action and changes only its ref. Swapping in a
             // different action is a different change and takes the normal tier.
@@ -193,12 +262,13 @@ jobs:
               if (!commits.length || commits.length >= 250) return false;
               // `author.login` is the account GitHub links from the commit email,
               // and the author name is free text; a human can set either. A
-              // verified signature only proves some key signed it, so the
-              // committer must also be Dependabot's authenticated bot account.
-              // Web-interface commits do not qualify. One commit outside that shape
-              // sends the PR down the normal review path.
+              // verified signature only proves some key signed it, so the rest
+              // of the shape has to match a commit GitHub itself made for the
+              // bot: committer `web-flow` from `noreply@github.com`. This is the
+              // same identity `scripts/dependabot_auto_merge_gate.py` accepts.
               return commits.every(commit => commit.author?.login === 'dependabot[bot]'
-                && commit.committer?.login === 'dependabot[bot]'
+                && commit.committer?.login === 'web-flow'
+                && commit.commit?.committer?.email === 'noreply@github.com'
                 && commit.commit?.verification?.verified === true);
             }
             // The dependency policy names the workflows whose action updates may
@@ -228,15 +298,30 @@ jobs:
                 return { state: 'failure', description: 'Base branch advanced since this head was built; update the branch then comment @codex review' };
               }
               const comments = await github.paginate(github.rest.issues.listComments, { ...repo, issue_number: prNumber, per_page: 100 });
+              // The newest marker-bearing comment is the one that counts, and it is
+              // chosen before its contents are validated. Choosing the newest
+              // *parseable* receipt instead would let a newer malformed or blocking
+              // receipt fall back to an older clean one, which is approval by
+              // accident. Comments updated in the same second are ordered by the
+              // higher id, so a refresher written later in that second still wins.
+              const stamped = comment => {
+                const value = Date.parse(comment.updated_at);
+                return Number.isFinite(value) ? value : 0;
+              };
               const receipts = comments
-                .filter(comment => CODEX_LOGIN.test(comment.user?.login || ''))
-                .map(comment => ({ comment, match: REVIEW_RECEIPT.exec(comment.body || '') }))
-                .filter(entry => entry.match)
-                .sort((a, b) => new Date(b.comment.updated_at) - new Date(a.comment.updated_at));
+                .filter(comment => CODEX_LOGIN.test(comment.user?.login || '')
+                  && typeof comment.body === 'string'
+                  && comment.body.includes('codex-review-state:v1'))
+                .sort((a, b) => stamped(b) - stamped(a) || (b.id || 0) - (a.id || 0));
               if (!receipts.length) return { state: 'pending', description: 'No Codex review yet; comment @codex review to start one' };
+              const markers = [...receipts[0].body.matchAll(/<!--\s*codex-review-state:v1\s*([\s\S]*?)\s*-->/g)];
+              // Two markers in one comment cannot both be the review that was run.
+              if (markers.length !== 1) {
+                return { state: 'error', description: 'Newest Codex review comment has a missing or duplicated receipt' };
+              }
               let receipt;
               try {
-                receipt = JSON.parse(receipts[0].match[1]);
+                receipt = JSON.parse(markers[0][1]);
               } catch {
                 return { state: 'error', description: 'Codex review receipt is not valid JSON' };
               }
@@ -283,7 +368,7 @@ jobs:
               // pushing onto a bot branch must not inherit the skip.
               const isDependabot = pr.user?.login === 'dependabot[bot]' && await dependabotHead(number);
               const actionFiles = isDependabot ? await eligibleActionFiles(pr.base.ref) : null;
-              await status('risk-gate', 'pending', 'Evaluating changed paths, owner approval and AI review');
+              await status('risk-gate', 'pending', 'Evaluating changed paths, clearing label and AI review');
               await status('pr-template', 'pending', 'Checking AI, change and verification fields');
               await status('ai-review', 'pending', 'Reading the Codex review receipt');
               const files = await github.paginate(github.rest.pulls.listFiles, { ...repo, pull_number: number, per_page: 100 });
@@ -302,6 +387,13 @@ jobs:
               // description always names which one applied, so an agent-cleared
               // high-risk merge is visible instead of passing as a human review.
               const APPROVAL_LABELS = ['owner-approved', 'agent-approved'];
+              // A label lives on the pull request, not on a commit, so a push
+              // after the label leaves it looking current. The `record-label` job
+              // writes the head from the `labeled` event to a commit status, and
+              // this evaluation credits the label only when the current head
+              // carries that record. Commit dates cannot prove which revision was
+              // current, and a status is keyed by the SHA it names.
+              const CLEARING_RECORD = 'clearing-label';
               let approval = null;
               if (pr.labels.some(label => APPROVAL_LABELS.includes(label.name))) {
                 const events = await github.paginate(github.rest.issues.listEvents, { ...repo, issue_number: number, per_page: 100 });
@@ -309,11 +401,29 @@ jobs:
                   const latest = events.filter(event => ['labeled', 'unlabeled'].includes(event.event)
                     && event.label?.name === name).sort((a, b) => b.id - a.id)[0];
                   return latest?.event === 'labeled' && APPROVAL_OWNER !== ''
-                    && latest.actor?.login === APPROVAL_OWNER;
+                    && latest.actor?.login === APPROVAL_OWNER ? latest : null;
                 };
-                // A human confirmation outranks an agent's when both are present.
-                if (liveLabel('owner-approved')) approval = 'owner';
-                else if (liveLabel('agent-approved')) approval = 'agent';
+                // Only a label bound to this head counts, so a stale owner label
+                // cannot shadow a fresh agent label: each label is checked on its
+                // own and owner precedence applies after that, never before.
+                const onHead = {};
+                const live = APPROVAL_LABELS.map(name => [name, liveLabel(name)]).filter(([, event]) => event);
+                if (live.length) {
+                  const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef,
+                    { ...repo, ref: sha, per_page: 100 });
+                  for (const [name, event] of live) {
+                    // The record must name the same event that is live now, so a
+                    // revoked approval is not revived by an older record.
+                    if (statuses.some(entry => entry.context === CLEARING_RECORD
+                      && entry.state === 'success'
+                      && entry.description === `${name} for PR ${number} at event ${event.id} on this head`)) {
+                      onHead[name] = true;
+                    }
+                  }
+                }
+                // A human confirmation outranks an agent's when both are on this head.
+                if (onHead['owner-approved']) approval = 'owner';
+                else if (onHead['agent-approved']) approval = 'agent';
               }
               const { data: current } = await github.rest.pulls.get({ ...repo, pull_number: number });
               if (current.head.sha !== sha || current.body !== pr.body
@@ -339,7 +449,7 @@ jobs:
               const tierNote = !risky ? 'Low-risk paths: no owner approval needed'
                 : approval === 'owner' ? 'High-risk paths: owner-approved label verified'
                 : approval === 'agent' ? 'High-risk paths: cleared by agent-approved, NOT confirmed by the owner'
-                : 'High-risk paths: needs-owner-approval; owner must add owner-approved';
+                : 'High-risk paths: needs a clearing label; owner-approved or agent-approved';
               let gateState;
               let gateNote;
               if (!tierOK) {
