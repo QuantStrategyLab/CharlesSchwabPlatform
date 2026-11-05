@@ -272,7 +272,7 @@ def project_schwab_account_facts_history(
             or report.get("service_name") != expected_service_name
             or report.get("strategy_profile") != STRATEGY_PROFILE
             or report.get("account_scope") not in (None, ACCOUNT_SCOPE)
-            or report.get("status") != "ok"
+            or report.get("status") not in ("ok", "error")
             or report.get("errors") != []
         ):
             raise _ProjectionError("report_identity_mismatch")
@@ -298,6 +298,12 @@ def project_schwab_account_facts_history(
         if not isinstance(now, datetime) or now.tzinfo is None or now.utcoffset() is None:
             raise _ProjectionError("invalid_observation_time")
         current = now.astimezone(timezone.utc)
+        if report.get("status") == "error":
+            # A validated gate-only error still carries the broker observation.
+            # Validate identity/time first and never relabel execution as healthy.
+            from notifications.approved_gates import report_gate_reasons
+            if not report_gate_reasons(report, observed_at=current):
+                raise _ProjectionError("report_identity_mismatch")
 
         summary = report.get("summary")
         observation = summary.get("account_observation") if isinstance(summary, Mapping) else None

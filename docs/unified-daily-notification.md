@@ -256,12 +256,17 @@ and the completed archive. The outer `runtime_report.v1` status remains `ok` or
 `error`: blocked, failed, missing and unknown execution outcomes use `error`;
 recognized completed, preview and broker-submission outcomes use `ok`.
 A positively completed zero-order cycle without a submission status is normalized
-to `no_action` only when the existing cycle evidence classifies it as routine;
-missing completion evidence and conflicting failures still use `error`.
+to `no_action` when the existing completion and failure checks pass. An empty
+dry-run preview uses the same checks and reports `dry_run_completed`; its digest
+remains ineligible and live order and fill counts remain unknown. Missing
+completion evidence and conflicting failures still use `error`.
 Verified consecutive-loss and daily-loss blocks retain their structured reasons
 with an outer `error`. They remain rejected by the execution heartbeat, while
 their notification is deferred to the digest only after receipt validation and
 confirmed candidate publication. Other failures still alert immediately.
+These validated gate-only errors can still publish the same cycle's account
+observation through the account-facts projector. Receipt, source identity,
+currency and freshness validation remain required; this does not accept execution.
 `summary.execution_status` retains the precise outcome. An outer `ok` still does
 not prove a fill or reconciliation. Probe and skipped-report semantics are unchanged.
 

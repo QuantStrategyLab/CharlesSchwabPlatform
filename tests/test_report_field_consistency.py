@@ -103,11 +103,12 @@ def test_completed_zero_order_cycle_is_healthy_without_submission_status(monkeyp
     {'broker_submission_done': True}, {'execution_status': 'unknown'},
     {'execution_status': 'blocked'}, {'execution_status': 'failed'},
 ])
-def test_completion_marker_cannot_hide_missing_or_conflicting_evidence(change):
+@pytest.mark.parametrize('dry_run', [False, True])
+def test_completion_marker_cannot_hide_missing_or_conflicting_evidence(change, dry_run):
     from application.runtime_report_summary import execution_report_status
     result = SimpleNamespace(execution={'notification_cycle_completed': True, **change},
                              submitted_orders=[], trade_logs=[])
-    summary = summarize_execution_cycle_result(result, dry_run=False)
+    summary = summarize_execution_cycle_result(result, dry_run=dry_run)
     assert execution_report_status(summary) == 'error'
 
 
@@ -116,3 +117,31 @@ def test_completion_marker_does_not_establish_submission_outcome():
     result = SimpleNamespace(execution={'notification_cycle_completed': True},
                              submitted_orders=[{'status': 'unknown'}], trade_logs=[])
     assert execution_report_status(summarize_execution_cycle_result(result, dry_run=False)) == 'error'
+
+
+@pytest.mark.parametrize('previous', [{}, {'execution_status': 'completed', 'result': 'completed'}])
+def test_completed_empty_dry_run_is_healthy_without_live_digest_evidence(previous):
+    from application.runtime_report_summary import execution_report_status
+    from notifications.accepted_orders import cycle_notification_evidence
+
+    result = SimpleNamespace(execution={'notification_cycle_completed': True}, submitted_orders=[], trade_logs=[])
+    before = copy.deepcopy(result)
+    previous_before = copy.deepcopy(previous)
+    summary = summarize_execution_cycle_result(result, dry_run=True, existing_summary=previous)
+    assert execution_report_status(summary) == 'ok'
+    assert summary['execution_status'] == summary['result'] == 'dry_run_completed'
+    assert summary['orders_previewed_count'] == summary['orders_submitted_count'] == 0
+    assert summary['broker_submission_done'] is False
+    assert summary['dry_run_order_preview_available'] is False
+    assert summary['notification_digest'] == cycle_notification_evidence(result.execution, [], dry_run=True)
+    assert summary['notification_digest']['routine'] is False
+    assert summary['notification_digest']['order_count'] is None
+    assert summary['notification_digest']['fill_count'] is None
+    assert result == before and previous == previous_before
+
+
+@pytest.mark.parametrize('dry_run', [False, True])
+def test_empty_execution_without_completion_is_not_healthy(dry_run):
+    from application.runtime_report_summary import execution_report_status
+    result = SimpleNamespace(execution={}, submitted_orders=[], trade_logs=[])
+    assert execution_report_status(summarize_execution_cycle_result(result, dry_run=dry_run)) == 'error'

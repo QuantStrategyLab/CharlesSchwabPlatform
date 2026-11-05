@@ -74,10 +74,13 @@ def summarize_execution_cycle_result(
     from notifications.accepted_orders import cycle_notification_evidence
     raw_orders = tuple(getattr(result, "submitted_orders", ()) or ())
     summary["notification_digest"] = cycle_notification_evidence(execution, raw_orders, dry_run=dry_run)
-    if not execution_status and not raw_orders and summary["notification_digest"]["routine"] is True:
-        # Reuse the existing completion and failure checks for a zero-order run.
-        # This normalizes the report only; the execution result stays untouched.
-        summary.update(result="no_action", execution_status="no_action")
+    if not execution_status and not raw_orders:
+        # Validate completion independently of dry-run digest eligibility. Keep
+        # the original preview evidence above: no live orders or fills are proved.
+        completion = cycle_notification_evidence(execution, raw_orders)
+        if completion["routine"] is True:
+            status = "dry_run_completed" if dry_run else "no_action"
+            summary.update(result=status, execution_status=status)
     if unified_enabled() and execution.get("notification_approved_gates"):
         from notifications.approved_gates import clean_gate_reasons
         summary["notification_approved_gates"] = clean_gate_reasons(execution["notification_approved_gates"])
