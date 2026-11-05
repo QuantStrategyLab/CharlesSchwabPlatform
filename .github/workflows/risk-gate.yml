@@ -42,6 +42,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
+      issues: read
+      pull-requests: read
       statuses: write
     steps:
       - name: Publish the label's head as an immutable commit status
@@ -62,9 +64,21 @@ jobs:
             // commit, and an approval given on one must not clear the other.
             const number = context.payload.pull_request?.number;
             if (!number) return;
+            // The event id is part of it too. A label can be revoked and added
+            // again later; without the id, moving the head back would revive
+            // the revoked approval, because the record and the live event would
+            // not be the same approval.
+            const events = await github.paginate(github.rest.issues.listEvents, {
+              ...context.repo, issue_number: number, per_page: 100,
+            });
+            const latest = events
+              .filter(event => event.event === 'labeled' && event.label?.name === label
+                && event.actor?.login === process.env.APPROVAL_OWNER)
+              .sort((a, b) => b.id - a.id)[0];
+            if (!latest) return;
             await github.rest.repos.createCommitStatus({
               ...context.repo, sha, context: 'clearing-label', state: 'success',
-              description: `${label} for PR ${number} on this head`,
+              description: `${label} for PR ${number} at event ${latest.id} on this head`,
             });
 
   evaluate:
@@ -362,14 +376,18 @@ jobs:
                 // cannot shadow a fresh agent label: each label is checked on its
                 // own and owner precedence applies after that, never before.
                 const onHead = {};
-                const live = APPROVAL_LABELS.filter(liveLabel);
+                const live = APPROVAL_LABELS.map(name => [name, liveLabel(name)]).filter(([, event]) => event);
                 if (live.length) {
                   const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef,
                     { ...repo, ref: sha, per_page: 100 });
-                  for (const name of live) {
+                  for (const [name, event] of live) {
+                    // The record must name the same event that is live now, so a
+                    // revoked approval is not revived by an older record.
                     if (statuses.some(entry => entry.context === CLEARING_RECORD
                       && entry.state === 'success'
-                      && entry.description === `${name} for PR ${number} on this head`)) onHead[name] = true;
+                      && entry.description === `${name} for PR ${number} at event ${event.id} on this head`)) {
+                      onHead[name] = true;
+                    }
                   }
                 }
                 // A human confirmation outranks an agent's when both are on this head.
