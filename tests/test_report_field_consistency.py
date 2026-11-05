@@ -71,3 +71,48 @@ def test_current_execution_overrides_stale_summary_without_mutating_it():
     assert summary['execution_status'] == summary['result'] == 'blocked'
     assert summary['routine_observation_counts'] == {}
     assert previous['execution_status'] == 'completed'
+
+
+@pytest.mark.parametrize('previous', [{}, {'execution_status': 'completed', 'result': 'completed'}])
+def test_completed_zero_order_cycle_is_healthy_without_submission_status(monkeypatch, previous):
+    from application.runtime_report_summary import execution_report_status
+    from notifications.accepted_orders import cycle_notification_evidence
+    from scripts import execution_report_heartbeat as heartbeat
+    from test_notification_quiet import NOW, mock_heartbeat
+    from test_runtime_daily_report_projection import report
+
+    result = SimpleNamespace(execution={'notification_cycle_completed': True}, submitted_orders=[], trade_logs=[])
+    before = copy.deepcopy(result.execution)
+    summary = summarize_execution_cycle_result(result, dry_run=False, existing_summary=previous)
+    assert summary['notification_digest'] == cycle_notification_evidence(result.execution, [])
+    assert summary['notification_digest']['routine'] is True
+    assert execution_report_status(summary) == 'ok'
+    assert summary['execution_status'] == summary['result'] == 'no_action'
+    source = report('no_action', summary=summary, status=execution_report_status(summary),
+                    started_at='2026-10-05T12:00:00Z', finished_at='2026-10-05T12:01:00Z', diagnostics={})
+    sent = mock_heartbeat(monkeypatch, source)
+    assert heartbeat.main(NOW) == 0
+    assert sent == []
+    assert result.execution == before
+
+
+@pytest.mark.parametrize('change', [
+    {'notification_cycle_completed': False}, {'notification_cycle_completed': 1},
+    {'notification_order_issue': True}, {'errors': ['fake-error']},
+    {'signal_metadata': {'errors': ['fake-error']}}, {'orders_pending_count': 1},
+    {'broker_submission_done': True}, {'execution_status': 'unknown'},
+    {'execution_status': 'blocked'}, {'execution_status': 'failed'},
+])
+def test_completion_marker_cannot_hide_missing_or_conflicting_evidence(change):
+    from application.runtime_report_summary import execution_report_status
+    result = SimpleNamespace(execution={'notification_cycle_completed': True, **change},
+                             submitted_orders=[], trade_logs=[])
+    summary = summarize_execution_cycle_result(result, dry_run=False)
+    assert execution_report_status(summary) == 'error'
+
+
+def test_completion_marker_does_not_establish_submission_outcome():
+    from application.runtime_report_summary import execution_report_status
+    result = SimpleNamespace(execution={'notification_cycle_completed': True},
+                             submitted_orders=[{'status': 'unknown'}], trade_logs=[])
+    assert execution_report_status(summarize_execution_cycle_result(result, dry_run=False)) == 'error'

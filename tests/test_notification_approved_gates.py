@@ -69,25 +69,37 @@ def test_approved_gates_are_digest_candidates_with_every_reason_and_no_order(mon
     assert summary["notification_approved_gates"] == reasons
 
 
+@pytest.mark.parametrize("outer_status", ["ok", "error"])
 @pytest.mark.parametrize("reasons", [[CONSECUTIVE], [DAILY], [CONSECUTIVE, DAILY]])
-def test_approved_block_receipt_suppresses_alert_only_after_candidate_and_still_fails(monkeypatch, reasons):
+def test_approved_block_receipt_suppresses_alert_only_after_candidate_and_still_fails(monkeypatch, reasons, outer_status):
     store = configure(monkeypatch)
     source = source_report(reasons)
-    assert report_gate_reasons(source) == reasons
+    source["status"] = outer_status
+    assert report_gate_reasons(source, observed_at=NOW) == reasons
+    projection = unified._project_runs([source], expected_target=source["runtime_target"],
+        opaque_account_uid="fake-opaque", target_id="fake-target", now=NOW)
+    assert projection["runs"][0]["approved_gate_reasons"] == reasons
     before = copy.deepcopy(source)
     sent = mock_heartbeat(monkeypatch, source)
     monkeypatch.setenv("RUNTIME_TARGET_JSON", json.dumps(source["runtime_target"]))
     monkeypatch.setattr(unified, "emit_completed_candidates", lambda env, **kwargs: {"uploaded": True})
     assert heartbeat.main(NOW) == 1
     assert not sent and source == before
-    assert heartbeat._is_accepted_report(source) == (False, "rejected inner execution status")
+    expected_reason = "rejected inner execution status" if outer_status == "ok" else "rejected status=error stage=-"
+    assert heartbeat._is_accepted_report(source) == (False, expected_reason)
     assert store.facts == {}  # Archive coverage owns this receipt; no second cycle fact.
 
 
-@pytest.mark.parametrize("change", ["missing_receipt", "wrong_receipt", "order", "error", "pending", "other_reason", "bad_limit", "producer_failed"])
-def test_other_receipt_failures_stay_immediate(monkeypatch, change):
+@pytest.mark.parametrize("outer_status", ["ok", "error"])
+@pytest.mark.parametrize("change", ["missing_receipt", "wrong_receipt", "order", "error", "pending", "other_reason", "bad_limit", "producer_failed", "stage", "notification_failure", "stale_receipt", "unknown_outer"])
+def test_other_receipt_failures_stay_immediate(monkeypatch, change, outer_status):
     configure(monkeypatch)
     source = source_report([CONSECUTIVE])
+    source["status"] = outer_status
+    if change == "stage": source["stage"] = "FUNDING_BLOCKED"
+    if change == "notification_failure": source["notification_error"] = "fake-error"
+    if change == "stale_receipt": source["execution_receipt"]["observed_at"] = "2026-10-05T11:00:00Z"
+    if change == "unknown_outer": source["status"] = "unknown"
     if change == "missing_receipt": source.pop("execution_receipt")
     if change == "wrong_receipt": source["execution_receipt"]["strategy_profile"] = "another-strategy"
     if change == "order": source["summary"].update(orders_submitted_count=1, broker_submission_done=True)

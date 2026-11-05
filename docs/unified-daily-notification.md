@@ -255,6 +255,13 @@ Execution cycles use the same summary builder for early notification candidates
 and the completed archive. The outer `runtime_report.v1` status remains `ok` or
 `error`: blocked, failed, missing and unknown execution outcomes use `error`;
 recognized completed, preview and broker-submission outcomes use `ok`.
+A positively completed zero-order cycle without a submission status is normalized
+to `no_action` only when the existing cycle evidence classifies it as routine;
+missing completion evidence and conflicting failures still use `error`.
+Verified consecutive-loss and daily-loss blocks retain their structured reasons
+with an outer `error`. They remain rejected by the execution heartbeat, while
+their notification is deferred to the digest only after receipt validation and
+confirmed candidate publication. Other failures still alert immediately.
 `summary.execution_status` retains the precise outcome. An outer `ok` still does
 not prove a fill or reconciliation. Probe and skipped-report semantics are unchanged.
 
