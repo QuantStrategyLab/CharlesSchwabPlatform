@@ -32,13 +32,52 @@ permissions:
   actions: write
 
 jobs:
+  # The `labeled` payload is the only authenticated record of which head a
+  # clearing label was added to. It is written here, in its own job with no
+  # concurrency group, because an evaluation can be superseded by a later event
+  # and the evidence must not depend on that run reaching its next step.
+  record_label:
+    name: Record the head a clearing label was added to
+    if: github.event_name == 'pull_request_target' && github.event.action == 'labeled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      statuses: write
+    steps:
+      - name: Publish the label's head as an immutable commit status
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          APPROVAL_OWNER: ${{ vars.RISK_GATE_OWNER }}
+        with:
+          script: |
+            const label = context.payload.label?.name;
+            if (!['owner-approved', 'agent-approved'].includes(label)) return;
+            // Only the configured approver's label carries a claim.
+            if (!process.env.APPROVAL_OWNER || context.payload.sender?.login !== process.env.APPROVAL_OWNER) return;
+            const sha = context.payload.pull_request?.head?.sha;
+            // A closed pull request keeps no authority over a commit that
+            // another pull request may now use.
+            if (!sha || context.payload.pull_request?.state !== 'open') return;
+            // The pull request is part of the record: two PRs can share a
+            // commit, and an approval given on one must not clear the other.
+            const number = context.payload.pull_request?.number;
+            if (!number) return;
+            await github.rest.repos.createCommitStatus({
+              ...context.repo, sha, context: 'clearing-label', state: 'success',
+              description: `${label} for PR ${number} on this head`,
+            });
+
   evaluate:
     name: Evaluate PR governance
-    if: github.event_name != 'issue_comment' || (github.event.issue.pull_request && (github.event.comment.user.login == 'chatgpt-codex-connector[bot]' || github.event.comment.user.login == 'chatgpt-codex-connector'))
+    needs: record_label
+    # A skipped recorder is the normal case for every other event.
+    if: always() && needs.record_label.result != 'cancelled'
+      && (github.event_name != 'issue_comment' || (github.event.issue.pull_request && (github.event.comment.user.login == 'chatgpt-codex-connector[bot]' || github.event.comment.user.login == 'chatgpt-codex-connector')))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     # Job-level, so a comment from anyone else skips the job without cancelling
-    # an evaluation already running for this PR.
+    # an evaluation already running for this PR. Label evidence no longer rides
+    # on this run, so a superseded evaluation costs nothing.
     concurrency:
       group: risk-gate-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
       cancel-in-progress: true
@@ -304,13 +343,11 @@ jobs:
               // high-risk merge is visible instead of passing as a human review.
               const APPROVAL_LABELS = ['owner-approved', 'agent-approved'];
               // A label lives on the pull request, not on a commit, so a push
-              // after the label leaves it looking current. The run GitHub starts
-              // for the `labeled` event knows from its payload which head the
-              // label was added to, and records that head as a commit status.
-              // Every later evaluation, including a sweep or a Codex-comment
-              // run, credits the label only when the current head carries the
-              // record. Commit dates cannot prove which revision was current,
-              // and a status is keyed by the SHA it names.
+              // after the label leaves it looking current. The `record-label` job
+              // writes the head from the `labeled` event to a commit status, and
+              // this evaluation credits the label only when the current head
+              // carries that record. Commit dates cannot prove which revision was
+              // current, and a status is keyed by the SHA it names.
               const CLEARING_RECORD = 'clearing-label';
               let approval = null;
               if (pr.labels.some(label => APPROVAL_LABELS.includes(label.name))) {
@@ -321,28 +358,23 @@ jobs:
                   return latest?.event === 'labeled' && APPROVAL_OWNER !== ''
                     && latest.actor?.login === APPROVAL_OWNER ? latest : null;
                 };
-                // A human confirmation outranks an agent's when both are present.
-                const live = liveLabel('owner-approved') || liveLabel('agent-approved');
-                if (live) {
-                  const name = live.label.name;
-                  const record = `${name} on this head`;
-                  const labeledHead = context.payload.action === 'labeled'
-                    && context.payload.label?.name === name
-                    ? context.payload.pull_request?.head?.sha : null;
-                  if (labeledHead === sha) {
-                    // This run is the label's own event, so the payload's head is
-                    // the authenticated answer: record it for later evaluations.
-                    await status(CLEARING_RECORD, 'success', record);
-                    approval = name === 'owner-approved' ? 'owner' : 'agent';
-                  } else {
-                    const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef,
-                      { ...repo, ref: sha, per_page: 100 });
+                // Only a label bound to this head counts, so a stale owner label
+                // cannot shadow a fresh agent label: each label is checked on its
+                // own and owner precedence applies after that, never before.
+                const onHead = {};
+                const live = APPROVAL_LABELS.filter(liveLabel);
+                if (live.length) {
+                  const statuses = await github.paginate(github.rest.repos.listCommitStatusesForRef,
+                    { ...repo, ref: sha, per_page: 100 });
+                  for (const name of live) {
                     if (statuses.some(entry => entry.context === CLEARING_RECORD
-                      && entry.state === 'success' && entry.description === record)) {
-                      approval = name === 'owner-approved' ? 'owner' : 'agent';
-                    }
+                      && entry.state === 'success'
+                      && entry.description === `${name} for PR ${number} on this head`)) onHead[name] = true;
                   }
                 }
+                // A human confirmation outranks an agent's when both are on this head.
+                if (onHead['owner-approved']) approval = 'owner';
+                else if (onHead['agent-approved']) approval = 'agent';
               }
               const { data: current } = await github.rest.pulls.get({ ...repo, pull_number: number });
               if (current.head.sha !== sha || current.body !== pr.body
