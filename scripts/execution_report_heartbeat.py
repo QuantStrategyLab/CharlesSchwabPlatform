@@ -1063,8 +1063,12 @@ def main(now: dt.datetime | None = None) -> int:
         if is_latest_report:
             latest_report_seen.add(service_name)
             if not ok:
-                if unified_enabled() and reason == "rejected inner execution status" and report_gate_reasons(payload, observed_at=now):
-                    approved_latest[service_name] = payload
+                if unified_enabled() and report_gate_reasons(payload, observed_at=now):
+                    # Gate-only reports now carry outer error. Classify a copy
+                    # with the legacy outer status so unrelated stage, error and
+                    # delivery rejections still prevent notification deferral.
+                    if _is_accepted_report({**payload, "status": "ok"}) == (False, "rejected inner execution status"):
+                        approved_latest[service_name] = payload
                 latest_report_issues.append(f"{service_name or name}: {reason}")
                 if _report_execution_status(payload).lower() in {"blocked", "risk_blocked"}:
                     summary = payload.get("summary") or {}

@@ -847,3 +847,101 @@ def test_external_flow_opt_in_preserves_independent_positions_opt_in():
             assert ("externalFlow" in payload) is flow
     observation["net_assets_currency_source"] = None
     assert publisher.project_schwab_account_facts_history(report, external_flow_enabled=True, **kwargs)["reason"] == "net_assets_currency_unconfirmed"
+
+
+# A completed risk pause supplies broker observations, not execution authority.
+def _completed_risk_block(reasons):
+    from quant_platform_kit.common.execution_receipts import build_execution_receipt
+    from test_notification_approved_gates import execution
+
+    source = _valid_report()
+    source.update(status="error", dry_run=False, runtime_release_receipt={
+        "attestation_state": "self_attested", "strategy_release": {"strategy_revision": "a" * 40},
+    })
+    source["runtime_target"]["execution_mode"] = "live"
+    source["summary"].update(execution(reasons), orders_submitted_count=0, orders_pending_count=0)
+    source["summary"]["account_observation"].update(
+        cash_balance="12.34", cash_balance_source="cashBalance", cash_currency="USD",
+        cash_currency_source="owner_confirmed", broker_reported_positions_scope="stocks_only",
+        broker_reported_positions_complete=True,
+        broker_reported_positions_observed_at=source["finished_at"],
+        broker_reported_positions=[{"symbol": "FAKE", "quantity": "1", "market_value": "10.00", "currency": "USD"}],
+    )
+    source["execution_receipt"] = build_execution_receipt(
+        platform="schwab", strategy_profile=source["strategy_profile"], strategy_revision="a" * 40,
+        execution_mode="live", outcome="risk_blocked", observed_at=source["finished_at"],
+    )
+    return source
+
+
+def _project_completed_risk_block(source):
+    prefix = "gs://example-bucket/execution-reports/charles_schwab/soxl_soxx_trend_income/"
+    return publisher.project_schwab_account_facts_history(
+        source, source_report_uri=prefix + "2026-09/20260930T222000Z.json", report_prefix=prefix,
+        expected_service_name=source["service_name"], expected_runtime_revision="service-00007-abc",
+        expected_target_id="fake-target", expected_cash_currency="USD",
+        now=datetime(2026, 10, 1, 1, 20, tzinfo=timezone.utc),
+    )
+
+
+@pytest.mark.parametrize("reason_codes", ["consecutive", "daily", "both"])
+def test_completed_risk_block_preserves_account_facts_and_execution_rejection(reason_codes):
+    import copy
+    from notifications.approved_gates import report_gate_reasons
+    from scripts.execution_report_heartbeat import _is_accepted_report
+    from test_notification_approved_gates import CONSECUTIVE, DAILY
+
+    reasons = {"consecutive": [CONSECUTIVE], "daily": [DAILY], "both": [CONSECUTIVE, DAILY]}[reason_codes]
+    source = _completed_risk_block(reasons)
+    before = copy.deepcopy(source)
+    body = _project_completed_risk_block(source)
+    assert body.get("schema_version") == publisher.HISTORY_SCHEMA
+    legacy = copy.deepcopy(source)
+    legacy["status"] = "ok"
+    assert body == _project_completed_risk_block(legacy)
+    assert body["broker_reported_balances"][0]["net_assets"] == "123.45"
+    assert body["cash"][0]["cash_balance"] == "12.34"
+    assert body["broker_reported_positions"][0]["symbol"] == "FAKE"
+    assert _is_accepted_report(source)[0] is False
+    assert report_gate_reasons(source, observed_at=datetime(2026, 10, 1, 1, 20, tzinfo=timezone.utc)) == reasons
+    assert source == before
+
+
+@pytest.mark.parametrize("fault", [
+    "missing_receipt", "wrong_receipt", "wrong_outcome", "stale_receipt", "future_receipt", "wrong_revision",
+    "unknown_status", "failed_status", "errors", "error", "pending", "orders", "broker", "unknown_execution",
+    "missing_reasons", "invalid_reasons", "dry_run", "profile", "selector", "revision", "run_id", "currency",
+    "stale_observation", "outside_report", "invalid_net_assets", "missing_runtime_target", "invalid_status",
+])
+def test_risk_block_account_facts_keep_receipt_identity_currency_and_freshness_gates(fault):
+    from test_notification_approved_gates import CONSECUTIVE
+
+    source = _completed_risk_block([CONSECUTIVE])
+    if fault == "missing_receipt": source.pop("execution_receipt")
+    if fault == "wrong_receipt": source["execution_receipt"]["strategy_profile"] = "fake-other"
+    if fault == "wrong_outcome": source["execution_receipt"]["outcome"] = "no_action"
+    if fault == "stale_receipt": source["execution_receipt"]["observed_at"] = "2026-09-30T22:19:00Z"
+    if fault == "future_receipt": source["execution_receipt"]["observed_at"] = "2026-10-01T02:00:00Z"
+    if fault == "wrong_revision": source["execution_receipt"]["strategy_revision"] = "b" * 40
+    if fault == "invalid_status": source["status"] = {}
+    if fault == "unknown_status": source["status"] = "unknown"
+    if fault == "failed_status": source["status"] = "failed"
+    if fault == "errors": source["errors"] = ["fake-error"]
+    if fault == "error": source["error"] = "fake-error"
+    if fault == "pending": source["summary"]["orders_pending_count"] = 1
+    if fault == "orders": source["summary"]["orders_submitted_count"] = 1
+    if fault == "broker": source["summary"]["broker_submission_done"] = True
+    if fault == "unknown_execution": source["summary"]["execution_status"] = "unknown"
+    if fault == "missing_reasons": source["summary"].pop("notification_approved_gates")
+    if fault == "invalid_reasons": source["summary"]["notification_approved_gates"][0]["limit"] = 4
+    if fault == "dry_run": source["dry_run"] = True
+    if fault == "missing_runtime_target": source.pop("runtime_target")
+    if fault == "profile": source["runtime_target"]["strategy_profile"] = "fake-other"
+    if fault == "selector": source["runtime_target"]["account_selector"] = ["fake-other"]
+    if fault == "revision": source["diagnostics"]["runtime_revision"] = "fake-other"
+    if fault == "run_id": source["run_id"] = "fake-other"
+    if fault == "currency": source["summary"]["account_observation"]["net_assets_currency"] = "EUR"
+    if fault == "stale_observation": source["summary"]["account_observation"]["observed_at"] = "2026-09-28T22:21:00Z"
+    if fault == "outside_report": source["summary"]["account_observation"]["observed_at"] = "2026-09-30T22:26:00Z"
+    if fault == "invalid_net_assets": source["summary"]["account_observation"]["net_assets"] = "NaN"
+    assert _project_completed_risk_block(source)["status"] == "skipped"

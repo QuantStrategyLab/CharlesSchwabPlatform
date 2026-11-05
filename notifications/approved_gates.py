@@ -105,11 +105,15 @@ def render_gate_reasons(reasons, locale):
 
 
 def report_gate_reasons(report, *, observed_at=None):
-    """Require the existing receipt validator; never make a report acceptable."""
+    """Classify gate-only outer errors without making execution acceptable.
+
+    Older archives use a successful outer status. Both forms require the same
+    validated risk-blocked receipt and absence of independent failures.
+    """
     summary = report.get("summary")
     if not isinstance(summary, Mapping) or report.get("dry_run") is not False:
         return []
-    if (report.get("status") not in {"ok", "success", "completed"}
+    if (report.get("status") not in {"ok", "success", "completed", "error"}
             or any(report.get(k) for k in ("errors", "error", "error_summary"))
             or type(summary.get("orders_pending_count")) is not int or summary["orders_pending_count"] != 0):
         return []
