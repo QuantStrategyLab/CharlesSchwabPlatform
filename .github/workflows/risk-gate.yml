@@ -168,7 +168,7 @@ jobs:
             const isWorkflow = path => path.startsWith('.github/workflows/');
             function highRisk(path) {
               const p = path.replace(/([a-z0-9])([A-Z])/g, '$1_$2').toLowerCase();
-              if (/(^|\/)codeowners$/.test(p)) return true;
+              if (p.startsWith('.github/governance/') || /(^|\/)codeowners$/.test(p)) return true;
               if (/(^|\/)(docs?|tests?|examples?|fixtures)(\/|$)/.test(p)) return false;
               if (/(^|\/)\.env(?:[./_-]|$)/.test(p)) return true;
               // Runtime configuration decides behaviour the diff does not show.
@@ -180,9 +180,11 @@ jobs:
               // workflow file, and a diff alone cannot show who calls it.
               if (/^\.github\/scripts\//.test(path)) return true;
               if (/^scripts\/[^/]*(?:check|verify|validate|hygiene|lint)[^/]*\.(?:py|sh|js|cjs|mjs|ts)$/.test(p)) return true;
-              if (/(^|[\/_.-])(trad(?:e|es|ing)|execution|executors?|orders?|brokers?|risk|deploy(?:ment)?|secrets?|credentials?|iam|runtime|strateg(?:y|ies))([\/_.-]|$)/.test(p)) return true;
+              // Release, deployment, credential and live-trading tooling are named here
+              // because a diff alone rarely shows what a script changes at run time.
+              if (/(^|[\/_.-])(ai_service|aiservice|kelly|stop_loss|trad(?:e|es|ing)|execution|executors?|orders?|brokers?|risk|release|deploy(?:ment)?|secrets?|credentials?|iam|service_account|serviceaccount|permission|role_binding|k8s|kubernetes|runtime|strateg(?:y|ies))([\/_.-]|$)/.test(p)) return true;
               return /(^|\/)(dockerfile(?:\..*)?|docker-compose[^/]*|compose\.ya?ml|vercel\.json|wrangler\.(?:toml|jsonc?)|firebase\.json)$/.test(p)
-                || /\.(?:tf|tfvars)$/.test(p);
+                || /\.(?:tf|tfvars|pem|key|p12|pfx)$/.test(p);
             }
             // A repin keeps the action and changes only its ref. Swapping in a
             // different action is a different change and takes the normal tier.
@@ -296,15 +298,30 @@ jobs:
                 return { state: 'failure', description: 'Base branch advanced since this head was built; update the branch then comment @codex review' };
               }
               const comments = await github.paginate(github.rest.issues.listComments, { ...repo, issue_number: prNumber, per_page: 100 });
+              // The newest marker-bearing comment is the one that counts, and it is
+              // chosen before its contents are validated. Choosing the newest
+              // *parseable* receipt instead would let a newer malformed or blocking
+              // receipt fall back to an older clean one, which is approval by
+              // accident. Comments updated in the same second are ordered by the
+              // higher id, so a refresher written later in that second still wins.
+              const stamped = comment => {
+                const value = Date.parse(comment.updated_at);
+                return Number.isFinite(value) ? value : 0;
+              };
               const receipts = comments
-                .filter(comment => CODEX_LOGIN.test(comment.user?.login || ''))
-                .map(comment => ({ comment, match: REVIEW_RECEIPT.exec(comment.body || '') }))
-                .filter(entry => entry.match)
-                .sort((a, b) => new Date(b.comment.updated_at) - new Date(a.comment.updated_at));
+                .filter(comment => CODEX_LOGIN.test(comment.user?.login || '')
+                  && typeof comment.body === 'string'
+                  && comment.body.includes('codex-review-state:v1'))
+                .sort((a, b) => stamped(b) - stamped(a) || (b.id || 0) - (a.id || 0));
               if (!receipts.length) return { state: 'pending', description: 'No Codex review yet; comment @codex review to start one' };
+              const markers = [...receipts[0].body.matchAll(/<!--\s*codex-review-state:v1\s*([\s\S]*?)\s*-->/g)];
+              // Two markers in one comment cannot both be the review that was run.
+              if (markers.length !== 1) {
+                return { state: 'error', description: 'Newest Codex review comment has a missing or duplicated receipt' };
+              }
               let receipt;
               try {
-                receipt = JSON.parse(receipts[0].match[1]);
+                receipt = JSON.parse(markers[0][1]);
               } catch {
                 return { state: 'error', description: 'Codex review receipt is not valid JSON' };
               }
