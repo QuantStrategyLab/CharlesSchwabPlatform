@@ -11,6 +11,16 @@ zh-CN/en formatter. A daily-loss block explains the code and asks the owner to
 review equity, cash flows and the configured loss limit. Intent confirmation
 does not release the guard.
 
+Daily-loss current equity comes only from the strategy portfolio's present
+`total_equity` or, when absent, `total_strategy_equity`. Explicit finite zero is
+valid. Every supplied strategy equity must be valid and finite; two supplied
+values must agree exactly. Missing, invalid, nonfinite and conflicting inputs
+have separate omission reasons and produce no daily-loss fact. Broker
+`account_observation.net_assets` (NLV), cash and metadata are not substitutes.
+A valid current equity, including zero, still requires the existing verified
+session baseline and cash-flow evidence. Otherwise `DAILY_LOSS_UNKNOWN_FAIL_CLOSED`
+remains in effect.
+
 The QPK pin is a notification-only backport on the exact former consumer pin;
 no unrelated risk-engine changes are included. This draft does not deploy,
 change runtime settings, enable the mode or alter private recipient mappings.
