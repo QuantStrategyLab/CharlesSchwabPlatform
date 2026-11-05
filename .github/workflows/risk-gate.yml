@@ -395,8 +395,21 @@ jobs:
                 }
               }
               if (single) {
-                const passed = await evaluate(number);
-                await refreshCollidedSiblings();
+                let passed;
+                try {
+                  passed = await evaluate(number);
+                } finally {
+                  // A synchronize can release a sibling from a shared head even
+                  // when this evaluation throws, and a stale collision error
+                  // would otherwise keep that sibling blocked until its own
+                  // event or the sweep. Best effort: a refresh failure must not
+                  // replace the evaluation error.
+                  try {
+                    await refreshCollidedSiblings();
+                  } catch (refreshError) {
+                    core.warning(`Sibling refresh failed: ${refreshError.message}`);
+                  }
+                }
                 // A dispatched run only refreshes statuses after the base moved, and
                 // the verdict already lives on the PR's commit status. Failing the run
                 // here would paint every merge red for open PRs that are legitimately
