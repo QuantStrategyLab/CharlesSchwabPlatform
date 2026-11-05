@@ -194,11 +194,10 @@ jobs:
               // `author.login` is the account GitHub links from the commit email,
               // and the author name is free text; a human can set either. A
               // verified signature only proves some key signed it, so the
-              // committer must also be Dependabot's authenticated bot account.
-              // Web-interface commits do not qualify. One commit outside that shape
+              // committer must be GitHub itself. One commit outside that shape
               // sends the PR down the normal review path.
               return commits.every(commit => commit.author?.login === 'dependabot[bot]'
-                && commit.committer?.login === 'dependabot[bot]'
+                && commit.committer?.login === 'web-flow'
                 && commit.commit?.verification?.verified === true);
             }
             // The dependency policy names the workflows whose action updates may
@@ -283,7 +282,7 @@ jobs:
               // pushing onto a bot branch must not inherit the skip.
               const isDependabot = pr.user?.login === 'dependabot[bot]' && await dependabotHead(number);
               const actionFiles = isDependabot ? await eligibleActionFiles(pr.base.ref) : null;
-              await status('risk-gate', 'pending', 'Evaluating changed paths, owner approval and AI review');
+              await status('risk-gate', 'pending', 'Evaluating changed paths, clearing label and AI review');
               await status('pr-template', 'pending', 'Checking AI, change and verification fields');
               await status('ai-review', 'pending', 'Reading the Codex review receipt');
               const files = await github.paginate(github.rest.pulls.listFiles, { ...repo, pull_number: number, per_page: 100 });
@@ -339,7 +338,7 @@ jobs:
               const tierNote = !risky ? 'Low-risk paths: no owner approval needed'
                 : approval === 'owner' ? 'High-risk paths: owner-approved label verified'
                 : approval === 'agent' ? 'High-risk paths: cleared by agent-approved, NOT confirmed by the owner'
-                : 'High-risk paths: needs-owner-approval; owner must add owner-approved';
+                : 'High-risk paths: needs a clearing label; owner-approved or agent-approved';
               let gateState;
               let gateNote;
               if (!tierOK) {
