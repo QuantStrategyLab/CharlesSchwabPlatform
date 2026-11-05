@@ -493,6 +493,29 @@ def _expected_account_hash_from_portfolio(portfolio: Mapping[str, Any]) -> str |
     return env_hash or None
 
 
+def _select_current_strategy_equity(portfolio: Mapping[str, Any]) -> tuple[float | None, str | None]:
+    """Use present strategy fields only; broker NLV/cash are different facts."""
+    values = []
+    for key in ("total_equity", "total_strategy_equity"):
+        if key not in portfolio:
+            continue
+        raw = portfolio[key]
+        if raw is None or isinstance(raw, bool):
+            return None, "invalid_current_equity"
+        try:
+            value = float(raw)
+        except (TypeError, ValueError, OverflowError):
+            return None, "invalid_current_equity"
+        if not math.isfinite(value):
+            return None, "nonfinite_current_equity"
+        values.append(value)
+    if not values:
+        return None, "missing_current_equity"
+    if len(values) == 2 and values[0] != values[1]:
+        return None, "conflicting_current_equity"
+    return values[0], None
+
+
 def attach_daily_loss_fact_to_portfolio(
     portfolio: Mapping[str, Any],
     *,
@@ -513,9 +536,13 @@ def attach_daily_loss_fact_to_portfolio(
         return out
 
     now = reference_now or datetime.now(tz=_NY)
-    current = _coerce_finite_float(out.get("total_equity") or out.get("total_strategy_equity"))
-    if current is None and isinstance(out.get("metadata"), Mapping):
-        current = _coerce_finite_float(out.get("total_equity"))
+    current, equity_reason = _select_current_strategy_equity(out)
+    if equity_reason is not None:
+        print(f"[Daily loss fact] status=omitted reason={equity_reason}", flush=True)
+        projection["daily_loss_fact_status"] = "omitted"
+        projection["daily_loss_fact_reason"] = equity_reason
+        out["account_new_risk_snapshot"] = projection
+        return out
 
     profile = _strategy_profile_from_portfolio(out)
     account_hash = str(expected_account_hash or "").strip() or _expected_account_hash_from_portfolio(out)
