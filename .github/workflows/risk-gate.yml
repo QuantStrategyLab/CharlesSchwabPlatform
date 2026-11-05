@@ -64,21 +64,35 @@ jobs:
             // commit, and an approval given on one must not clear the other.
             const number = context.payload.pull_request?.number;
             if (!number) return;
-            // The event id is part of it too. A label can be revoked and added
-            // again later; without the id, moving the head back would revive
-            // the revoked approval, because the record and the live event would
-            // not be the same approval.
+            // The event id is part of the record too. A label can be revoked
+            // and added again later; without the id, moving the head back would
+            // revive the revoked approval, because the record and the live
+            // event would not be the same approval.
+            //
+            // The id has to come from this delivery, not from the newest event
+            // at execution time: a run queued for head A can start after the
+            // label was revoked and added again on head B, and taking the
+            // newest event would stamp B's approval onto A. The payload carries
+            // no event id, but a label change bumps `pull_request.updated_at`
+            // to the addition's own time, and that snapshot arrived with the
+            // head it records, so matching on that time names this addition.
+            const addedAt = context.payload.pull_request?.updated_at;
+            if (!addedAt) return;
             const events = await github.paginate(github.rest.issues.listEvents, {
               ...context.repo, issue_number: number, per_page: 100,
             });
-            const latest = events
-              .filter(event => event.event === 'labeled' && event.label?.name === label
-                && event.actor?.login === process.env.APPROVAL_OWNER)
-              .sort((a, b) => b.id - a.id)[0];
-            if (!latest) return;
+            const matches = events.filter(event => event.event === 'labeled'
+              && event.label?.name === label
+              && event.actor?.login === process.env.APPROVAL_OWNER
+              && event.created_at === addedAt);
+            // Two additions in the same second cannot be told apart; recording
+            // either could credit the wrong head, so this delivery records
+            // nothing and the gate stays closed until a later addition.
+            if (matches.length !== 1) return;
+            const record = matches[0];
             await github.rest.repos.createCommitStatus({
               ...context.repo, sha, context: 'clearing-label', state: 'success',
-              description: `${label} for PR ${number} at event ${latest.id} on this head`,
+              description: `${label} for PR ${number} at event ${record.id} on this head`,
             });
 
   evaluate:
