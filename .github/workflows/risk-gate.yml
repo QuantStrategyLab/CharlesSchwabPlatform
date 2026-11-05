@@ -194,10 +194,11 @@ jobs:
               // `author.login` is the account GitHub links from the commit email,
               // and the author name is free text; a human can set either. A
               // verified signature only proves some key signed it, so the
-              // committer must be GitHub itself. One commit outside that shape
-              // sends the PR down the normal review path.
+              // committer must also be Dependabot's authenticated bot account.
+              // Web-interface commits do not qualify. One commit outside that
+              // shape sends the PR down the normal review path.
               return commits.every(commit => commit.author?.login === 'dependabot[bot]'
-                && commit.committer?.login === 'web-flow'
+                && commit.committer?.login === 'dependabot[bot]'
                 && commit.commit?.verification?.verified === true);
             }
             // The dependency policy names the workflows whose action updates may
@@ -304,11 +305,19 @@ jobs:
               let approval = null;
               if (pr.labels.some(label => APPROVAL_LABELS.includes(label.name))) {
                 const events = await github.paginate(github.rest.issues.listEvents, { ...repo, issue_number: number, per_page: 100 });
+                const { data: headCommit } = await github.rest.repos.getCommit({ ...repo, ref: sha });
+                const headTime = Date.parse(headCommit.commit?.committer?.date || headCommit.commit?.author?.date || '');
                 const liveLabel = name => {
                   const latest = events.filter(event => ['labeled', 'unlabeled'].includes(event.event)
                     && event.label?.name === name).sort((a, b) => b.id - a.id)[0];
+                  // A label only clears the head it was added to. The label list
+                  // still shows it after a later push, so the event time is
+                  // compared with the head commit date; an unreadable date fails
+                  // closed and clears nothing.
+                  const addedAt = Date.parse(latest?.created_at || '');
                   return latest?.event === 'labeled' && APPROVAL_OWNER !== ''
-                    && latest.actor?.login === APPROVAL_OWNER;
+                    && latest.actor?.login === APPROVAL_OWNER
+                    && Number.isFinite(headTime) && Number.isFinite(addedAt) && addedAt >= headTime;
                 };
                 // A human confirmation outranks an agent's when both are present.
                 if (liveLabel('owner-approved')) approval = 'owner';
