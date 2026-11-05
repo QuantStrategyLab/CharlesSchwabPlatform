@@ -194,10 +194,11 @@ jobs:
               // `author.login` is the account GitHub links from the commit email,
               // and the author name is free text; a human can set either. A
               // verified signature only proves some key signed it, so the
-              // committer must be GitHub itself. One commit outside that shape
+              // committer must also be Dependabot's authenticated bot account.
+              // Web-interface commits do not qualify. One commit outside that shape
               // sends the PR down the normal review path.
               return commits.every(commit => commit.author?.login === 'dependabot[bot]'
-                && commit.committer?.login === 'web-flow'
+                && commit.committer?.login === 'dependabot[bot]'
                 && commit.commit?.verification?.verified === true);
             }
             // The dependency policy names the workflows whose action updates may
