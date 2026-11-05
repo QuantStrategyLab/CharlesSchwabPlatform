@@ -720,8 +720,8 @@ def _has_signal_snapshot_details(snapshot: dict[str, object]) -> bool:
     )
 
 
-def _summarize_cycle_result_for_report(result, *, dry_run: bool) -> dict[str, object]:
-    return summarize_execution_cycle_result(result, dry_run=dry_run)
+def _summarize_cycle_result_for_report(result, *, dry_run: bool, existing_summary=None) -> dict[str, object]:
+    return summarize_execution_cycle_result(result, dry_run=dry_run, existing_summary=existing_summary)
 
 
 def persist_execution_report(report, *, dry_run_only_override: bool | None = None):
@@ -949,6 +949,7 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
         execution_summary = _summarize_cycle_result_for_report(
             execution_result,
             dry_run=bool(report.get("dry_run")),
+            existing_summary=report.get("summary"),
         )
         account_observation = getattr(execution_result, "account_observation", None)
         if isinstance(account_observation, dict):
@@ -970,9 +971,10 @@ def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_
             # execution result intact and let the control plane show missing
             # evidence instead of changing a completed cycle into an error.
             pass
+        from application.runtime_report_summary import execution_report_status
         finalize_runtime_report(
             report,
-            status="ok",
+            status=execution_report_status(execution_summary),
             summary=execution_summary,
             diagnostics=_runtime_revision_diagnostics(
                 signal=signal_diagnostics,

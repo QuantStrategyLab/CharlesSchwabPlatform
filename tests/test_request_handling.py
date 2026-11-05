@@ -1023,7 +1023,7 @@ class RequestHandlingTests(unittest.TestCase):
         )
         self.assertTrue(all(run_id == "run-001" for run_id, _event, _fields in observed))
 
-    def test_handle_schwab_persists_machine_readable_report(self):
+    def test_handle_schwab_persists_unknown_execution_as_error(self):
         module = load_module()
         observed = {}
 
@@ -1038,7 +1038,8 @@ class RequestHandlingTests(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertEqual(body, "OK")
-        self.assertEqual(observed["report"]["status"], "ok")
+        # HTTP completion does not establish a successful missing execution.
+        self.assertEqual(observed["report"]["status"], "error")
         self.assertEqual(observed["report"]["strategy_profile"], "tqqq_growth_income")
         self.assertEqual(
             observed["report"]["summary"]["strategy_display_name"],

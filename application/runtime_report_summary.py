@@ -30,7 +30,9 @@ def _counter_by_key(items: Iterable[Mapping[str, object]], key: str) -> dict[str
     return dict(counter)
 
 
-def summarize_execution_cycle_result(result: object, *, dry_run: bool) -> dict[str, object]:
+def summarize_execution_cycle_result(
+    result: object, *, dry_run: bool, existing_summary: Mapping | None = None,
+) -> dict[str, object]:
     execution = _as_mapping(getattr(result, "execution", {}))
     submitted_orders = _normalize_submitted_orders(result)
     trade_logs = tuple(str(item) for item in (getattr(result, "trade_logs", ()) or ()) if str(item).strip())
@@ -79,4 +81,17 @@ def summarize_execution_cycle_result(result: object, *, dry_run: bool) -> dict[s
             summary["notification_attention_reason_codes"] = list(execution["notification_attention_reason_codes"])
     if execution.get("notification_events"):
         summary["notification_events"] = execution["notification_events"]
-    return summary
+    return {**dict(existing_summary or {}), **summary}
+
+
+def execution_report_status(summary: Mapping) -> str:
+    """Report completion must not claim success for blocked or unknown execution.
+
+    Keep the runtime_report.v1 outer vocabulary (ok/error); precise execution
+    outcomes remain in summary.execution_status. This grants no trading authority.
+    """
+    status = str(summary.get("execution_status") or "").strip().lower()
+    healthy = {"no_action", "no_op", "completed", "executed", "submitted",
+               "broker_acknowledged", "pending", "partially_filled", "pending_reconciliation",
+               "dry_run", "dry_run_completed"}
+    return "ok" if status in healthy else "error"

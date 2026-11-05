@@ -277,13 +277,11 @@ def _cycle_projection(result, fact, config):
         raise CandidatePersistenceError("notification_target_unknown")
     # Normalize only the notification copy of the established Schwab aliases.
     target["platform_id"] = "schwab"
-    report.update(platform="schwab", status="ok", dry_run=bool(config.dry_run_only))
-    from .accepted_orders import cycle_notification_evidence
-    summary = dict(report.get("summary") or {})
-    summary.update(execution_status=result.execution.get("execution_status"),
-        notification_digest=cycle_notification_evidence(result.execution, result.submitted_orders,
-            dry_run=bool(config.dry_run_only)))
-    report["summary"] = summary
+    from application.runtime_report_summary import execution_report_status, summarize_execution_cycle_result
+    summary = summarize_execution_cycle_result(result, dry_run=bool(config.dry_run_only),
+        existing_summary=report.get("summary"))
+    report.update(platform="schwab", status=execution_report_status(summary),
+        dry_run=bool(config.dry_run_only), summary=summary)
     if report["dry_run"]:
         # Existing live archive acceptance is unchanged; previews are facts only.
         return {"schema_version": "qsl.digest_candidates.v1", "runs": [], "notification_events": [fact]}

@@ -250,3 +250,17 @@ Candidate merging normalizes documented optional null defaults, count-status
 spelling and equivalent timestamp offsets. Identity, counters, execution state
 and other factual differences still fail before the generation-guarded upload.
 This projection does not change reconciliation, broker calls or alert routing.
+
+Execution cycles use the same summary builder for early notification candidates
+and the completed archive. The outer `runtime_report.v1` status remains `ok` or
+`error`: blocked, failed, missing and unknown execution outcomes use `error`;
+recognized completed, preview and broker-submission outcomes use `ok`.
+`summary.execution_status` retains the precise outcome. An outer `ok` still does
+not prove a fill or reconciliation. Probe and skipped-report semantics are unchanged.
+
+Plugin `routine_observation_counts` are carried from the current run's summary
+into both projections. An absent field stays unknown; an explicitly empty map
+means the plugin observation completed with no routine signals. These states
+remain distinct in canonical comparison. Existing contradictory candidates are
+not rewritten or normalized away. Source identity, factual conflict rejection
+and generation-conditional writes continue to apply on replay and restart.
