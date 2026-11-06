@@ -127,7 +127,7 @@ jobs:
 
       - name: Publish read-only runtime execution evidence
         if: ${{ !cancelled() && steps.install_runtime_deps.outcome == 'success' && (steps.gcp_auth_primary.outcome == 'success' || steps.gcp_auth_retry.outcome == 'success') }}
-        uses: QuantStrategyLab/QuantRuntimeSettings/actions/publish-runtime-execution-evidence@c97752202670fac58db797c01596d11dd105a94b
+        uses: QuantStrategyLab/QuantRuntimeSettings/actions/publish-runtime-execution-evidence@7f4d37ce347986c84d6c0a664aebd685e4d1607e
         with:
           source-id: runtime-reports-schwab
           report-platform: charles_schwab
