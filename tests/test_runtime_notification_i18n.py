@@ -33,13 +33,13 @@ def test_startup_alert_is_compact_localized_and_does_not_embed_provider_text(loc
     monkeypatch.setenv("STRATEGY_PROFILE", "test_strategy")
     fn = runtime_function("_runtime_error_notification_message", NOTIFY_LANG=locale, t=build_translator(locale))
     message = fn(RuntimeError("PRIVATE_PROVIDER_SENTINEL"), route_label="/main")
-    assert len(message.splitlines()) <= 5
+    assert len(message.splitlines()) == 8
     assert "PRIVATE_PROVIDER_SENTINEL" not in message
     assert "未提交订单" not in message
     assert "no order" not in message.lower()
-    assert ("未正常结束" in message) is locale.startswith("zh")
-    assert ("did not finish successfully" in message) is (locale == "en")
-    assert "test_strategy" in message or "Test strategy" in message
+    assert message.startswith("【资产管理｜运行错误】" if locale.startswith("zh") else "[Asset management | Runtime error]")
+    assert ("Order submission: unknown" in message) is (locale == "en")
+    assert "test_strategy" not in message and "Test service" not in message
 
 
 @pytest.mark.parametrize("handler_name", ['_handle_schwab_cycle', '_handle_schwab_probe'])

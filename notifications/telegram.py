@@ -431,6 +431,9 @@ def build_sender(token, chat_id, *, requests_module=None):
         import requests as requests_module
 
     def send_tg_message(message) -> bool:
+        from .unified import current_error_notification
+        if not str(message).startswith(("【资产管理｜运行错误】", "[Asset management | Runtime error]")):
+            message = current_error_notification() or message
         if not token or not chat_id:
             return False
         url = f"https://api.telegram.org/bot{token}/sendMessage"

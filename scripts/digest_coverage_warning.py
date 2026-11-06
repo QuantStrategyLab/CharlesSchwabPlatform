@@ -47,10 +47,8 @@ def warn_coverage_unconfirmed(send, locale):
                     pass
     elif os.environ.get("GITHUB_ACTIONS") == "true":
         print("digest_coverage_warning_marker_unavailable", file=sys.stderr)
-    message = ("⚠️ Schwab 日报候选记录未确认，日报可能缺少本次记录；请检查运行记录和摘要存储。"
-               if str(locale).lower().startswith("zh") else
-               "⚠️ Schwab daily digest candidate record is unconfirmed; the digest may omit this record. "
-               "Check the run and digest storage.")
+    from notifications.receipt_alerts import render_runtime_error
+    message = render_runtime_error(reason="coverage", locale=locale)
     try:
         return send(message) is True
     except Exception:  # noqa: BLE001 -- The attempt remains recorded when delivery is uncertain.
