@@ -276,3 +276,18 @@ means the plugin observation completed with no routine signals. These states
 remain distinct in canonical comparison. Existing contradictory candidates are
 not rewritten or normalized away. Source identity, factual conflict rejection
 and generation-conditional writes continue to apply on replay and restart.
+
+## Candidate warning display
+
+The existing candidate-persistence warning uses the shared five sections:
+Result, Scope, Evidence, Coverage and Next step. Its QPK presentation snapshot
+has a separate byte/source manifest under `notifications/digest_snapshot`;
+other snapshots and runtime dependency pins are unchanged.
+
+The warning states that inclusion is unconfirmed, with unknown orders/fills and
+an unknown business window when none was supplied. A run link uses only valid
+current Actions context; absent context remains unavailable. It does not copy
+private storage paths or raw exceptions. Existing attempt-marker identity,
+atomic publication, sender callback, strict boolean acknowledgement and
+failure behavior are unchanged. This copy change does not resolve an actual
+candidate conflict or prove central delivery.

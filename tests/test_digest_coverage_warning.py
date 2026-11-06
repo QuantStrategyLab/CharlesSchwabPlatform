@@ -179,6 +179,37 @@ class CoverageWarningTests(unittest.TestCase):
                 self.assertNotIn('private exception', sent[0])
                 self.assertNotIn('http', sent[0].lower())
 
+    def test_unified_sections_and_unknown_counts_do_not_change_send_ack(self):
+        for locale in ("zh", "en"):
+            with self.subTest(locale=locale), patch.dict(os.environ, {}, clear=True):
+                sent = []
+                self.assertFalse(warn_coverage_unconfirmed(lambda text: sent.append(text), locale))
+                self.assertEqual(len(sent), 1)
+                sections = ("结果", "范围", "证据", "覆盖", "下一步") if locale == "zh" else ("Result", "Scope", "Evidence", "Coverage", "Next step")
+                for section in sections:
+                    self.assertIn(f"【{section}】" if locale == "zh" else f"[{section}]", sent[0])
+                self.assertIn("成交：未知" if locale == "zh" else "fills: unknown", sent[0])
+                self.assertIn("candidate_publication_unconfirmed", sent[0])
+                self.assertNotIn("成交：0", sent[0])
+
+    def test_run_link_requires_valid_current_actions_context(self):
+        environment = dict(GITHUB_ACTIONS="true", GITHUB_SERVER_URL="https://github.com",
+                           GITHUB_REPOSITORY="example/synthetic", GITHUB_RUN_ID="123")
+        for run_id in ("123", "123?private=hidden"):
+            with self.subTest(valid=run_id == "123"), patch.dict(os.environ, {**environment, "GITHUB_RUN_ID": run_id}, clear=True):
+                sent = []
+                self.assertTrue(warn_coverage_unconfirmed(lambda text: sent.append(text) or True, "en"))
+                self.assertEqual("https://github.com/example/synthetic/actions/runs/123" in sent[0], run_id == "123")
+                self.assertNotIn("private=hidden", sent[0])
+
+    def test_presentation_snapshot_matches_recorded_source_bytes(self):
+        import hashlib
+        import json
+        root = ROOT / "notifications/digest_snapshot"
+        manifest = json.loads((root / "presentation-source.json").read_text())
+        self.assertRegex(manifest["commit"], r"^[a-f0-9]{40}$")
+        self.assertEqual(hashlib.sha256((root / "presentation.py").read_bytes()).hexdigest(), manifest["sha256"])
+
     def test_workflow_uses_same_job_path_in_both_steps(self):
         workflow = (ROOT / '.github/workflows/execution-report-heartbeat.yml').read_text()
         marker = ('DIGEST_COVERAGE_ALERT_ATTEMPT_PATH: ${{ runner.temp }}/schwab-digest-coverage-'

@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sys
 import tempfile
 
@@ -47,12 +48,37 @@ def warn_coverage_unconfirmed(send, locale):
                     pass
     elif os.environ.get("GITHUB_ACTIONS") == "true":
         print("digest_coverage_warning_marker_unavailable", file=sys.stderr)
-    message = ("⚠️ Schwab 日报候选记录未确认，日报可能缺少本次记录；请检查运行记录和摘要存储。"
-               if str(locale).lower().startswith("zh") else
-               "⚠️ Schwab daily digest candidate record is unconfirmed; the digest may omit this record. "
-               "Check the run and digest storage.")
+    message = _coverage_message(locale)
     try:
         return send(message) is True
     except Exception:  # noqa: BLE001 -- The attempt remains recorded when delivery is uncertain.
         print("digest_coverage_warning_send_unconfirmed", file=sys.stderr)
         return False
+
+
+def _coverage_message(locale):
+    """Display only; preserve the existing attempted-send marker and callback."""
+    from notifications.digest_snapshot.presentation import next_step_text, render_operator_message
+
+    lang = "zh" if str(locale).lower().startswith("zh") else "en"
+    zh = lang == "zh"
+    link = None
+    # Only the active Actions run is a valid source for this warning's run link.
+    repository = os.environ.get("GITHUB_REPOSITORY", "")
+    run_id = os.environ.get("GITHUB_RUN_ID", "")
+    if (os.environ.get("GITHUB_ACTIONS") == "true"
+            and os.environ.get("GITHUB_SERVER_URL") == "https://github.com"
+            and re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository)
+            and re.fullmatch(r"[0-9]{1,20}", run_id)):
+        link = f"https://github.com/{repository}/actions/runs/{run_id}"
+    return render_operator_message(
+        title="⚠️ Schwab 日报候选确认" if zh else "⚠️ Schwab digest candidate confirmation",
+        locale=lang,
+        result=["日报候选记录未确认" if zh else "Daily digest candidate record is unconfirmed"],
+        scope=["本次候选保存尝试；统计窗口未知" if zh else "This candidate persistence attempt; business window unknown"],
+        evidence=["reason_code: candidate_publication_unconfirmed",
+                  ("运行记录：" if zh else "Run record: ") + (link or ("未提供运行链接" if zh else "run link not provided"))],
+        coverage=["日报可能缺少本次记录；订单：未知；成交：未知" if zh else
+                  "The digest may omit this record; orders: unknown; fills: unknown"],
+        next_step=[next_step_text(lang, needs_review=True)],
+    )
