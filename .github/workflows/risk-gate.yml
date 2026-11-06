@@ -53,17 +53,23 @@ jobs:
         with:
           script: |
             const label = context.payload.label?.name;
-            if (!['owner-approved', 'agent-approved'].includes(label)) return;
+            const expected = ['owner-approved', 'agent-approved'].includes(label);
+            const noRecord = reason => {
+              core.info(`clearing-label-recorder reason=${reason}`);
+              if (expected) core.warning(`clearing-label-recorder no_status_record reason=${reason}`);
+            };
+            if (!expected) return noRecord('non_clearing_label');
             // Only the configured approver's label carries a claim.
-            if (!process.env.APPROVAL_OWNER || context.payload.sender?.login !== process.env.APPROVAL_OWNER) return;
+            if (!process.env.APPROVAL_OWNER || context.payload.sender?.login !== process.env.APPROVAL_OWNER) return noRecord('approver_mismatch');
             const sha = context.payload.pull_request?.head?.sha;
             // A closed pull request keeps no authority over a commit that
             // another pull request may now use.
-            if (!sha || context.payload.pull_request?.state !== 'open') return;
+            if (!sha) return noRecord('missing_head');
+            if (context.payload.pull_request?.state !== 'open') return noRecord('pr_not_open');
             // The pull request is part of the record: two PRs can share a
             // commit, and an approval given on one must not clear the other.
             const number = context.payload.pull_request?.number;
-            if (!number) return;
+            if (!number) return noRecord('missing_pr_number');
             // The event id is part of the record too. A label can be revoked
             // and added again later; without the id, moving the head back would
             // revive the revoked approval, because the record and the live
@@ -77,23 +83,46 @@ jobs:
             // to the addition's own time, and that snapshot arrived with the
             // head it records, so matching on that time names this addition.
             const addedAt = context.payload.pull_request?.updated_at;
-            if (!addedAt) return;
+            if (!addedAt) return noRecord('missing_updated_at');
             const events = await github.paginate(github.rest.issues.listEvents, {
               ...context.repo, issue_number: number, per_page: 100,
+            }).catch(error => {
+              noRecord('event_read_failed');
+              throw error;
             });
             const matches = events.filter(event => event.event === 'labeled'
               && event.label?.name === label
               && event.actor?.login === process.env.APPROVAL_OWNER
               && event.created_at === addedAt);
+            // Log only correlation fields, never the payload, actor or credentials.
+            const evidence = {
+              payload_updated_at: addedAt,
+              match_count: matches.length,
+              head_equal: sha === context.sha,
+              pr_number_equal: number === context.issue.number,
+            };
+            core.info(`clearing-label-recorder event_match=${JSON.stringify(evidence)}`);
+            for (const event of events.filter(event => event.event === 'labeled'
+              && event.label?.name === label
+              && event.actor?.login === process.env.APPROVAL_OWNER)) {
+              core.info(`clearing-label-recorder event_candidate=${JSON.stringify({
+                ...evidence, issue_event_created_at: event.created_at ?? null,
+              })}`);
+            }
             // Two additions in the same second cannot be told apart; recording
             // either could credit the wrong head, so this delivery records
             // nothing and the gate stays closed until a later addition.
-            if (matches.length !== 1) return;
+            if (matches.length !== 1) return noRecord('match_count_ne_1');
             const record = matches[0];
             await github.rest.repos.createCommitStatus({
               ...context.repo, sha, context: 'clearing-label', state: 'success',
               description: `${label} for PR ${number} at event ${record.id} on this head`,
+            }).catch(error => {
+              core.info('clearing-label-recorder reason=status_write_failed');
+              core.warning('clearing-label-recorder status_write_unconfirmed reason=status_write_failed');
+              throw error;
             });
+            core.info('clearing-label-recorder reason=status_recorded');
 
   evaluate:
     name: Evaluate PR governance
