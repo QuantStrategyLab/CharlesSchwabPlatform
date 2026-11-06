@@ -421,7 +421,11 @@ def install_stub_modules(
     qpk_schwab_module.get_client_from_secret = lambda *args, **kwargs: None
     qpk_schwab_module.submit_equity_order = lambda *args, **kwargs: None
 
+    import quant_platform_kit.notifications as notification_sdk
     qpk_notifications_module = types.ModuleType("quant_platform_kit.notifications")
+    for name in ("install_log_redaction", "NotificationIntent", "redact_sensitive_text",
+                 "send_notification_intent", "send_telegram_message"):
+        setattr(qpk_notifications_module, name, getattr(notification_sdk, name))
     qpk_notifications_module.__path__ = []
     qpk_cycle_channel_module = types.ModuleType("quant_platform_kit.notifications.cycle_channel")
     qpk_cycle_channel_module.resolve_cycle_channel_and_url = lambda **kwargs: ("telegram", None)

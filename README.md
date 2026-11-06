@@ -174,3 +174,9 @@ An explicit run invokes `scripts/run_runtime_daily_from_reports.py`, which reads
 The first real preparation is a separate acceptance step inside the existing cloud boundary. Report prefixes, identity/hash, private metadata, raw reports and exception details must never enter shared output. The daily endpoint is local to the new publisher step; the legacy execution-evidence URL is not changed. Output is limited to fixed classifications. `prepared` or `stored_acknowledged` with `completeness=incomplete` is not a healthy-day or authenticated-readback claim. Coverage remains unconditionally false: proving current-day-as-of-cut enumeration, retained prior unresolved history, terminal evidence and actual due obligations is still required. There is no operator completeness override; listing exhaustion, an empty directory or fewer than 20 reports do not supply that proof.
 
 Display/notification naming configuration: [display names](docs/display-names.md).
+
+Telegram delivery uses QPK notification intents and redacted receipts. Runtime
+entrypoints install shared log and stream redaction. Environment-backed bot
+routes resolve credentials only in QPK delivery; existing injected or in-memory
+credentials use QPK's compatibility sender, with no temporary environment mutation.
+Provider errors and credential-bearing request data are excluded from reports.
