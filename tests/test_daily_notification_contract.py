@@ -271,8 +271,14 @@ def test_healthy_heartbeat_coverage_failure_is_urgent_and_private(locale, monkey
                                                source_reports=[{"execution_receipt": {"synthetic": True}}])
     assert result == 1
     assert len(sent) == 1
-    assert ("Schwab 日报候选记录未确认，日报可能缺少本次记录" if locale == "zh" else
-            "Schwab daily digest candidate record is unconfirmed; the digest may omit this record") in sent[0]
+    assert "Schwab" in sent[0]
+    assert ("日报候选记录未确认" if locale == "zh" else
+            "Daily digest candidate record is unconfirmed") in sent[0]
+    assert ("日报可能缺少本次记录" if locale == "zh" else "The digest may omit this record") in sent[0]
+    assert ("成交：未知" if locale == "zh" else "fills: unknown") in sent[0]
+    for section in (("结果", "范围", "证据", "覆盖", "下一步") if locale == "zh" else
+                    ("Result", "Scope", "Evidence", "Coverage", "Next step")):
+        assert (f"【{section}】" if locale == "zh" else f"[{section}]") in sent[0]
     assert "private order detail" not in sent[0]
 
 
