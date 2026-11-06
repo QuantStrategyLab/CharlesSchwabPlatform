@@ -1,0 +1,51 @@
+{
+  "status": "PREPARATION_ONLY_NOT_APPLY_READY",
+  "chosen_ues": "76e04b18180f21f7e04bd1f6e116a3206e2c30fc",
+  "qpk_unchanged": "bfe55791adcd8867790e15dba6fd35304e4093c0",
+  "reviewed_platform_base": "437b5361edaa46df53a64883ab35108e0f4cbcf5",
+  "proposed_effective_session": "2026-10-19",
+  "new_live_baseline_issued": false,
+  "new_release_manifest_issued": false,
+  "validation": {
+    "ues_targeted": {
+      "passed": 115,
+      "subtests_passed": 40
+    },
+    "qpk_contract": {
+      "passed": 13
+    },
+    "platform_continuity_each": {
+      "passed": 17
+    },
+    "offline_contract_checks": 26,
+    "tqqq_core_synthetic_cases": 11152,
+    "tqqq_core_mismatches": 0
+  },
+  "release_patch_sha256": {
+    "4a39438..76e04b1.patch": {
+      "bytes": 3831966,
+      "sha256": "2265233528ea585964cc8beb710bc1a9d702efb9d2f6a218557a845505717176"
+    },
+    "4a39438..9d1544d.patch": {
+      "bytes": 3157873,
+      "sha256": "0be7b45428ea264f6db6419ea0c16cad55f228b0446fae03af88ee8d35019093"
+    },
+    "9d1544d..76e04b1.patch": {
+      "bytes": 684216,
+      "sha256": "fa82f6aeeb7b86057533253037525b4d206ea3ecbe58e2e71ab4f6f28ba09180"
+    }
+  },
+  "source_links": {
+    "schema": "https://github.com/QuantStrategyLab/QuantPlatformKit/blob/bfe55791adcd8867790e15dba6fd35304e4093c0/src/quant_platform_kit/common/live_continuity.py",
+    "manifest": "https://github.com/QuantStrategyLab/QuantPlatformKit/blob/bfe55791adcd8867790e15dba6fd35304e4093c0/src/quant_platform_kit/common/strategy_release.py",
+    "readiness": "https://github.com/QuantStrategyLab/QuantPlatformKit/blob/bfe55791adcd8867790e15dba6fd35304e4093c0/src/quant_platform_kit/strategy_lifecycle/release_readiness.py",
+    "current_gate": "https://github.com/QuantStrategyLab/CharlesSchwabPlatform/blob/437b5361edaa46df53a64883ab35108e0f4cbcf5/scripts/runtime_target_continuity.py"
+  },
+  "limitations": [
+    "not platform full CI",
+    "no installed-image verification",
+    "no production release evidence",
+    "no implemented migration entry",
+    "TQQQ bound caps not established"
+  ]
+}
