@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from application.decision_cycle import plugin_load_options
+
 from collections.abc import Collection, Mapping, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -70,6 +72,7 @@ class SchwabRuntimeStrategyAdapters:
                 self.load_configured_strategy_plugin_signals_fn(
                     mounts,
                     strategy_profile=self.strategy_profile,
+                    **plugin_load_options(self.load_configured_strategy_plugin_signals_fn),
                 ),
                 None,
             )

@@ -142,7 +142,7 @@ def test_reporting_metadata_does_not_change_actual_risk_plan_or_execution_identi
         def submit(intent):
             intents.append(intent)
             return ExecutionReport(symbol=intent.symbol, side=intent.side, quantity=intent.quantity,
-                                   status="accepted", broker_order_id="synthetic")
+                                   status="accepted", broker_order_id="123456789")
         execute_rebalance_cycle(client=object(), plan=plan, portfolio=plan["portfolio"],
             execution=plan["execution"], allocation=plan["allocation"],
             fetch_managed_snapshot=lambda client: source,
