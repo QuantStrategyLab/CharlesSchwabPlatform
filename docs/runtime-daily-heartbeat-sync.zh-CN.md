@@ -9,6 +9,11 @@ daily publisher step，在既有 22:20 UTC 调度内复用同一 WIF/uv 流程�
 或证据同步失败仍可记录日报；认证、依赖安装失败或运行取消不发布。日报的失败
 不会跳过已经执行的原健康通知，原步骤顺序与行为不变。
 
+`Publish read-only runtime execution evidence` 同样独立于健康检查和候选发布的
+成功状态：只要运行未取消、依赖安装成功且本次认证成功，就继续导出已有执行证据。
+因此缺少可接受回执或候选冲突不会额外造成管理站的执行证据缺口。原检查仍保留失败
+结论；导出步骤继续使用原有 action、来源和步骤级凭据，不调用策略或券商。
+
 GitHub默认条件语义：[官方表达式说明](https://docs.github.com/en/actions/reference/workflows-and-actions/expressions#status-check-functions)。
 
 ## 启用
