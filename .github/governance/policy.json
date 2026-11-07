@@ -1,0 +1,24 @@
+{
+  "version": "pr-governance/v3",
+  "mode": "enforce",
+  "reviewer": {
+    "provider": "codex",
+    "app_id": 1144995,
+    "user_id": 199175422,
+    "login": "chatgpt-codex-connector[bot]"
+  },
+  "r0_paths": [
+    "README.md",
+    "CHANGELOG.md",
+    "docs/prose/"
+  ],
+  "r2_paths": [
+    "scripts/",
+    ".github/governance/",
+    ".github/scripts/",
+    "policy.schema.json",
+    "policy.default.json"
+  ],
+  "dependabot_template_exemption": true,
+  "max_evidence_age_hours": 168
+}
