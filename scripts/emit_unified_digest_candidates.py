@@ -6,7 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import json
 import os
-from notifications.unified import CandidateStorageError, emit_completed_candidates  # noqa: E402
+from notifications.unified import CandidateConflictError, CandidateStorageError, emit_completed_candidates  # noqa: E402
 from scripts.digest_coverage_warning import warn_coverage_unconfirmed  # noqa: E402
 
 
@@ -48,6 +48,9 @@ _STORAGE_CODES = frozenset({
 
 
 def _failure_diagnostic(error, stage):
+    if isinstance(error, CandidateConflictError):
+        return {"stage": "candidate_merge", "error_code": "notification_candidate_source_conflict",
+                "conflict": error.diagnostic()}
     if isinstance(error, CandidateStorageError):
         stage = error.stage if error.stage in ("candidate_read", "candidate_write") else stage
         code = error.category
