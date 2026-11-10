@@ -124,6 +124,14 @@ notification routes or cloud permissions. It does not establish delivery success
 
 ## Publication before the central daily read
 
+Run the manual `Digest candidate job release` workflow from the default
+branch. The production environment supports `verify`, which reads back the
+pinned Cloud Run Job image through a dedicated short-lived Google identity.
+Deploy and rollback are available for the isolated test environment. The
+workflow does not invoke the producer or change its schedule.
+
+[Organization container release contract](https://github.com/QuantStrategyLab/.github/blob/main/docs/deployment-workflows.md)
+
 GitHub schedule events can start late. A heartbeat workflow is therefore not a
 reliable deadline trigger for the 07:00 Asia/Shanghai read. Keep its existing
 monitoring checks, but run the archive-only publisher independently in an
