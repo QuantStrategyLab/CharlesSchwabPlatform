@@ -1,0 +1,40 @@
+name: Digest candidate job release
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Protected release environment
+        type: choice
+        required: true
+        options:
+          - digest-candidate-release
+          - digest-candidate-release-test
+      operation:
+        description: Release operation
+        type: choice
+        required: true
+        default: verify
+        options:
+          - verify
+          - deploy
+          - rollback
+permissions: {}
+jobs:
+  release:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (inputs.target == 'digest-candidate-release-test' ||
+       (inputs.target == 'digest-candidate-release' && inputs.operation == 'verify'))
+    permissions:
+      id-token: write
+    uses: QuantStrategyLab/.github/.github/workflows/deploy-job.yml@fcf38f37e25c34580776ef1318718f434286f6e2
+    with:
+      provider: gcp
+      environment: ${{ inputs.target }}
+      operation: ${{ inputs.operation }}
+    secrets:
+      DEPLOY_WIF_PROVIDER: ${{ secrets.DEPLOY_WIF_PROVIDER }}
+      DEPLOY_SERVICE_ACCOUNT: ${{ secrets.DEPLOY_SERVICE_ACCOUNT }}
+      DEPLOY_RESOURCE: ${{ secrets.DEPLOY_RESOURCE }}
+      DEPLOY_PREVIOUS_IMAGE: ${{ secrets.DEPLOY_PREVIOUS_IMAGE }}
+      DEPLOY_CANDIDATE_IMAGE: ${{ secrets.DEPLOY_CANDIDATE_IMAGE }}
