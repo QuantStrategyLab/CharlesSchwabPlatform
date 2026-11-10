@@ -159,9 +159,12 @@ def main():
     except DeadlineExceeded:
         print(json.dumps({"status": "failed", "reason_code": "candidate_publication_watchdog_timeout"}))
         return 1
-    except Exception:
+    except Exception as error:
         # Never expose exception messages, private locators or credentials.
-        print(json.dumps({"status": "failed", "reason_code": "candidate_publication_unconfirmed"}))
+        reason_code = "candidate_publication_unconfirmed"
+        if type(error) is ValueError and str(error) == "notification_candidate_source_conflict":
+            reason_code = "notification_candidate_source_conflict"
+        print(json.dumps({"status": "failed", "reason_code": reason_code}))
         return 1
     finally:
         signal.alarm(0)
