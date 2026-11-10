@@ -105,7 +105,11 @@ def test_heartbeat_failed_producer_sends_coverage_error_and_reports_unknown(monk
     monkeypatch.setattr(unified, "emit_completed_candidates", lambda env, **kwargs: {"uploaded": False})
     assert heartbeat.main(NOW) == 1
     assert len(sent) == 1
-    assert "Schwab 日报候选记录未确认，日报可能缺少本次记录" in sent[0]
+    assert "Schwab" in sent[0]
+    assert "日报候选记录未确认" in sent[0]
+    assert "日报可能缺少本次记录" in sent[0]
+    assert "成交：未知" in sent[0]
+    assert "【覆盖】" in sent[0] and "【下一步】" in sent[0]
     assert "coverage=unknown" in capsys.readouterr().out
 
 
