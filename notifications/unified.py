@@ -43,6 +43,58 @@ class CandidateStorageError(RuntimeError):
         super().__init__("candidate_persistence_failed")
 
 
+# Public diagnostic vocabulary only. Never derive output keys or type labels
+# from candidate content; unknown fields are represented by one boolean.
+_CONFLICT_FIELDS = (
+    "platform_id", "opaque_account_uid", "target_id", "strategy_profile",
+    "business_day", "source_run_id", "actually_ran", "cycle_count",
+    "order_count", "fill_count", "field_status", "status", "execution_status",
+    "reason_code", "block_reason", "routine_observation_counts", "as_of",
+    "scheduled_idle", "approved_gate_reasons",
+)
+_CONFLICT_TYPES = ("missing", "null", "boolean", "integer", "number", "string", "object", "array", "other")
+
+
+def _diagnostic_type(row, field):
+    if field not in row:
+        return "missing"
+    return {type(None): "null", bool: "boolean", int: "integer", float: "number",
+            str: "string", dict: "object", list: "array"}.get(type(row[field]), "other")
+
+
+class CandidateConflictError(ValueError):
+    """A fixed source-conflict code with value-free comparison evidence."""
+
+    def __init__(self, prior, candidate, canonical):
+        super().__init__("notification_candidate_source_conflict")
+        self._fields = []
+        for field in _CONFLICT_FIELDS:
+            prior_type = _diagnostic_type(prior, field)
+            candidate_type = _diagnostic_type(candidate, field)
+            raw_equal = prior_type == candidate_type and prior.get(field) == candidate.get(field)
+            canonical_equal = ((field in prior) == (field in canonical)
+                               and prior.get(field) == canonical.get(field))
+            self._fields.append((field, prior_type, candidate_type, raw_equal, canonical_equal))
+        # Do not retain raw rows, unknown names, hashes, locators or values.
+        unlisted = (set(prior) | set(canonical)) - set(_CONFLICT_FIELDS) - {"notification_events"}
+        self._unlisted_changed = any((field in prior) != (field in canonical)
+                                    or prior.get(field) != canonical.get(field) for field in unlisted)
+
+    def diagnostic(self):
+        fields = []
+        for field, prior_type, candidate_type, raw_equal, canonical_equal in self._fields[:len(_CONFLICT_FIELDS)]:
+            if (type(field) is not str or field not in _CONFLICT_FIELDS
+                    or type(prior_type) is not str or prior_type not in _CONFLICT_TYPES
+                    or type(candidate_type) is not str or candidate_type not in _CONFLICT_TYPES
+                    or type(raw_equal) is not bool or type(canonical_equal) is not bool):
+                continue
+            fields.append({"field": field, "prior_type": prior_type, "candidate_type": candidate_type,
+                           "raw_equal": raw_equal, "canonical_equal": canonical_equal,
+                           "classification": "changed" if not canonical_equal else
+                           "equal" if raw_equal else "representation_only"})
+        return {"fields": fields, "unlisted_fields_changed": self._unlisted_changed is True}
+
+
 def enabled(env=None):
     return unified_notification_enabled(os.environ if env is None else env, FLAG)
 
@@ -541,7 +593,7 @@ def persist_projected_candidate(payload, *, env=None, store=None):
         prior = dict(merged.get(key) or {})
         prior_events = prior.pop("notification_events", [])
         if prior and prior != current:
-            raise ValueError("notification_candidate_source_conflict")
+            raise CandidateConflictError(prior, row, current)
         facts = {}
         for event in [*prior_events, *events]:
             if (not isinstance(event, dict) or not event.get("dedupe_key")

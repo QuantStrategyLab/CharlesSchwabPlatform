@@ -289,3 +289,18 @@ means the plugin observation completed with no routine signals. These states
 remain distinct in canonical comparison. Existing contradictory candidates are
 not rewritten or normalized away. Source identity, factual conflict rejection
 and generation-conditional writes continue to apply on replay and restart.
+
+### Candidate source-conflict diagnostics
+
+A contradictory same-run candidate still stops publication with
+`notification_candidate_source_conflict` and a nonzero emitter result. Its
+`conflict` object contains a fixed field allowlist, fixed type labels, equality
+booleans and `equal` / `representation_only` / `changed` classifications.
+Comparison uses the existing canonicalization; it does not authorize a new merge
+policy. Missing versus null optional fields and equivalent timestamp offsets can
+be classified as representation-only while another field causes the conflict.
+Unknown field differences produce only `unlisted_fields_changed`, never names or
+values. No candidate values, account hashes, object identities or provider text
+are included. Event-only additions still require existing event identity checks;
+generation preconditions and duplicate idempotency are unchanged. These offline
+diagnostics do not resolve an original conflict without its protected source pair.

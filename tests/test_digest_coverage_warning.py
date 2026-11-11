@@ -68,6 +68,7 @@ class CoverageWarningTests(unittest.TestCase):
             raise RuntimeError('private exception')
         unified = types.ModuleType('notifications.unified')
         unified.emit_completed_candidates = fail
+        unified.CandidateConflictError = type("CandidateConflictError", (ValueError,), {})
         unified.CandidateStorageError = type("CandidateStorageError", (RuntimeError,), {})
         heartbeat = types.ModuleType('scripts.execution_report_heartbeat')
         heartbeat._notification_locale = lambda: 'zh'
