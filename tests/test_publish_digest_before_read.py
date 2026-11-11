@@ -212,6 +212,44 @@ def test_existing_business_report_uses_native_archive_reader_and_verified_public
     assert all(row["business_day"] == "2026-10-31" for row in rows)
 
 
+@pytest.mark.parametrize("existing_status", ["blocked", "execution_unknown"])
+def test_completed_report_and_job_use_the_same_blocked_projection(client, monkeypatch, existing_status):
+    from notifications import unified
+
+    class FrozenTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW.astimezone(tz) if tz else NOW.replace(tzinfo=None)
+
+    monkeypatch.setattr(unified, "datetime", FrozenTime)
+    target = json.loads(ENV["RUNTIME_TARGET_JSON"])
+    report = {
+        "schema_version": "runtime_report.v1", "platform": "charles_schwab",
+        "strategy_profile": target["strategy_profile"], "service_name": target["service_name"],
+        "runtime_target": target, "run_id": "synthetic-blocked", "dry_run": False,
+        "status": "ok", "started_at": "2026-10-31T20:00:00+00:00",
+        "summary": {"execution_status": "blocked"},
+    }
+    source = client.blob("gs://synthetic-archive/reports/charles_schwab/synthetic/2026-10/blocked.json")
+    source.upload_from_string(json.dumps(report), retry=None)
+    assert unified.persist_completed_report(report, env=ENV) is True
+
+    candidate = client.blob(f"gs://synthetic-candidates/digest/{PLATFORM}/2026-10-31/synthetic-slot.json")
+    prior = json.loads(candidate.body)
+    assert prior["runs"][0]["execution_status"] == "blocked"
+    if existing_status == "execution_unknown":
+        prior["runs"][0]["execution_status"] = existing_status
+        candidate.upload_from_string(json.dumps(prior), retry=None)
+    before = candidate.generation, candidate.body
+
+    if existing_status == "blocked":
+        assert publisher.publish(ENV, now=lambda: NOW, client=client)["readback_verified"] is True
+    else:
+        with pytest.raises(ValueError, match="notification_candidate_source_conflict"):
+            publisher.publish(ENV, now=lambda: NOW, client=client)
+    assert (candidate.generation, candidate.body) == before
+
+
 @pytest.mark.parametrize("key,value", [
     ("platform_id", "another-platform"), ("service_name", ""),
     ("account_scope", None), ("dry_run_only", "false"),
@@ -335,6 +373,23 @@ def test_main_reports_wait_timeout_without_private_details(monkeypatch, capsys):
     assert publisher.main() == 1
     assert json.loads(capsys.readouterr().out) == {
         "status": "failed", "reason_code": "candidate_publication_wait_timeout"}
+
+
+@pytest.mark.parametrize(("error", "reason"), [
+    (ValueError("notification_candidate_source_conflict"), "notification_candidate_source_conflict"),
+    (ValueError("notification_candidate_source_conflict: gs://private-bucket/report"), "candidate_publication_unconfirmed"),
+    (RuntimeError("notification_candidate_source_conflict"), "candidate_publication_unconfirmed"),
+])
+def test_main_reports_only_the_fixed_source_conflict_code(monkeypatch, capsys, error, reason):
+    monkeypatch.setattr(publisher.signal, "signal", lambda *a: None)
+    monkeypatch.setattr(publisher.signal, "alarm", lambda *a: None)
+
+    def fail(*args):
+        raise error
+
+    monkeypatch.setattr(publisher, "publish", fail)
+    assert publisher.main() == 1
+    assert json.loads(capsys.readouterr().out) == {"status": "failed", "reason_code": reason}
 
 
 @pytest.mark.parametrize("result", [

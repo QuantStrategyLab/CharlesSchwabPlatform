@@ -144,6 +144,11 @@ or access Secret Manager. Archive reads use the Storage SDK and the job's
 attached identity; the image does not need gcloud. Existing candidate writes,
 merge semantics and identity checks remain authoritative.
 
+When an existing candidate conflicts with the archive projection for the same
+run, the publisher exits with `notification_candidate_source_conflict` without
+rewriting that candidate. The log carries the fixed code and no report contents.
+Compare the producer and Job projection versions before changing either.
+
 The heartbeat candidate publisher uses the same bounded SDK archive reader.
 A successfully listed empty month is empty input, including when a completed
 window spans two UTC months. Permission, timeout and JSON failures still abort
