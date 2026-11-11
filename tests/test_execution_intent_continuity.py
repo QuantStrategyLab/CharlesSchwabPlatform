@@ -753,7 +753,7 @@ def test_resolution_preserves_known_broker_identity_and_unsupported_notional_hol
         first = run_strategy_core(runtime=original.runtime,config=original.config)
         assert len(original.calls) == 1
         if not lost_reply:
-            assert first.submitted_orders[0]["broker_order_id"] == "SYNTH_ACK"
+            assert first.submitted_orders[0]["broker_order_id"] == "200000001"
         current=continuity_case(tmp_path/label,"2026-10-01",kind="BUY_LIMIT")
         body,_=resolution_material(original,current,order_id="DIFFERENT_FROM_NATIVE_ACK" if not lost_reply else None)
         session=_IntentSession(with_resolution_source(current.context,body),snapshot=current.snapshot,profile_id=current.scope.profile_id)

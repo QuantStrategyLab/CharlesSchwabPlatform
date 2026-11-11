@@ -939,7 +939,12 @@ class _IntentSession:
 
     def record_outcome(self, ticket, *, accepted=None, broker_order_id=None):
         try:
+            from application.broker_order_identity import is_valid_schwab_order_id
+
             store = self.context.command_store
+            if accepted is True and not is_valid_schwab_order_id(broker_order_id):
+                accepted = None
+                broker_order_id = None
             if accepted is None:
                 self.reasons.append("original_attempt_pending_reconciliation")
                 states = (ExecutionCommandState.RECONCILIATION_REQUIRED,)

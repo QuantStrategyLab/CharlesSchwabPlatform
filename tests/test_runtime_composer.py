@@ -150,7 +150,7 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders(tmp_path
         assert c.calls[0].symbol == "SOXL" and c.calls[0].quantity == 4
         assert result.execution["continuity_coverage"] == "managed_new_cohort"
         assert result.execution["execution_status"] == "pending_reconciliation"
-        assert result.submitted_orders[0]["broker_order_id"] == "SYNTH_ACK"
+        assert result.submitted_orders[0]["broker_order_id"] == "200000001"
         from application.execution_intent_continuity import _IntentSession
         recorded = _IntentSession(c.context, snapshot=c.snapshot, profile_id=c.scope.profile_id)
         assert recorded.fatal_reason is None

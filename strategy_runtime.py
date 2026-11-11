@@ -6,6 +6,8 @@ import json
 from importlib import metadata as importlib_metadata
 from typing import Any, Callable, Mapping
 
+from application.daily_strategy_state import DailyStateBinding, evaluate_with_daily_state
+from application.decision_cycle import capture_decision, current_cycle
 from quant_platform_kit.common.feature_snapshot import load_feature_snapshot_guarded
 from quant_platform_kit.common.feature_snapshot_runtime import (
     FeatureSnapshotRuntimeSettings,
@@ -125,6 +127,7 @@ class LoadedStrategyRuntime:
     runtime_config: Mapping[str, Any] = field(default_factory=dict)
     merged_runtime_config: Mapping[str, Any] = field(default_factory=dict)
     logger: Callable[[str], None] = print
+    daily_state_binding: DailyStateBinding | None = None
 
     @property
     def profile(self) -> str:
@@ -404,7 +407,8 @@ class LoadedStrategyRuntime:
                 runtime_config=runtime_config,
                 available_inputs=self._stamp_portfolio_risk_metadata(available_inputs),
             )
-        as_of = datetime.now(timezone.utc)
+        cycle = current_cycle()
+        as_of = cycle["decision_time"] if cycle is not None else datetime.now(timezone.utc)
         resolved_available_inputs = self._stamp_portfolio_risk_metadata(available_inputs)
         resolved_available_inputs.update(
             resolve_external_market_signal_inputs(
@@ -430,7 +434,7 @@ class LoadedStrategyRuntime:
             runtime_config=runtime_config,
             capabilities=capabilities,
         )
-        decision = self.entrypoint.evaluate(ctx)
+        decision = capture_decision(evaluate_with_daily_state(self.entrypoint, ctx, self.daily_state_binding))
         if any(str(flag).startswith("rejected:runtime_risk") for flag in decision.risk_flags):
             diagnostics = decision.diagnostics if isinstance(decision.diagnostics, Mapping) else {}
             portfolio_snapshot = resolved_available_inputs.get("portfolio_snapshot")
@@ -524,6 +528,7 @@ def load_strategy_runtime(
     runtime_settings: PlatformRuntimeSettings,
     runtime_overrides: Mapping[str, Any] | None = None,
     logger: Callable[[str], None] = print,
+    daily_state_binding: DailyStateBinding | None = None,
 ) -> LoadedStrategyRuntime:
     entrypoint = load_strategy_entrypoint_for_profile(raw_profile)
     runtime_adapter = load_strategy_runtime_adapter_for_profile(raw_profile)
@@ -556,6 +561,7 @@ def load_strategy_runtime(
     merged_runtime_config.update(runtime_config)
     merged_runtime_config.update(overrides)
     return LoadedStrategyRuntime(
+        daily_state_binding=daily_state_binding,
         entrypoint=entrypoint,
         runtime_adapter=runtime_adapter,
         runtime_settings=runtime_settings,

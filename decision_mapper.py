@@ -376,6 +376,7 @@ def map_strategy_decision_to_plan(
         "dual_drive_crisis_defense_applied",
         "dual_drive_crisis_defense_destination",
         "dual_drive_crisis_defense_removed_value",
+        "joint_execution_required",
         "market_regime_control_enabled",
         "market_regime_control_found",
         "market_regime_control_source",
@@ -403,4 +404,15 @@ def map_strategy_decision_to_plan(
     ):
         if field_name in diagnostics:
             execution[field_name] = diagnostics[field_name]
+    if decision.diagnostics.get("joint_execution_required") is True:
+        from application.decision_cycle import current_cycle
+        from quant_platform_kit.common.execution_state import submission_binding_digest
+        cycle = current_cycle()
+        joint = cycle.get("joint_strategy_binding") if cycle is not None else None
+        if joint is None or decision is not joint.get("gated_decision"):
+            raise ValueError("joint gated decision binding unavailable")
+        allocation = plan.get("allocation")
+        if not isinstance(allocation, dict):
+            raise ValueError("joint gated allocation unavailable")
+        joint["allocation_sha256"] = submission_binding_digest(allocation)
     return plan

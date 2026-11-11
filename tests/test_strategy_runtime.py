@@ -935,3 +935,23 @@ class StrategyRuntimeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_loaded_runtime_accepts_explicit_daily_state_binding():
+    from candidate_dependency_guard import require_candidate_dependencies
+    require_candidate_dependencies()
+    from application.daily_strategy_state import DailyStateBinding
+    from quant_platform_kit.common.strategy_risk_state import StrategyRiskStateIdentity, StrategyRiskStateStore
+    from tempfile import TemporaryDirectory
+
+    with TemporaryDirectory() as directory:
+        binding = DailyStateBinding(
+            StrategyRiskStateStore(local_dir=directory),
+            StrategyRiskStateIdentity("tqqq_growth_income", "synthetic", "candidate", "a" * 64),
+            "2026-06-19", "b" * 64, None,
+        )
+        runtime = strategy_runtime_module.load_strategy_runtime(
+            "tqqq_growth_income", runtime_settings=_build_runtime_settings("tqqq_growth_income"),
+            daily_state_binding=binding,
+        )
+        assert runtime.daily_state_binding is binding

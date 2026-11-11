@@ -791,6 +791,9 @@ def run_strategy_core(
             trade_logs=(),
         )
     else:
+        joint_required = execution.get("joint_execution_required") is True
+        if joint_required and (config.dry_run_only or not execution_claim_acquired or execution_state_store is None):
+            raise RuntimeError("joint strategy execution requires the live execution claim")
         execution_result = execute_rebalance_cycle(
             client=client,
             plan=plan,
@@ -819,6 +822,8 @@ def run_strategy_core(
             cash_only_execution=getattr(config, "cash_only_execution", True),
             notional_buy_execution=getattr(config, "notional_buy_execution", False),
             intent_continuity=continuity,
+            **({"joint_execution_state_store": execution_state_store,
+                "joint_strategy_profile": config.strategy_profile} if joint_required else {}),
             publish_order_issue=lambda message: publish_incident(
                 lambda: notification_publisher.publish(RenderedNotification(detailed_text=message, compact_text=message)),
                 reason="order_integrity_issue", profile=config.strategy_profile, kind="order_status_unknown",
