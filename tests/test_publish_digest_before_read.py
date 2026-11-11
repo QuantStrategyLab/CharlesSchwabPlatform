@@ -8,6 +8,7 @@ from google.api_core.exceptions import Forbidden, NotFound, PreconditionFailed
 from google.cloud import storage
 
 from scripts import publish_digest_before_read as publisher
+from notifications.unified import CandidateConflictError
 
 NOW = datetime(2026, 10, 31, 22, 10, tzinfo=timezone.utc)
 PLATFORM = "schwab"
@@ -212,8 +213,13 @@ def test_existing_business_report_uses_native_archive_reader_and_verified_public
     assert all(row["business_day"] == "2026-10-31" for row in rows)
 
 
-@pytest.mark.parametrize("existing_status", ["blocked", "execution_unknown"])
-def test_completed_report_and_job_use_the_same_blocked_projection(client, monkeypatch, existing_status):
+@pytest.mark.parametrize("existing_status,finished,changed_count", [
+    ("blocked", False, False),
+    ("execution_unknown", False, False),
+    ("execution_unknown", True, False),
+    ("execution_unknown", True, True),
+])
+def test_completed_report_and_job_use_the_same_blocked_projection(client, monkeypatch, existing_status, finished, changed_count):
     from notifications import unified
 
     class FrozenTime(datetime):
@@ -230,6 +236,17 @@ def test_completed_report_and_job_use_the_same_blocked_projection(client, monkey
         "status": "ok", "started_at": "2026-10-31T20:00:00+00:00",
         "summary": {"execution_status": "blocked"},
     }
+    if finished:
+        from quant_platform_kit.common.execution_receipts import build_execution_receipt
+
+        report["finished_at"] = "2026-10-31T20:01:00+00:00"
+        report["runtime_target"] = {**target, "execution_mode": "live"}
+        report["runtime_release_receipt"] = {"attestation_state": "self_attested",
+            "strategy_release": {"strategy_revision": "a" * 40}}
+        report["execution_receipt"] = build_execution_receipt(
+            platform="schwab", strategy_profile=target["strategy_profile"], strategy_revision="a" * 40,
+            execution_mode="live", outcome="risk_blocked", observed_at=report["finished_at"],
+        )
     source = client.blob("gs://synthetic-archive/reports/charles_schwab/synthetic/2026-10/blocked.json")
     source.upload_from_string(json.dumps(report), retry=None)
     assert unified.persist_completed_report(report, env=ENV) is True
@@ -239,11 +256,25 @@ def test_completed_report_and_job_use_the_same_blocked_projection(client, monkey
     assert prior["runs"][0]["execution_status"] == "blocked"
     if existing_status == "execution_unknown":
         prior["runs"][0]["execution_status"] = existing_status
+        prior["runs"][0]["routine_observation_counts"] = {}
+        if changed_count:
+            prior["runs"][0]["order_count"] = 1
+            prior["runs"][0]["field_status"]["order_count"] = "known"
         candidate.upload_from_string(json.dumps(prior), retry=None)
     before = candidate.generation, candidate.body
 
     if existing_status == "blocked":
         assert publisher.publish(ENV, now=lambda: NOW, client=client)["readback_verified"] is True
+    elif finished and not changed_count:
+        assert publisher.publish(ENV, now=lambda: NOW, client=client)["readback_verified"] is True
+        assert candidate.generation == before[0] + 1
+        upgraded_row = json.loads(candidate.body)["runs"][0]
+        assert upgraded_row["execution_status"] == "blocked"
+        assert upgraded_row["routine_observation_counts"] == {}
+        upgraded = candidate.generation, candidate.body
+        assert publisher.publish(ENV, now=lambda: NOW, client=client)["readback_verified"] is True
+        assert (candidate.generation, candidate.body) == upgraded
+        return
     else:
         with pytest.raises(ValueError, match="notification_candidate_source_conflict"):
             publisher.publish(ENV, now=lambda: NOW, client=client)
@@ -377,6 +408,7 @@ def test_main_reports_wait_timeout_without_private_details(monkeypatch, capsys):
 
 @pytest.mark.parametrize(("error", "reason"), [
     (ValueError("notification_candidate_source_conflict"), "notification_candidate_source_conflict"),
+    (CandidateConflictError({}, {}, {}), "notification_candidate_source_conflict"),
     (ValueError("notification_candidate_source_conflict: gs://private-bucket/report"), "candidate_publication_unconfirmed"),
     (RuntimeError("notification_candidate_source_conflict"), "candidate_publication_unconfirmed"),
 ])

@@ -449,7 +449,7 @@ def _notification_report(report):
     return value
 
 
-def _project_runs(reports, **kwargs):
+def _project_runs(reports, *, archived_risk_blocks=None, **kwargs):
     # The archive remains authoritative. Project each business run separately;
     # window totals must never be relabelled as one run or copied to every run.
     unique = {}
@@ -478,6 +478,7 @@ def _project_runs(reports, **kwargs):
             row["notification_events"] = copy.deepcopy(events)
             row["field_status"] = {name: "known" if row.get(name) is not None else "unknown"
                 for name in ("order_count", "fill_count", "cycle_count")}
+            legacy_unknown = row.get("execution_status") == "execution_unknown"
             # The archive's outer success describes report completion, not the
             # inner execution outcome. Only change this notification copy.
             summary = report.get("summary") or {}
@@ -507,6 +508,11 @@ def _project_runs(reports, **kwargs):
                     # make a skewed receipt acceptable to live processing.
                     reason = row.get("reason_code")
                     row.update(status="alert", reason_code="+".join(filter(None, (reason, "receipt_time_unconfirmed"))))
+                elif (archived_risk_blocks is not None and legacy_unknown
+                        and row.get("execution_status") == "blocked" and receipt.get("outcome") == "risk_blocked"):
+                    from scripts.runtime_daily_report_projection import _run
+                    if _run(report, kwargs["now"])["evidence"]["receipt_state"] == "valid":
+                        archived_risk_blocks.add(run_id)
             from .approved_gates import report_gate_reasons, render_gate_reasons
             approved = report_gate_reasons(report, observed_at=kwargs.get("now"))
             if approved:
@@ -540,7 +546,7 @@ def _canonical_candidate_row(row):
     return value
 
 
-def persist_projected_candidate(payload, *, env=None, store=None):
+def persist_projected_candidate(payload, *, env=None, store=None, archived_risk_blocks=()):
     """Merge archive-authoritative runs into one exact object, with one CAS."""
     import re
     from google.api_core.exceptions import NotFound
@@ -592,7 +598,16 @@ def persist_projected_candidate(payload, *, env=None, store=None):
         events = current.pop("notification_events", [])
         prior = dict(merged.get(key) or {})
         prior_events = prior.pop("notification_events", [])
-        if prior and prior != current:
+        comparison = prior
+        if (current.get("execution_status") == "blocked"
+                and row.get("source_run_id") in archived_risk_blocks
+                and prior.get("execution_status") in ("execution_unknown", "blocked")):
+            # The existing writer may also have observed no routine signals.
+            # Retain that observation when the archive omits the optional map.
+            if prior.get("routine_observation_counts") == {}:
+                current.setdefault("routine_observation_counts", {})
+            comparison = {**prior, "execution_status": "blocked"}
+        if prior and comparison != current:
             raise CandidateConflictError(prior, row, current)
         facts = {}
         for event in [*prior_events, *events]:
@@ -671,6 +686,7 @@ def emit_completed_candidates(env, *, now=None, read=None, upload=None, required
     read = read or digest_archive._read
     configured = {**env, "QSL_ROUTINE_NOTIFICATION_MODE": "daily_digest"}
     published_runs = set()
+    archived_risk_blocks = set()
 
     def project_completed(reports, **kwargs):
         selected = []
@@ -688,7 +704,7 @@ def emit_completed_candidates(env, *, now=None, read=None, upload=None, required
                 and "signal" not in diagnostics)
             if not probe:
                 selected.append(report)
-        return _project_runs(selected, **kwargs)
+        return _project_runs(selected, archived_risk_blocks=archived_risk_blocks, **kwargs)
 
     def write(uri, body):
         payload = json.loads(body)
@@ -714,7 +730,7 @@ def emit_completed_candidates(env, *, now=None, read=None, upload=None, required
         if upload:
             upload(uri, projected)
         else:
-            persist_projected_candidate(payload, env=configured)
+            persist_projected_candidate(payload, env=configured, archived_risk_blocks=archived_risk_blocks)
         published_runs.update(identities)
 
     def notification_read(args):

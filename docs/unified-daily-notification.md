@@ -290,6 +290,12 @@ remain distinct in canonical comparison. Existing contradictory candidates are
 not rewritten or normalized away. Source identity, factual conflict rejection
 and generation-conditional writes continue to apply on replay and restart.
 
+The completed-window publisher can refine an older `execution_unknown` row to
+`blocked` when the matching archive run contains a valid risk-blocked execution
+receipt. It retains an existing empty plugin observation map when the archive
+omits it. Other run fields must agree and event identity checks still apply.
+The write uses the existing generation precondition and replays are idempotent.
+
 ### Candidate source-conflict diagnostics
 
 A contradictory same-run candidate still stops publication with
