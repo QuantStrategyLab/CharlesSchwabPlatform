@@ -450,10 +450,16 @@ def test_wrapper_masks_original_variable_precedence_before_step_headers():
     assert "uses: ./.github/workflows/pilot-metadata-readback-protected.yml" in wrapper
     assert "inventory: ${{ vars.CLOUD_RUN_SERVICE_TARGETS_JSON || secrets.CLOUD_RUN_SERVICE_TARGETS_JSON }}" in wrapper
     assert "runtime_target: ${{ vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}" in wrapper
-    assert "steps:" not in wrapper and "env:" not in wrapper
+    approval, readback = wrapper.split("\n  approve-live:\n", 1)[1].split("\n  readback:\n", 1)
+    assert "steps:" not in readback and "env:" not in readback
+    assert "secrets." not in approval and "permissions: {}" in approval
+    assert "environment: schwab-live-approval" in approval
+    assert "needs.approve-live.result == 'success'" in readback
+    assert "needs.approve-live.result == 'skipped'" in readback
     assert "workflow_call:" in protected and "workflow_dispatch:" not in protected
     assert "vars." not in protected
-    assert protected.count("    env:") == 2
+    assert protected.count("    env:") == 3
+    assert "queue: max" in protected
     assert "CLOUD_RUN_SERVICE_TARGETS_JSON: ${{ secrets.inventory }}" in protected
     assert "RUNTIME_TARGET_JSON: ${{ secrets.runtime_target }}" in protected
     for text in (wrapper, protected):
@@ -473,6 +479,7 @@ def test_wrapper_masks_original_variable_precedence_before_step_headers():
 def test_workflow_has_no_mutating_or_broker_steps():
     for path in ("pilot-metadata-readback.yml", "pilot-metadata-readback-protected.yml"):
         text = (ROOT / ".github/workflows" / path).read_text()
+        text = text.replace("/actions/runs", "").replace("$workflow/runs", "")
         for forbidden in ("/run", "/reconcile", "/probe", "scheduler jobs", "services update", "storage", "logging read", "secrets versions", "sendMessage", "--publish", "--renew"):
             assert forbidden not in text
 

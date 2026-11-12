@@ -32,15 +32,45 @@ on:
         required: false
 
 permissions:
+  actions: read
   contents: read
   id-token: write
 
 jobs:
   read_metadata:
+    name: Schwab runtime operation · ${{ inputs.resume_operation }}
+    concurrency:
+      group: schwab-pilot-metadata-operation
+      queue: max
     if: github.repository == 'QuantStrategyLab/CharlesSchwabPlatform' && github.ref == 'refs/heads/main' && github.run_attempt == 1
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Reject a stale enable request
+        if: inputs.resume_operation == 'enable'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          workflow="repos/${GITHUB_REPOSITORY}/actions/workflows/pilot-metadata-readback.yml"
+          created=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq .created_at)
+          runs=$(gh api --method GET "$workflow/runs" -f branch=main -f "created=>=${created}" -F per_page=100)
+          jq -e '.total_count == (.workflow_runs | length)' <<< "$runs" >/dev/null
+          [[ "$GITHUB_RUN_NUMBER" =~ ^[1-9][0-9]*$ ]]
+          newer=$(jq -r --argjson run_number "$GITHUB_RUN_NUMBER" '
+            .workflow_runs[] | select(.run_number > $run_number)
+            | select(.display_title != "Schwab runtime switch read-only") | .id' <<< "$runs")
+          for run in $newer; do
+            jobs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run}/jobs?per_page=100")
+            # Until a newer request can be identified, leave the earlier enable unapplied.
+            if ! jq -e '.total_count == (.jobs | length) and
+                any(.jobs[]; .name | endswith("Schwab runtime operation · inspect")) and
+                all(.jobs[]; .name | endswith("Schwab runtime operation · disable") | not)' <<< "$jobs" >/dev/null; then
+              echo "::error::A newer Schwab switch request superseded this approval."
+              exit 1
+            fi
+          done
+
       - name: Checkout reviewed source
         uses: actions/checkout@v6
 

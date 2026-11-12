@@ -27,3 +27,7 @@ dry-run、cash-only、执行通道、continuity、release 和风险政策的声�
 Secret payload 读取或云写入，不重试、不解除熔断。服务原本可能处于 enabled／live，但本入口
 不会触发它执行。首次真实运行需先合并来源并由授权执行者从准确 `main` 版本派发；本地合成
 测试通过不能代替真实读回证据。
+
+
+`enable` 请求须通过 `schwab-live-approval` Environment 审批。审批通过后，任务会复核是否有更新的切换请求，再执行现有服务回读及启用逻辑。
+`inspect` 和 `disable` 可直接运行，审批等待期间仍能处理关闭请求。
