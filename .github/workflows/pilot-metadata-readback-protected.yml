@@ -41,7 +41,7 @@ jobs:
     name: Schwab runtime operation · ${{ inputs.resume_operation }}
     concurrency:
       group: schwab-pilot-metadata-operation
-      cancel-in-progress: false
+      queue: max
     if: github.repository == 'QuantStrategyLab/CharlesSchwabPlatform' && github.ref == 'refs/heads/main' && github.run_attempt == 1
     runs-on: ubuntu-latest
     timeout-minutes: 10
