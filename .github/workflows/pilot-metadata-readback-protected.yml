@@ -56,8 +56,9 @@ jobs:
           created=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq .created_at)
           runs=$(gh api --method GET "$workflow/runs" -f branch=main -f "created=>=${created}" -F per_page=100)
           jq -e '.total_count == (.workflow_runs | length)' <<< "$runs" >/dev/null
-          newer=$(jq -r --arg run "$GITHUB_RUN_ID" --arg created "$created" '
-            .workflow_runs[] | select((.id | tostring) != $run and .created_at >= $created)
+          [[ "$GITHUB_RUN_NUMBER" =~ ^[1-9][0-9]*$ ]]
+          newer=$(jq -r --argjson run_number "$GITHUB_RUN_NUMBER" '
+            .workflow_runs[] | select(.run_number > $run_number)
             | select(.display_title != "Schwab runtime switch read-only") | .id' <<< "$runs")
           for run in $newer; do
             jobs=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run}/jobs?per_page=100")
