@@ -15,16 +15,29 @@ on:
         required: false
 
 permissions:
+  actions: read
   contents: read
   id-token: write
 
-concurrency:
-  group: schwab-pilot-metadata-readback
-  cancel-in-progress: false
-
 jobs:
+  approve-live:
+    name: Approve Schwab live enable
+    if: github.repository == 'QuantStrategyLab/CharlesSchwabPlatform' && github.ref == 'refs/heads/main' && github.run_attempt == 1 && inputs.resume_operation == 'enable' && inputs.request_id != ''
+    environment: schwab-live-approval
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions: {}
+    steps:
+      - name: Record live-enable approval
+        run: echo "Approved the Schwab live-enable request for this run." >> "$GITHUB_STEP_SUMMARY"
+
   readback:
-    if: github.repository == 'QuantStrategyLab/CharlesSchwabPlatform' && github.ref == 'refs/heads/main' && github.run_attempt == 1
+    needs: approve-live
+    if: >-
+      !cancelled() && github.repository == 'QuantStrategyLab/CharlesSchwabPlatform' &&
+      github.ref == 'refs/heads/main' && github.run_attempt == 1 &&
+      ((inputs.resume_operation == 'enable' && needs.approve-live.result == 'success') ||
+      (inputs.resume_operation != 'enable' && needs.approve-live.result == 'skipped'))
     uses: ./.github/workflows/pilot-metadata-readback-protected.yml
     with:
       resume_operation: ${{ inputs.resume_operation || 'none' }}
