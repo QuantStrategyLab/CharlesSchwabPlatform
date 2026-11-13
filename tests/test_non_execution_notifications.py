@@ -84,7 +84,7 @@ def test_non_run_conflict_is_not_overwritten(candidate_store):
 
 @pytest.mark.parametrize("enabled,persist_fails", [(False, False), (True, False), (True, True)])
 def test_actual_early_guard_persists_only_when_enabled_and_never_builds_client(monkeypatch, enabled, persist_fails):
-    source = Path(__file__).resolve().parents[1] / "main.py"
+    source = Path(__file__).resolve().parents[1] / "http_routes.py"
     node = next(x for x in ast.parse(source.read_text()).body if isinstance(x, ast.FunctionDef) and x.name == "_handle_schwab_cycle")
     calls = []
     monkeypatch.setattr(unified, "enabled", lambda: enabled)
@@ -97,7 +97,7 @@ def test_actual_early_guard_persists_only_when_enabled_and_never_builds_client(m
         return "synthetic-archive-ack"
 
     reporting = SimpleNamespace(build_log_context=lambda: object())
-    namespace = {
+    surface = {
         "RUNTIME_SETTINGS": SimpleNamespace(runtime_target_enabled=False),
         "build_composer": lambda: SimpleNamespace(build_reporting_adapters=lambda: reporting),
         "build_execution_report": lambda context: skipped_report(),
@@ -106,6 +106,11 @@ def test_actual_early_guard_persists_only_when_enabled_and_never_builds_client(m
         "persist_execution_report": persist,
         "run_strategy_core": lambda *args, **kwargs: pytest.fail("guard called strategy"),
     }
+
+    def entry():
+        return SimpleNamespace(**surface)
+
+    namespace = {"entry": entry, **surface}
     exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), "exec"), namespace)
     assert namespace["_handle_schwab_cycle"]() == ("Runtime Target Disabled", 200)
     assert [kind for kind, _ in calls] == ([] if not enabled else ["archive"] if persist_fails else ["archive", "candidate"])
