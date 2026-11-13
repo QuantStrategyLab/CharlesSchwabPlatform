@@ -45,11 +45,15 @@ include_namespace_packages = true
 [tool.setuptools]
 py-modules = [
   "decision_mapper",
+  "http_routes",
   "main",
+  "notifications_runtime",
   "runtime_config_support",
   "runtime_execution_policy",
   "runtime_logging",
+  "runtime_wiring",
   "strategy_loader",
+  "strategy_plugins_runtime",
   "strategy_registry",
   "strategy_runtime",
 ]
