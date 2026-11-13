@@ -141,7 +141,7 @@ def _normalize_plugin_mounts_strategy(raw_mounts_json: str | None) -> str | None
             continue
         old = item.get('strategy')
         if old and old != STRATEGY_PROFILE:
-            entry['strategy'] = STRATEGY_PROFILE
+            item['strategy'] = STRATEGY_PROFILE
             changed = True
             print(f'[config-sync] Plugin mount strategy corrected: {old} → {STRATEGY_PROFILE}', flush=True)
     return json.dumps(mounts, ensure_ascii=False) if changed else raw_mounts_json
