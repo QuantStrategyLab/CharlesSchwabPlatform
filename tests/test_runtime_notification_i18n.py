@@ -14,7 +14,7 @@ def test_chinese_locale_variants_use_chinese(locale):
 
 
 def runtime_function(name, **overrides):
-    tree = ast.parse((Path(__file__).resolve().parents[1] / "main.py").read_text())
+    tree = ast.parse((Path(__file__).resolve().parents[1] / "notifications_runtime.py").read_text())
     function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name)
     namespace = dict(os=os, request=SimpleNamespace(method="GET", path="/main"),
                      NOTIFY_LANG="zh-CN", SERVICE_NAME="Test service", SECRET_NAME="Test secret alias",
@@ -45,7 +45,7 @@ def test_startup_alert_is_compact_localized_and_does_not_embed_provider_text(loc
 @pytest.mark.parametrize("handler_name", ['_handle_schwab_cycle', '_handle_schwab_probe'])
 def test_actual_cycle_exception_handler_emits_no_provider_text(handler_name, monkeypatch):
     monkeypatch.setenv("K_REVISION", "synthetic-runtime-revision")
-    source = (Path(__file__).resolve().parents[1] / "main.py").read_text()
+    source = (Path(__file__).resolve().parents[1] / "http_routes.py").read_text()
     function = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef) and n.name == handler_name)
     handler = next(n for n in ast.walk(function) if isinstance(n, ast.ExceptHandler) and isinstance(n.type, ast.Name) and n.type.id == "Exception" and n.name == "exc" and any(isinstance(c, ast.Call) and isinstance(c.func, ast.Name) and c.func.id == "append_runtime_report_error" for c in ast.walk(n)))
     emitted = []
