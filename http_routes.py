@@ -21,7 +21,7 @@ from application import signal_provenance
 from application.broker_reconciliation import collect_read_only_reconciliation_observations
 from application.paper_execution_command_consumer import consume_due_paper_execution_commands
 from application.rebalance_service import run_strategy_core as run_rebalance_cycle
-from application.runtime_report_summary import execution_report_status, summarize_execution_cycle_result
+from application.runtime_report_summary import summarize_execution_cycle_result
 from entrypoints.cloud_run import is_market_open_now
 from quant_platform_kit.common.platform_runner import dispatch_due_monitors, load_monitor_targets
 from quant_platform_kit.common.runtime_reports import (
@@ -49,7 +49,7 @@ def _build_execution_report(log_context, *, dry_run_only_override: bool | None =
 
 
 def _persist_execution_report(report, *, dry_run_only_override: bool | None = None):
-    return rw.build_composer(dry_run_only_override=dry_run_only_override).build_reporting_adapters().persist_report(report)
+    return rw.build_composer(dry_run_only_override=dry_run_only_override).build_reporting_adapters().persist_execution_report(report)
 
 
 def _fetch_reference_history(market_data_port):
@@ -100,10 +100,6 @@ def _run_strategy_core(c, now_ny, **kwargs):
 
 def _log_runtime_event(log_context, event, **fields):
     return rw.build_composer().build_reporting_adapters().log_event(log_context, event, **fields)
-
-
-def _build_execution_report(log_context, *, dry_run_only_override: bool | None = None):
-    return rw.build_composer(dry_run_only_override=dry_run_only_override).build_reporting_adapters().build_report(log_context)
 
 
 def _signal_diagnostics_from_result(result) -> dict[str, object]:
@@ -176,97 +172,6 @@ def _has_signal_snapshot_details(snapshot: dict[str, object]) -> bool:
 
 def _summarize_cycle_result_for_report(result, *, dry_run: bool, existing_summary=None) -> dict[str, object]:
     return summarize_execution_cycle_result(result, dry_run=dry_run, existing_summary=existing_summary)
-
-
-def _persist_execution_report(report, *, dry_run_only_override: bool | None = None):
-    return rw.build_composer(dry_run_only_override=dry_run_only_override).build_reporting_adapters()._persist_execution_report(report)
-
-
-def _fetch_reference_history(market_data_port):
-    return rw.build_strategy_adapters()._fetch_reference_history(market_data_port)
-
-
-def _build_price_history(market_data_port, symbol: str):
-    return rw.build_broker_adapters()._build_price_history(market_data_port, symbol)
-
-
-def _build_market_history_loader(market_data_port):
-    return rw.build_broker_adapters()._build_market_history_loader(market_data_port)
-
-
-def _fetch_managed_snapshot(client):
-    return rw.build_broker_adapters()._fetch_managed_snapshot(client)
-
-
-def _build_market_data_port(client):
-    return rw.build_broker_adapters()._build_market_data_port(client)
-
-
-def _build_semiconductor_indicators(market_data_source, *, trend_window: int) -> dict[str, dict[str, float]]:
-    return rw.build_strategy_adapters()._build_semiconductor_indicators(
-        market_data_source,
-        trend_window=trend_window,
-    )
-
-
-def _build_account_state_from_snapshot(snapshot) -> dict[str, object]:
-    return rw.build_strategy_adapters()._build_account_state_from_snapshot(snapshot)
-
-
-def _resolve_rebalance_plan(*, qqq_history, snapshot):
-    return rw.build_strategy_adapters()._resolve_rebalance_plan(
-        qqq_history=qqq_history,
-        snapshot=snapshot,
-    )
-
-
-def _run_strategy_core(
-    c,
-    now_ny,
-    *,
-    strategy_plugin_signals=(),
-    strategy_plugin_error: str | None = None,
-    dry_run_only_override: bool | None = None,
-):
-    composer = rw.build_composer(dry_run_only_override=dry_run_only_override)
-    return run_rebalance_cycle(
-        c,
-        now_ny,
-        runtime=composer.build_rebalance_runtime(
-            c,
-            silent_cycle_notifications=bool(dry_run_only_override),
-        ),
-        config=composer.build_rebalance_config(
-            strategy_plugin_signals=strategy_plugin_signals,
-            strategy_plugin_error=strategy_plugin_error,
-            cash_only_execution=CASH_ONLY_EXECUTION,
-        ),
-    )
-
-
-def _schwab_force_run_env() -> bool:
-    return (os.getenv("SCHWAB_FORCE_RUN") or "").strip().lower() == "true"
-
-
-def _schwab_market_open_now():
-    market_open = is_market_open_now(calendar_name="NASDAQ", timezone_name="America/New_York")
-    if isinstance(market_open, tuple):
-        return market_open
-    return market_open, None
-
-
-def attach_signal_data_provenance(report) -> None:
-    """Attach this run's non-sensitive signal data provenance; never raises."""
-    try:
-        provenance = signal_provenance.snapshot()
-        if provenance and isinstance(report, dict):
-            diagnostics = report.get("diagnostics")
-            if not isinstance(diagnostics, dict):
-                diagnostics = {}
-                report["diagnostics"] = diagnostics
-            diagnostics["signal_data_provenance"] = provenance
-    except Exception:
-        return
 
 
 def _handle_schwab_cycle(*, dry_run_only_override: bool | None = None, response_body: str = "OK"):
@@ -555,7 +460,7 @@ def _handle_paper_execution_command_consumer():
 
     def _market_data_port_loader():
         if "market_data_port" not in market_data_box:
-            market_data_box["market_data_port"] = composer.broker_adapters._build_market_data_port(_client())
+            market_data_box["market_data_port"] = composer.broker_adapters.build_market_data_port(_client())
         return market_data_box["market_data_port"]
 
     try:
@@ -610,7 +515,7 @@ def _handle_paper_execution_command_consumer():
         return "Paper Command Consumer Error", 500
     finally:
         try:
-            report_path = reporting_adapters._persist_execution_report(report)
+            report_path = reporting_adapters.persist_execution_report(report)
             print(f"execution_report {report_path}", flush=True)
         except Exception as persist_exc:
             print(f"failed to persist execution report: {persist_exc}", flush=True)
@@ -637,7 +542,7 @@ def _handle_schwab_probe(*, response_body: str = "Probe OK"):
         # bounded retry policy for transient 5xx responses (including the
         # provider's JS-SetBackendUrl fault), causing the runtime guard to
         # report a healthy service as failed on one transient response.
-        snapshot = rw.build_broker_adapters()._fetch_managed_snapshot(client)
+        snapshot = rw.build_broker_adapters().fetch_managed_snapshot(client)
         summary = {
             "buying_power": float(snapshot.buying_power or 0.0),
             "total_equity": float(snapshot.total_equity or 0.0),
