@@ -29,6 +29,11 @@ def runtime_function(name, **overrides):
     root = Path(__file__).resolve().parents[1]
     source_name = {
         "_runtime_error_notification_message": "notifications_runtime.py",
+        "_runtime_error_notification_targets": "notifications_runtime.py",
+        "_notify_runtime_error": "notifications_runtime.py",
+        "_publish_runtime_failure_notification": "notifications_runtime.py",
+        "_publish_runtime_failure_notification_legacy": "notifications_runtime.py",
+        "_handle_route_runtime_error": "notifications_runtime.py",
         "_runtime_revision_diagnostics": "runtime_wiring.py",
     }.get(name, "main.py")
     tree = ast.parse((root / source_name).read_text())
