@@ -1,6 +1,7 @@
 """Single-target final report publication under the approved object scope."""
 import copy
 import json
+from datetime import datetime
 from types import SimpleNamespace
 import pytest
 from notifications import unified
@@ -67,6 +68,46 @@ def test_conflicting_evidence_or_other_identity_is_never_overwritten(monkeypatch
     changed=payload('two');changed['runs'][0]['target_id']='other'
     with pytest.raises(ValueError):unified.persist_projected_candidate(changed,env=env,store=store)
     assert client.data==before
+
+
+def test_archive_snapshot_accepts_same_native_account_digest_and_keeps_scope():
+    target = {"runtime_risk_limits": {"binding": {"account_hash": "ab" * 32}}}
+    report = {"dry_run": False, "started_at": "2026-10-27T20:00:00Z",
+              "finished_at": "2026-10-27T20:01:00Z", "summary": {"account_observation": {
+                  "account_hash": "AB" * 32, "observed_at": "2026-10-27T20:00:01Z",
+                  "net_assets_source": "liquidationValue", "net_assets_currency": "USD",
+                  "net_assets_currency_source": "owner_confirmed", "net_assets": "123.45",
+              }}}
+    now = datetime.fromisoformat("2026-10-27T21:00:00+00:00")
+    assert unified._account_snapshots(report, target, now) == [
+        {"as_of": "2026-10-27T20:00:01+00:00", "equity": 123.45, "equity_currency": "USD"}
+    ]
+    assert unified._account_snapshots({**report, "dry_run": True}, target, now) == []
+    observation = report["summary"]["account_observation"]
+    observation["observed_at"] = "2026-10-27T20:01:01Z"
+    assert unified._account_snapshots(report, target, now) == []
+    observation.update(account_hash="ac" * 32, observed_at="2026-10-27T20:00:01Z")
+    assert unified._account_snapshots(report, target, now) == []
+
+
+def test_archive_snapshot_enriches_existing_run_without_overwriting_execution(monkeypatch):
+    client, store, env = setup(monkeypatch)
+    original = payload()
+    assert unified.persist_projected_candidate(original, env=env, store=store)
+    enriched = copy.deepcopy(original)
+    facts = {"snapshots": [{"as_of": "2026-10-27T20:00:01Z", "equity": 123.45, "equity_currency": "USD"}]}
+    enriched["runs"][0]["account_daily_facts"] = facts
+    assert unified.persist_projected_candidate(enriched, env=env, store=store)
+    before = copy.deepcopy(client.data)
+    assert unified.persist_projected_candidate(original, env=env, store=store)
+    assert client.data == before
+    stored, = next(iter(client.data.values()))[1]["runs"]
+    assert stored["account_daily_facts"] == facts
+    assert stored["order_count"] is None and stored["fill_count"] is None
+    enriched["runs"][0]["account_daily_facts"]["snapshots"][0]["equity"] = 200
+    with pytest.raises(unified.CandidateConflictError):
+        unified.persist_projected_candidate(enriched, env=env, store=store)
+    assert client.data == before
 
 
 def test_staged_event_uses_only_the_approved_marker_directory(monkeypatch):
