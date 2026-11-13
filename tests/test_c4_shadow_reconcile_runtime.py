@@ -303,10 +303,10 @@ def test_report_attachment_is_internal_only_and_omits_account_details() -> None:
 def test_main_reconcile_path_wires_c4_into_report_not_public_body() -> None:
     from pathlib import Path
 
-    source = Path("main.py").read_text(encoding="utf-8")
+    source = Path("http_routes.py").read_text(encoding="utf-8")
     assert "build_reconcile_c4_report_attachment" in source
     assert '**c4_attachment["diagnostics"]' in source or "**c4_attachment['diagnostics']" in source
-    assert "return json.dumps(payload" in source
+    assert "json.dumps(payload" in source
     assert "FINAL_RISK_ASSESSMENT_PROVIDER = None" in source
     # Public body remains candidate payload only.
     assert "json.dumps(c4_attachment" not in source
