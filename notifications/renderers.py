@@ -343,6 +343,10 @@ def render_trade_notification(
     trade_logs,
     account_label="",
 ) -> RenderedNotification:
+    from .unified import current_error_notification
+    error_body = current_error_notification(locale="zh" if _translator_uses_zh(translator) else "en")
+    if error_body:
+        return RenderedNotification(detailed_text=error_body, compact_text=error_body)
     signal_display = _localize_notification_text(execution["signal_display"], translator=translator)
     status_display = _localize_notification_text(execution.get("status_display"), translator=translator)
     extra_notification_block = _render_extra_notification_block(
@@ -421,6 +425,10 @@ def render_heartbeat_notification(
     account_label="",
     account_snapshot=None,
 ) -> RenderedNotification:
+    from .unified import current_error_notification
+    error_body = current_error_notification(locale="zh" if _translator_uses_zh(translator) else "en")
+    if error_body:
+        return RenderedNotification(detailed_text=error_body, compact_text=error_body)
     snapshot = account_snapshot if isinstance(account_snapshot, Mapping) else {}
     observed_at = snapshot.get("observed_at")
     observed_at = observed_at.isoformat() if isinstance(observed_at, datetime) else str(observed_at or "").strip()

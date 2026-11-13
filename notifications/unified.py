@@ -24,6 +24,28 @@ from .digest_snapshot.unified_contract import (
 
 FLAG = "SCHWAB_UNIFIED_NOTIFICATION_ENABLED"
 _context = ContextVar("schwab_notification_report", default=None)
+_error_event = ContextVar("schwab_notification_error", default=None)
+
+
+def current_error_notification(*, locale=None):
+    value = _error_event.get()
+    if value is None:
+        return None
+    from .receipt_alerts import render_runtime_error
+    event, reason = value
+    report = _context.get() or {}
+    return render_runtime_error(reason=reason or event.event_kind, locale=locale,
+        profile=event.strategy_profile, occurred_at=event.occurred_at,
+        workflow_url=report.get("console_run_url"))
+
+
+@contextmanager
+def error_notification_context(event, *, reason=None):
+    context_token = _error_event.set((event, reason))
+    try:
+        yield
+    finally:
+        _error_event.reset(context_token)
 
 
 class CandidateStorageError(RuntimeError):
@@ -285,6 +307,16 @@ def route(event, *, legacy, immediate=None, stream="cycle", state="alert", sever
           recovered=False, projection=None, store=None, env=None, candidate_details=None):
     env = os.environ if env is None else env
     routine = event.event_kind in {"routine_cycle", "healthy_heartbeat", "order_submitted", "fill"}
+    original_legacy, original_immediate = legacy, immediate
+    def deliver_formatted(callback):
+        with error_notification_context(event):
+            return callback()
+    if not routine:
+        def legacy():
+            return deliver_formatted(original_legacy)
+        if original_immediate is not None:
+            def immediate():
+                return deliver_formatted(original_immediate)
     if not enabled(env) and not routine:
         return legacy()
     persisted = False
@@ -347,6 +379,12 @@ def _cycle_projection(result, fact, config):
 def publish_cycle(result, *, config, legacy, coverage_failure=None):
     """Called after execution; only the notification callback is moved."""
     execution, orders = result.execution, tuple(result.submitted_orders or ())
+    if coverage_failure is not None:
+        original_coverage_failure = coverage_failure
+        def coverage_failure():
+            with error_notification_context(event_for("real_error", profile=config.strategy_profile), reason="coverage"):
+                return original_coverage_failure()
+
     from .approved_gates import approved_block_reasons, render_gate_reasons
     approved = approved_block_reasons(execution, order_count=len(orders), dry_run=config.dry_run_only)
     if set(getattr(config, "notification_attention_reason_codes", ()) or ()) - {"account_new_risk_gate"}:
@@ -432,8 +470,6 @@ def publish_cycle(result, *, config, legacy, coverage_failure=None):
 
 
 def publish_incident(legacy, *, reason, profile=None, kind="real_error"):
-    if not enabled():
-        return legacy()
     return route(event_for(kind, profile=profile, reason=reason), legacy=legacy, state=kind)
 
 

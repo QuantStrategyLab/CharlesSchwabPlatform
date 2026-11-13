@@ -32,6 +32,15 @@ def test_flags_off_preserves_business_calls_and_urgent_output(monkeypatch, flag,
     if scenario == "healthy":
         assert len(actual_sends) == 1
         assert ("摘要" if locale == "zh" else "coverage") in actual_sends[0][1].lower()
+    elif scenario in {"blocked", "order"}:
+        # P10 deliberately replaces only the last urgent body; retain earlier
+        # execution notices, all business calls, and the complete result below.
+        assert actual_sends[:-1] == previous_sends[:-1]
+        assert len(actual_sends) == len(previous_sends)
+        text = actual_sends[-1][1]
+        assert text.startswith("【资产管理｜运行错误】" if locale == "zh" else "[Asset management | Runtime error]")
+        assert ("是否提交订单：未知" if locale == "zh" else "Order submission: unknown") in text
+        assert "fake strategy" not in text
     else:
         assert actual_sends == previous_sends
     execution = actual["result"]["execution"]

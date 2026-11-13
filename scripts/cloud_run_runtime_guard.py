@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+
 import datetime as dt
 import json
 import os
@@ -13,9 +14,13 @@ import time
 import urllib.parse
 import urllib.request
 from typing import Any
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from notifications.receipt_alerts import render_runtime_error
 
 from quant_platform_kit.common.operational_notification_localization import (
-    format_operational_alert,
     operational_notification_text,
     resolve_operational_notification_locale,
 )
@@ -819,16 +824,8 @@ def main() -> int:
             f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}"
             f"/actions/runs/{os.environ['GITHUB_RUN_ID']}"
         )
-    message = format_operational_alert(
-        locale=_notification_locale(),
-        alert_type="runtime_guard",
-        name=name,
-        context={"project": project, "lookback_minutes": lookback_minutes},
-        issues=issues,
-        # Keep provider audit payloads in their source logs, including on pinned QPK.
-        technical_details=(),
-        workflow_url=run_url,
-    )
+    message = render_runtime_error(reason="runtime_guard", locale=_notification_locale(),
+        occurred_at=dt.datetime.now(dt.timezone.utc), workflow_url=run_url)
     print(message)
     decision = alert_dedupe.decide(name=name, issues=issues, event_ids=alert_event_ids)
     print(decision.log_line())

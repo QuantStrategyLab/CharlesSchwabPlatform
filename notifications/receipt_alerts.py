@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import datetime
+import os
+
+from quant_platform_kit.notifications._redaction import redact_sensitive_text
+from quant_platform_kit.common.operational_notification_localization import resolve_operational_notification_locale
 from zoneinfo import ZoneInfo
 from urllib.parse import urlsplit, urlunsplit
 
@@ -51,8 +55,53 @@ def render_receipt_alert(*, locale, observations=(), workflow_url="", scheduler_
         title = ("最新相关回执时间" if label == "latest" else "最近应执行时间") if zh else (
             "Latest relevant receipt" if label == "latest" else "Latest scheduled execution")
         lines.append(f"{title}：{value}" if zh else f"{title}: {value}")
-    if workflow_url:
-        link = urlsplit(str(workflow_url))
-        if link.scheme == "https" and link.hostname and not link.username and not link.password:
-            lines.extend(["工作流运行记录：" if zh else "Workflow run:", urlunsplit((link.scheme, link.netloc, link.path, "", ""))])
-    return "\n".join(lines)
+    return render_runtime_error(locale=locale, reason="real_error", workflow_url=workflow_url,
+        problem="；".join(lines[1:]), occurred_at=None)
+
+
+def render_runtime_error(*, reason="real_error", locale=None, profile=None,
+                         occurred_at=None, workflow_url="", problem=None, action=None):
+    """Plan P10 body until the coordinated shared formatter pin is published.
+
+    Only caller-owned localized summaries may be supplied as problem/action;
+    provider diagnostics and raw identities are deliberately never interpolated.
+    """
+    from .display_names import display_name
+    zh = resolve_operational_notification_locale(locale or os.getenv("QSL_NOTIFY_LANG") or os.getenv("NOTIFY_LANG")) == "zh"
+    lang = "zh" if zh else "en"
+    stamp = occurred_at
+    if isinstance(stamp, str):
+        try:
+            stamp = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        except ValueError:
+            stamp = None
+    time = "未知" if zh else "unknown"
+    if isinstance(stamp, datetime) and stamp.tzinfo is not None:
+        time = stamp.astimezone(ZoneInfo("Asia/Singapore")).strftime("%Y-%m-%d %H:%M:%S SGT")
+    link = "运行链接不可用" if zh else "Run link unavailable"
+    try:
+        parts = urlsplit(str(workflow_url or ""))
+        # Do not turn credential-bearing URLs into apparently safe evidence.
+        if parts.scheme == "https" and (parts.hostname in {"github.com", "example.invalid", "example.test"} or (parts.hostname or "").endswith(".example.invalid")) and not parts.username and not parts.password and not parts.query and not parts.fragment:
+            link = urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+    except ValueError:
+        pass
+    problems = {
+        "coverage": ("Schwab 日报候选记录未确认，日报可能缺少本次记录", "Schwab daily digest candidate record is unconfirmed; the digest may omit this record (coverage unknown)"),
+        "runtime_guard": ("运行监控发现错误或证据缺失", "Runtime monitoring found an error or missing evidence"),
+        "auth_failure": ("认证失败", "Authentication failed"),
+        "blocked_run": ("本轮执行被阻断", "Execution blocked"),
+        "order_status_unknown": ("订单状态尚待核对", "Order status needs review"),
+        "real_error": ("运行发生错误，具体原因待核对", "Runtime error; the cause requires review"),
+    }
+    description = problem or problems.get(reason, problems["real_error"])[0 if zh else 1]
+    strategy = display_name("strategies", profile, lang, fallback="策略未核实" if zh else "Strategy unverified")
+    next_step = action or ("查看本次运行记录，核实输入和执行状态；未恢复前保持执行保护" if zh else
+                           "Inspect this run and verify inputs and execution state; retain execution protections")
+    lines = (["【资产管理｜运行错误】", f"时间：{time}", f"平台 / 策略：Schwab / {strategy}",
+              f"问题：{description}", "影响：是否提交订单：未知；是否有待处理订单：未知",
+              f"证据：Schwab 运行记录；{link}", f"处理：{next_step}", "事件：运行错误｜投递状态以回执为准"] if zh else
+             ["[Asset management | Runtime error]", f"Time: {time}", f"Platform / strategy: Schwab / {strategy}",
+              f"Problem: {description}", "Impact: Order submission: unknown; pending orders: unknown",
+              f"Evidence: Schwab run record; {link}", f"Action: {next_step}", "Event: runtime error | Delivery status depends on receipts"])
+    return redact_sensitive_text("\n".join(lines))

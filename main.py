@@ -482,14 +482,12 @@ def _runtime_error_notification_targets() -> tuple[tuple[str, str], ...]:
 
 
 def _runtime_error_notification_message(exc: Exception, *, route_label: str) -> str:
-    title = "runtime_failure_title"
-    return "\n".join((
-        t(title),
-        t("strategy_label", name=strategy_display_name or STRATEGY_PROFILE),
-        t("runtime_failure_context", context=SERVICE_NAME),
-        t("runtime_failure_result"),
-        t("runtime_failure_action"),
-    ))
+    from notifications.receipt_alerts import render_runtime_error
+    from notifications.unified import attention_run_context
+    context = attention_run_context()
+    return render_runtime_error(locale=NOTIFY_LANG, profile=STRATEGY_PROFILE,
+        reason="auth_failure" if "auth" in type(exc).__name__.lower() else "real_error",
+        occurred_at=context["occurred_at"], workflow_url=context["run_url"])
 
 
 def _notify_runtime_error(exc: Exception, *, route_label: str) -> bool:
@@ -523,10 +521,8 @@ def _notify_runtime_error(exc: Exception, *, route_label: str) -> bool:
 
 
 def _notify_digest_coverage_failure() -> bool:
-    from quant_platform_kit.common.operational_notification_localization import resolve_operational_notification_locale
-    zh = resolve_operational_notification_locale(NOTIFY_LANG) == "zh"
-    message = ("⚠️ 每日摘要记录未确认；请检查运行记录和摘要存储。" if zh else
-               "⚠️ Daily digest coverage is unconfirmed; check the run and digest storage.")
+    from notifications.receipt_alerts import render_runtime_error
+    message = render_runtime_error(reason="coverage", locale=NOTIFY_LANG, profile=STRATEGY_PROFILE)
     try:
         if publish_notification(detailed_text=message, compact_text=message):
             return True
@@ -554,13 +550,16 @@ def _publish_runtime_failure_notification_legacy(*, detailed_text: str, compact_
 
 
 def _publish_runtime_failure_notification(*, detailed_text: str, compact_text: str, exc: Exception) -> bool:
-    from notifications.unified import enabled as unified_enabled, publish_incident
-
+    from notifications.unified import enabled as unified_enabled, publish_incident, attention_run_context
+    from notifications.receipt_alerts import render_runtime_error
+    context = attention_run_context()
+    message = render_runtime_error(locale=NOTIFY_LANG, profile=STRATEGY_PROFILE,
+        occurred_at=context["occurred_at"], workflow_url=context["run_url"],
+        reason="auth_failure" if "auth" in type(exc).__name__.lower() else "real_error")
     if not unified_enabled():
-        return _publish_runtime_failure_notification_legacy(detailed_text=detailed_text, compact_text=compact_text, exc=exc)
-
+        return _publish_runtime_failure_notification_legacy(detailed_text=message, compact_text=message, exc=exc)
     return publish_incident(
-        lambda: publish_notification(detailed_text=detailed_text, compact_text=compact_text),
+        lambda: publish_notification(detailed_text=message, compact_text=message),
         reason="runtime_failure:" + type(exc).__name__, profile=STRATEGY_PROFILE,
         kind="auth_failure" if "auth" in type(exc).__name__.lower() else "real_error",
     )
