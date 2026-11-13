@@ -449,6 +449,54 @@ def _notification_report(report):
     return value
 
 
+def _account_snapshots(report, target, now):
+    """Use the archive's broker observation only for the configured account."""
+    from scripts.publish_account_facts_from_reports import _ProjectionError, _money_text, _project_positions
+    from scripts.schwab_native_identity import _account_hash_matches
+
+    try:
+        if report.get("dry_run") is not False:
+            return []
+        expected = target["runtime_risk_limits"]["binding"]["account_hash"]
+        observation = report["summary"]["account_observation"]
+        if not expected or not _account_hash_matches(expected, observation["account_hash"]):
+            return []
+        observed = _stamp(observation["observed_at"])
+        started, finished = _stamp(report["started_at"]), _stamp(report["finished_at"])
+        window = sgt_business_window(started)
+        if not started <= observed <= finished <= now or not observed < window.end:
+            return []
+        snapshots = []
+        if (observation.get("net_assets_source") == "liquidationValue"
+                and observation.get("net_assets_currency") == "USD"
+                and observation.get("net_assets_currency_source") == "owner_confirmed"):
+            try:
+                equity = float(_money_text(observation.get("net_assets")))
+            except _ProjectionError:
+                pass
+            else:
+                snapshots.append({"as_of": observed.isoformat(), "equity": equity, "equity_currency": "USD"})
+        try:
+            positions = _project_positions(observation)
+            if not positions:
+                return snapshots
+            scope = observation["broker_reported_positions_scope"]
+            stamp = _stamp(observation.get("broker_reported_positions_observed_at", observed.isoformat()))
+        except (KeyError, ValueError, TypeError, AttributeError):
+            pass
+        else:
+            if observed <= stamp <= finished and stamp < window.end:
+                holdings = [{"symbol": p["symbol"], "quantity": float(p["quantity"]), "asset_type": "security"}
+                            for p in positions]
+                if snapshots and stamp == observed:
+                    snapshots[0].update(holdings=holdings, holdings_scope=scope)
+                else:
+                    snapshots.append({"as_of": stamp.isoformat(), "holdings": holdings, "holdings_scope": scope})
+        return snapshots
+    except (KeyError, ValueError, TypeError, AttributeError):
+        return []
+
+
 def _project_runs(reports, *, archived_risk_blocks=None, **kwargs):
     # The archive remains authoritative. Project each business run separately;
     # window totals must never be relabelled as one run or copied to every run.
@@ -518,6 +566,10 @@ def _project_runs(reports, *, archived_risk_blocks=None, **kwargs):
             if approved:
                 row.update(approved_gate_reasons=approved,
                     reason_text_zh=render_gate_reasons(approved, "zh"), reason_text_en=render_gate_reasons(approved, "en"))
+            if archived_risk_blocks is not None:
+                snapshots = _account_snapshots(report, kwargs["expected_target"], kwargs["now"])
+                if snapshots:
+                    row["account_daily_facts"] = {"snapshots": snapshots}
             rows.append(row)
     return {"schema_version": "qsl.digest_candidates.v1", "producer_status": "projected", "runs": rows}
 
@@ -599,6 +651,14 @@ def persist_projected_candidate(payload, *, env=None, store=None, archived_risk_
         prior = dict(merged.get(key) or {})
         prior_events = prior.pop("notification_events", [])
         comparison = prior
+        # Account facts are additive, separate from the run's execution result.
+        # An older writer may omit them; competing facts must still agree.
+        prior_facts = prior.get("account_daily_facts")
+        current_facts = current.get("account_daily_facts")
+        if prior and prior_facts is None and current_facts is not None:
+            comparison = {**prior, "account_daily_facts": current_facts}
+        elif prior_facts is not None and current_facts is None:
+            current["account_daily_facts"] = prior_facts
         if (current.get("execution_status") == "blocked"
                 and row.get("source_run_id") in archived_risk_blocks
                 and prior.get("execution_status") in ("execution_unknown", "blocked")):
@@ -606,7 +666,7 @@ def persist_projected_candidate(payload, *, env=None, store=None, archived_risk_
             # Retain that observation when the archive omits the optional map.
             if prior.get("routine_observation_counts") == {}:
                 current.setdefault("routine_observation_counts", {})
-            comparison = {**prior, "execution_status": "blocked"}
+            comparison = {**comparison, "execution_status": "blocked"}
         if prior and comparison != current:
             raise CandidateConflictError(prior, row, current)
         facts = {}
