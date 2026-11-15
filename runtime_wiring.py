@@ -56,7 +56,7 @@ APP_SECRET = os.getenv('SCHWAB_APP_SECRET')
 TG_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TG_CHAT_ID = os.getenv('QSL_GLOBAL_TELEGRAM_CHAT_ID') or os.getenv('GLOBAL_TELEGRAM_CHAT_ID')
 _NOTIFICATION_CHANNEL, _NOTIFICATION_WEBHOOK_URL = resolve_cycle_channel_and_url(explicit_channel=os.getenv('NOTIFICATION_CHANNEL', 'telegram'), telegram_token=TG_TOKEN, telegram_chat_id=TG_CHAT_ID, wecom_url=os.getenv('NOTIFICATION_WECOM_WEBHOOK_URL'), dingtalk_url=os.getenv('NOTIFICATION_DINGTALK_WEBHOOK_URL'), feishu_url=os.getenv('NOTIFICATION_FEISHU_WEBHOOK_URL'), serverchan_url=os.getenv('NOTIFICATION_SERVERCHAN_WEBHOOK_URL'))
-SECRET_ID = 'schwab_token'
+SECRET_ID = os.getenv('SCHWAB_TOKEN_SECRET_ID', 'schwab-oauth-token')
 TOKEN_PATH = os.path.join(tempfile.gettempdir(), 'qsl-schwab-token.json')
 
 def _optional_float_env(name: str) -> float | None:

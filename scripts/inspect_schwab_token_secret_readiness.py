@@ -23,7 +23,7 @@ if __package__ in {None, ""}:
 from scripts.publish_account_facts_from_reports import PROJECT_ID
 
 API_HOST = "secretmanager.googleapis.com"
-SECRET_ID = "schwab_token"
+SECRET_ID = os.getenv("SCHWAB_TOKEN_SECRET_ID", "schwab-oauth-token")
 API_ROOT = f"https://{API_HOST}/v1/projects/{PROJECT_ID}/secrets/{SECRET_ID}"
 MAX_RESPONSE_BYTES = 64 * 1024
 PERMISSION = "secretmanager.versions.access"

@@ -32,7 +32,7 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders(tmp_path
     composer = SchwabRuntimeComposer(
         project_id="project-1",
         service_name="charles-schwab-platform",
-        secret_id="schwab_token",
+        secret_id="schwab-oauth-token",
         app_key="app-key",
         app_secret="app-secret",
         token_path="/tmp/token.json",
@@ -192,7 +192,7 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders(tmp_path
     assert config.notification_attention_reason_codes == ("strategy_plugin_error",)
     assert config.execution_dedup_enabled is True
     assert reporting_adapters == "reporting-adapters"
-    assert built_client[0][:4] == ("project-1", "schwab_token", "app-key", "app-secret")
+    assert built_client[0][:4] == ("project-1", "schwab-oauth-token", "app-key", "app-secret")
 
     live_composer = replace(composer, dry_run_only=False)
     live_config = live_composer.build_rebalance_config()
