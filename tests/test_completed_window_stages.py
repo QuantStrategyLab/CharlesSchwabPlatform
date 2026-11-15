@@ -347,3 +347,65 @@ def test_persist_projected_candidate_upgrades_legacy_snapshot_with_empty_holding
     conflicting["runs"][0]["account_daily_facts"]["snapshots"][0]["equity"] = 999.99
     with pytest.raises(unified.CandidateConflictError):
         unified.persist_projected_candidate(conflicting, env=env, store=store)
+
+
+def test_digest_archive_carryover_prefers_latest_observation_time(monkeypatch):
+    from datetime import timedelta
+    from test_unified_notification_storage import fake_gcs
+    from notifications.digest_snapshot.digest_archive import emit
+
+    fake_gcs.__wrapped__(monkeypatch)
+    env, older_report, _, newer_report = archive()
+    target = json.loads(env["RUNTIME_TARGET_JSON"])
+    _with_observation(
+        target,
+        older_report,
+        [{"symbol": "OLD", "quantity": "1", "market_value": "50.00", "currency": "USD"}],
+        scope="strategy_symbols_only",
+        complete=True,
+    )
+    _with_observation(
+        target,
+        newer_report,
+        [{"symbol": "NEW", "quantity": "2", "market_value": "100.00", "currency": "USD"}],
+        scope="strategy_symbols_only",
+        complete=True,
+    )
+    older_started = datetime(2026, 10, 28, 19, 45, tzinfo=timezone.utc)
+    newer_started = datetime(2026, 10, 29, 19, 45, tzinfo=timezone.utc)
+    older_report["started_at"] = older_started.isoformat()
+    older_report["finished_at"] = (older_started + timedelta(minutes=1)).isoformat()
+    older_report["summary"]["account_observation"]["observed_at"] = (older_started + timedelta(seconds=30)).isoformat()
+    older_report["summary"]["account_observation"]["broker_reported_positions_observed_at"] = (
+        older_started + timedelta(seconds=30)
+    ).isoformat()
+    newer_report["started_at"] = newer_started.isoformat()
+    newer_report["finished_at"] = (newer_started + timedelta(minutes=1)).isoformat()
+    newer_report["summary"]["account_observation"]["observed_at"] = (newer_started + timedelta(seconds=30)).isoformat()
+    newer_report["summary"]["account_observation"]["broker_reported_positions_observed_at"] = (
+        newer_started + timedelta(seconds=30)
+    ).isoformat()
+
+    env["RUNTIME_TARGET_JSON"] = json.dumps(target)
+    env["QSL_ROUTINE_NOTIFICATION_MODE"] = "daily_digest"
+    env["DIGEST_NOTIFICATION_SCHEDULE_JSON"] = json.dumps({"scheduler": {
+        "main_time": "45 15 * * 1-5", "timezone": "America/New_York"}})
+    env["EXECUTION_REPORT_GCS_URI"] = "gs://synthetic-archive/reports"
+    env["DIGEST_CANDIDATES_GCS_URI"] = "gs://synthetic-candidates/digest"
+    idle_now = datetime(2026, 11, 1, 1, 0, tzinfo=timezone.utc)
+
+    def read(args):
+        if args[0] == "ls":
+            return [
+                {"url": "gs://synthetic-archive/reports/charles_schwab/synthetic/2026-10/older.json",
+                 "metadata": {"updated": "2026-10-30T10:00:00Z"}},
+                {"url": "gs://synthetic-archive/reports/charles_schwab/synthetic/2026-10/newer.json",
+                 "metadata": {"updated": "2026-10-29T19:46:00Z"}},
+            ]
+        return deepcopy(older_report) if args[1].endswith("older.json") else deepcopy(newer_report)
+
+    uploads = []
+    res = emit(env, now=idle_now, read=read, upload=lambda *a: uploads.append(a))
+    assert res["uploaded"] is True
+    snap = json.loads(uploads[0][1])["runs"][0]["account_daily_facts"]["snapshots"][0]
+    assert snap["holdings"] == [{"symbol": "NEW", "quantity": 2.0, "asset_type": "security"}]

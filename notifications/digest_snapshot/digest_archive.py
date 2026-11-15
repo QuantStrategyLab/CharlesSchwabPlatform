@@ -169,15 +169,44 @@ def emit(env, *, now=None, read=_read, upload=None, projector=project_reports):
             norm_target = ({**target, "platform_id": "schwab"}
                            if target.get("platform_id") in {"charles_schwab", "schwab"} else target)
             allow_probe = not target.get("dry_run_only")
+
+            def _max_as_of(snaps):
+                return max(datetime.fromisoformat(s["as_of"].replace("Z", "+00:00")) for s in snaps)
+
+            best_as_of = None
             for source in sorted(reports, key=lambda item: str(item.get("started_at", "")), reverse=True):
-                carryover_snapshots = _account_snapshots(
-                    _notification_report(copy_source := json.loads(json.dumps(source))),
+                snaps = _account_snapshots(
+                    _notification_report(json.loads(json.dumps(source))),
                     norm_target, current, allow_carryover=True, allow_live_probe=allow_probe, cutoff=end,
                 )
-                if carryover_snapshots:
-                    break
+                if snaps:
+                    cand_as_of = _max_as_of(snaps)
+                    if best_as_of is None or cand_as_of > best_as_of:
+                        carryover_snapshots = snaps
+                        best_as_of = cand_as_of
             if not carryover_snapshots:
+                extra_months = {(lookback_start + timedelta(days=offset)).astimezone(timezone.utc).strftime("%Y-%m")
+                                for offset in (0, 4, 7)} - months
+                extra_candidates = []
+                for month in sorted(extra_months):
+                    month_entries = read(["ls", "--json", f"{prefix}/{source_platform}/**/{month}/*.json"])
+                    total_listed += len(month_entries)
+                    if total_listed > 10000:
+                        raise ValueError("candidate_archive_budget_exceeded")
+                    for entry in month_entries:
+                        uri = str(entry.get("url", "")).split("#", 1)[0]
+                        if uri in uris:
+                            continue
+                        if not uri.startswith(f"{prefix}/{source_platform}/"):
+                            raise ValueError("candidate_source_locator_mismatch")
+                        uris.add(uri)
+                        stamp = _entry_stamp(entry)
+                        if lookback_start <= stamp < start:
+                            extra_candidates.append((stamp, uri))
+
                 def _scan_carryover(candidates):
+                    best_snaps = []
+                    best_snap_as_of = None
                     for _stamp, item_uri in sorted(candidates, key=lambda item: item[0], reverse=True):
                         source = read(["cat", item_uri])
                         if not _matches_target(source.get("runtime_target"), allow_platform_alias=True):
@@ -192,30 +221,13 @@ def emit(env, *, now=None, read=_read, upload=None, projector=project_reports):
                             allow_carryover=True, allow_live_probe=allow_probe, cutoff=end,
                         )
                         if snaps:
-                            return snaps
-                    return []
+                            cand_as_of = _max_as_of(snaps)
+                            if best_snap_as_of is None or cand_as_of > best_snap_as_of:
+                                best_snaps = snaps
+                                best_snap_as_of = cand_as_of
+                    return best_snaps
 
-                carryover_snapshots = _scan_carryover(lookback_entries)
-                if not carryover_snapshots:
-                    extra_months = {(lookback_start + timedelta(days=offset)).astimezone(timezone.utc).strftime("%Y-%m")
-                                    for offset in (0, 4, 7)} - months
-                    extra_candidates = []
-                    for month in sorted(extra_months):
-                        month_entries = read(["ls", "--json", f"{prefix}/{source_platform}/**/{month}/*.json"])
-                        total_listed += len(month_entries)
-                        if total_listed > 10000:
-                            raise ValueError("candidate_archive_budget_exceeded")
-                        for entry in month_entries:
-                            uri = str(entry.get("url", "")).split("#", 1)[0]
-                            if uri in uris:
-                                continue
-                            if not uri.startswith(f"{prefix}/{source_platform}/"):
-                                raise ValueError("candidate_source_locator_mismatch")
-                            uris.add(uri)
-                            stamp = _entry_stamp(entry)
-                            if lookback_start <= stamp < start:
-                                extra_candidates.append((stamp, uri))
-                    carryover_snapshots = _scan_carryover(extra_candidates)
+                carryover_snapshots = _scan_carryover([*lookback_entries, *extra_candidates])
 
         idle_row = {
             "platform_id": platform, "strategy_profile": target["strategy_profile"],
