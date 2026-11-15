@@ -172,7 +172,7 @@ def emit(env, *, now=None, read=_read, upload=None, projector=project_reports):
             for source in sorted(reports, key=lambda item: str(item.get("started_at", "")), reverse=True):
                 carryover_snapshots = _account_snapshots(
                     _notification_report(copy_source := json.loads(json.dumps(source))),
-                    norm_target, current, allow_carryover=True, allow_live_probe=allow_probe,
+                    norm_target, current, allow_carryover=True, allow_live_probe=allow_probe, cutoff=end,
                 )
                 if carryover_snapshots:
                     break
@@ -189,7 +189,7 @@ def emit(env, *, now=None, read=_read, upload=None, projector=project_reports):
                             continue
                         snaps = _account_snapshots(
                             _notification_report(source), norm_target, current,
-                            allow_carryover=True, allow_live_probe=allow_probe,
+                            allow_carryover=True, allow_live_probe=allow_probe, cutoff=end,
                         )
                         if snaps:
                             return snaps
