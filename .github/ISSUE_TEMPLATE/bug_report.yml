@@ -1,0 +1,102 @@
+name: Bug report
+description: Report behavior that does not match the documentation or the expected result
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This form is shared by every repository in the organization, so it asks
+        for the repository rather than assuming one.
+
+        Remove API keys, account identifiers, positions, order identifiers, and
+        broker session data before submitting. A log line that proves the bug
+        does not need the account it happened on.
+
+        Do not report a security vulnerability here. See `SECURITY.md` in the
+        affected repository.
+
+  - type: input
+    id: repository
+    attributes:
+      label: Repository and version
+      description: Which repository, and the tag, release, or commit you ran.
+      placeholder: QuantPlatformKit v1.4.2, or commit 1a2b3c4
+    validations:
+      required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened
+      description: One sentence on the observable behavior, then the detail.
+      placeholder: The rebalance planner emits an order for a symbol that the universe filter excluded.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to reproduce
+      description: The smallest sequence that still shows it. Include the command and the input it read.
+      placeholder: |
+        1. Run `python -m quant_platform_kit.plan --config configs/example.yaml`
+        2. Inspect the emitted order list
+        3. AAA is present, though the filter excludes it
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result and actual result
+      placeholder: |
+        Expected: no order for AAA.
+        Actual: one order for AAA, size 100.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Execution mode
+      description: >
+        The most useful piece of context for a trading-system bug. State the
+        furthest the run got, even if it failed before reaching that step.
+      options:
+        - Offline data only, no broker connection
+        - Backtest or replay
+        - Paper or dry-run against a broker
+        - Live account with real orders
+        - Not applicable
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Python version, operating system, and broker or data provider if relevant.
+      placeholder: Python 3.13.2, macOS 15.3, IBKR paper gateway
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or output
+      description: Sanitized. The lines around the failure, not the whole run.
+      render: text
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: I removed credentials, account identifiers, positions, and order identifiers.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true
