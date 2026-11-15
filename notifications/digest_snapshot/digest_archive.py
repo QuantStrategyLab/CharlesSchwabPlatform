@@ -98,13 +98,36 @@ def emit(env, *, now=None, read=_read, upload=None, projector=project_reports):
     # than overwriting the previous day's complete candidate with partial facts.
     end = datetime(day.year, day.month, day.day, 6, tzinfo=ZoneInfo("Asia/Singapore")) + timedelta(days=1)
     start = end - timedelta(days=1)
+    lookback_start = start - timedelta(days=7)
     months = {start.astimezone(timezone.utc).strftime("%Y-%m"), end.astimezone(timezone.utc).strftime("%Y-%m")}
     entries = []
     for month in sorted(months):
         entries.extend(read(["ls", "--json", f"{prefix}/{source_platform}/**/{month}/*.json"]))
-    if len(entries) > 10000:
+    total_listed = len(entries)
+    if total_listed > 10000:
         raise ValueError("candidate_archive_budget_exceeded")
-    reports, uris = [], set()
+    keys = ("platform_id", "strategy_profile", "service_name", "account_scope", "account_selector", "deployment_selector", "dry_run_only")
+    reports, lookback_entries, uris = [], [], set()
+
+    def _entry_stamp(entry):
+        raw_stamp = (entry.get("metadata") or {}).get("updated") or (entry.get("metadata") or {}).get("timeCreated")
+        stamp = datetime.fromisoformat(str(raw_stamp).replace("Z", "+00:00"))
+        if stamp.tzinfo is None:
+            raise ValueError("candidate_archive_time_missing")
+        return stamp
+
+    def _matches_target(source_target, *, allow_platform_alias=False):
+        if not isinstance(source_target, dict):
+            return False
+        for key in keys:
+            if key == "platform_id" and allow_platform_alias:
+                aliases = {"schwab", "charles_schwab"}
+                if target.get(key) in aliases and source_target.get(key) in aliases:
+                    continue
+            if source_target.get(key) != target.get(key):
+                return False
+        return True
+
     for entry in entries:
         uri = str(entry.get("url", "")).split("#", 1)[0]
         if uri in uris:
@@ -112,22 +135,23 @@ def emit(env, *, now=None, read=_read, upload=None, projector=project_reports):
         if not uri.startswith(f"{prefix}/{source_platform}/"):
             raise ValueError("candidate_source_locator_mismatch")
         uris.add(uri)
-        raw_stamp = (entry.get("metadata") or {}).get("updated") or (entry.get("metadata") or {}).get("timeCreated")
-        stamp = datetime.fromisoformat(str(raw_stamp).replace("Z", "+00:00"))
-        if stamp.tzinfo is None:
-            raise ValueError("candidate_archive_time_missing")
-        if stamp < start or stamp > current:
+        stamp = _entry_stamp(entry)
+        if stamp < lookback_start or stamp > current:
+            continue
+        if stamp < start:
+            lookback_entries.append((stamp, uri))
             continue
         source = read(["cat", uri])
         source_target = source.get("runtime_target") or {}
-        keys = ("platform_id", "strategy_profile", "service_name", "account_scope", "account_selector", "deployment_selector", "dry_run_only")
-        if not isinstance(source_target, dict) or any(source_target.get(key) != target.get(key) for key in keys):
+        if not _matches_target(source_target):
             continue
         source_stamp = datetime.fromisoformat(str(source.get("started_at", "")).replace("Z", "+00:00"))
         if source_stamp.tzinfo is None:
             raise ValueError("candidate_source_time_invalid")
         if start <= source_stamp < end:
             reports.append(source)
+        elif lookback_start <= source_stamp < start:
+            lookback_entries.append((source_stamp, uri))
     payload = projector(reports, expected_target=target, opaque_account_uid=uid, target_id=tid, now=current) if reports else {"runs": []}
     if not payload["runs"]:
         schedule_raw = env.get("DIGEST_NOTIFICATION_SCHEDULE_JSON", "").strip()
@@ -139,7 +163,61 @@ def emit(env, *, now=None, read=_read, upload=None, projector=project_reports):
             publication_grace=timedelta(0), warning_logger=lambda message: None)
         if not evaluated or due:
             raise ValueError("candidate_due_source_absent")
-        payload = {"schema_version": "qsl.digest_candidates.v1", "runs": [{
+        carryover_snapshots = []
+        if target.get("dry_run_only") is False:
+            from notifications.unified import _account_snapshots, _notification_report
+            norm_target = ({**target, "platform_id": "schwab"}
+                           if target.get("platform_id") in {"charles_schwab", "schwab"} else target)
+            allow_probe = not target.get("dry_run_only")
+            for source in sorted(reports, key=lambda item: str(item.get("started_at", "")), reverse=True):
+                carryover_snapshots = _account_snapshots(
+                    _notification_report(copy_source := json.loads(json.dumps(source))),
+                    norm_target, current, allow_carryover=True, allow_live_probe=allow_probe,
+                )
+                if carryover_snapshots:
+                    break
+            if not carryover_snapshots:
+                def _scan_carryover(candidates):
+                    for _stamp, item_uri in sorted(candidates, key=lambda item: item[0], reverse=True):
+                        source = read(["cat", item_uri])
+                        if not _matches_target(source.get("runtime_target"), allow_platform_alias=True):
+                            continue
+                        source_stamp = datetime.fromisoformat(str(source.get("started_at", "")).replace("Z", "+00:00"))
+                        if source_stamp.tzinfo is None:
+                            raise ValueError("candidate_source_time_invalid")
+                        if not (lookback_start <= source_stamp < start):
+                            continue
+                        snaps = _account_snapshots(
+                            _notification_report(source), norm_target, current,
+                            allow_carryover=True, allow_live_probe=allow_probe,
+                        )
+                        if snaps:
+                            return snaps
+                    return []
+
+                carryover_snapshots = _scan_carryover(lookback_entries)
+                if not carryover_snapshots:
+                    extra_months = {(lookback_start + timedelta(days=offset)).astimezone(timezone.utc).strftime("%Y-%m")
+                                    for offset in (0, 4, 7)} - months
+                    extra_candidates = []
+                    for month in sorted(extra_months):
+                        month_entries = read(["ls", "--json", f"{prefix}/{source_platform}/**/{month}/*.json"])
+                        total_listed += len(month_entries)
+                        if total_listed > 10000:
+                            raise ValueError("candidate_archive_budget_exceeded")
+                        for entry in month_entries:
+                            uri = str(entry.get("url", "")).split("#", 1)[0]
+                            if uri in uris:
+                                continue
+                            if not uri.startswith(f"{prefix}/{source_platform}/"):
+                                raise ValueError("candidate_source_locator_mismatch")
+                            uris.add(uri)
+                            stamp = _entry_stamp(entry)
+                            if lookback_start <= stamp < start:
+                                extra_candidates.append((stamp, uri))
+                    carryover_snapshots = _scan_carryover(extra_candidates)
+
+        idle_row = {
             "platform_id": platform, "strategy_profile": target["strategy_profile"],
             "opaque_account_uid": uid, "target_id": tid, "business_day": day.isoformat(),
             "actually_ran": False, "status": "ok", "scheduled_idle": True,
@@ -147,7 +225,10 @@ def emit(env, *, now=None, read=_read, upload=None, projector=project_reports):
             "order_count": None, "fill_count": None,
             "field_status": {"order_count": "unknown", "fill_count": "unknown", "cycle_count": "known"},
             "evidence_provenance": "candidates",
-        }]}
+        }
+        if carryover_snapshots:
+            idle_row["account_daily_facts"] = {"snapshots": carryover_snapshots}
+        payload = {"schema_version": "qsl.digest_candidates.v1", "runs": [idle_row]}
     if upload is None:
         from google.cloud import storage
         def upload(uri, body):

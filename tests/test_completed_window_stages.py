@@ -208,3 +208,75 @@ def test_shared_qrs_patch_reverses_exactly_to_recorded_snapshot_base(tmp_path):
         cwd=tmp_path, capture_output=True, text=True)
     assert result.returncode == 0
     assert hashlib.sha256(target.read_bytes()).hexdigest() == metadata["base_sha256"]
+
+
+def _with_observation(target, report, positions, *, scope="strategy_symbols_only", complete=True):
+    target["runtime_risk_limits"] = {"binding": {"account_hash": "synthetic-account-hash"}}
+    report["runtime_target"] = deepcopy(target)
+    report["finished_at"] = "2026-10-30T19:46:00+00:00"
+    obs = {
+        "account_hash": "synthetic-account-hash",
+        "observed_at": "2026-10-30T19:45:30+00:00",
+        "net_assets": "123.45",
+        "net_assets_source": "liquidationValue",
+        "net_assets_currency": "USD",
+        "net_assets_currency_source": "owner_confirmed",
+        "broker_reported_positions": positions,
+        "broker_reported_positions_scope": scope,
+        "broker_reported_positions_observed_at": "2026-10-30T19:45:30+00:00",
+    }
+    if complete is not None:
+        obs["broker_reported_positions_complete"] = complete
+    report["summary"]["account_observation"] = obs
+
+
+def test_account_snapshots_supports_empty_account_positions():
+    env, live, _, _ = archive()
+    target = json.loads(env["RUNTIME_TARGET_JSON"])
+    _with_observation(target, live, [], scope="strategy_symbols_only", complete=True)
+    snaps = unified._account_snapshots(unified._notification_report(live), target, datetime(2026, 11, 2, 2, tzinfo=timezone.utc))
+    assert len(snaps) == 1
+    assert snaps[0]["holdings"] == []
+    assert snaps[0]["holdings_complete"] is True
+
+
+def test_digest_archive_7day_carryover_on_scheduled_idle(monkeypatch):
+    from datetime import timedelta
+    from test_unified_notification_storage import fake_gcs
+    from notifications.digest_snapshot.digest_archive import emit
+
+    objects, _, _, _ = fake_gcs.__wrapped__(monkeypatch)
+    env, live, _, _ = archive()
+    target = json.loads(env["RUNTIME_TARGET_JSON"])
+    _with_observation(
+        target,
+        live,
+        [{"symbol": "SOXL", "quantity": "3", "market_value": "90.00", "currency": "USD"}],
+        scope="strategy_symbols_only",
+        complete=True,
+    )
+    env["RUNTIME_TARGET_JSON"] = json.dumps(target)
+    prior_started = datetime.fromisoformat(live["started_at"].replace("Z", "+00:00"))
+    idle_now = prior_started + timedelta(days=2, hours=3)
+    env["QSL_ROUTINE_NOTIFICATION_MODE"] = "daily_digest"
+    env["DIGEST_NOTIFICATION_SCHEDULE_JSON"] = json.dumps({"scheduler": {
+        "main_time": "45 15 * * 1-5", "timezone": "America/New_York"}})
+    env["EXECUTION_REPORT_GCS_URI"] = "gs://synthetic-archive/reports"
+    env["DIGEST_CANDIDATES_GCS_URI"] = "gs://synthetic-candidates/digest"
+    prefix = f"reports/charles_schwab/synthetic/{prior_started:%Y-%m}/prior.json"
+    objects[("synthetic-archive", prefix)] = json.dumps(live).encode()
+
+    def read(args):
+        if args[0] == "ls":
+            return [{"url": f"gs://synthetic-archive/{prefix}",
+                     "metadata": {"updated": live["finished_at"]}}]
+        return json.loads(objects[("synthetic-archive", prefix)].decode())
+
+    uploads = []
+    res = emit(env, now=idle_now, read=read, upload=lambda *a: uploads.append(a))
+    assert res["uploaded"] is True
+    row = json.loads(uploads[0][1])["runs"][0]
+    assert row["scheduled_idle"] is True
+    assert row["actually_ran"] is False
+    snap = row["account_daily_facts"]["snapshots"][0]
+    assert snap["holdings"] == [{"symbol": "SOXL", "quantity": 3.0, "asset_type": "security"}]
