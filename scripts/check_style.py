@@ -108,6 +108,17 @@ PLACEHOLDER_BUCKET = re.compile(
     r"|^bucket(?:-|$)"
 )
 
+# Section 13 asks for a placeholder wherever a deployed subdomain would appear,
+# so `YOUR_SUBDOMAIN.workers.dev` is the correct form, not a finding. Matching
+# the domain shape alone reports the guide's own advice as a leak, which is how
+# a check earns the reputation that lets the real leak through.
+PLACEHOLDER_SUBDOMAIN = re.compile(
+    r"^[<{$]|[<>{}]"
+    r"|^(?:your|my|example|sample|placeholder)[-_]"
+    r"|^subdomain(?:-|$)"
+    r"|^x{2,}$"
+)
+
 URL_TOKEN = re.compile(r"https?://[^\s)\]\"'<>`]+")
 FENCED_BLOCK = re.compile(r"^```.*?^```", re.DOTALL | re.MULTILINE)
 
@@ -138,6 +149,24 @@ def bucket_is_real(text: str, match: re.Match, ctx: FileContext) -> bool:
     if bucket.endswith(".") and not bucket.endswith("..."):
         bucket = bucket[:-1]
     return bool(bucket) and not PLACEHOLDER_BUCKET.search(bucket)
+
+
+def subdomain_is_real(text: str, match: re.Match, ctx: FileContext) -> bool:
+    """A placeholder subdomain is the form section 13 asks for, not a leak.
+
+    What survives this predicate is a subdomain that was actually deployed,
+    which is the thing the rule is about.
+
+    The fenced-block exemption is repeated here because `check_leaks` only
+    applies it to patterns without a predicate. Without this line, installing
+    the predicate would make an example that shows what to avoid start
+    reporting — a wider blocking set than the rule had before, which is not
+    what a narrowing fix should do.
+    """
+    if not ctx.prose[match.start():match.end()].strip():
+        return False
+    subdomain = match.group(0)[: -len(".workers.dev")]
+    return not PLACEHOLDER_SUBDOMAIN.search(subdomain.lower())
 
 
 def hex_is_prose(text: str, match: re.Match, ctx: FileContext) -> bool:
@@ -185,7 +214,7 @@ LEAK_PATTERNS = [
     (re.compile(r"\bgs://[^\s`)\]\"'<>]+"),
      "content", "non-placeholder bucket (section 13)", bucket_is_real),
     (re.compile(r"\b[\w-]+\.workers\.dev\b"),
-     "content", "personal subdomain (section 13)", None),
+     "publish", "personal subdomain (section 13)", subdomain_is_real),
     (re.compile(r"\b[0-9a-f]{40}\b"),
      "content", "40-character hex string in prose (section 5)", hex_is_prose),
     # `| PR |` is a table header; `| PR #12 |` and `| #12 |` are the rows this
@@ -212,6 +241,10 @@ INTERNAL_NOTE_GITIGNORE = [
     "docs/plans/",
     "docs/handoffs/",
     "docs/superpowers/",
+    "docs/changes/",
+    "docs/acceptance-policy.md",
+    ".claude/",
+    ".codex/",
     ".local/",
     "ops-notes/",
     "*.local.md",
@@ -220,7 +253,7 @@ INTERNAL_NOTE_GITIGNORE = [
 
 # Directories whose contents are working material, never reader-facing docs.
 INTERNAL_NOTE_DIRS = re.compile(
-    r"(^|/)(docs/plans|docs/handoffs|docs/superpowers|docs/audits)/"
+    r"(^|/)(docs/plans|docs/handoffs|docs/superpowers|docs/audits|docs/changes)/"
 )
 
 DATED_TITLE = re.compile(r"(audit|acceptance).*20\d{2}-\d{2}-\d{2}", re.IGNORECASE)
@@ -233,9 +266,19 @@ DATED_TITLE = re.compile(r"(audit|acceptance).*20\d{2}-\d{2}-\d{2}", re.IGNORECA
 # rest once the naming cleanup is done. README structure never blocks, because
 # section 3 is a default and section 4 says so.
 PHASE_BLOCKING = {
-    1: {"paths", "links", "agents", "hygiene"},
-    2: {"paths", "links", "agents", "hygiene", "content", "naming", "language", "docs"},
+    1: {"paths", "links", "agents", "hygiene", "publish"},
+    2: {"paths", "links", "agents", "hygiene", "publish", "content", "naming", "language", "docs"},
 }
+
+# Rules whose purpose is to stop an identifier being published.
+#
+# The style guide governs published documentation. In a private repository
+# nothing is published, and a deployment document may need the real host name to
+# be usable at all — an OAuth callback URL with a placeholder in it cannot be
+# configured. So these report as notes there and block in public repositories,
+# which is the case the rule was written for. The default stays "public", so
+# forgetting the flag cannot switch a leak rule off by accident.
+PUBLICATION_CATEGORIES = {"paths", "publish"}
 
 
 class Report:
@@ -253,7 +296,57 @@ class Report:
         return [f for f in self.findings if f[0] not in self.blocking]
 
 
+def git_visible_files(root: Path) -> set[Path] | None:
+    """Return tracked and unignored working-tree files when root is a Git checkout."""
+    if not (root / ".git").exists():
+        return None
+    res = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        cwd=root,
+        capture_output=True,
+        check=False,
+    )
+    if res.returncode != 0:
+        return None
+    visible: set[Path] = set()
+    for raw in res.stdout.split(b"\0"):
+        if not raw:
+            continue
+        rel = raw.decode("utf-8", errors="surrogateescape")
+        candidate = root / rel
+        if candidate.is_file():
+            visible.add(candidate)
+    return visible
+
+
+def is_untracked_gitignored(root: Path, rel_path: str) -> bool:
+    """Return True only when rel_path has no tracked/unignored files and is gitignored."""
+    if not (root / ".git").exists():
+        return False
+    listed = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", rel_path],
+        cwd=root,
+        capture_output=True,
+        check=False,
+    )
+    if listed.returncode == 0 and listed.stdout.strip(b"\0"):
+        return False
+    ignored = subprocess.run(
+        ["git", "check-ignore", "-q", "--", rel_path],
+        cwd=root,
+        check=False,
+    )
+    return ignored.returncode == 0
+
+
 def iter_files(root: Path):
+    visible = git_visible_files(root)
+    if visible is not None:
+        for path in sorted(visible):
+            if any(part in SKIP_DIRS for part in path.parts):
+                continue
+            yield path
+        return
     for path in sorted(root.rglob("*")):
         if any(part in SKIP_DIRS for part in path.parts):
             continue
@@ -284,6 +377,12 @@ def strip_fenced_blocks(text: str) -> str:
     return re.sub(r"^```.*?^```", "", text, flags=re.DOTALL | re.MULTILINE)
 
 
+# GitHub recognises these two template names with underscores only. Renaming
+# them to hyphens silently disables the template, so they are exempt from the
+# underscore rule while the lowercase rule still applies.
+GITHUB_TEMPLATE_NAMES = {"pull_request_template", "issue_template"}
+
+
 def check_naming(root: Path, report: Report) -> None:
     for path in iter_files(root):
         if not is_markdown(path):
@@ -306,7 +405,7 @@ def check_naming(root: Path, report: Report) -> None:
                 f"{rel}: English is the base name (section 4); .en.md is not a suffix",
             )
 
-        if core not in CONVENTIONAL_UPPER:
+        if rel != "PROPOSAL.md" and core not in CONVENTIONAL_UPPER and core not in GITHUB_TEMPLATE_NAMES:
             if core != core.lower():
                 report.add("naming", f"{rel}: file name must be lowercase (section 7)")
             if "_" in core:
@@ -316,31 +415,77 @@ def check_naming(root: Path, report: Report) -> None:
             report.add("naming", f"{rel}: dates belong in history, not file names (section 7)")
 
 
+RE_PATCH_PROSE = re.compile(
+    r"\b(this change|this pr|in this pr|this policy pr|remains? unchanged)\b",
+    re.IGNORECASE,
+)
+RE_PHASE_HEADING = re.compile(r"^#{1,4}\s+.*\bP0[–-]P\d+\b", re.MULTILINE)
+RE_LICENSE_HEADING = re.compile(r"^##\s+(?:License|许可证)\s*$")
+RE_H2_HEADING = re.compile(r"^##\s+\S+")
+MAX_AGENTS_LINES = 120
+
+
 def check_readme(root: Path, report: Report) -> None:
     readme = root / "README.md"
     if not readme.exists():
         report.add("readme", "README.md is missing")
-        return
-    text = readme.read_text(encoding="utf-8", errors="ignore")
-    headings = [h.strip().lower() for h in re.findall(r"^#{2,3}\s+(.+)$", text, re.MULTILINE)]
-    missing = [
-        section for section in README_OUTLINE
-        if not any(section in heading for heading in headings)
-    ]
-    if missing:
-        report.add(
-            "readme",
-            "README.md: section 3 outline not followed — missing "
-            + ", ".join(missing)
-            + " (a default, not a requirement)",
-        )
+    else:
+        text = readme.read_text(encoding="utf-8", errors="ignore")
+        headings = [h.strip().lower() for h in re.findall(r"^#{2,3}\s+(.+)$", text, re.MULTILINE)]
+        missing = [
+            section for section in README_OUTLINE
+            if not any(section in heading for heading in headings)
+        ]
+        if missing:
+            report.add(
+                "readme",
+                "README.md: section 3 outline not followed — missing "
+                + ", ".join(missing)
+                + " (a default, not a requirement)",
+            )
+
+    for name in ("README.md", "README.zh-CN.md"):
+        path = root / name
+        if not path.exists():
+            continue
+        raw = path.read_text(encoding="utf-8", errors="ignore")
+        prose = blank_fenced_blocks(raw)
+        masked = blank_code_spans(prose)
+        seen_license = False
+        for lineno, (prose_line, masked_line) in enumerate(
+            zip(prose.splitlines(), masked.splitlines()), 1
+        ):
+            match = RE_PATCH_PROSE.search(masked_line)
+            if match:
+                report.add(
+                    "content",
+                    f"{name}:{lineno}: PR-diff narration '{match.group(0)}' belongs in PR description, not README (section 2)",
+                )
+            if RE_PHASE_HEADING.match(prose_line):
+                report.add(
+                    "content",
+                    f"{name}:{lineno}: phase code heading belongs outside reader-facing README (section 5)",
+                )
+            if RE_LICENSE_HEADING.match(prose_line):
+                seen_license = True
+            elif seen_license and RE_H2_HEADING.match(prose_line):
+                report.add(
+                    "content",
+                    f"{name}:{lineno}: top-level section after License belongs above License (section 3)",
+                )
 
 
 def check_links(root: Path, report: Report) -> None:
     for path in iter_files(root):
         if not is_markdown(path):
             continue
-        text = strip_fenced_blocks(path.read_text(encoding="utf-8", errors="ignore"))
+        # A link written inside backticks is an example of how to write a link,
+        # not a link. `pr-attachments.md` documents `![alt](./shot.png)` so the
+        # reader can copy it; reporting that as a broken target makes the
+        # documentation of the feature impossible to pass the check.
+        text = blank_code_spans(
+            strip_fenced_blocks(path.read_text(encoding="utf-8", errors="ignore"))
+        )
         for match in re.finditer(r"\[[^\]]*\]\(([^)\s]+)\)", text):
             target = match.group(1)
             if target.startswith(("http://", "https://", "mailto:", "#", "<")):
@@ -388,9 +533,22 @@ def check_agent_files(root: Path, report: Report) -> None:
         if content != "@AGENTS.md":
             report.add("agents", "CLAUDE.md must contain the single line @AGENTS.md")
 
+    if (root / ".github" / "engineering.md").exists() and not is_untracked_gitignored(
+        root, ".github/engineering.md"
+    ):
+        report.add(
+            "agents",
+            ".github/engineering.md is retired; consolidate rules in AGENTS.md",
+        )
+
     agents = root / "AGENTS.md"
     if agents.exists():
         text = agents.read_text(encoding="utf-8", errors="ignore")
+        if len(text.splitlines()) > MAX_AGENTS_LINES:
+            report.add(
+                "agents",
+                f"AGENTS.md exceeds {MAX_AGENTS_LINES} lines; keep agent rules concise",
+            )
         if CONTENT_BOUNDARY not in text:
             report.add(
                 "agents",
@@ -422,6 +580,30 @@ def check_docs_baseline(root: Path, report: Report) -> None:
         )
 
 
+QUOTE_MARKS = "\"'\u201c\u201d\u2018\u2019"
+QUOTED_TERM = re.compile(r"[\"\'\u201c\u2018][^\"\'\u201c\u201d\u2018\u2019]{1,40}[\"\'\u201d\u2019]")
+
+
+def quoted_term_list(line: str, match: re.Match) -> bool:
+    """True when a banned word sits inside a list of quoted terms.
+
+    Section 2 forbids marketing words in prose. A guide that writes
+    "Elevate", "Seamless", "Unleash" is naming the words it forbids, and
+    reporting it makes the rule unusable exactly where it is most needed --
+    the same shape as the placeholder-subdomain and template-underscore
+    exemptions.
+
+    The condition is two or more quoted terms on the line, so one quoted word
+    used as a claim ("our 'seamless' onboarding") is still reported. That
+    keeps the exemption about lists, not about quotation marks.
+    """
+    before = line[match.start() - 1] if match.start() else ""
+    after = line[match.end()] if match.end() < len(line) else ""
+    if before not in QUOTE_MARKS or after not in QUOTE_MARKS:
+        return False
+    return len(QUOTED_TERM.findall(line)) >= 2
+
+
 def check_language(root: Path, report: Report) -> None:
     marketing = re.compile(
         r"\b(" + "|".join(re.escape(w) for w in MARKETING_WORDS) + r")\b", re.IGNORECASE
@@ -440,6 +622,8 @@ def check_language(root: Path, report: Report) -> None:
         first_heading = True
         for number, line in enumerate(text.splitlines(), 1):
             for match in marketing.finditer(line):
+                if quoted_term_list(line, match):
+                    continue
                 report.add("language", f"{rel}:{number}: marketing word '{match.group(0)}' (section 2)")
             for match in filler.finditer(line):
                 report.add("language", f"{rel}:{number}: filler phrase '{match.group(0)}' (section 2)")
@@ -518,6 +702,18 @@ def check_internal_paths(root: Path, report: Report) -> None:
             "hygiene",
             ".gitignore: internal note paths not ignored — " + ", ".join(missing),
         )
+    if "!.github/engineering.md" in text:
+        report.add(
+            "hygiene",
+            ".gitignore: remove obsolete !.github/engineering.md unignore rule",
+        )
+    if (root / "docs" / "acceptance-policy.md").exists() and not is_untracked_gitignored(
+        root, "docs/acceptance-policy.md"
+    ):
+        report.add(
+            "publish",
+            "docs/acceptance-policy.md: internal acceptance policy stays out of public repositories (section 5)",
+        )
 
     for path in iter_files(root):
         if not is_markdown(path):
@@ -529,17 +725,28 @@ def check_internal_paths(root: Path, report: Report) -> None:
             report.add("content", f"{rel}: committed output directory (section 5)")
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", default=".", help="repository root (default: cwd)")
     parser.add_argument(
         "--phase", type=int, choices=(1, 2), default=1,
         help="1 blocks leaks and broken links; 2 also blocks naming (default: 1)",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--advisory", action="store_true",
+        help="report findings but always exit 0, for adopting a repository gradually",
+    )
+    parser.add_argument(
+        "--visibility", choices=("public", "private"), default="public",
+        help="private demotes publication rules to notes; default treats the repository as public",
+    )
+    args = parser.parse_args(argv)
 
     root = Path(args.root).resolve()
-    report = Report(PHASE_BLOCKING[args.phase])
+    blocking_categories = set(PHASE_BLOCKING[args.phase])
+    if args.visibility == "private":
+        blocking_categories -= PUBLICATION_CATEGORIES
+    report = Report(blocking_categories)
 
     check_naming(root, report)
     check_readme(root, report)
@@ -560,9 +767,21 @@ def main() -> int:
 
     print()
     print(
-        f"phase {args.phase}: {len(blocking)} blocking, {len(advisory)} advisory. "
-        "Advisory findings become blocking in phase 2."
+        f"phase {args.phase} ({args.visibility}): {len(blocking)} blocking, "
+        f"{len(advisory)} advisory. Advisory findings become blocking in phase 2."
     )
+    if args.visibility == "private":
+        print(
+            "private repository: publication rules report as notes; "
+            "they would block if this repository were published"
+        )
+    if args.advisory:
+        # A repository adopts the rule set before it can satisfy it. Failing on
+        # the adoption pull request would make that pull request the first thing
+        # the check blocks, and the check would be removed instead of the
+        # findings fixed. The findings are still printed and still counted.
+        print("advisory run: exit status forced to 0")
+        return 0
 
     return 1 if blocking else 0
 

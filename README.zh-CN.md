@@ -64,10 +64,6 @@ uv run --no-sync python scripts/check_qpk_pin_consistency.py
 
 见 [CONTRIBUTING.md](CONTRIBUTING.md)。AI 助手与维护者遵循 [AGENTS.md](AGENTS.md)。
 
-## 许可证
-
-详见 [LICENSE](LICENSE)。
-
 ## 只读日报 caller 候选
 
 `scripts/publish_runtime_daily_from_reports.py` 只为 `charles-schwab-quant-service / soxl_soxx_trend_income / live` 准备隐私安全的日报投影。身份必须独立来自唯一的现有 runtime policy 及 `RUNTIME_TARGET_JSON.runtime_risk_limits.binding.account_hash`；只有与该 hash 逐字相等的报告才能作为投影输入，既有 account-facts binding ID 从独立身份派生，不能由报告自己证明预期账户。
@@ -113,3 +109,7 @@ ACK 的 account_key 是可信 receiver 返回的 canonical UI 别名，不代表
 明确运行后，`scripts/run_runtime_daily_from_reports.py` 通过有界只读 metadata adapter 核对固定服务实际 serving traffic 和既有 scheduler 候选，再复用已合并的有界报告 reader 与 caller。只接受稳定、唯一且总计 100% 流量的 revision。scheduler 必须唯一、enabled，且指向同一服务的既定 `/run` 路径；只比较该 URI，绝不调用。暂停、歧义、目标不符或无法核验均保持 `unevaluable`，声明 cron 或 TTL 不能替代实际事实。原 caller CLI 继续离线。
 
 首次真实 prepare 仍是原云权限边界内的独立验收步骤。报告 prefix、身份/hash、私有 metadata、原报告和自由异常文本不进入共享输出；日报 endpoint 仅在新发布步骤局部使用，不修改旧 execution-evidence URL。只输出固定分类：`prepared` 或 `stored_acknowledged` 加 `completeness=incomplete` 不代表全天健康或登录态回读通过。coverage 仍无条件 false；当前业务日截至观察点的完整枚举、保留的先前未决历史及终态证据、真实 due obligations 均需另行证明。没有人工 complete 开关，枚举耗尽、空目录或少于20份报告都不能提供该证明。
+
+## 许可证
+
+详见 [LICENSE](LICENSE)。

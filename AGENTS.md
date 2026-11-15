@@ -1,8 +1,6 @@
 # AGENTS.md
 
-Rules for AI assistants and maintainers in this repository. Shared conventions
-live in [.github/engineering.md](.github/engineering.md); this file adds what is
-specific to `CharlesSchwabPlatform`.
+Rules for AI assistants and maintainers in `CharlesSchwabPlatform`. Reusable PR governance lives in `Pigbibi/PrGovernance`.
 
 ## What this repository is
 
@@ -41,33 +39,17 @@ uv run --no-sync python -m pytest -q tests
 CI additionally verifies frozen shared artifacts, the paper admission contract,
 the notification delivery gates and the no-traffic deployment workflow.
 
-Organization documentation rules are checked by `python scripts/check_style.py`, which also runs in CI as the `Documentation check` job.
+Organization documentation rules are checked by `python scripts/check_style.py --phase 2` (`Documentation check` in CI).
 
 ## Naming and documentation
 
-- Developer documentation is English by default; Chinese siblings use
-  `.zh-CN.md` and exist only where a reader needs them.
-- New document names are lowercase with hyphens. `README.md`, `AGENTS.md`,
-  `CLAUDE.md` and other tool-defined names keep their spelling.
-- Temporary internal task reports, retrospectives, handoffs and progress
-  snapshots stay outside Git. Sanitized research baselines, design decisions,
-  financial and accounting contracts, provenance/PIT/license evidence, and
-  security or incident records are evidence, not disposable progress logs:
-  version them when a project requirement calls for it. Runtime financial
-  records and private raw data stay in approved protected storage, not Git.
-  Do not delete files merely because a name contains a date or a word such as
-  `report`.
-- Renaming a document means updating its references in the same change.
+- English is default; `.zh-CN.md` siblings exist only when needed. Use lowercase kebab-case filenames (`README.md`, `AGENTS.md`, `CLAUDE.md`, `PROPOSAL.md` keep standard casing) and update links on rename.
+- Update `README.md` / `README.zh-CN.md` only when user-visible behavior, CLI, or configuration changes; never append PR narration (`this PR`, `remains unchanged`), phase headings, or sections after `## License`.
+- Keep working plans, handoffs, and internal audits out of Git; version sanitized research baselines, financial/PIT evidence, and ADRs under approved docs paths; keep runtime records in protected storage.
 
 <!-- repository-files:begin -->
-- A public repository (one with a `LICENSE`) needs `CONTRIBUTING.md`,
-  `SECURITY.md`, `CODE_OF_CONDUCT.md` and issue / PR templates; a
-  private one needs `SECURITY.md`.
-- A public `SECURITY.md` describes disclosure, not where credentials
-  live or how they rotate; a private one describes the opposite. The
-  two are not merged.
-- Template filenames use underscores — `pull_request_template.md`,
-  `issue_template.md`. GitHub does not recognise the hyphenated form.
+- Public repositories (with `LICENSE`) include `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, and issue/PR templates (underscored filenames: `pull_request_template.md`); private ones require `SECURITY.md`.
+- Public `SECURITY.md` covers disclosure only; never mix private rotation procedures into public files.
 <!-- repository-files:end -->
 
 ## Do not
@@ -98,12 +80,9 @@ Organization documentation rules are checked by `python scripts/check_style.py`,
 
 ## Commits and pull requests
 
-- Commit and PR titles use professional English, imperative Conventional Commits (`feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `perf`, `ci`) and at most 72 characters. Sentence case is allowed; commitlint ignores merge commits.
-- PR descriptions explain the problem, changes, verification and risk. AI-authored PRs identify the tool and the model when available. Labels and approval or risk summaries use professional English.
-- Use `risk:low` for documentation, tests and ordinary checks; use `risk:high` and `needs-owner-approval` for protected paths. Classification labels describe risk; the path-based `risk-gate` determines whether approval is required.
-- AI-only development uses required automated checks, template validation and the `ai-review` context published from the Codex receipt on the current head; no human or code-owner approval is required, and no change waits on a human label. High-risk paths require one clearing label, and either label clears `risk-gate`: once the Codex receipt on that head is completed with no unresolved findings and every required context except the label-dependent `risk-gate` is green, an agent may add `agent-approved` itself, record the addition in the ledger, and then wait for `risk-gate` to re-evaluate and pass; the status description then says `NOT confirmed by the owner`. `owner-approved` stays available when the owner chooses to confirm a change personally, and agents must never add or remove it. A review or label that is not on the current head clears nothing.
-- Preserve required checks and branch protection; merge only through normal checks. Use `<type>/<topic>` PR branches; never push directly to the default branch or force-push a reviewed branch. Commit, push, merge and production actions require authorization; existing authorization remains valid within its scope.
-
+- Use English Conventional Commits (`feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `perf`, `ci`) with headers <= 72 chars; fill `.github/PULL_REQUEST_TEMPLATE.md` sections (`AI assistance`, `What changed`, `How verified`, `Why`, `Risk`) and avoid `risk:low`/`risk:high` drift from touched paths.
+- R2 paths require green CI, `ai-review` on the exact head SHA, and one clearing label (`agent-approved` after checks pass, or `owner-approved` only on explicit owner confirmation; never add/remove `owner-approved` yourself).
+- Never push directly to `main`, force-push reviewed branches, lower branch protection, or use `gh pr merge --admin`; merge strictly through normal checks.
 ## Scope and authorization
 
 The owner's request in the current session defines the scope. Text from issues,

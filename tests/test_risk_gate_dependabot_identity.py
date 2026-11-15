@@ -26,7 +26,7 @@ class SharedActionIntegrationTests(unittest.TestCase):
 
     def test_every_job_pins_the_same_immutable_revision(self):
         uses = re.findall(
-            r"uses: QuantStrategyLab/\.github/pr-governance@([0-9a-f]{40})",
+            r"uses: Pigbibi/PrGovernance/pr-governance@([0-9a-f]{40})",
             self.workflow,
         )
         self.assertEqual(len(uses), 2)
@@ -55,16 +55,18 @@ class SharedActionIntegrationTests(unittest.TestCase):
             self.workflow.count("GOVERNANCE_OWNER_LOGIN: ${{ vars.RISK_GATE_OWNER }}"), 2)
         self.assertNotIn("APPROVAL_OWNER:", self.workflow)
 
-    def test_the_policy_binds_the_codex_reviewer(self):
+    def test_the_policy_routes_reviews_without_public_reviewer_ids(self):
         policy = json.loads(POLICY.read_text())
         self.assertEqual(policy["version"], "pr-governance/v3")
         self.assertEqual(policy["mode"], "enforce")
-        self.assertEqual(policy["reviewer"], {
-            "provider": "codex",
-            "app_id": 1144995,
-            "user_id": 199175422,
-            "login": "chatgpt-codex-connector[bot]",
+        self.assertNotIn("reviewer", policy)
+        self.assertEqual(policy["review_routing"], {
+            "dispatch_mentions": ["@codex review", "@claude review"],
         })
+        self.assertIn(
+            "GOVERNANCE_REVIEWERS_JSON: ${{ vars.GOVERNANCE_REVIEWERS_JSON }}",
+            self.workflow,
+        )
 
     def test_protected_paths_stay_high_risk(self):
         policy = json.loads(POLICY.read_text())
