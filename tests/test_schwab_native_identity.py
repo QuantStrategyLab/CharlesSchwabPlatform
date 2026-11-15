@@ -48,7 +48,7 @@ def standard_refresh_ports(monkeypatch, capsys):
             state.events.append(("read", name))
             if state.fault == "read":
                 raise PermissionError("SYNTHETIC_REFRESH_SECRET")
-            if name == parent + "schwab_token/versions/latest":
+            if name == parent + "schwab-oauth-token/versions/latest":
                 token = json.loads(token_payload(expires_at=NOW.timestamp() + (600 if state.fresh else -1),
                                                  token_fields={"refresh_token": original}))
                 token["creation_timestamp"] = state.now.timestamp() - 120
@@ -56,7 +56,7 @@ def standard_refresh_ports(monkeypatch, capsys):
                 if state.bad_input:
                     token["token"].pop("refresh_token")
                 data = json.dumps(token).encode()
-                return SimpleNamespace(name=parent + "schwab_token/versions/77",
+                return SimpleNamespace(name=parent + "schwab-oauth-token/versions/77",
                                        payload=SimpleNamespace(data=data))
             assert name in (parent + "charles-schwab-api-key/versions/1",
                             parent + "charles-schwab-app-secret/versions/1")
@@ -68,7 +68,7 @@ def standard_refresh_ports(monkeypatch, capsys):
             return SimpleNamespace(name=actual, payload=SimpleNamespace(data=data))
 
         def test_iam_permissions(self, *, request, retry, timeout):
-            assert request == {"resource": parent + "schwab_token",
+            assert request == {"resource": parent + "schwab-oauth-token",
                                "permissions": ["secretmanager.versions.add"]}
             assert retry is None and timeout == 15
             state.events.append(("write_permission", request["resource"]))
@@ -77,14 +77,14 @@ def standard_refresh_ports(monkeypatch, capsys):
 
         def add_secret_version(self, *, request, retry, timeout):
             assert retry is None and timeout == 15
-            assert request["parent"] == parent + "schwab_token"
+            assert request["parent"] == parent + "schwab-oauth-token"
             state.events.append(("persist", request["parent"]))
             state.writes.append(json.loads(request["payload"]["data"]))
             if state.fault == "persist":
                 raise TimeoutError("SYNTHETIC_REFRESH_SECRET uncertain write")
             if state.fault in ("persist_interrupt", "persist_exit"):
                 raise KeyboardInterrupt() if state.fault == "persist_interrupt" else SystemExit()
-            return SimpleNamespace(name=parent + "schwab_token/versions/" + ("77" if state.fault == "write_ack" else "78"))
+            return SimpleNamespace(name=parent + "schwab-oauth-token/versions/" + ("77" if state.fault == "write_ack" else "78"))
 
     def handle(request):
         from urllib.parse import parse_qs

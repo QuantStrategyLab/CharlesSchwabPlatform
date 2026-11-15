@@ -60,7 +60,7 @@ runner 状态为 `stored_acknowledged`、`account_attribution=receiver_reported_
 
 `runtime-daily-sync.yml` 另有默认关闭的 `diagnose_source_access` 手动输入，与
 `publish` 互斥。选择该项只用 workflow 原有 ADC 检查 QPK runtime 实际读取的
-`<project-id>/schwab_token` Secret 元数据、`latest` 版本是否启用，以及
+`<project-id>/schwab-oauth-token` Secret 元数据、`latest` 版本是否启用，以及
 对该 Secret 调用 `testIamPermissions`，观察响应是否列出
 `secretmanager.versions.access`；请求不读取 Secret payload，
 不访问 Schwab、不刷新 token，也不修改 IAM。固定输出不包含资源名、错误正文或凭据。
@@ -74,7 +74,7 @@ metadata Viewer，也不以 `testIamPermissions` 的观察结果代替真实读�
 ### 原生账户身份核验与恢复
 
 `verify_native_identity` 是另一个默认关闭的手动输入，与 `publish` 和
-`diagnose_source_access` 互斥。它使用既有云端身份在内存中读取 `schwab_token`，不输出
+`diagnose_source_access` 互斥。它使用既有云端身份在内存中读取 `schwab-oauth-token`，不输出
 token 或原生账户号/hash，也不刷新或写回 token；随后只调用一次有界的 Schwab 原生账户号
 只读接口，并将结果与受保护运行目标中预先配置的身份精确比较。日报 report 自己携带的
 身份字段不能证明预期身份。此模式始终进行实时原生账户核验，即使日报发布 Secret 已配置。
@@ -98,7 +98,7 @@ Secret/版本状态或服务可用性；无需为此增加 metadata Viewer。不
 ### 只读检查 token 加载状态
 
 默认关闭的 `check_token_load` 手动输入与制备、`publish`、metadata 诊断和原生身份核验
-互斥。它只通过现有云端身份读取一次 `schwab_token` payload，在内存中校验结构和到期时间，
+互斥。它只通过现有云端身份读取一次 `schwab-oauth-token` payload，在内存中校验结构和到期时间，
 不调用 Schwab、不读取日报、不发送 POST，也不刷新或写回 token。读取请求有固定超时并关闭
 SDK 自动重试；输出仅为固定状态码，不含异常文本、资源路径或 token 内容。
 

@@ -6,13 +6,14 @@ import datetime as dt
 import importlib
 import json
 import math
+import os
 import time
 from collections.abc import Mapping
 from typing import Any, Callable
 
 from scripts.publish_account_facts_from_reports import PROJECT_ID
 
-SECRET_ID = "schwab_token"
+SECRET_ID = os.getenv("SCHWAB_TOKEN_SECRET_ID", "schwab-oauth-token")
 API_URL = "https://api.schwabapi.com/trader/v1/accounts/accountNumbers"
 MAX_TOKEN_BYTES = 64 * 1024
 MAX_RESPONSE_BYTES = 64 * 1024

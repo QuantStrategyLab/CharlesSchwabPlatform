@@ -34,13 +34,13 @@ def checked_session(
 ):
     project = project_alias or readiness.PROJECT_ID
     version_project = version_project_alias or project
-    secret_name = f"projects/{project}/secrets/schwab_token"
+    secret_name = f"projects/{project}/secrets/schwab-oauth-token"
     session = Mock()
     session.get.side_effect = [
         Response({"name": secret_name}),
         Response(
             {
-                "name": f"projects/{version_project}/secrets/schwab_token/versions/7",
+                "name": f"projects/{version_project}/secrets/schwab-oauth-token/versions/7",
                 "state": state,
             }
         ),
@@ -75,7 +75,7 @@ def test_checks_fixed_metadata_version_and_permission_only():
     assert version_call.kwargs["params"] == {"fields": "name,state"}
     permission_call = session.post.call_args
     assert permission_call.args == (
-        f"https://{readiness.API_HOST}/v1/projects/{readiness.PROJECT_ID}/secrets/schwab_token:testIamPermissions",
+        f"https://{readiness.API_HOST}/v1/projects/{readiness.PROJECT_ID}/secrets/schwab-oauth-token:testIamPermissions",
     )
     assert permission_call.kwargs["json"] == {
         "permissions": ["secretmanager.versions.access"]
@@ -119,10 +119,10 @@ def test_version_state_and_access_permission_are_independent(
 def test_invalid_version_resource_stops_before_permission_test():
     session = Mock()
     session.get.side_effect = [
-        Response({"name": f"projects/{readiness.PROJECT_ID}/secrets/schwab_token"}),
+        Response({"name": f"projects/{readiness.PROJECT_ID}/secrets/schwab-oauth-token"}),
         Response(
             {
-                "name": "projects/other/secrets/schwab_token/versions/7",
+                "name": "projects/other/secrets/schwab-oauth-token/versions/7",
                 "state": "ENABLED",
             }
         ),
@@ -152,10 +152,10 @@ def test_official_secret_number_resource_shape_uses_secret_level_permission_endp
         "permission_reported": True,
     }
     assert session.get.call_args_list[1].args == (
-        f"https://{readiness.API_HOST}/v1/projects/{canonical_project_number}/secrets/schwab_token/versions/latest",
+        f"https://{readiness.API_HOST}/v1/projects/{canonical_project_number}/secrets/schwab-oauth-token/versions/latest",
     )
     assert session.post.call_args.args == (
-        f"https://{readiness.API_HOST}/v1/projects/{canonical_project_number}/secrets/schwab_token:testIamPermissions",
+        f"https://{readiness.API_HOST}/v1/projects/{canonical_project_number}/secrets/schwab-oauth-token:testIamPermissions",
     )
 
 
@@ -187,7 +187,7 @@ def test_original_project_id_version_is_accepted_after_numeric_metadata_name():
     assert result["latest_version_enabled"] is True
     assert result["permission_reported"] is True
     assert session.post.call_args.args == (
-        f"https://{readiness.API_HOST}/v1/projects/{canonical_project_number}/secrets/schwab_token:testIamPermissions",
+        f"https://{readiness.API_HOST}/v1/projects/{canonical_project_number}/secrets/schwab-oauth-token:testIamPermissions",
     )
 
 
@@ -198,12 +198,12 @@ def test_version_rejects_unrelated_numeric_project_resource():
     session.get.side_effect = [
         Response(
             {
-                "name": f"projects/{canonical_project_number}/secrets/schwab_token"
+                "name": f"projects/{canonical_project_number}/secrets/schwab-oauth-token"
             }
         ),
         Response(
             {
-                "name": f"projects/{unrelated_project_number}/secrets/schwab_token/versions/7",
+                "name": f"projects/{unrelated_project_number}/secrets/schwab-oauth-token/versions/7",
                 "state": "ENABLED",
             }
         ),
@@ -219,7 +219,7 @@ def test_version_rejects_unrelated_numeric_project_resource():
 @pytest.mark.parametrize(
     "name",
     [
-        "projects/other-project/secrets/schwab_token",
+        "projects/other-project/secrets/schwab-oauth-token",
         f"projects/{readiness.PROJECT_ID}/secrets/other-secret",
     ],
 )
