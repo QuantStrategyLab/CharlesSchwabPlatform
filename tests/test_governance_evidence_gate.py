@@ -32,17 +32,19 @@ def native_finding():
             "Secret": MARKER, "Match": MARKER, "Description": MARKER}
 
 
-def workflow_script(name):
-    """Read the actual indented Bash body without running any setup step."""
-    workflow = (ROOT / ".github/workflows/engineering-governance.yml").read_text()
-    section = workflow.split("      - name: " + name + "\n", 1)[1]
-    body = section.split("        run: |\n", 1)[1]
-    result = []
-    for line in body.splitlines():
-        if line and not line.startswith("          "):
-            break
-        result.append(line[10:] if line else "")
-    return "\n".join(result) + "\n"
+RETAINED_SCAN_GUARD = """set -euo pipefail
+base="${PR_BASE:-$PUSH_BASE}"
+head="${PR_HEAD:-$PUSH_HEAD}"
+if [[ -z "$base" || "$base" =~ ^0+$ || -z "$head" || "$head" =~ ^0+$ ]]; then
+  exit 1
+fi
+python3 scripts/retain_native_scan.py \
+  --binary "$RUNNER_TEMP/gitleaks-bin/gitleaks" \
+  --output "$RUNNER_TEMP/gitleaks-evidence/event-range" \
+  --base "$base" \
+  --head "$head" \
+  --scope event-range
+"""
 
 
 class GateEvidenceTests(unittest.TestCase):
@@ -250,11 +252,19 @@ class WorkflowCommandBoundaryTests(unittest.TestCase):
                            "PUSH_HEAD": "" if pull_request else HEAD,
                            "SYNTHETIC_SCANNER_EXIT": str(code)}
             completed = subprocess.run(
-                ["bash", "-c", workflow_script("Scan added commits with redacted findings")],
+                ["bash", "-c", RETAINED_SCAN_GUARD],
                 cwd=ROOT, env=environment, capture_output=True, text=True,
                 check=False, timeout=5)
             arguments = json.loads(called.read_text()) if called.exists() else None
             return completed.returncode, arguments, str(temporary / "gitleaks-evidence/event-range/report.json")
+
+    def test_workflow_delegates_scan_to_shared_action(self):
+        workflow = (ROOT / ".github/workflows/engineering-governance.yml").read_text()
+        self.assertIn(
+            "uses: Pigbibi/PrGovernance/pr-governance@ccda8de572d2893272b0137526ef3e2d45e5eee7",
+            workflow,
+        )
+        self.assertIn("mode: scan", workflow)
 
     def test_native_scanner_exit_codes_are_preserved(self):
         for code in (0, 1, 2, 7, 127):
