@@ -449,13 +449,15 @@ def _notification_report(report):
     return value
 
 
-def _account_snapshots(report, target, now):
+def _account_snapshots(report, target, now, *, allow_carryover=False, allow_live_probe=False, cutoff=None):
     """Use the archive's broker observation only for the configured account."""
-    from scripts.publish_account_facts_from_reports import _ProjectionError, _money_text, _project_positions
+    from scripts.publish_account_facts_from_reports import POSITIONS_SCOPE, _ProjectionError, _money_text, _project_positions
     from scripts.schwab_native_identity import _account_hash_matches
 
     try:
-        if report.get("dry_run") is not False:
+        if report.get("dry_run") is not False and not (
+            allow_live_probe and report.get("dry_run") is True and target.get("dry_run_only") is False
+        ):
             return []
         expected = target["runtime_risk_limits"]["binding"]["account_hash"]
         observation = report["summary"]["account_observation"]
@@ -464,7 +466,8 @@ def _account_snapshots(report, target, now):
         observed = _stamp(observation["observed_at"])
         started, finished = _stamp(report["started_at"]), _stamp(report["finished_at"])
         window = sgt_business_window(started)
-        if not started <= observed <= finished <= now or not observed < window.end:
+        within_cutoff = observed < cutoff if cutoff is not None else (allow_carryover or observed < window.end)
+        if not started <= observed <= finished <= now or not within_cutoff:
             return []
         snapshots = []
         if (observation.get("net_assets_source") == "liquidationValue"
@@ -478,20 +481,28 @@ def _account_snapshots(report, target, now):
                 snapshots.append({"as_of": observed.isoformat(), "equity": equity, "equity_currency": "USD"})
         try:
             positions = _project_positions(observation)
-            if not positions:
+            if (positions is None and observation.get("broker_reported_positions") == []
+                    and observation.get("broker_reported_positions_scope") in {POSITIONS_SCOPE, "account"}
+                    and observation.get("broker_reported_positions_complete") is not False):
+                positions = []
+            if positions is None:
                 return snapshots
             scope = observation["broker_reported_positions_scope"]
             stamp = _stamp(observation.get("broker_reported_positions_observed_at", observed.isoformat()))
         except (KeyError, ValueError, TypeError, AttributeError):
             pass
         else:
-            if observed <= stamp <= finished and stamp < window.end:
+            stamp_within_cutoff = stamp < cutoff if cutoff is not None else (allow_carryover or stamp < window.end)
+            if observed <= stamp <= finished <= now and stamp_within_cutoff:
                 holdings = [{"symbol": p["symbol"], "quantity": float(p["quantity"]), "asset_type": "security"}
                             for p in positions]
+                extra = {"holdings": holdings, "holdings_scope": scope}
+                if not holdings and (scope in {POSITIONS_SCOPE, "account"} or observation.get("broker_reported_positions_complete") is True):
+                    extra["holdings_complete"] = True
                 if snapshots and stamp == observed:
-                    snapshots[0].update(holdings=holdings, holdings_scope=scope)
+                    snapshots[0].update(extra)
                 else:
-                    snapshots.append({"as_of": stamp.isoformat(), "holdings": holdings, "holdings_scope": scope})
+                    snapshots.append({"as_of": stamp.isoformat(), **extra})
         return snapshots
     except (KeyError, ValueError, TypeError, AttributeError):
         return []
@@ -598,6 +609,51 @@ def _canonical_candidate_row(row):
     return value
 
 
+def _reconcile_empty_holdings_facts(prior_facts, current_facts):
+    """Allow an explicit empty-holdings coverage upgrade over an older legacy snapshot."""
+    from scripts.publish_account_facts_from_reports import POSITIONS_SCOPE
+
+    if (not isinstance(prior_facts, dict) or not isinstance(current_facts, dict)
+            or {k: v for k, v in prior_facts.items() if k != "snapshots"}
+            != {k: v for k, v in current_facts.items() if k != "snapshots"}):
+        return None
+    prior_snaps = prior_facts.get("snapshots")
+    current_snaps = current_facts.get("snapshots")
+    allowed_scopes = {POSITIONS_SCOPE, "account"}
+
+    def _is_empty_enrichment(base, rich):
+        if (not isinstance(base, list) or not isinstance(rich, list) or not base or not rich
+                or not all(isinstance(s, dict) and isinstance(s.get("as_of"), str) for s in [*base, *rich])):
+            return False
+        if len(rich) == len(base):
+            changed = False
+            for b, r in zip(base, rich):
+                if b == r:
+                    continue
+                extra = {"holdings": [], "holdings_scope": r.get("holdings_scope"), "holdings_complete": True}
+                if (extra["holdings_scope"] in allowed_scopes
+                        and not any(k in b for k in extra) and r == {**b, **extra}):
+                    changed = True
+                    continue
+                return False
+            return changed
+        if len(rich) == len(base) + 1:
+            for i, candidate in enumerate(rich):
+                if (candidate.get("holdings") == []
+                        and candidate.get("holdings_scope") in allowed_scopes
+                        and candidate.get("holdings_complete") is True
+                        and set(candidate) == {"as_of", "holdings", "holdings_scope", "holdings_complete"}
+                        and rich[:i] + rich[i + 1:] == base):
+                    return True
+        return False
+
+    if _is_empty_enrichment(prior_snaps, current_snaps):
+        return current_facts
+    if _is_empty_enrichment(current_snaps, prior_snaps):
+        return prior_facts
+    return None
+
+
 def persist_projected_candidate(payload, *, env=None, store=None, archived_risk_blocks=()):
     """Merge archive-authoritative runs into one exact object, with one CAS."""
     import re
@@ -659,6 +715,11 @@ def persist_projected_candidate(payload, *, env=None, store=None, archived_risk_
             comparison = {**prior, "account_daily_facts": current_facts}
         elif prior_facts is not None and current_facts is None:
             current["account_daily_facts"] = prior_facts
+        elif prior_facts is not None and current_facts is not None and prior_facts != current_facts:
+            enriched_facts = _reconcile_empty_holdings_facts(prior_facts, current_facts)
+            if enriched_facts is not None:
+                comparison = {**comparison, "account_daily_facts": enriched_facts}
+                current["account_daily_facts"] = enriched_facts
         if (current.get("execution_status") == "blocked"
                 and row.get("source_run_id") in archived_risk_blocks
                 and prior.get("execution_status") in ("execution_unknown", "blocked")):
