@@ -13,26 +13,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  policy:
+    uses: QuantStrategyLab/.github/.github/workflows/docs-acceptance.yml@b4966bdd8780cad3ae5154ae50d8b98259a16dc6
+    with:
+      policy-revision: b4966bdd8780cad3ae5154ae50d8b98259a16dc6
+      mode: enforce
+
   docs:
     name: Documentation check
+    needs: policy
+    if: always()
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 2
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-          path: target
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          repository: QuantStrategyLab/.github
-          ref: cbfe3aedf927a9cf73dfb7813e872b38d432b5a1
-          persist-credentials: false
-          path: policy
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: "3.12"
-      - name: Test the documentation checker
-        working-directory: policy
-        run: python scripts/test_style.py
-      - name: Check documentation rules
-        run: python policy/scripts/check_style.py --root target --phase 2
+      - name: Require documentation policy acceptance
+        run: test "${{ needs.policy.result }}" = "success"
