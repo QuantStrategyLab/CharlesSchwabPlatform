@@ -556,18 +556,15 @@ def check_agent_files(root: Path, report: Report) -> None:
             )
 
 
-def check_docs_baseline(root: Path, report: Report) -> None:
-    """The file set a reader expects, split by what the repository is.
+def check_docs_baseline(root: Path, report: Report, visibility: str = "public") -> None:
+    """The file set a reader expects, split by repository visibility.
 
-    A LICENSE is the signal: a repository that grants rights to outside readers
-    owes them a contribution path, a way to report a vulnerability, and a
-    conduct policy. A repository that does not grant them is internal, and an
-    internal repository needs one thing from this list — where credentials live
-    and what to do when one leaks — not a public disclosure process it will
-    never run.
+    Public repositories owe outside readers a license, contribution path,
+    vulnerability disclosure policy, and code of conduct. Private repositories
+    only require SECURITY.md for credential handling and rotation.
     """
-    if (root / "LICENSE").exists():
-        required = ["CONTRIBUTING.md", "SECURITY.md", "CODE_OF_CONDUCT.md"]
+    if visibility == "public" or (root / "LICENSE").exists():
+        required = ["LICENSE", "CONTRIBUTING.md", "SECURITY.md", "CODE_OF_CONDUCT.md"]
         kind = "public"
     else:
         required = ["SECURITY.md"]
@@ -578,6 +575,29 @@ def check_docs_baseline(root: Path, report: Report) -> None:
             "docs",
             f"{kind} repository is missing {', '.join(missing)} (section 14)",
         )
+
+
+def check_doc_hygiene_advisory(root: Path, report: Report) -> None:
+    """Report non-blocking semantic hygiene cues (orphan docs, zh-CN-only files)."""
+    docs_dir = root / "docs"
+    if docs_dir.is_dir():
+        doc_mds = [p for p in docs_dir.rglob("*.md") if p.name != "README.md"]
+        if len(doc_mds) > 5 and not (docs_dir / "README.md").exists():
+            report.add(
+                "docs_advisory",
+                f"docs/ has {len(doc_mds)} documents but no docs/README.md index",
+            )
+    for path in iter_files(root):
+        if not is_markdown(path):
+            continue
+        if path.name.endswith(".zh-CN.md"):
+            en_sibling = path.with_name(path.name[:-len(".zh-CN.md")] + ".md")
+            if not en_sibling.exists():
+                rel = path.relative_to(root).as_posix()
+                report.add(
+                    "docs_advisory",
+                    f"{rel}: Chinese sibling has no English source file (section 4)",
+                )
 
 
 QUOTE_MARKS = "\"'\u201c\u201d\u2018\u2019"
@@ -753,7 +773,8 @@ def main(argv: list[str] | None = None) -> int:
     check_links(root, report)
     check_agent_files(root, report)
     check_language(root, report)
-    check_docs_baseline(root, report)
+    check_docs_baseline(root, report, visibility=args.visibility)
+    check_doc_hygiene_advisory(root, report)
     check_leaks(root, report)
     check_internal_paths(root, report)
 

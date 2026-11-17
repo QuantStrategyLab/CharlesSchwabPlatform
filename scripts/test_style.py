@@ -375,30 +375,34 @@ class DocsBaselineTest(CheckerTestCase):
     def test_public_repository_needs_the_reader_file_set(self):
         self.write("LICENSE", "MIT\n")
         report = self.report()
-        check_style.check_docs_baseline(self.root, report)
+        check_style.check_docs_baseline(self.root, report, visibility="public")
         found = self.messages(report, "docs")
         self.assertTrue(any("CONTRIBUTING.md" in m for m in found))
         self.assertTrue(any("CODE_OF_CONDUCT.md" in m for m in found))
+
+    def test_public_repository_without_license_is_reported(self):
+        report = self.report()
+        check_style.check_docs_baseline(self.root, report, visibility="public")
+        found = self.messages(report, "docs")
+        self.assertTrue(any("LICENSE" in m for m in found))
 
     def test_public_repository_with_the_file_set_passes(self):
         self.write("LICENSE", "MIT\n")
         for name in ("CONTRIBUTING.md", "SECURITY.md", "CODE_OF_CONDUCT.md"):
             self.write(name, "# " + name + "\n")
         report = self.report()
-        check_style.check_docs_baseline(self.root, report)
+        check_style.check_docs_baseline(self.root, report, visibility="public")
         self.assertEqual(self.messages(report, "docs"), [])
 
     def test_private_repository_needs_only_the_credential_doc(self):
-        # No LICENSE means the repository grants nothing to outside readers, so
-        # a public disclosure process would be a document nobody runs.
         self.write("SECURITY.md", "# Credentials\n")
         report = self.report()
-        check_style.check_docs_baseline(self.root, report)
+        check_style.check_docs_baseline(self.root, report, visibility="private")
         self.assertEqual(self.messages(report, "docs"), [])
 
     def test_private_repository_without_the_credential_doc_is_reported(self):
         report = self.report()
-        check_style.check_docs_baseline(self.root, report)
+        check_style.check_docs_baseline(self.root, report, visibility="private")
         self.assertTrue(any("SECURITY.md" in m for m in self.messages(report, "docs")))
 
 
@@ -573,11 +577,18 @@ class GitVisibilityTest(CheckerTestCase):
         self.write(".gitignore", GITIGNORE_BLOCK)
         self.write("AGENTS.md", "# rules\n\n" + check_style.CONTENT_BOUNDARY + "\n")
         self.write("CLAUDE.md", "@AGENTS.md\n")
+        self.write("LICENSE", "MIT\n")
+        self.write("CONTRIBUTING.md", "# Contributing\n")
+        self.write("CODE_OF_CONDUCT.md", "# Code of Conduct\n")
         self.write("SECURITY.md", "# Security\n")
         self.git("init", "--quiet")
         self.git("config", "user.name", "Test User")
         self.git("config", "user.email", "test@example.com")
-        self.git("add", ".gitignore", "AGENTS.md", "CLAUDE.md", "SECURITY.md", "README.md")
+        self.git(
+            "add",
+            ".gitignore", "AGENTS.md", "CLAUDE.md",
+            "LICENSE", "CONTRIBUTING.md", "CODE_OF_CONDUCT.md", "SECURITY.md", "README.md",
+        )
 
         self.write("docs/changes/task/change-card.md", "# Card\n")
         self.write("docs/plans/draft.md", "# Draft\n")
