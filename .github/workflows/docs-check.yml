@@ -14,20 +14,7 @@ concurrency:
 
 jobs:
   docs:
-    name: Documentation check
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
-        with:
-          python-version: "3.12"
-      # The checker runs before the tests because a rule that stopped working
-      # would otherwise report a clean repository. The tests are the only thing
-      # that notices the difference between "no findings" and "no checking".
-      - name: Test the documentation checker
-        run: python scripts/test_style.py
-      - name: Check documentation rules
-        run: python scripts/check_style.py --phase 2
+    uses: QuantStrategyLab/.github/.github/workflows/docs-acceptance.yml@cbfe3aedf927a9cf73dfb7813e872b38d432b5a1
+    with:
+      policy-revision: cbfe3aedf927a9cf73dfb7813e872b38d432b5a1
+      mode: enforce

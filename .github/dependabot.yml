@@ -13,7 +13,11 @@ updates:
   directory: /
   schedule:
     interval: weekly
-  open-pull-requests-limit: 5
+  groups:
+    actions-minor-and-patch:
+      patterns:
+        - "*"
+  open-pull-requests-limit: 3
   ignore:
   - dependency-name: '*'
     update-types:

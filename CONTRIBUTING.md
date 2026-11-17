@@ -2,6 +2,8 @@
 
 Thanks for contributing to `CharlesSchwabPlatform`.
 
+Documentation follows the [QuantStrategyLab documentation style guide](https://github.com/QuantStrategyLab/.github/blob/main/docs/STYLE_GUIDE.md).
+
 ## Ground Rules
 
 - Prefer small, low-risk pull requests.
