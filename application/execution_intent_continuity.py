@@ -42,6 +42,29 @@ class _EvidenceRequired(ValueError):
     pass
 
 
+_SHA256_HEX_RE = re.compile(r"[0-9a-f]{64}")
+
+
+def _is_nonempty_str(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _is_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_sha256_hex(value: object) -> bool:
+    return isinstance(value, str) and _SHA256_HEX_RE.fullmatch(value) is not None
+
+
+def _all_mappings(*values: object) -> bool:
+    return all(isinstance(value, Mapping) for value in values)
+
+
+def _all_dicts(*values: object) -> bool:
+    return all(isinstance(value, dict) for value in values)
+
+
 @dataclass(frozen=True)
 class _RecoveryScope:
     account_hash: str
@@ -50,7 +73,7 @@ class _RecoveryScope:
     cohort_id: str
 
     def __post_init__(self):
-        if any(not isinstance(value, str) or not value.strip() for value in asdict(self).values()):
+        if any(not _is_nonempty_str(value) for value in asdict(self).values()):
             raise ValueError("recovery scope requires explicit nonempty identities")
 
 
@@ -77,7 +100,7 @@ def _reject_constant(_value):
 
 
 def _object_json(text: str) -> dict:
-    if not isinstance(text, str) or not text.strip():
+    if not _is_nonempty_str(text):
         raise ValueError("recovery payload must be a nonempty JSON object")
     value = json.loads(text, object_pairs_hook=_unique_object, parse_constant=_reject_constant)
     if not isinstance(value, dict):
@@ -93,10 +116,20 @@ def _digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _canonical_digest(value: object) -> str:
+    return _digest(_canonical_json(value))
+
+
+def _snapshot_digest(snapshot: Any) -> str:
+    source = asdict(snapshot)
+    source["as_of"] = snapshot.as_of.isoformat()
+    return _canonical_digest(source)
+
+
 def _generation(value: object) -> int:
     if isinstance(value, str) and value.isascii() and value.isdigit():
         value = int(value)
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+    if not _is_int(value) or value <= 0:
         raise ValueError("positive object generation unavailable")
     return value
 
@@ -138,7 +171,7 @@ class _RecoveryLocatorStore:
     @staticmethod
     def _io_failure(exc: Exception, *, reading: bool):
         code = getattr(exc, "code", None)
-        if isinstance(code, bool) or not isinstance(code, int):
+        if not _is_int(code):
             code = None
         if code in {409, 412}:
             raise _LocatorConflict("conditional_version_conflict", status_code=code) from None
@@ -204,8 +237,8 @@ class _RecoveryLocatorStore:
         return self._write(payload_json, 0)
 
     def compare_update(self, payload_json: str, *, expected: _LocatorVersion) -> _LocatorVersion:
-        if (not isinstance(expected, _LocatorVersion) or isinstance(expected.generation, bool)
-                or not isinstance(expected.generation, int) or expected.generation <= 0):
+        if (not isinstance(expected, _LocatorVersion) or not _is_int(expected.generation)
+                or expected.generation <= 0):
             raise ValueError("CAS requires a positive version from a qualified read or write acknowledgement")
         if (expected.locator_uri != self._uri or expected.scope != self._scope
                 or not isinstance(expected.payload_json, str) or _digest(expected.payload_json) != expected.payload_sha256):
@@ -259,8 +292,7 @@ def _read_schwab_position_quantities(
     Invalid fields remain unknown for that symbol; untrusted bundle provenance
     prevents consumption of the requested scope, not an account-wide policy.
     """
-    if (not isinstance(expected_account_hash, str) or not expected_account_hash.strip()
-            or isinstance(symbols, (str, bytes))):
+    if not _is_nonempty_str(expected_account_hash) or isinstance(symbols, (str, bytes)):
         raise _EvidenceRequired("explicit_account_and_symbol_scope_required")
     try:
         requested = tuple(symbols)
@@ -277,8 +309,7 @@ def _read_schwab_position_quantities(
     if not isinstance(facts, Mapping):
         raise _EvidenceRequired("position_fact_bundle_unavailable")
     digest = metadata.get("source_digest_sha256")
-    if (not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None
-            or facts.get("source_digest_sha256") != digest):
+    if not _is_sha256_hex(digest) or facts.get("source_digest_sha256") != digest:
         raise _EvidenceRequired("position_source_binding_unavailable")
     if (facts.get("positions_field_present") is not True or facts.get("observation_window_valid") is not True
             or facts.get("time_semantics") != "client_observation_window" or facts.get("orders_observed") is not False):
@@ -293,8 +324,9 @@ def _read_schwab_position_quantities(
     rows = facts.get("records")
     long_map, short_map = facts.get("long_quantities"), facts.get("short_quantities")
     ambiguous = facts.get("ambiguous_symbols")
-    if (not isinstance(rows, list) or not isinstance(long_map, Mapping) or not isinstance(short_map, Mapping)
-            or not isinstance(ambiguous, list) or any(not isinstance(s, str) for s in ambiguous)):
+    if (not isinstance(rows, list) or not isinstance(ambiguous, list)
+            or not _all_mappings(long_map, short_map)
+            or any(not isinstance(s, str) for s in ambiguous)):
         raise _EvidenceRequired("position_fact_structure_unavailable")
     grouped: dict[str, list[Mapping]] = {s: [] for s in requested}
     for row in rows:
@@ -310,7 +342,7 @@ def _read_schwab_position_quantities(
             continue
         row = records[0]
         reported, omitted = row.get("reported_quantities"), row.get("unavailable_fields")
-        if row.get("asset_type") != "EQUITY" or not isinstance(reported, Mapping) or not isinstance(omitted, Mapping):
+        if row.get("asset_type") != "EQUITY" or not _all_mappings(reported, omitted):
             unavailable[symbol] = ("position_units_or_record_unavailable",)
             continue
         reasons = []
@@ -447,6 +479,167 @@ def _resolution_time(value):
     return result
 
 
+_RESOLUTION_BODY_KEYS = frozenset({
+    "schema_version", "scope", "enrollment_sha256", "strategy_release", "original_ref",
+    "original_request_sha256", "identity_binding", "broker_requested_quantity",
+    "broker_requested_notional", "terminal_observed_at", "coverage", "observed_at",
+    "current_snapshot_sha256", "ledger",
+})
+_RESOLUTION_COVERAGE_KEYS = frozenset({
+    "from", "through", "orders_complete", "executions_complete", "fees_complete", "corrections_complete",
+})
+_RESOLUTION_EVENT_KEYS = frozenset({
+    "event_id", "event_type", "order_id", "owner_id", "symbol", "side",
+    "quantity", "price", "fee", "fee_source", "event_time", "event_digest",
+})
+_RESOLUTION_CONFLICT_LISTS = ("unsupported_event_ids", "quarantined_order_ids", "quarantined_event_ids")
+
+
+def _validate_resolution_envelope_and_binding(
+    command, ref, body, *, scope, enrollment_sha256, strategy_release, snapshot_sha256,
+    attempted, known_order_ids,
+) -> tuple[dict[str, Any], dict[str, Any], str]:
+    if (set(body) != _RESOLUTION_BODY_KEYS or body["schema_version"] != "schwab_original_resolution.v1"
+            or not attempted or body["scope"] != asdict(scope)
+            or body["enrollment_sha256"] != enrollment_sha256
+            or body["strategy_release"] != strategy_release.to_dict()
+            or body["original_ref"] != ref or body["current_snapshot_sha256"] != snapshot_sha256):
+        raise _EvidenceRequired("resolution_original_or_source_mismatch")
+    order = command.intent["order"]
+    if body["original_request_sha256"] != _canonical_digest(order):
+        raise _EvidenceRequired("resolution_request_mismatch")
+    binding = body["identity_binding"]
+    if (set(binding) != {"command_id", "order_id", "method"}
+            or binding["command_id"] != command.command_id
+            or binding["method"] != "exact_persisted_source_binding"
+            or not _is_nonempty_str(binding["order_id"])
+            or any(order_id != binding["order_id"] for order_id in known_order_ids)):
+        raise _EvidenceRequired("resolution_exact_broker_identity_required")
+    return order, binding, binding["order_id"]
+
+
+def _validate_resolution_coverage_and_request(
+    command, body, order, *, snapshot_as_of, now, _decimal,
+) -> tuple[datetime, datetime, datetime, Decimal]:
+    observed = _resolution_time(body["observed_at"])
+    terminal_at = _resolution_time(body["terminal_observed_at"])
+    coverage = body["coverage"]
+    created_at = _resolution_time(command.created_at)
+    if (set(coverage) != _RESOLUTION_COVERAGE_KEYS
+            or any(coverage[key] is not True for key in (
+                "orders_complete", "executions_complete", "fees_complete", "corrections_complete"
+            ))
+            or observed != snapshot_as_of or observed > now
+            or _resolution_time(coverage["through"]) != observed
+            or _resolution_time(coverage["from"]) > created_at
+            or not created_at <= terminal_at <= observed):
+        raise _EvidenceRequired("resolution_current_complete_coverage_required")
+    requested = _decimal(body["broker_requested_quantity"], "broker_requested_quantity", positive=True)
+    if _decimal(order["quantity"], "original_quantity", nonnegative=True) <= 0:
+        # The existing ledger is share-quantity based. No qualified notional
+        # request-to-terminal-quantity source contract is adopted here; never
+        # manufacture a share quantity or budget rule for quantity=0 intents.
+        raise _EvidenceRequired("resolution_notional_source_contract_unavailable")
+    if requested != _decimal(order["quantity"], "original_quantity") or body["broker_requested_notional"] is not None:
+        raise _EvidenceRequired("resolution_requested_quantity_mismatch")
+    return created_at, observed, terminal_at, requested
+
+
+def _validate_resolution_ledger_binding(
+    ledger, command, order, *, broker_id, scope, requested, schema_version, terminal_statuses, _decimal,
+) -> tuple[dict[str, Any], Decimal]:
+    # Even a zero-fill terminal needs explicit known-empty coverage. Missing
+    # collections, integer zero and empty objects are unknown, not empty lists.
+    if (not isinstance(ledger, dict)
+            or any(not isinstance(ledger.get(key), list) for key in (*_RESOLUTION_CONFLICT_LISTS, "events"))
+            or any(not _is_nonempty_str(item) for key in _RESOLUTION_CONFLICT_LISTS for item in ledger[key])
+            or ledger["schema_version"] != schema_version
+            or ledger["unsupported_event_ids"]):
+        raise _EvidenceRequired("resolution_ledger_unsupported")
+    intents, orders = ledger["intents"], ledger["orders"]
+    if not _all_dicts(intents, orders) or not _all_dicts(*intents.values(), *orders.values()):
+        raise _EvidenceRequired("resolution_identity_component_unknown")
+    # Check both directions inside this supplied original-related component.
+    # An active alias or duplicate fact under another key cannot disappear by
+    # selecting the one terminal row. Unrelated correctly bound rows may remain.
+    intent_keys = {key for key, row in intents.items() if key == command.command_id
+                   or row.get("intent_id") == command.command_id or row.get("order_id") == broker_id}
+    order_keys = {key for key, row in orders.items() if key == broker_id
+                  or row.get("intent_id") == command.command_id}
+    if intent_keys != {command.command_id} or order_keys != {broker_id}:
+        raise _EvidenceRequired("resolution_identity_component_conflict")
+    intent = intents[command.command_id]
+    state = orders[broker_id]
+    expected_side = order["side"].upper()
+    if (intent["intent_id"] != command.command_id or intent["order_id"] != broker_id
+            or intent["owner_id"] != scope.profile_id or intent["symbol"] != order["symbol"]
+            or intent["side"] != expected_side or _decimal(intent["quantity"], "ledger_request") != requested
+            or state["intent_id"] != command.command_id or state["owner_id"] != scope.profile_id
+            or state["symbol"] != order["symbol"] or state["side"] != expected_side
+            or _decimal(state["requested_quantity"], "state_request") != requested
+            or state["status"] not in terminal_statuses or state["terminal"] is not True
+            or state["reconciliation_status"] != "complete" or state["reservation_status"] != "released"
+            or broker_id in ledger["quarantined_order_ids"]):
+        raise _EvidenceRequired("resolution_terminal_binding_incomplete")
+    cumulative = _decimal(state["cumulative_filled_quantity"], "terminal_cumulative", nonnegative=True)
+    if cumulative > requested or (state["status"] == "FILLED" and cumulative != requested):
+        raise _EvidenceRequired("resolution_terminal_quantity_mismatch")
+    return state, cumulative
+
+
+def _collect_resolution_fills(
+    ledger, state, order, *, broker_id, scope, created_at, terminal_at, cumulative, _decimal, _money, _json_digest,
+) -> list[dict[str, Any]]:
+    zero = _decimal("0", "zero")
+    total = zero
+    total_fees = zero
+    owner_fees: dict[str, Decimal] = {}
+    ids: set[str] = set()
+    fills: list[dict[str, Any]] = []
+    expected_side = order["side"].upper()
+    for event in ledger["events"]:
+        event_id = event["event_id"]
+        if not _is_nonempty_str(event_id) or event_id in ids:
+            raise _EvidenceRequired("resolution_duplicate_execution")
+        ids.add(event_id)
+        # Reconcile normalized per-fill fees with the existing ledger's fee
+        # summaries. This validates the source; it never credits buying power.
+        event_fee = _decimal(event["fee"], "ledger_event_fee", nonnegative=True)
+        if event_fee != _decimal(_money(event_fee), "normalized_fee"):
+            raise _EvidenceRequired("resolution_fee_precision_mismatch")
+        total_fees += event_fee
+        owner_fees[event["owner_id"]] = owner_fees.get(event["owner_id"], zero) + event_fee
+        if event["order_id"] != broker_id:
+            continue
+        fee_source = event["fee_source"].lower().replace("-", "_").replace(" ", "_")
+        if (set(event) != _RESOLUTION_EVENT_KEYS or event["event_type"] != "FILL"
+                or event["owner_id"] != scope.profile_id or event["symbol"] != order["symbol"]
+                or event["side"] != expected_side
+                or event_id in ledger["quarantined_event_ids"]
+                or any(token in fee_source for token in ("cumulative", "aggregate", "order_commission", "order_level"))
+                or not any(token in fee_source for token in ("per_fill", "per_execution", "fill_level", "execution_level"))):
+            raise _EvidenceRequired("resolution_fill_binding_or_fee_source_invalid")
+        when = _resolution_time(event["event_time"])
+        if not created_at <= when <= terminal_at:
+            raise _EvidenceRequired("resolution_late_execution")
+        quantity = _decimal(event["quantity"], "fill_quantity", positive=True)
+        _decimal(event["price"], "fill_price", positive=True)
+        fee = _decimal(event["fee"], "fill_fee", nonnegative=True)
+        material = {key: value for key, value in event.items() if key != "event_digest"}
+        if fee != _decimal(_money(fee), "normalized_fee") or event["event_digest"] != _json_digest(material):
+            raise _EvidenceRequired("resolution_fee_or_execution_digest_mismatch")
+        total += quantity
+        fills.append(event)
+    if (_decimal(ledger["account"]["fees"], "account_fees", nonnegative=True) != total_fees
+            or not set(owner_fees).issubset(ledger["owners"])
+            or any(_decimal(owner["fees"], "owner_fees", nonnegative=True) != owner_fees.get(owner_id, zero)
+                   for owner_id, owner in ledger["owners"].items())):
+        raise _EvidenceRequired("resolution_fee_totals_inconsistent")
+    if total != cumulative or _decimal(state["recorded_filled_quantity"], "recorded_quantity") != cumulative:
+        raise _EvidenceRequired("resolution_execution_coverage_incomplete")
+    return fills
+
+
 def _validated_original_resolution(command, ref, body, *, scope, enrollment_sha256,
         strategy_release, snapshot_sha256, snapshot_as_of, now, source_uri, proof_sha256,
         known_order_ids, attempted, prior_binding):
@@ -459,137 +652,37 @@ def _validated_original_resolution(command, ref, body, *, scope, enrollment_sha2
     from application.execution_event_accounting import (
         ExecutionEventLedger, _TERMINAL_STATUSES, _decimal, _decimal_text, _json_digest, _money,
     )
-    expected_keys = {"schema_version", "scope", "enrollment_sha256", "strategy_release",
-        "original_ref", "original_request_sha256", "identity_binding", "broker_requested_quantity",
-        "broker_requested_notional", "terminal_observed_at", "coverage", "observed_at",
-        "current_snapshot_sha256", "ledger"}
-    if (set(body) != expected_keys or body["schema_version"] != "schwab_original_resolution.v1"
-            or not attempted or body["scope"] != asdict(scope)
-            or body["enrollment_sha256"] != enrollment_sha256
-            or body["strategy_release"] != strategy_release.to_dict()
-            or body["original_ref"] != ref or body["current_snapshot_sha256"] != snapshot_sha256):
-        raise _EvidenceRequired("resolution_original_or_source_mismatch")
-    order = command.intent["order"]
-    if body["original_request_sha256"] != _digest(_canonical_json(order)):
-        raise _EvidenceRequired("resolution_request_mismatch")
-    binding = body["identity_binding"]
-    if (set(binding) != {"command_id", "order_id", "method"}
-            or binding["command_id"] != command.command_id
-            or binding["method"] != "exact_persisted_source_binding"
-            or not isinstance(binding["order_id"], str) or not binding["order_id"].strip()
-            or any(order_id != binding["order_id"] for order_id in known_order_ids)):
-        raise _EvidenceRequired("resolution_exact_broker_identity_required")
-    broker_id = binding["order_id"]
-    observed = _resolution_time(body["observed_at"])
-    terminal_at = _resolution_time(body["terminal_observed_at"])
-    coverage = body["coverage"]
-    if (set(coverage) != {"from", "through", "orders_complete", "executions_complete", "fees_complete", "corrections_complete"}
-            or any(coverage[key] is not True for key in ("orders_complete", "executions_complete", "fees_complete", "corrections_complete"))
-            or observed != snapshot_as_of or observed > now
-            or _resolution_time(coverage["through"]) != observed
-            or _resolution_time(coverage["from"]) > _resolution_time(command.created_at)
-            or not _resolution_time(command.created_at) <= terminal_at <= observed):
-        raise _EvidenceRequired("resolution_current_complete_coverage_required")
-    requested = _decimal(body["broker_requested_quantity"], "broker_requested_quantity", positive=True)
-    if _decimal(order["quantity"], "original_quantity", nonnegative=True) > 0:
-        if requested != _decimal(order["quantity"], "original_quantity") or body["broker_requested_notional"] is not None:
-            raise _EvidenceRequired("resolution_requested_quantity_mismatch")
-    else:
-        # The existing ledger is share-quantity based. No qualified notional
-        # request-to-terminal-quantity source contract is adopted here; never
-        # manufacture a share quantity or budget rule for quantity=0 intents.
-        raise _EvidenceRequired("resolution_notional_source_contract_unavailable")
+    order, binding, broker_id = _validate_resolution_envelope_and_binding(
+        command, ref, body,
+        scope=scope, enrollment_sha256=enrollment_sha256, strategy_release=strategy_release,
+        snapshot_sha256=snapshot_sha256, attempted=attempted, known_order_ids=known_order_ids,
+    )
+    created_at, observed, terminal_at, requested = _validate_resolution_coverage_and_request(
+        command, body, order, snapshot_as_of=snapshot_as_of, now=now, _decimal=_decimal,
+    )
     ledger = body["ledger"]
-    conflict_lists = ("unsupported_event_ids", "quarantined_order_ids", "quarantined_event_ids")
-    # Even a zero-fill terminal needs explicit known-empty coverage. Missing
-    # collections, integer zero and empty objects are unknown, not empty lists.
-    if (not isinstance(ledger, dict)
-            or any(not isinstance(ledger.get(key), list) for key in (*conflict_lists, "events"))
-            or any(not isinstance(item, str) or not item.strip()
-                   for key in conflict_lists for item in ledger[key])
-            or ledger["schema_version"] != ExecutionEventLedger.schema_version
-            or ledger["unsupported_event_ids"]):
-        raise _EvidenceRequired("resolution_ledger_unsupported")
-    intents, orders = ledger["intents"], ledger["orders"]
-    if (not isinstance(intents, dict) or not isinstance(orders, dict)
-            or any(not isinstance(row, dict) for row in (*intents.values(), *orders.values()))):
-        raise _EvidenceRequired("resolution_identity_component_unknown")
-    # Check both directions inside this supplied original-related component.
-    # An active alias or duplicate fact under another key cannot disappear by
-    # selecting the one terminal row. Unrelated correctly bound rows may remain.
-    intent_keys = {key for key, row in intents.items() if key == command.command_id
-                   or row.get("intent_id") == command.command_id or row.get("order_id") == broker_id}
-    order_keys = {key for key, row in orders.items() if key == broker_id
-                  or row.get("intent_id") == command.command_id}
-    if intent_keys != {command.command_id} or order_keys != {broker_id}:
-        raise _EvidenceRequired("resolution_identity_component_conflict")
-    intent = ledger["intents"][command.command_id]
-    state = ledger["orders"][broker_id]
-    if (intent["intent_id"] != command.command_id or intent["order_id"] != broker_id
-            or intent["owner_id"] != scope.profile_id or intent["symbol"] != order["symbol"]
-            or intent["side"] != order["side"].upper() or _decimal(intent["quantity"], "ledger_request") != requested
-            or state["intent_id"] != command.command_id or state["owner_id"] != scope.profile_id
-            or state["symbol"] != order["symbol"] or state["side"] != order["side"].upper()
-            or _decimal(state["requested_quantity"], "state_request") != requested
-            or state["status"] not in _TERMINAL_STATUSES or state["terminal"] is not True
-            or state["reconciliation_status"] != "complete" or state["reservation_status"] != "released"
-            or broker_id in ledger["quarantined_order_ids"]):
-        raise _EvidenceRequired("resolution_terminal_binding_incomplete")
-    cumulative = _decimal(state["cumulative_filled_quantity"], "terminal_cumulative", nonnegative=True)
-    if cumulative > requested or (state["status"] == "FILLED" and cumulative != requested):
-        raise _EvidenceRequired("resolution_terminal_quantity_mismatch")
-    total = _decimal("0", "zero")
-    total_fees = _decimal("0", "zero")
-    owner_fees = {}
-    ids = set()
-    fills = []
-    event_keys = {"event_id", "event_type", "order_id", "owner_id", "symbol", "side",
-                  "quantity", "price", "fee", "fee_source", "event_time", "event_digest"}
-    for event in ledger["events"]:
-        event_id = event["event_id"]
-        if not isinstance(event_id, str) or not event_id.strip() or event_id in ids:
-            raise _EvidenceRequired("resolution_duplicate_execution")
-        ids.add(event_id)
-        # Reconcile normalized per-fill fees with the existing ledger's fee
-        # summaries. This validates the source; it never credits buying power.
-        event_fee = _decimal(event["fee"], "ledger_event_fee", nonnegative=True)
-        if event_fee != _decimal(_money(event_fee), "normalized_fee"):
-            raise _EvidenceRequired("resolution_fee_precision_mismatch")
-        total_fees += event_fee
-        owner_fees[event["owner_id"]] = owner_fees.get(event["owner_id"], _decimal("0", "zero")) + event_fee
-        if event["order_id"] != broker_id:
-            continue
-        fee_source = event["fee_source"].lower().replace("-", "_").replace(" ", "_")
-        if (set(event) != event_keys or event["event_type"] != "FILL"
-                or event["owner_id"] != scope.profile_id or event["symbol"] != order["symbol"]
-                or event["side"] != order["side"].upper()
-                or event_id in ledger["quarantined_event_ids"]
-                or any(token in fee_source for token in ("cumulative", "aggregate", "order_commission", "order_level"))
-                or not any(token in fee_source for token in ("per_fill", "per_execution", "fill_level", "execution_level"))):
-            raise _EvidenceRequired("resolution_fill_binding_or_fee_source_invalid")
-        when = _resolution_time(event["event_time"])
-        if not _resolution_time(command.created_at) <= when <= terminal_at:
-            raise _EvidenceRequired("resolution_late_execution")
-        quantity = _decimal(event["quantity"], "fill_quantity", positive=True)
-        _decimal(event["price"], "fill_price", positive=True)
-        fee = _decimal(event["fee"], "fill_fee", nonnegative=True)
-        material = {key: value for key, value in event.items() if key != "event_digest"}
-        if fee != _decimal(_money(fee), "normalized_fee") or event["event_digest"] != _json_digest(material):
-            raise _EvidenceRequired("resolution_fee_or_execution_digest_mismatch")
-        total += quantity
-        fills.append(event)
-    if (_decimal(ledger["account"]["fees"], "account_fees", nonnegative=True) != total_fees
-            or not set(owner_fees).issubset(ledger["owners"])
-            or any(_decimal(owner["fees"], "owner_fees", nonnegative=True) != owner_fees.get(owner_id, _decimal("0", "zero"))
-                   for owner_id, owner in ledger["owners"].items())):
-        raise _EvidenceRequired("resolution_fee_totals_inconsistent")
-    if total != cumulative or _decimal(state["recorded_filled_quantity"], "recorded_quantity") != cumulative:
-        raise _EvidenceRequired("resolution_execution_coverage_incomplete")
-    economics = _digest(_canonical_json({"original_ref": ref, "identity_binding": binding,
+    state, cumulative = _validate_resolution_ledger_binding(
+        ledger, command, order,
+        broker_id=broker_id, scope=scope, requested=requested,
+        schema_version=ExecutionEventLedger.schema_version,
+        terminal_statuses=_TERMINAL_STATUSES, _decimal=_decimal,
+    )
+    fills = _collect_resolution_fills(
+        ledger, state, order,
+        broker_id=broker_id, scope=scope, created_at=created_at, terminal_at=terminal_at,
+        cumulative=cumulative, _decimal=_decimal, _money=_money, _json_digest=_json_digest,
+    )
+    notional = body["broker_requested_notional"]
+    economics = _canonical_digest({
+        "original_ref": ref,
+        "identity_binding": binding,
         "original_request_sha256": body["original_request_sha256"],
-        "requested_quantity": _decimal_text(requested), "requested_notional": (None if body["broker_requested_notional"] is None else _decimal_text(_decimal(body["broker_requested_notional"], "notional"))),
-        "terminal_status": state["status"], "terminal_quantity": _decimal_text(cumulative),
-        "fills": sorted(fills, key=lambda item: (item["event_time"], item["event_id"]))}))
+        "requested_quantity": _decimal_text(requested),
+        "requested_notional": None if notional is None else _decimal_text(_decimal(notional, "notional")),
+        "terminal_status": state["status"],
+        "terminal_quantity": _decimal_text(cumulative),
+        "fills": sorted(fills, key=lambda item: (item["event_time"], item["event_id"])),
+    })
     if prior_binding is not None and (prior_binding["economics_sha256"] != economics
             or observed < _resolution_time(prior_binding["observed_at"])
             or (observed == _resolution_time(prior_binding["observed_at"]) and prior_binding["proof_sha256"] != proof_sha256)):
@@ -628,7 +721,7 @@ class _IntentSession:
         enrollment = dict(c.enrollment)
         if (enrollment.get("schema_version") != "schwab_intent_enrollment.v1"
                 or enrollment.get("scope") != asdict(scope)
-                or not re.fullmatch("[a-f0-9]{64}", str(enrollment.get("authority_sha256") or ""))
+                or not _is_sha256_hex(enrollment.get("authority_sha256"))
                 or enrollment.get("managed_writers") != "native_create_only.v1"
                 or enrollment.get("complete_event_reads") is not True):
             raise _EvidenceRequired("positive_new_cohort_enrollment_required")
@@ -658,13 +751,11 @@ class _IntentSession:
                 or not isinstance(c.locator, _RecoveryLocatorStore) or c.locator._scope != scope
                 or c.locator._client is not driver.client):
             raise _EvidenceRequired("explicit_scoped_native_store_required")
-        snapshot_source = asdict(snapshot)
-        snapshot_source["as_of"] = snapshot.as_of.isoformat()
-        self.snapshot_sha256 = _digest(_canonical_json(snapshot_source))
+        self.snapshot_sha256 = _snapshot_digest(snapshot)
         self.snapshot_as_of = snapshot.as_of
         self.resolution_sources = dict(c.resolution_sources) if isinstance(c.resolution_sources, Mapping) else None
         self.resolution_receipts = dict(c.resolution_receipts) if isinstance(c.resolution_receipts, Mapping) else None
-        self.enrollment_sha256 = _digest(_canonical_json(enrollment))
+        self.enrollment_sha256 = _canonical_digest(enrollment)
         self.version = c.locator.read_registered()
         payload = self._payload(self.version)
         for ref in payload["references"]:
@@ -679,9 +770,7 @@ class _IntentSession:
         try:
             if snapshot.metadata.get("account_hash") != self.context.scope.account_hash:
                 raise _EvidenceRequired("refreshed_snapshot_scope_mismatch")
-            source = asdict(snapshot)
-            source["as_of"] = snapshot.as_of.isoformat()
-            digest = _digest(_canonical_json(source))
+            digest = _snapshot_digest(snapshot)
             prior = self.plan_sources.get(id(plan))
             if prior is not None and prior[1] != digest:
                 raise _EvidenceRequired("reused_plan_has_ambiguous_source")
@@ -718,8 +807,8 @@ class _IntentSession:
         for command_id, anchor in anchors.items():
             if (set(anchor) != {"descriptor_sha256", "economics_sha256", "source_uri", "proof_sha256", "observed_at"}
                     or anchor["descriptor_sha256"] != refs[command_id]["descriptor_sha256"]
-                    or any(not re.fullmatch("[a-f0-9]{64}", str(anchor[key])) for key in ("economics_sha256", "proof_sha256"))
-                    or not isinstance(anchor["source_uri"], str) or not anchor["source_uri"].strip()):
+                    or any(not _is_sha256_hex(anchor[key]) for key in ("economics_sha256", "proof_sha256"))
+                    or not _is_nonempty_str(anchor["source_uri"])):
                 raise _EvidenceRequired("resolution_binding_invalid")
             _resolution_time(anchor["observed_at"])
         return value
@@ -731,7 +820,7 @@ class _IntentSession:
         if self.resolution_sources is None and self.resolution_receipts is None:
             return resolved
         try:
-            if (not isinstance(self.resolution_sources, dict) or not isinstance(self.resolution_receipts, dict)
+            if (not _all_dicts(self.resolution_sources, self.resolution_receipts)
                     or set(self.resolution_sources) != set(self.resolution_receipts)
                     or len(self.resolution_sources) > len(self.originals)):
                 raise _EvidenceRequired("resolution_qualified_source_missing")
@@ -798,9 +887,9 @@ class _IntentSession:
         if (command.platform != "schwab" or command.strategy_profile != scope.profile_id.lower()
                 or command.account_scope != scope.account_hash.lower() or command.execution_mode != "live"
                 or intent.get("routing_account_hash") != scope.account_hash or intent.get("cohort_id") != scope.cohort_id
-                or not isinstance(intent.get("order"), dict) or not re.fullmatch("[a-f0-9]{64}", command.decision_digest)):
+                or not isinstance(intent.get("order"), dict) or not _is_sha256_hex(command.decision_digest)):
             raise _EvidenceRequired("descriptor_scope_mismatch")
-        if _digest(_canonical_json(intent.get("source_plan"))) != command.decision_digest:
+        if _canonical_digest(intent.get("source_plan")) != command.decision_digest:
             raise _EvidenceRequired("source_plan_digest_mismatch")
         order = OrderIntent(**intent["order"])
         if not order.symbol or order.side not in {"buy", "sell"}:
@@ -812,7 +901,7 @@ class _IntentSession:
             raise _EvidenceRequired("exact_original_reference_required")
         command = self._read_command(ref["descriptor_uri"])
         if (command.command_id != ref["command_id"] or command.effective_date != ref["effective_date"]
-                or _digest(_canonical_json(command.to_dict())) != ref["descriptor_sha256"]):
+                or _canonical_digest(command.to_dict()) != ref["descriptor_sha256"]):
             raise _EvidenceRequired("original_reference_content_mismatch")
         # Original release identity is in the immutable full descriptor, not the
         # current plan's release. A later runtime cannot rename that obligation.
@@ -824,16 +913,16 @@ class _IntentSession:
         facts = self.context.resource_facts
         if not isinstance(facts, Mapping):
             return False
-        obligations = [{"command_id": cmd.command_id, "descriptor_sha256": _digest(_canonical_json(cmd.to_dict())),
+        obligations = [{"command_id": cmd.command_id, "descriptor_sha256": _canonical_digest(cmd.to_dict()),
                         "order": cmd.intent["order"], "routing_account_hash": cmd.intent["routing_account_hash"]}
                        for cmd, _ in (self.originals if originals is None else originals) if cmd.command_id != candidate.command_id]
         if (facts.get("scope") != asdict(self.context.scope) or facts.get("session") != self.session
                 or facts.get("complete_original_obligations") != obligations
                 or facts.get("resource_reconciliation") != "verified_complete"
                 or facts.get("snapshot_sha256") != self.snapshot_sha256
-                or facts.get("proposal_order_sha256") != _digest(_canonical_json(asdict(order)))
+                or facts.get("proposal_order_sha256") != _canonical_digest(asdict(order))
                 or facts.get("strategy_release") != self.context.runtime_target.strategy_release.to_dict()
-                or not re.fullmatch("[a-f0-9]{64}", str(facts.get("source_sha256") or ""))):
+                or not _is_sha256_hex(facts.get("source_sha256"))):
             return False
         # No reserve release or new quantity formula. Explicitly qualified
         # disjoint reduction only; another pending sell in this symbol refuses.
@@ -872,7 +961,7 @@ class _IntentSession:
             candidate = ExecutionCommand.from_decision(platform="schwab", account_scope=c.scope.account_hash,
                 strategy_profile=c.scope.profile_id, execution_mode="live", signal_date=execution["signal_date"],
                 effective_date=execution["effective_date"], execution_timing_contract=execution["execution_timing_contract"],
-                decision_digest=_digest(_canonical_json(source)), intent=intent, created_at=self.now.isoformat())
+                decision_digest=_canonical_digest(source), intent=intent, created_at=self.now.isoformat())
             resolved = self._resolved_originals()
             unresolved = [(cmd, history) for cmd, history in self.originals if cmd.command_id not in resolved]
             # Explicit resolution-input selection fails before creating a new
@@ -896,7 +985,7 @@ class _IntentSession:
             candidate = stored
             ref = {"command_id": candidate.command_id, "effective_date": candidate.effective_date,
                    "descriptor_uri": str(c.command_store._command_location(candidate)),
-                   "descriptor_sha256": _digest(_canonical_json(candidate.to_dict()))}
+                   "descriptor_sha256": _canonical_digest(candidate.to_dict())}
             payload = self._payload(self.version)
             resolved = self._resolved_originals()
             if resolved:
