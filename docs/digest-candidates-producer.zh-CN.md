@@ -1,3 +1,5 @@
+[English](digest-candidates-producer.md) | 简体中文
+
 # Schwab DIGEST_CANDIDATES 生产者（P0-05）
 
 审计日：2026-10-09  

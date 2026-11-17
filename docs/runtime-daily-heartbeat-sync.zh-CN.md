@@ -1,3 +1,5 @@
+[English](runtime-daily-heartbeat-sync.md) | 简体中文
+
 # Schwab 日报心跳接线（默认关闭）
 
 2026-10-08。`execution-report-heartbeat.yml` 的 `heartbeat` job 新增一个默认关闭的

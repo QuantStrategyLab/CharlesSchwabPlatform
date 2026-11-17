@@ -1,3 +1,5 @@
+[English](execution-event-accounting.md) | 简体中文
+
 # Schwab 执行事件入账（离线实现）
 
 本文记录 Milestone C 的 E 工作线。`application.execution_event_accounting.ExecutionEventLedger` 是一个本地离线账本；它接收已标准化的增量成交事件，不连接券商，不解析原生订单报告，也未接入生产下单路由。

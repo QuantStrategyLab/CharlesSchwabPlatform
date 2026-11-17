@@ -1,3 +1,5 @@
+[English](schwab-reconciliation-recovery.md) | 简体中文
+
 # Schwab 冻结实盘基线的只读对账
 
 ## 现役恢复顺序

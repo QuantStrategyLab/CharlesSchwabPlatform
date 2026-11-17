@@ -1,3 +1,5 @@
+[English](append-only-execution-outcome.md) | 简体中文
+
 # Schwab 不可变执行 outcome
 
 Schwab 在执行前保留原子 claim marker 作为唯一的重复下单拦截依据。执行周期返回后，平台调用 QPK 的 `record_outcome`，在独立的 `execution_outcomes/` 路径以仅创建方式记录终态；它不会覆盖 claim marker。

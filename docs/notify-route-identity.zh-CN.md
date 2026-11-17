@@ -1,3 +1,5 @@
+[English](notify-route-identity.md) | 简体中文
+
 # Serving Telegram 只读身份诊断
 
 入口为 `notify-route-check.yml` → `notify-route-check-protected.yml` → `scripts/notify_route_check.py`。仅接受 main 分支的手动 workflow_dispatch；不改生产设置、secret、IAM、Cloud Run、通知路由、交易或预算。
