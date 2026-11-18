@@ -1,7 +1,7 @@
 import unittest
 
-from notifications.renderers import render_trade_notification
-from notifications.telegram import build_translator
+from charles_schwab_platform.notifications.renderers import render_trade_notification
+from charles_schwab_platform.notifications.telegram import build_translator
 
 
 class InlineRiskNotificationTests(unittest.TestCase):

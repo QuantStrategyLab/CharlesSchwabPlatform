@@ -18,8 +18,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def heartbeat_function(namespace):
     import sys
-    names = ('notifications', 'notifications.receipt_alerts', 'notifications.unified',
-             'notifications.approved_gates', 'quant_platform_kit', 'quant_platform_kit.common',
+    names = ('charles_schwab_platform', 'charles_schwab_platform.notifications',
+             'charles_schwab_platform.notifications.receipt_alerts',
+             'charles_schwab_platform.notifications.unified',
+             'charles_schwab_platform.notifications.approved_gates',
+             'quant_platform_kit', 'quant_platform_kit.common',
              'quant_platform_kit.common.execution_receipts',
              'quant_platform_kit.common.operational_notification_localization',
              'quant_platform_kit.common.runtime_heartbeat_policy')
@@ -66,7 +69,11 @@ class CoverageWarningTests(unittest.TestCase):
         import sys
         def fail(*args, **kwargs):
             raise RuntimeError('private exception')
-        unified = types.ModuleType('notifications.unified')
+        pkg = types.ModuleType('charles_schwab_platform')
+        pkg.__path__ = []
+        notif = types.ModuleType('charles_schwab_platform.notifications')
+        notif.__path__ = []
+        unified = types.ModuleType('charles_schwab_platform.notifications.unified')
         unified.emit_completed_candidates = fail
         unified.CandidateConflictError = type("CandidateConflictError", (ValueError,), {})
         unified.CandidateStorageError = type("CandidateStorageError", (RuntimeError,), {})
@@ -75,8 +82,9 @@ class CoverageWarningTests(unittest.TestCase):
         heartbeat._send_telegram = send or self.send
         spec = importlib.util.spec_from_file_location('test_emitter', ROOT / 'scripts/emit_unified_digest_candidates.py')
         module = importlib.util.module_from_spec(spec)
-        with patch.dict(sys.modules, {'notifications': types.ModuleType('notifications'),
-                                     'notifications.unified': unified,
+        with patch.dict(sys.modules, {'charles_schwab_platform': pkg,
+                                     'charles_schwab_platform.notifications': notif,
+                                     'charles_schwab_platform.notifications.unified': unified,
                                      'scripts.execution_report_heartbeat': heartbeat}):
             spec.loader.exec_module(module)
             with contextlib.redirect_stdout(io.StringIO()):

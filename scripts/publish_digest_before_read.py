@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from google.api_core.exceptions import NotFound
 
-from notifications.digest_snapshot.digest_archive import ArchiveReader
+from charles_schwab_platform.notifications.digest_snapshot.digest_archive import ArchiveReader
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 PLATFORM = "schwab"
@@ -46,7 +46,7 @@ def publication_day(now):
 
 
 def _emit(env, *, now, read):
-    from notifications.unified import emit_completed_candidates
+    from charles_schwab_platform.notifications.unified import emit_completed_candidates
     return emit_completed_candidates(env, now=now, read=read)
 
 

@@ -1,6 +1,6 @@
 import pytest
 
-from application.runtime_strategy_adapters import required_trend_ma_window
+from charles_schwab_platform.application.runtime_strategy_adapters import required_trend_ma_window
 
 
 def test_reads_manifest_value():

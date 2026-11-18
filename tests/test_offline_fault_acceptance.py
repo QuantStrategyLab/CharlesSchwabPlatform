@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from application.offline_fault_acceptance import (
+from charles_schwab_platform.application.offline_fault_acceptance import (
     RESPONSE_LOSS_MARKER_KEY,
     run_offline_fault_acceptance,
 )
@@ -25,7 +25,7 @@ _CLASSIFICATIONS = {"supported", "verified-safe-reject", "unsupported"}
 
 @pytest.fixture
 def acceptance(tmp_path, monkeypatch):
-    monkeypatch.setattr("application.runtime_broker_adapters.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("charles_schwab_platform.application.runtime_broker_adapters.time.sleep", lambda _seconds: None)
     return run_offline_fault_acceptance(tmp_path)
 
 
@@ -50,7 +50,7 @@ def test_each_scenario_names_a_real_call_path(acceptance):
     for scenario in acceptance["scenarios"]:
         assert scenario["classification"] in _CLASSIFICATIONS
         assert scenario["call_path"]
-        assert all(path.startswith("application.") or path.startswith("quant_platform_kit.") for path in scenario["call_path"])
+        assert all(path.startswith("charles_schwab_platform.application.") or path.startswith("quant_platform_kit.") for path in scenario["call_path"])
         assert scenario["limitations"]
 
 
@@ -58,8 +58,8 @@ def test_response_loss_is_safe_reject_without_fabricated_order_identity(acceptan
     scenario = _scenario(acceptance, "accepted_submit_response_loss")
     assertions = scenario["assertions"]
     assert scenario["classification"] == "verified-safe-reject"
-    assert "application.execution_claim.claim_execution_marker" in scenario["call_path"]
-    assert "application.execution_service.execute_rebalance_cycle" in scenario["call_path"]
+    assert "charles_schwab_platform.application.execution_claim.claim_execution_marker" in scenario["call_path"]
+    assert "charles_schwab_platform.application.execution_service.execute_rebalance_cycle" in scenario["call_path"]
     assert assertions["first_submit_count"] == 1
     assert assertions["second_submit_count"] == 0
     assert assertions["broker_order_id"] is None
@@ -80,7 +80,7 @@ def test_response_loss_is_safe_reject_without_fabricated_order_identity(acceptan
 
 
 def test_response_loss_follows_claim_seam_instead_of_hardcoded_dedup(tmp_path, monkeypatch):
-    from application import offline_fault_acceptance as mod
+    from charles_schwab_platform.application import offline_fault_acceptance as mod
 
     real_claim = mod.claim_execution_marker
     seen = []
@@ -93,7 +93,7 @@ def test_response_loss_follows_claim_seam_instead_of_hardcoded_dedup(tmp_path, m
         return real_claim(store, marker_key, **kwargs)
 
     monkeypatch.setattr(mod, "claim_execution_marker", claim)
-    monkeypatch.setattr("application.runtime_broker_adapters.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("charles_schwab_platform.application.runtime_broker_adapters.time.sleep", lambda _seconds: None)
     result = mod.run_offline_fault_acceptance(tmp_path)
     scenario = _scenario(result, "accepted_submit_response_loss")
     assert len(seen) >= 2
@@ -105,7 +105,7 @@ def test_partial_fill_cancel_and_duplicate_reports_are_unsupported(acceptance):
     scenario = _scenario(acceptance, "partial_fill_cancel_late_duplicate_reports")
     assertions = scenario["assertions"]
     assert scenario["classification"] == "unsupported"
-    assert "application.broker_reconciliation.collect_read_only_reconciliation_observations" in scenario["call_path"]
+    assert "charles_schwab_platform.application.broker_reconciliation.collect_read_only_reconciliation_observations" in scenario["call_path"]
     assert assertions["recent_executions_complete"] is False
     assert assertions["recent_executions_count"] == 0
     assert "order_fill_quantity_is_not_a_timestamped_execution_stream" in assertions["reason_codes"]
@@ -122,9 +122,9 @@ def test_restart_reconciles_before_continue_and_does_not_expire_claim(acceptance
     assertions = scenario["assertions"]
     assert scenario["classification"] == "verified-safe-reject"
     assert scenario["call_path"].index(
-        "application.execution_claim.claim_execution_marker"
+        "charles_schwab_platform.application.execution_claim.claim_execution_marker"
     ) < scenario["call_path"].index(
-        "application.broker_reconciliation.collect_read_only_reconciliation_observations"
+        "charles_schwab_platform.application.broker_reconciliation.collect_read_only_reconciliation_observations"
     )
     assert assertions["restarted_claim_acquired"] is False
     assert assertions["claim_has_ttl"] is False
@@ -138,16 +138,16 @@ def test_restart_reconciles_before_continue_and_does_not_expire_claim(acceptance
 def test_query_retry_stays_on_account_seam_and_unknown_freezes_new_risk(tmp_path, monkeypatch):
     sleeps = []
     monkeypatch.setattr(
-        "application.runtime_broker_adapters.time.sleep",
+        "charles_schwab_platform.application.runtime_broker_adapters.time.sleep",
         lambda seconds: sleeps.append(seconds),
     )
     result = run_offline_fault_acceptance(tmp_path)
     scenario = _scenario(result, "query_429_disconnect_unknown")
     assertions = scenario["assertions"]
     assert scenario["classification"] == "verified-safe-reject"
-    assert "application.runtime_broker_adapters.SchwabRuntimeBrokerAdapters.fetch_managed_snapshot" in scenario["call_path"]
-    assert "application.runtime_broker_adapters.SchwabRuntimeBrokerAdapters.build_order_status_fetcher" in scenario["call_path"]
-    assert "application.execution_service.execute_rebalance_cycle" in scenario["call_path"]
+    assert "charles_schwab_platform.application.runtime_broker_adapters.SchwabRuntimeBrokerAdapters.fetch_managed_snapshot" in scenario["call_path"]
+    assert "charles_schwab_platform.application.runtime_broker_adapters.SchwabRuntimeBrokerAdapters.build_order_status_fetcher" in scenario["call_path"]
+    assert "charles_schwab_platform.application.execution_service.execute_rebalance_cycle" in scenario["call_path"]
     assert sleeps == [1.0, 2.0]
     assert assertions["account_query_attempts"] == 3
     assert assertions["disconnect_query_attempts"] == 1
@@ -164,7 +164,7 @@ def test_boxx_multi_owner_attribution_is_unsupported_and_cash_is_not_duplicated(
     scenario = _scenario(acceptance, "same_boxx_multi_owner")
     assertions = scenario["assertions"]
     assert scenario["classification"] == "unsupported"
-    assert "application.broker_reconciliation.collect_read_only_reconciliation_observations" in scenario["call_path"]
+    assert "charles_schwab_platform.application.broker_reconciliation.collect_read_only_reconciliation_observations" in scenario["call_path"]
     assert assertions["broker_net_quantity"] == 25.0
     assert assertions["owner_attribution_supported"] is False
     assert "owner" not in assertions["position_fact_keys"]
@@ -178,7 +178,7 @@ def test_risk_pause_calls_execution_path_and_submits_no_new_risk(acceptance):
     phases = scenario["phases"]
     assertions = scenario["assertions"]
     assert scenario["classification"] == "supported"
-    assert "application.execution_service.execute_rebalance_cycle" in scenario["call_path"]
+    assert "charles_schwab_platform.application.execution_service.execute_rebalance_cycle" in scenario["call_path"]
     assert phases["request"]["seq"] < phases["receive"]["seq"] < phases["effective_prevention"]["seq"]
     assert phases["receive"]["seen_in_execution_trade_log"] is True
     assert phases["effective_prevention"]["new_risk_submit_count"] == 0
@@ -191,7 +191,7 @@ def test_risk_pause_calls_execution_path_and_submits_no_new_risk(acceptance):
 
 
 def test_real_seams_are_entered(tmp_path, monkeypatch):
-    from application import offline_fault_acceptance as mod
+    from charles_schwab_platform.application import offline_fault_acceptance as mod
 
     called = set()
 
@@ -210,6 +210,6 @@ def test_real_seams_are_entered(tmp_path, monkeypatch):
         wrap("reconcile", mod.collect_read_only_reconciliation_observations),
     )
     monkeypatch.setattr(mod, "build_runtime_broker_adapters", wrap("adapters", mod.build_runtime_broker_adapters))
-    monkeypatch.setattr("application.runtime_broker_adapters.time.sleep", lambda _seconds: None)
+    monkeypatch.setattr("charles_schwab_platform.application.runtime_broker_adapters.time.sleep", lambda _seconds: None)
     mod.run_offline_fault_acceptance(tmp_path)
     assert called == {"claim", "execute", "reconcile", "adapters"}

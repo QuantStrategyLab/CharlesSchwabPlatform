@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from notifications import unified
+from charles_schwab_platform.notifications import unified
 
 
 def archive():
@@ -243,7 +243,7 @@ def test_account_snapshots_supports_empty_account_positions():
 def test_digest_archive_7day_carryover_on_scheduled_idle(monkeypatch):
     from datetime import timedelta
     from test_unified_notification_storage import fake_gcs
-    from notifications.digest_snapshot.digest_archive import emit
+    from charles_schwab_platform.notifications.digest_snapshot.digest_archive import emit
 
     objects, _, _, _ = fake_gcs.__wrapped__(monkeypatch)
     env, live, _, _ = archive()
@@ -284,7 +284,7 @@ def test_digest_archive_7day_carryover_on_scheduled_idle(monkeypatch):
 
 def test_digest_archive_carryover_excludes_probe_observed_after_cutoff(monkeypatch):
     import quant_platform_kit.common.runtime_heartbeat_policy as policy
-    from notifications.digest_snapshot.digest_archive import emit
+    from charles_schwab_platform.notifications.digest_snapshot.digest_archive import emit
 
     env, live, _, probe = archive()
     target = json.loads(env["RUNTIME_TARGET_JSON"])
@@ -352,7 +352,7 @@ def test_persist_projected_candidate_upgrades_legacy_snapshot_with_empty_holding
 def test_digest_archive_carryover_prefers_latest_observation_time(monkeypatch):
     from datetime import timedelta
     from test_unified_notification_storage import fake_gcs
-    from notifications.digest_snapshot.digest_archive import emit
+    from charles_schwab_platform.notifications.digest_snapshot.digest_archive import emit
 
     fake_gcs.__wrapped__(monkeypatch)
     env, older_report, _, newer_report = archive()

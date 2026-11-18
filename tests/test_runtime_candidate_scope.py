@@ -4,7 +4,7 @@ import json
 from datetime import datetime
 from types import SimpleNamespace
 import pytest
-from notifications import unified
+from charles_schwab_platform.notifications import unified
 
 
 class Blob:

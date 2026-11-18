@@ -1,0 +1,5 @@
+{
+  "action_files": [
+    ".github/workflows/ci.yml"
+  ]
+}

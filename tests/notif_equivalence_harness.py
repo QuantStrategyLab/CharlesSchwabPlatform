@@ -6,11 +6,11 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from application import rebalance_service
+from charles_schwab_platform.application import rebalance_service
 
-from application.rebalance_service import run_strategy_core
-from application.runtime_dependencies import SchwabRebalanceConfig, SchwabRebalanceRuntime
-from notifications.telegram import build_translator
+from charles_schwab_platform.application.rebalance_service import run_strategy_core
+from charles_schwab_platform.application.runtime_dependencies import SchwabRebalanceConfig, SchwabRebalanceRuntime
+from charles_schwab_platform.notifications.telegram import build_translator
 from quant_platform_kit.common.models import ExecutionReport, PortfolioSnapshot, Position, QuoteSnapshot
 from quant_platform_kit.common.port_adapters import CallableExecutionPort, CallableMarketDataPort, CallableNotificationPort, CallablePortfolioPort
 

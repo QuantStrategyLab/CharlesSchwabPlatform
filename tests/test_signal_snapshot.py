@@ -1,4 +1,4 @@
-from application.signal_snapshot import build_signal_snapshot
+from charles_schwab_platform.application.signal_snapshot import build_signal_snapshot
 
 
 def test_includes_soxl_dynamic_volatility_fields():

@@ -1,0 +1,1304 @@
+"""Order execution helpers for CharlesSchwabPlatform."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass
+from math import isfinite
+
+from charles_schwab_platform.application.account_new_risk_gate_support import (
+    apply_combined_scale_to_allocation_targets,
+    build_account_new_risk_snapshot,
+    build_snapshot_from_portfolio,
+    evaluate_cycle_new_risk_admission,
+    evaluate_portfolio_new_risk_admission,
+    is_account_new_risk_gate_enabled,
+    maybe_publish_attention_for_admission,
+    new_risk_buy_prohibited,
+    set_cycle_snapshot,
+)
+from charles_schwab_platform.application.execution_intent_continuity import _IntentSession
+from charles_schwab_platform.application.daily_loss_fact_producer import attach_daily_loss_fact_to_portfolio
+from charles_schwab_platform.application.execution_kernel_adapter import should_block_halted_resubmit
+from quant_platform_kit.common.order_status import compute_confirmed_sell_release_value
+
+from quant_platform_kit.common.cash_sweep import should_sell_cash_sweep_to_fund_whole_share_buy
+from quant_platform_kit.common.small_account_compatibility import (
+    DEFAULT_EXISTING_WHOLE_SHARE_RETENTION_SYMBOLS,
+    DEFAULT_WHOLE_SHARE_BOOTSTRAP_MIN_TARGET_SHARE_RATIO_BY_SYMBOL,
+    DEFAULT_WHOLE_SHARE_RETENTION_MIN_TARGET_SHARE_RATIO_BY_SYMBOL,
+    SMALL_ACCOUNT_SAFE_HAVEN_CASH_SUBSTITUTE_LIMIT_USD as QPK_SMALL_ACCOUNT_SAFE_HAVEN_CASH_SUBSTITUTE_LIMIT_USD,
+    apply_small_account_cash_compatibility,
+    build_small_account_allocation_drift_notes,
+    format_small_account_allocation_drift_notes,
+    format_small_account_cash_substitution_notes,
+)
+from quant_platform_kit.common.models import OrderIntent
+from quant_platform_kit.common.quantity import format_quantity
+
+
+@dataclass(frozen=True)
+class ExecutionCycleResult:
+    plan: dict
+    portfolio: dict
+    execution: dict
+    allocation: dict
+    trade_logs: tuple[str, ...]
+    submitted_orders: tuple[dict, ...] = ()
+    account_observation: dict[str, object] | None = None
+
+
+DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD = 1000.0
+MIN_NOTIONAL_BUY_USD = 1.0
+SMALL_ACCOUNT_SAFE_HAVEN_CASH_SUBSTITUTE_LIMIT_USD = QPK_SMALL_ACCOUNT_SAFE_HAVEN_CASH_SUBSTITUTE_LIMIT_USD
+SMALL_ACCOUNT_EXISTING_WHOLE_SHARE_RETENTION_SYMBOLS = DEFAULT_EXISTING_WHOLE_SHARE_RETENTION_SYMBOLS
+_SMALL_ACCOUNT_RETENTION_MIN_TARGET_SHARE_RATIO_DEFAULT = 0.85
+# Merge platform-specific SOXX ratios on top of the QPK shared defaults (QQQM etc.).
+SMALL_ACCOUNT_EXISTING_WHOLE_SHARE_RETENTION_MIN_TARGET_SHARE_RATIO_BY_SYMBOL = {
+    **DEFAULT_WHOLE_SHARE_RETENTION_MIN_TARGET_SHARE_RATIO_BY_SYMBOL,
+    "SOXX": 0.90,
+}
+SMALL_ACCOUNT_WHOLE_SHARE_BOOTSTRAP_MIN_TARGET_SHARE_RATIO_BY_SYMBOL = {
+    **DEFAULT_WHOLE_SHARE_BOOTSTRAP_MIN_TARGET_SHARE_RATIO_BY_SYMBOL,
+    "SOXX": 0.90,
+}
+
+
+def _limit_buy_premium_for_symbol(symbol, default_premium, premium_by_symbol=None) -> float:
+    normalized_symbol = str(symbol or "").strip().upper()
+    try:
+        fallback = float(default_premium)
+    except (TypeError, ValueError):
+        fallback = 1.005
+    if not isinstance(premium_by_symbol, dict):
+        return fallback
+    raw_value = premium_by_symbol.get(normalized_symbol)
+    if raw_value is None:
+        return fallback
+    try:
+        premium = float(raw_value)
+    except (TypeError, ValueError):
+        return fallback
+    return premium if premium > 0.0 else fallback
+
+
+def _limit_buy_price(symbol, price, default_premium, premium_by_symbol=None) -> float:
+    return round(
+        float(price) * _limit_buy_premium_for_symbol(symbol, default_premium, premium_by_symbol),
+        2,
+    )
+
+
+def _noop_sleep(_seconds):
+    return None
+
+
+def _safe_haven_cash_symbols(*, portfolio: dict, allocation: dict) -> tuple[str, ...]:
+    symbols: list[str] = []
+    for symbol in allocation.get("safe_haven_symbols", ()):
+        normalized = str(symbol or "").strip().upper()
+        if normalized:
+            symbols.append(normalized)
+    cash_sweep_symbol = str(portfolio.get("cash_sweep_symbol") or "").strip().upper()
+    if cash_sweep_symbol:
+        symbols.append(cash_sweep_symbol)
+    return tuple(dict.fromkeys(symbols))
+
+
+def _small_account_drift_reference_targets(allocation: Mapping, *, portfolio: Mapping | None = None) -> dict:
+    allocation = dict(allocation or {})
+    targets = {
+        str(symbol or "").strip().upper(): float(value or 0.0)
+        for symbol, value in dict(allocation.get("targets") or {}).items()
+    }
+    candidate_symbols = tuple(
+        dict.fromkeys(
+            str(symbol or "").strip().upper()
+            for symbol in tuple(allocation.get("risk_symbols", ()))
+            + tuple(allocation.get("income_symbols", ()))
+            if str(symbol or "").strip()
+        )
+    )
+    if not candidate_symbols:
+        safe_haven_symbols = set(_safe_haven_cash_symbols(portfolio=dict(portfolio or {}), allocation=allocation))
+        candidate_symbols = tuple(symbol for symbol in targets if symbol not in safe_haven_symbols)
+    return {symbol: targets.get(symbol, 0.0) for symbol in candidate_symbols if symbol in targets}
+
+
+def _positive_target_total(targets: dict) -> float:
+    total = 0.0
+    for value in dict(targets or {}).values():
+        try:
+            total += max(0.0, float(value or 0.0))
+        except (TypeError, ValueError):
+            continue
+    return total
+
+
+def _apply_safe_haven_cash_substitution(
+    *,
+    plan,
+    portfolio,
+    allocation,
+    threshold_usd,
+) -> tuple[dict, dict]:
+    threshold = max(0.0, float(threshold_usd or 0.0))
+    target_values = {
+        str(symbol).strip().upper(): float(value or 0.0)
+        for symbol, value in dict(allocation.get("targets") or {}).items()
+    }
+    if threshold <= 0.0:
+        return dict(plan or {}), {**dict(allocation or {}), "targets": target_values}
+
+    changed = False
+    for symbol in _safe_haven_cash_symbols(portfolio=portfolio, allocation=allocation):
+        target_value = float(target_values.get(symbol, 0.0) or 0.0)
+        if 0.0 < target_value < threshold:
+            target_values[symbol] = 0.0
+            changed = True
+    adjusted_allocation = {**dict(allocation or {}), "targets": target_values}
+    adjusted_plan = dict(plan or {})
+    if changed:
+        adjusted_plan["allocation"] = adjusted_allocation
+    return adjusted_plan, adjusted_allocation
+
+
+def _should_retain_existing_whole_share(symbol, *, target_value, price, quantity=0.0) -> bool:
+    """Decide whether an existing whole-share position should be retained.
+
+    Universal rule: if the account already holds this symbol (>0 shares) and the
+    strategy wants to keep a meaningful fraction of a share (target >= 85% of
+    1-share price), retain the position.  This prevents the sell-then-fail-to-rebuy
+    cycle for small accounts where target < 1 share but still close to it.
+
+    Genuine reductions (target << 1 share) are NOT blocked.
+    The hardcoded lists act as overrides for symbols that need a different threshold.
+    """
+    normalized_symbol = str(symbol or "").strip().upper()
+    held = float(quantity or 0.0)
+    target = float(target_value or 0.0)
+    quote_price = max(0.0, float(price or 0.0))
+
+    # Universal: held + positive target + target close to 1-share price -> retain
+    if held > 0.0 and target > 0.0 and quote_price > 0.0:
+        if target >= quote_price * _SMALL_ACCOUNT_RETENTION_MIN_TARGET_SHARE_RATIO_DEFAULT:
+            return True
+
+    # Legacy whitelist -- unconditional retention (safety net)
+    if normalized_symbol in SMALL_ACCOUNT_EXISTING_WHOLE_SHARE_RETENTION_SYMBOLS:
+        return True
+
+    # Legacy per-symbol ratio-based retention (override / tighter threshold)
+    min_target_share_ratio = (
+        SMALL_ACCOUNT_EXISTING_WHOLE_SHARE_RETENTION_MIN_TARGET_SHARE_RATIO_BY_SYMBOL.get(normalized_symbol)
+    )
+    if min_target_share_ratio is None:
+        return False
+    if quote_price <= 0.0:
+        return False
+    return target >= quote_price * float(min_target_share_ratio)
+
+
+def _should_bootstrap_whole_share_buy(symbol, *, target_value, limit_price) -> bool:
+    normalized_symbol = str(symbol or "").strip().upper()
+    min_target_share_ratio = (
+        SMALL_ACCOUNT_WHOLE_SHARE_BOOTSTRAP_MIN_TARGET_SHARE_RATIO_BY_SYMBOL.get(normalized_symbol)
+    )
+    if min_target_share_ratio is None:
+        return False
+    effective_limit_price = max(0.0, float(limit_price or 0.0))
+    if effective_limit_price <= 0.0:
+        return False
+    return max(0.0, float(target_value or 0.0)) >= effective_limit_price * float(min_target_share_ratio)
+
+
+def _should_top_up_existing_whole_share_buy(
+    symbol,
+    *,
+    target_value,
+    current_value,
+    quantity=0.0,
+    limit_price,
+) -> bool:
+    del symbol
+    held_quantity = max(0.0, float(quantity or 0.0))
+    effective_limit_price = max(0.0, float(limit_price or 0.0))
+    if held_quantity < 1.0 or effective_limit_price <= 0.0:
+        return False
+    remaining_value = max(0.0, float(target_value or 0.0) - float(current_value or 0.0))
+    if remaining_value <= 0.0 or remaining_value >= effective_limit_price:
+        return False
+    held_whole_shares = int(held_quantity)
+    if held_whole_shares <= 0:
+        return False
+    target_quantity = max(0.0, float(target_value or 0.0)) / effective_limit_price
+    return target_quantity >= held_whole_shares + 0.5
+
+
+def _planned_buy_order_quantity(
+    symbol,
+    *,
+    target_value,
+    current_value,
+    quantity=0.0,
+    amount_to_spend,
+    available_buying_power,
+    limit_price,
+    allow_top_up=False,
+) -> int:
+    effective_limit_price = max(0.0, float(limit_price or 0.0))
+    if effective_limit_price <= 0.0:
+        return 0
+    planned_quantity = int(max(0.0, float(amount_to_spend or 0.0)) // effective_limit_price)
+    if planned_quantity > 0:
+        return planned_quantity
+    if not allow_top_up:
+        return 0
+    if max(0.0, float(available_buying_power or 0.0)) < effective_limit_price:
+        return 0
+    if _should_top_up_existing_whole_share_buy(
+        symbol,
+        target_value=target_value,
+        current_value=current_value,
+        quantity=quantity,
+        limit_price=effective_limit_price,
+    ):
+        return 1
+    return 0
+
+
+def _format_symbol_with_suffix(symbol, *, suffix=".US") -> str:
+    normalized = str(symbol or "").strip().upper()
+    if not normalized:
+        return normalized
+    if "." in normalized:
+        return normalized
+    normalized_suffix = str(suffix or "").strip().upper()
+    return f"{normalized}{normalized_suffix}" if normalized_suffix else normalized
+
+
+def _format_small_account_whole_share_bootstrap_notes(
+    symbols,
+    *,
+    translator,
+    symbol_suffix=".US",
+) -> tuple[str, ...]:
+    normalized_symbols = tuple(
+        dict.fromkeys(
+            _format_symbol_with_suffix(symbol, suffix=symbol_suffix)
+            for symbol in tuple(symbols or ())
+            if str(symbol or "").strip()
+        )
+    )
+    if not normalized_symbols:
+        return ()
+    try:
+        message = translator(
+            "buy_lifted_small_account_whole_share",
+            symbols=", ".join(normalized_symbols),
+        )
+    except Exception:
+        message = ""
+    if not message or message == "buy_lifted_small_account_whole_share":
+        message = (
+            f"ℹ️ [买入说明] {', '.join(normalized_symbols)} 目标金额接近 1 股；"
+            "小账户整数股兼容，本轮允许按 1 股下单"
+        )
+    return (message,)
+
+
+def _apply_small_account_whole_share_compatibility(
+    *,
+    plan,
+    allocation,
+    quotes,
+    limit_buy_premium=1.005,
+    limit_buy_premium_by_symbol=None,
+) -> tuple[dict, dict]:
+    target_values = dict(allocation.get("targets") or {})
+    candidate_symbols = tuple(
+        dict.fromkeys(
+            str(symbol or "").strip().upper()
+            for symbol in tuple(allocation.get("risk_symbols", ()))
+            + tuple(allocation.get("income_symbols", ()))
+            if str(symbol or "").strip()
+        )
+    )
+    if not candidate_symbols:
+        safe_haven_symbols = set(
+            _safe_haven_cash_symbols(portfolio=dict((plan or {}).get("portfolio") or {}), allocation=allocation)
+        )
+        candidate_symbols = tuple(
+            str(symbol or "").strip().upper()
+            for symbol in target_values
+            if str(symbol or "").strip().upper() not in safe_haven_symbols
+        )
+    quote_prices = {
+        str(symbol).strip().upper(): float(
+            quote.get("askPrice") or quote.get("lastPrice") or 0.0
+        )
+        for symbol, quote in dict(quotes or {}).items()
+    }
+    retained_symbols = []
+    bootstrap_symbols = []
+    portfolio = dict((plan or {}).get("portfolio") or {})
+    execution = dict((plan or {}).get("execution") or {})
+    _liquid_cash = float(portfolio.get("liquid_cash", 0.0) or 0.0)
+    _reserved_cash = float(execution.get("reserved_cash", 0.0) or 0.0)
+    _estimated_buying_power = max(0.0, _liquid_cash - _reserved_cash)
+    quantities = {
+        str(symbol or "").strip().upper(): float(quantity or 0.0)
+        for symbol, quantity in dict(portfolio.get("quantities") or {}).items()
+    }
+    compatibility_targets = {
+        str(symbol or "").strip().upper(): float(value or 0.0)
+        for symbol, value in target_values.items()
+    }
+    for symbol in candidate_symbols:
+        target_value = max(0.0, float(compatibility_targets.get(symbol, 0.0) or 0.0))
+        price = max(0.0, float(quote_prices.get(symbol, 0.0) or 0.0))
+        limit_price = (
+            _limit_buy_price(symbol, price, limit_buy_premium, limit_buy_premium_by_symbol)
+            if price > 0.0
+            else 0.0
+        )
+        # Skip bootstrap if the account cannot afford even 1 share at limit price.
+        _can_afford_one_share = limit_price > 0.0 and _estimated_buying_power >= limit_price
+        if not _should_retain_existing_whole_share(symbol, target_value=target_value, price=price, quantity=quantities.get(symbol, 0.0)):
+            if (
+                quantities.get(symbol, 0.0) <= 0.0
+                and 0.0 < target_value < limit_price
+                and _can_afford_one_share
+                and _should_bootstrap_whole_share_buy(symbol, target_value=target_value, limit_price=limit_price)
+            ):
+                compatibility_targets[symbol] = limit_price
+                bootstrap_symbols.append(symbol)
+            continue
+        if price > 0.0 and 0.0 < target_value < price and quantities.get(symbol, 0.0) >= 1.0:
+            compatibility_targets[symbol] = price
+            retained_symbols.append(symbol)
+            continue
+        if (
+            quantities.get(symbol, 0.0) <= 0.0
+            and 0.0 < target_value < limit_price
+            and _can_afford_one_share
+            and _should_bootstrap_whole_share_buy(symbol, target_value=target_value, limit_price=limit_price)
+        ):
+            compatibility_targets[symbol] = limit_price
+            bootstrap_symbols.append(symbol)
+    safe_haven_symbols = _safe_haven_cash_symbols(
+        portfolio=portfolio,
+        allocation=allocation,
+    )
+    compatibility = apply_small_account_cash_compatibility(
+        compatibility_targets,
+        quote_prices,
+        candidate_symbols=candidate_symbols,
+        safe_haven_cash_symbols=safe_haven_symbols,
+        quantity_step=1.0,
+        cash_substitute_limit_usd=SMALL_ACCOUNT_SAFE_HAVEN_CASH_SUBSTITUTE_LIMIT_USD,
+    )
+    adjusted_targets = compatibility.targets
+    substituted = compatibility.whole_share_substituted_symbols
+    safe_haven_substituted = compatibility.safe_haven_cash_substituted_symbols
+    adjusted_allocation = {**dict(allocation or {}), "targets": adjusted_targets}
+    adjusted_allocation.pop("small_account_whole_share_cash_notes", None)
+    if substituted:
+        adjusted_allocation["small_account_whole_share_substituted_symbols"] = substituted
+    if safe_haven_substituted:
+        adjusted_allocation["small_account_safe_haven_cash_substituted_symbols"] = tuple(safe_haven_substituted)
+    if retained_symbols:
+        adjusted_allocation["small_account_existing_whole_share_retained_symbols"] = tuple(
+            dict.fromkeys(retained_symbols)
+        )
+    if bootstrap_symbols:
+        adjusted_allocation["small_account_whole_share_bootstrap_symbols"] = tuple(
+            dict.fromkeys(bootstrap_symbols)
+        )
+    if compatibility.cash_substitution_notes:
+        adjusted_allocation["small_account_whole_share_cash_notes"] = tuple(compatibility.cash_substitution_notes)
+    adjusted_plan = dict(plan or {})
+    if substituted or safe_haven_substituted or retained_symbols or bootstrap_symbols:
+        adjusted_plan["allocation"] = adjusted_allocation
+    return adjusted_plan, adjusted_allocation
+
+
+def execute_rebalance_cycle(
+    *,
+    client,
+    plan,
+    portfolio,
+    execution,
+    allocation,
+    fetch_managed_snapshot,
+    market_data_port,
+    load_plan,
+    execution_port=None,
+    fetch_order_status=None,
+    submit_equity_order=None,
+    translator,
+    limit_buy_premium,
+    sell_settle_delay_sec,
+    limit_buy_premium_by_symbol=None,
+    dry_run_only=False,
+    post_sell_refresh_attempts=1,
+    post_sell_refresh_interval_sec=0.0,
+    sleeper=_noop_sleep,
+    publish_order_issue,
+    safe_haven_cash_substitute_threshold_usd=DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
+    cash_only_execution=True,
+    notional_buy_execution: bool = False,
+    intent_continuity: _IntentSession | None = None,
+) -> ExecutionCycleResult:
+    if intent_continuity is not None:
+        intent_continuity.select_plan_source(plan)
+
+    # Reject malformed long-only targets before risk scaling can remove them.
+    # Never reconstruct a liquidation target from an absent/rejected decision.
+    if any(
+        isinstance(value, bool) or not isinstance(value, (int, float))
+        or not isfinite(value) or value < 0
+        for value in dict(allocation.get("targets") or {}).values()
+    ):
+        result_execution = {**dict(execution or {}), "execution_status": "blocked",
+                            "broker_submission_done": False, "no_op_reason": "invalid_long_only_target"}
+        if intent_continuity is not None:
+            result_execution = intent_continuity.present(result_execution, current_submitted=())
+        set_cycle_snapshot(None)
+        return ExecutionCycleResult(
+            plan=dict(plan or {}), portfolio=dict(portfolio or {}),
+            execution=result_execution,
+            allocation=dict(allocation or {}),
+            trade_logs=("Order cycle blocked; invalid long-only target.",), submitted_orders=(),
+        )
+
+    def load_quotes(symbols):
+        quotes = {}
+        for symbol in symbols:
+            try:
+                snapshot = market_data_port.get_quote(symbol)
+            except Exception:
+                snapshot = None
+            quotes[symbol] = {
+                "lastPrice": getattr(snapshot, "last_price", None),
+                "askPrice": getattr(snapshot, "ask_price", None)
+                or getattr(snapshot, "last_price", None),
+            }
+        return quotes
+
+    def quote_has_usable_last_price(quote):
+        try:
+            return float(dict(quote or {}).get("lastPrice")) > 0.0
+        except (TypeError, ValueError):
+            return False
+
+    def buying_power_from_plan(current_portfolio, current_execution):
+        current_liquid_cash = float(current_portfolio["liquid_cash"])
+        current_reserved_cash = float(current_execution["reserved_cash"])
+        return max(0.0, current_liquid_cash - current_reserved_cash)
+
+    strategy_symbols = tuple(allocation["strategy_symbols"])
+    quotes = load_quotes(strategy_symbols)
+    trade_logs: list[str] = []
+    submitted_orders: list[dict] = []
+    notification_order_issue = False
+    small_account_cash_note_messages: set[str] = set()
+    small_account_bootstrap_note_messages: set[str] = set()
+
+    unavailable_quote_symbols = tuple(
+        symbol for symbol in strategy_symbols if not quote_has_usable_last_price(quotes.get(symbol))
+    )
+    if unavailable_quote_symbols:
+        message = translator(
+            "market_data_unavailable",
+            symbols=", ".join(unavailable_quote_symbols),
+        )
+        trade_logs.append(message)
+        publish_order_issue(message)
+        result_execution = dict(execution or {})
+        result_execution.update(
+            {
+                "execution_status": "deferred_market_data",
+                "broker_submission_done": False,
+                "orders_pending_count": 0,
+                "market_data_retry_required": True,
+                "market_data_missing_symbols": list(unavailable_quote_symbols),
+            }
+        )
+        return ExecutionCycleResult(
+            plan=dict(plan or {}),
+            portfolio=dict(portfolio or {}),
+            execution=result_execution,
+            allocation=dict(allocation or {}),
+            trade_logs=tuple(trade_logs),
+            submitted_orders=(),
+        )
+
+    account_new_risk_buy_blocked = False
+    account_new_risk_reason_codes: tuple[str, ...] = ()
+    if is_account_new_risk_gate_enabled():
+        portfolio = dict(portfolio)
+        # Verified daily-loss fact when baseline+cashflow available; omit on failure.
+        # Bind transactions to the same plan account identity used for submit
+        # (decision_mapper: plan["account_hash"] = snapshot.metadata["account_hash"]).
+        expected_account_hash = str((plan or {}).get("account_hash") or "").strip() or None
+        portfolio = attach_daily_loss_fact_to_portfolio(
+            portfolio,
+            client=client,
+            expected_account_hash=expected_account_hash,
+        )
+        portfolio["account_new_risk_snapshot"] = build_account_new_risk_snapshot(
+            portfolio,
+            execution=execution,
+        )
+        admission = evaluate_portfolio_new_risk_admission(portfolio, execution=execution)
+        account_new_risk_buy_blocked = new_risk_buy_prohibited(admission)
+        account_new_risk_reason_codes = tuple(admission.reason_codes)
+        cycle_snapshot = build_snapshot_from_portfolio(portfolio, execution=execution)
+        set_cycle_snapshot(cycle_snapshot)
+        reasons = ", ".join(account_new_risk_reason_codes) or "-"
+        gate_diagnostic_message = (
+            "[Account new-risk gate] "
+            f"disposition={admission.disposition.value} "
+            f"observation={cycle_snapshot.observation_status} "
+            f"reconciliation={cycle_snapshot.reconciliation_status} "
+            f"breaker={cycle_snapshot.circuit_breaker_state} "
+            f"reasons={reasons}"
+        )
+        # Cloud Logging / dry-run verification need stdout; trade_logs alone are not persisted.
+        print(gate_diagnostic_message, flush=True)
+        trade_logs.append(gate_diagnostic_message)
+        attention_counts = maybe_publish_attention_for_admission(
+            admission,
+            portfolio=portfolio,
+            execution=execution,
+            plan=plan,
+            snapshot=cycle_snapshot,
+        )
+        attention_message = (
+            "[Attention notify] "
+            f"sent={attention_counts.get('sent', 0)} "
+            f"skipped={attention_counts.get('skipped', 0)} "
+            f"failed={attention_counts.get('failed', 0)}"
+        )
+        print(attention_message, flush=True)
+        trade_logs.append(attention_message)
+        if not strategy_symbols and getattr(admission, "hard_brake_triggered", False):
+            trade_logs.append("Account hard brake observed; no registered reduction plan is available.")
+        allocation = apply_combined_scale_to_allocation_targets(
+            allocation,
+            admission.combined_scale,
+        )
+        if admission.combined_scale is not None:
+            scale_message = (
+                f"[Envelope scale] combined_scale={admission.combined_scale} "
+                "applied_to_allocation_targets"
+            )
+            print(scale_message, flush=True)
+            trade_logs.append(scale_message)
+    else:
+        set_cycle_snapshot(None)
+
+    def append_small_account_cash_notes(current_allocation):
+        for message in format_small_account_cash_substitution_notes(
+            dict(current_allocation or {}).get("small_account_whole_share_cash_notes") or (),
+            translator=translator,
+        ):
+            if message in small_account_cash_note_messages:
+                continue
+            small_account_cash_note_messages.add(message)
+            trade_logs.append(message)
+
+    def append_small_account_bootstrap_notes(current_allocation):
+        for message in _format_small_account_whole_share_bootstrap_notes(
+            dict(current_allocation or {}).get("small_account_whole_share_bootstrap_symbols") or (),
+            translator=translator,
+        ):
+            if message in small_account_bootstrap_note_messages:
+                continue
+            small_account_bootstrap_note_messages.add(message)
+            trade_logs.append(message)
+
+    def held_whole_shares(symbol):
+        raw = quantities.get(symbol)
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            return 0
+        try:
+            if not isfinite(raw) or raw <= 0:
+                return 0
+            return int(raw)
+        except (OverflowError, ValueError):
+            return 0
+
+    def sell_order_quantity(symbol, current_value, target_value, price):
+        held_quantity = held_whole_shares(symbol)
+        if held_quantity <= 0 or not all(isfinite(value) for value in (current_value, target_value, price)) or price <= 0:
+            return 0
+        target_value = max(0.0, target_value)
+        try:
+            value_based_quantity = int((current_value - target_value) // price)
+            position_value = held_quantity * price
+            quantity_from_position = int(max(0.0, position_value - target_value) / price + 1e-9)
+        except (OverflowError, ValueError):
+            return 0
+        return min(held_quantity, max(quantity_from_position, value_based_quantity))
+
+    def record_submitted_order(symbol, action_type, quantity, price=None, *, status, broker_order_id=None):
+        side = "sell" if action_type == "SELL" else "buy"
+        if action_type == "BUY_NOTIONAL":
+            order_type = "market"
+        else:
+            order_type = "limit" if action_type == "BUY_LIMIT" else "market"
+        payload = {
+            "symbol": str(symbol or "").strip().upper(),
+            "side": side,
+            "quantity": quantity,
+            "order_type": order_type,
+            "status": status,
+        }
+        if action_type == "BUY_NOTIONAL":
+            payload["notional_usd"] = round(float(quantity), 2)
+        if price:
+            payload["price"] = round(float(price), 4)
+            if order_type == "limit":
+                payload["limit_price"] = round(float(price), 4)
+        if broker_order_id:
+            payload["broker_order_id"] = broker_order_id
+        submitted_orders.append(payload)
+
+    submission_halted = False
+    submission_outcome_unknown = False
+    sell_resource_evidence_required = False
+
+    def execute_fire_forget(symbol, action_type, quantity, price=None):
+        nonlocal submission_halted, submission_outcome_unknown, sell_resource_evidence_required, notification_order_issue
+        if submission_halted:
+            # N13: redundant T2/T3 consult; local halt always wins (no behavior change).
+            should_block_halted_resubmit(
+                submission_outcome_unknown=submission_outcome_unknown,
+            )
+            return False
+        if is_account_new_risk_gate_enabled() and action_type != "SELL":
+            admission = evaluate_cycle_new_risk_admission()
+            if new_risk_buy_prohibited(admission):
+                record_submitted_order(symbol, action_type, quantity, price, status="rejected")
+                return False
+        if action_type == "BUY_NOTIONAL":
+            if float(quantity or 0.0) < MIN_NOTIONAL_BUY_USD:
+                return False
+        elif quantity <= 0:
+            return False
+        if action_type == "SELL" and (not isfinite(quantity) or quantity > held_whole_shares(symbol)):
+            return False
+        if action_type == "SELL" and not dry_run_only and not isinstance(intent_continuity, _IntentSession):
+            sell_resource_evidence_required = True
+            trade_logs.append("Automatic sell deferred; complete sell-resource evidence required.")
+            return False
+        submission_attempted = False
+        outcome_confirmed = False
+        report = None
+        continuity_ticket = None
+        try:
+            price_text = "{:.2f}".format(price) if price else None
+            if action_type == "SELL":
+                order_intent = OrderIntent(symbol=symbol, side="sell", quantity=quantity)
+            elif action_type == "BUY_LIMIT":
+                order_intent = OrderIntent(
+                    symbol=symbol,
+                    side="buy",
+                    quantity=quantity,
+                    order_type="limit",
+                    limit_price=float(price),
+                )
+            elif action_type == "BUY_MARKET":
+                order_intent = OrderIntent(symbol=symbol, side="buy", quantity=quantity)
+            elif action_type == "BUY_NOTIONAL":
+                order_intent = OrderIntent(
+                    symbol=symbol,
+                    side="buy",
+                    quantity=0.0,
+                    order_type="market",
+                    metadata={"notional_usd": round(float(quantity), 2)},
+                )
+            else:
+                return False
+
+            if dry_run_only:
+                if action_type == "SELL":
+                    trade_logs.append(
+                        translator(
+                            "dry_run_trade_log",
+                            command=translator("market_sell_cmd"),
+                            symbol=symbol,
+                            quantity=quantity,
+                            shares=translator("shares"),
+                        )
+                    )
+                elif action_type == "BUY_LIMIT":
+                    trade_logs.append(
+                        translator(
+                            "dry_run_trade_log_with_price",
+                            command=translator("limit_buy_cmd"),
+                            symbol=symbol,
+                            price=price_text,
+                            quantity=quantity,
+                            shares=translator("shares"),
+                        )
+                    )
+                elif action_type == "BUY_NOTIONAL":
+                    trade_logs.append(
+                        f"DRY RUN {translator('market_buy_cmd')} {symbol}: ${float(quantity):.2f}"
+                    )
+                elif action_type == "BUY_MARKET":
+                    trade_logs.append(
+                        translator(
+                            "dry_run_trade_log",
+                            command=translator("market_buy_cmd"),
+                            symbol=symbol,
+                            quantity=quantity,
+                            shares=translator("shares"),
+                        )
+                    )
+                record_submitted_order(symbol, action_type, quantity, price, status="dry_run")
+                return True
+
+            if intent_continuity is not None:
+                continuity_ticket = intent_continuity.prepare(order=order_intent, plan=plan, action_type=action_type)
+                if continuity_ticket is None:
+                    return False
+                resolved = intent_continuity._resolved_originals() if action_type == "SELL" else {}
+                unresolved = [(command, events) for command, events in intent_continuity.originals
+                              if command.command_id not in resolved]
+                if action_type == "SELL" and not intent_continuity._independent_reduction(
+                    order_intent, continuity_ticket.command, originals=unresolved,
+                ):
+                    # Reuse the existing scope/snapshot/release/obligation and
+                    # long-only admission. A claim alone does not reserve shares.
+                    # Keep this native claim; do not release or replay it.
+                    sell_resource_evidence_required = True
+                    intent_continuity.reasons.append("sell_resource_evidence_required")
+                    return False
+            if execution_port is not None:
+                submission_attempted = True
+                report = execution_port.submit_order(order_intent)
+            elif submit_equity_order is not None:
+                submission_attempted = True
+                report = submit_equity_order(client, plan["account_hash"], order_intent)
+            else:
+                raise ValueError("Schwab execution requires execution_port or submit_equity_order")
+            # The pinned adapter labels HTTP errors rejected, including responses
+            # that do not establish whether the broker accepted the request.
+            status_code = report.raw_payload.get("status_code")
+            if report.status not in {"accepted", "rejected"} or (
+                report.status == "rejected"
+                and status_code is not None
+                and (int(status_code) >= 500 or int(status_code) == 408)
+            ):
+                raise RuntimeError("submission outcome unconfirmed")
+            outcome_confirmed = True
+            success = report.status == "accepted"
+            if success:
+                # Preserve the ACK before formatting or notification can fail.
+                record_submitted_order(
+                    symbol, action_type, quantity, price,
+                    status=report.status, broker_order_id=report.broker_order_id,
+                )
+            if intent_continuity is not None and not intent_continuity.record_outcome(
+                    continuity_ticket, accepted=success, broker_order_id=report.broker_order_id):
+                submission_halted = True
+                submission_outcome_unknown = True
+                return False
+            info = report.broker_order_id if success else report.status
+            order_id_suffix = str(translator("order_id_suffix", order_id=info)).strip()
+            if not order_id_suffix or order_id_suffix == "order_id_suffix":
+                if str(translator("shares")).strip() == "股":
+                    order_id_suffix = f"（订单号: {info}）"
+                else:
+                    order_id_suffix = f"(ID: {info})"
+            if success:
+                if action_type == "SELL":
+                    trade_logs.append(
+                        f"⏳ 📉 {translator('market_sell_cmd')} {symbol}: {quantity}{translator('shares')} {translator('order_accepted_unfilled')} {order_id_suffix}"
+                    )
+                elif action_type == "BUY_LIMIT":
+                    trade_logs.append(
+                        f"⏳ 💰 {translator('limit_buy_cmd')} {symbol} (${price_text}): {quantity}{translator('shares')} {translator('order_accepted_unfilled')} {order_id_suffix}"
+                    )
+                elif action_type == "BUY_NOTIONAL":
+                    trade_logs.append(
+                        f"⏳ 📈 {translator('market_buy_cmd')} {symbol}: ${float(quantity):.2f} {translator('order_accepted_unfilled')} {order_id_suffix}"
+                    )
+                elif action_type == "BUY_MARKET":
+                    trade_logs.append(
+                        f"⏳ 📈 {translator('market_buy_cmd')} {symbol}: {quantity}{translator('shares')} {translator('order_accepted_unfilled')} {order_id_suffix}"
+                    )
+                return True
+
+            if action_type == "SELL":
+                message = f"❌ {translator('market_sell')} {symbol}: {quantity}{translator('shares')} {translator('failed')} - {info}"
+            elif action_type == "BUY_LIMIT":
+                message = f"❌ {translator('limit_buy')} {symbol}: {quantity}{translator('shares')} {translator('failed')} - {info}"
+            else:
+                message = f"❌ {translator('market_buy')} {symbol}: {quantity}{translator('shares')} {translator('failed')} - {info}"
+            trade_logs.append(message)
+            notification_order_issue = True
+            publish_order_issue(message)
+            return False
+        except Exception:
+            if continuity_ticket is not None and not outcome_confirmed:
+                intent_continuity.record_outcome(continuity_ticket)
+            if submission_attempted:
+                submission_halted = True
+                if not outcome_confirmed:
+                    submission_outcome_unknown = True
+                    record_submitted_order(
+                        symbol, action_type, quantity, price, status="unknown",
+                        broker_order_id=getattr(report, "broker_order_id", None),
+                    )
+                message = "Order cycle stopped; reconciliation required."
+            elif continuity_ticket is not None:
+                submission_halted = True
+                message = "Order attempt fenced; reconciliation required."
+            else:
+                message = "Order validation failed before submission."
+            trade_logs.append(message)
+            notification_order_issue = True
+            try:
+                publish_order_issue(message)
+            except Exception:
+                # Notification failure must not discard an uncertain outcome.
+                pass
+            return False
+
+    market_values = dict(portfolio["market_values"])
+    quantities = dict(portfolio["quantities"])
+    allocation_drift_base_market_values = dict(market_values)
+    allocation_drift_base_quantities = dict(quantities)
+    allocation_drift_base_cash = float(portfolio.get("liquid_cash", 0.0) or 0.0)
+    plan, allocation = _apply_safe_haven_cash_substitution(
+        plan=plan,
+        portfolio=portfolio,
+        allocation=allocation,
+        threshold_usd=safe_haven_cash_substitute_threshold_usd,
+    )
+    small_account_reference_target_values = _small_account_drift_reference_targets(
+        allocation,
+        portfolio=portfolio,
+    )
+    if not notional_buy_execution:
+        plan, allocation = _apply_small_account_whole_share_compatibility(
+            plan=plan,
+            allocation=allocation,
+            quotes=quotes,
+            limit_buy_premium=limit_buy_premium,
+            limit_buy_premium_by_symbol=limit_buy_premium_by_symbol,
+        )
+    append_small_account_cash_notes(allocation)
+    append_small_account_bootstrap_notes(allocation)
+    target_values = dict(allocation["targets"])
+    threshold = float(execution.get("trade_threshold_value", 0))
+    # An omitted cash-sweep setting is represented as None by some broker
+    # account payloads.  Treat it as disabled instead of looking up a
+    # fictitious "NONE" quote later in the rebalance cycle.
+    cash_sweep_symbol = str(portfolio.get("cash_sweep_symbol") or "").strip().upper()
+    dry_run_sale_events = []
+    post_sell_buying_power_released = None
+    confirmed_sell_release_value = 0.0
+    pre_sell_buying_power = buying_power_from_plan(portfolio, execution)
+    buy_order_symbols = tuple(
+        allocation.get("income_symbols", ()) + allocation.get("risk_symbols", ())
+    )
+    funding_buy_candidates = [
+        symbol
+        for symbol in buy_order_symbols
+        if symbol != cash_sweep_symbol and (target_values.get(symbol, 0) - market_values.get(symbol, 0)) > threshold
+    ]
+    if account_new_risk_buy_blocked:
+        funding_buy_candidates = []
+
+    def cash_sweep_sale_quantity_to_fund_buy(max_quantity, candidate_symbols):
+        if max_quantity <= 0 or not cash_sweep_symbol:
+            return 0
+        cash_sweep_price = quotes[cash_sweep_symbol]["lastPrice"]
+        base_buying_power = buying_power_from_plan(portfolio, execution)
+        funding_needs = (
+            (
+                target_values[buy_symbol] - market_values[buy_symbol],
+                quotes[buy_symbol]["askPrice"],
+            )
+            for buy_symbol in candidate_symbols
+        )
+        if should_sell_cash_sweep_to_fund_whole_share_buy(
+            max_quantity,
+            cash_sweep_price,
+            base_buying_power,
+            funding_needs,
+        ):
+            return int(max_quantity)
+        return 0
+
+    sell_order_symbols = tuple(
+        allocation.get("risk_symbols", ())
+        + allocation.get("income_symbols", ())
+        + allocation.get("safe_haven_symbols", ())
+    )
+    sell_executed = False
+    cash_sweep_sold_this_cycle = False
+    pending_sell_release_symbols: list[str] = []
+    for symbol in sell_order_symbols:
+        current = market_values[symbol]
+        target = target_values[symbol]
+        if current > (target + threshold):
+            quantity = sell_order_quantity(symbol, current, target, quotes[symbol]["lastPrice"])
+            if symbol == cash_sweep_symbol:
+                quantity = cash_sweep_sale_quantity_to_fund_buy(quantity, funding_buy_candidates)
+                if quantity <= 0:
+                    continue
+            if quantity <= 0:
+                pending_sell_release_symbols.append(symbol)
+                trade_logs.append(translator("sell_deferred_whole_share", symbol=symbol))
+                continue
+            if execute_fire_forget(symbol, "SELL", quantity):
+                sell_executed = True
+                if symbol == cash_sweep_symbol:
+                    cash_sweep_sold_this_cycle = True
+                if dry_run_only:
+                    dry_run_sale_events.append(
+                        (symbol, quantity, quantity * quotes[symbol]["lastPrice"])
+                    )
+
+    if (
+        not cash_sweep_sold_this_cycle
+        and funding_buy_candidates
+        and cash_sweep_symbol
+        and held_whole_shares(cash_sweep_symbol) > 0
+    ):
+        sweep_quantity = cash_sweep_sale_quantity_to_fund_buy(
+            held_whole_shares(cash_sweep_symbol),
+            funding_buy_candidates,
+        )
+        if sweep_quantity > 0:
+            sweep_price = round(float(quotes[cash_sweep_symbol]["lastPrice"]), 2)
+            if dry_run_only:
+                submitted = execute_fire_forget(
+                    cash_sweep_symbol,
+                    "SELL",
+                    sweep_quantity,
+                    sweep_price,
+                )
+            else:
+                submitted = execute_fire_forget(
+                    cash_sweep_symbol,
+                    "SELL",
+                    sweep_quantity,
+                    sweep_price,
+                )
+            if submitted:
+                sell_executed = True
+                cash_sweep_sold_this_cycle = True
+                if dry_run_only:
+                    dry_run_sale_events.append(
+                        (
+                            cash_sweep_symbol,
+                            sweep_quantity,
+                            sweep_quantity * sweep_price,
+                        )
+                    )
+
+    if sell_executed and not submission_halted:
+        if dry_run_only:
+            virtual_market_values = dict(portfolio["market_values"])
+            virtual_quantities = dict(portfolio["quantities"])
+            virtual_sale_proceeds = 0.0
+            for symbol, quantity, sale_value in dry_run_sale_events:
+                virtual_sale_proceeds += sale_value
+                virtual_market_values[symbol] = max(
+                    0.0,
+                    float(virtual_market_values.get(symbol, 0.0)) - sale_value,
+                )
+                virtual_quantities[symbol] = max(
+                    0,
+                    int(virtual_quantities.get(symbol, 0)) - quantity,
+                )
+            portfolio = dict(portfolio)
+            portfolio["market_values"] = virtual_market_values
+            portfolio["quantities"] = virtual_quantities
+            portfolio["liquid_cash"] = float(portfolio["liquid_cash"]) + virtual_sale_proceeds
+            market_values = dict(portfolio["market_values"])
+        else:
+            previous_buying_power = buying_power_from_plan(portfolio, execution)
+            refresh_attempts = max(1, int(post_sell_refresh_attempts or 1))
+            refresh_interval = max(0.0, float(post_sell_refresh_interval_sec or 0.0))
+            best_refreshed_state = None
+            best_buying_power = previous_buying_power
+            projected_sell_release_value = 0.0
+            for attempt in range(refresh_attempts):
+                sleeper(sell_settle_delay_sec if attempt == 0 else refresh_interval)
+                snapshot = fetch_managed_snapshot(client)
+                refreshed_state = load_plan(snapshot)
+                refreshed_buying_power = buying_power_from_plan(
+                    refreshed_state[1],
+                    refreshed_state[2],
+                )
+                projected_sell_release_value = max(
+                    projected_sell_release_value,
+                    compute_confirmed_sell_release_value(
+                        submitted_sell_orders=tuple(
+                            order for order in submitted_orders if str(order.get("side") or "").lower() == "sell"
+                        ),
+                        fetch_order_status=fetch_order_status,
+                    ),
+                )
+                if best_refreshed_state is None or refreshed_buying_power > best_buying_power:
+                    best_refreshed_state = refreshed_state
+                    best_buying_power = refreshed_buying_power
+                if refreshed_buying_power > previous_buying_power:
+                    best_refreshed_state = refreshed_state
+                    break
+            confirmed_sell_release_value = projected_sell_release_value
+            post_sell_buying_power_released = (
+                best_buying_power > previous_buying_power or confirmed_sell_release_value > 0.0
+            )
+            plan, portfolio, execution, allocation = best_refreshed_state
+            if intent_continuity is not None:
+                intent_continuity.select_plan_source(plan)
+            plan, allocation = _apply_safe_haven_cash_substitution(
+                plan=plan,
+                portfolio=portfolio,
+                allocation=allocation,
+                threshold_usd=safe_haven_cash_substitute_threshold_usd,
+            )
+            small_account_reference_target_values = _small_account_drift_reference_targets(
+                allocation,
+                portfolio=portfolio,
+            )
+            strategy_symbols = tuple(allocation["strategy_symbols"])
+            quotes = load_quotes(strategy_symbols)
+            if not notional_buy_execution:
+                plan, allocation = _apply_small_account_whole_share_compatibility(
+                    plan=plan,
+                    allocation=allocation,
+                    quotes=quotes,
+                    limit_buy_premium=limit_buy_premium,
+                    limit_buy_premium_by_symbol=limit_buy_premium_by_symbol,
+                )
+            append_small_account_cash_notes(allocation)
+            append_small_account_bootstrap_notes(allocation)
+            market_values = dict(portfolio["market_values"])
+            target_values = dict(allocation["targets"])
+            threshold = float(execution.get("trade_threshold_value", 0))
+
+    liquid_cash = float(portfolio["liquid_cash"])
+    reserved_cash = float(execution.get("reserved_cash", 0))
+    estimated_buying_power = max(0, liquid_cash - reserved_cash)
+    if confirmed_sell_release_value > 0.0:
+        estimated_buying_power = max(
+            estimated_buying_power,
+            pre_sell_buying_power + confirmed_sell_release_value,
+        )
+    pending_sell_release_symbols = list(dict.fromkeys(pending_sell_release_symbols))
+    buy_needed_symbols = [
+        symbol
+        for symbol in buy_order_symbols
+        if market_values.get(symbol, 0) < (target_values.get(symbol, 0) - threshold)
+    ]
+    buys_blocked_reason = None
+    if cash_only_execution and pending_sell_release_symbols and buy_needed_symbols:
+        estimated_buy_cost = 0.0
+        for symbol in buy_needed_symbols:
+            target_val = target_values[symbol]
+            amount_to_spend = min(
+                target_val - market_values[symbol],
+                estimated_buying_power,
+            )
+            if amount_to_spend <= 0:
+                continue
+            if notional_buy_execution:
+                if amount_to_spend >= MIN_NOTIONAL_BUY_USD:
+                    estimated_buy_cost += amount_to_spend
+                continue
+            ask = quotes[symbol]["askPrice"]
+            limit_price = _limit_buy_price(
+                symbol, ask, limit_buy_premium, limit_buy_premium_by_symbol
+            )
+            quantity = _planned_buy_order_quantity(
+                symbol,
+                target_value=target_val,
+                current_value=market_values[symbol],
+                quantity=quantities.get(symbol, 0.0),
+                amount_to_spend=amount_to_spend,
+                available_buying_power=estimated_buying_power,
+                limit_price=limit_price,
+                allow_top_up=sell_executed,
+            )
+            if quantity > 0:
+                estimated_buy_cost += quantity * limit_price
+        if estimated_buy_cost > estimated_buying_power:
+            buys_blocked_reason = "pending_sell_release"
+            trade_logs.append(
+                translator(
+                    "buy_deferred_pending_sell_release",
+                    symbols=", ".join(pending_sell_release_symbols),
+                )
+            )
+    if buys_blocked_reason is None and cash_only_execution and liquid_cash < 0.0 and buy_needed_symbols:
+        buys_blocked_reason = "negative_cash"
+        trade_logs.append(
+            translator(
+                "buy_deferred_negative_cash",
+                cash=f"{liquid_cash:,.2f}",
+            )
+        )
+    if account_new_risk_buy_blocked and buy_needed_symbols and buys_blocked_reason is None:
+        buys_blocked_reason = "account_new_risk_gate"
+        reason_text = ", ".join(account_new_risk_reason_codes) or "NEW_RISK_PROHIBITED"
+        trade_logs.append(
+            translator(
+                "buy_deferred",
+                detail=f"[Account new-risk gate] {reason_text}",
+            )
+        )
+    buy_executed = False
+    if not buys_blocked_reason:
+        for symbol in buy_order_symbols:
+            target_val = target_values[symbol]
+            if market_values[symbol] < (target_val - threshold):
+                amount_to_spend = min(target_val - market_values[symbol], estimated_buying_power)
+                if amount_to_spend > 0:
+                    if notional_buy_execution:
+                        if amount_to_spend >= MIN_NOTIONAL_BUY_USD and amount_to_spend <= estimated_buying_power:
+                            if execute_fire_forget(symbol, "BUY_NOTIONAL", amount_to_spend):
+                                buy_executed = True
+                                estimated_buying_power -= amount_to_spend
+                        continue
+                    ask = quotes[symbol]["askPrice"]
+                    limit_price = _limit_buy_price(symbol, ask, limit_buy_premium, limit_buy_premium_by_symbol)
+                    quantity = _planned_buy_order_quantity(
+                        symbol,
+                        target_value=target_val,
+                        current_value=market_values[symbol],
+                        quantity=quantities.get(symbol, 0.0),
+                        amount_to_spend=amount_to_spend,
+                        available_buying_power=estimated_buying_power,
+                        limit_price=limit_price,
+                        allow_top_up=sell_executed,
+                    )
+                    if quantity > 0:
+                        order_cost = quantity * limit_price
+                        if order_cost > estimated_buying_power:
+                            quantity = int(estimated_buying_power // limit_price) if limit_price > 0 else 0
+                            order_cost = quantity * limit_price
+                        if quantity > 0 and order_cost <= estimated_buying_power:
+                            if execute_fire_forget(symbol, "BUY_LIMIT", quantity, limit_price):
+                                buy_executed = True
+                                estimated_buying_power -= order_cost
+                    elif amount_to_spend > 0 and limit_price > 0:
+                        trade_logs.append(
+                            translator(
+                                "buy_deferred_insufficient_buying_power",
+                                symbol=_format_symbol_with_suffix(symbol),
+                                limit_price=f"{limit_price:.2f}",
+                                buying_power=f"{estimated_buying_power:.2f}",
+                            )
+                        )
+
+    cash_sweep_substituted_to_cash = bool(
+        allocation.get("small_account_safe_haven_cash_substituted_symbols")
+    )
+    if (
+        not buys_blocked_reason
+        and not cash_sweep_sold_this_cycle
+        and cash_sweep_symbol
+        and (
+            float(target_values.get(cash_sweep_symbol, 0.0) or 0.0) > 0.0
+            or not cash_sweep_substituted_to_cash
+        )
+        and estimated_buying_power > quotes[cash_sweep_symbol]["lastPrice"] * 2
+        and (
+            max(0.0, float(safe_haven_cash_substitute_threshold_usd or 0.0)) <= 0.0
+            or estimated_buying_power >= max(
+                0.0,
+                float(safe_haven_cash_substitute_threshold_usd or 0.0),
+            )
+        )
+    ):
+        quantity = int(estimated_buying_power // quotes[cash_sweep_symbol]["lastPrice"])
+        if quantity > 0:
+            if execute_fire_forget(cash_sweep_symbol, "BUY_MARKET", quantity):
+                trade_logs.append(
+                    translator(
+                        "cash_sweep_rebuy",
+                        symbol=cash_sweep_symbol,
+                        quantity=format_quantity(quantity),
+                        shares=translator("shares"),
+                        price=f"{quotes[cash_sweep_symbol]['lastPrice']:.2f}",
+                    )
+                )
+                buy_executed = True
+
+    if (
+        sell_executed
+        and not dry_run_only
+        and post_sell_buying_power_released is False
+        and not buy_executed
+    ):
+        trade_logs.append(translator("post_sell_buying_power_unreleased"))
+
+    reference_prices = {
+        symbol: float((quotes.get(symbol) or {}).get("lastPrice") or 0.0)
+        for symbol in tuple(strategy_symbols)
+    }
+    total_value = float(portfolio.get("total_strategy_equity") or portfolio.get("total_equity") or 0.0)
+    drift_notes = build_small_account_allocation_drift_notes(
+        target_values=small_account_reference_target_values,
+        current_values=allocation_drift_base_market_values,
+        current_quantities=allocation_drift_base_quantities,
+        prices=reference_prices,
+        submitted_orders=submitted_orders,
+        total_value=total_value,
+        cash_value=allocation_drift_base_cash,
+    )
+    trade_logs.extend(format_small_account_allocation_drift_notes(drift_notes, translator=translator))
+
+    result_execution = dict(execution or {})
+    # Notification evidence only: this point is reached after the cycle's
+    # normal execution path completed; it does not establish a fill.
+    result_execution["notification_cycle_completed"] = True
+    if notification_order_issue:
+        result_execution["notification_order_issue"] = True
+    attention_reasons = list(result_execution.get("notification_attention_reason_codes") or ())
+    if sell_resource_evidence_required:
+        attention_reasons.append("sell_resource_evidence_required")
+        result_execution.update(execution_status="blocked", broker_submission_done=False)
+    if account_new_risk_buy_blocked:
+        attention_reasons.append("account_new_risk_gate")
+    if buys_blocked_reason:
+        attention_reasons.append(buys_blocked_reason)
+    if attention_reasons:
+        result_execution["notification_attention_reason_codes"] = tuple(dict.fromkeys(attention_reasons))
+    if submitted_orders:
+        if dry_run_only:
+            result_execution.setdefault("execution_status", "dry_run")
+        else:
+            # Schwab accepts an order before it is filled.  Keep the physical
+            # submission records, but never present that acknowledgement as a
+            # completed strategy action.
+            result_execution.update(
+                {
+                    "execution_status": "pending_reconciliation",
+                    "broker_submission_done": not submission_outcome_unknown,
+                    "orders_pending_count": len(submitted_orders),
+                }
+            )
+
+    if intent_continuity is not None:
+        result_execution = intent_continuity.present(result_execution, current_submitted=submitted_orders)
+    set_cycle_snapshot(None)
+    return ExecutionCycleResult(
+        plan=dict(plan or {}),
+        portfolio=dict(portfolio or {}),
+        execution=result_execution,
+        allocation=dict(allocation or {}),
+        trade_logs=tuple(trade_logs),
+        submitted_orders=tuple(submitted_orders),
+    )

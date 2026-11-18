@@ -5,7 +5,7 @@ import json
 import pytest
 from google.api_core.exceptions import PreconditionFailed
 
-from notifications import unified
+from charles_schwab_platform.notifications import unified
 from scripts import emit_unified_digest_candidates as publisher
 from test_runtime_candidate_scope import payload, setup
 

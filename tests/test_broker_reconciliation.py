@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from application.broker_reconciliation import (
+from charles_schwab_platform.application.broker_reconciliation import (
     SchwabReconciliationReadError,
     build_reconciliation_candidate,
     collect_read_only_reconciliation_observations,
@@ -386,7 +386,7 @@ def test_native_account_ledger_unknown_blocks_old_empty_scope_baseline(tmp_path)
 ])
 def test_unverified_native_namespace_never_falls_back_to_control_scope(monkeypatch, identity, scope):
     monkeypatch.setattr(
-        "application.broker_reconciliation.build_execution_marker_store_from_env",
+        "charles_schwab_platform.application.broker_reconciliation.build_execution_marker_store_from_env",
         lambda **_kwargs: pytest.fail("unverified namespace must not read any store"),
     )
     observations = replace(_synthetic_complete_observations(), account_identity_match=identity, account_scope=scope)

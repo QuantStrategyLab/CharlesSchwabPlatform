@@ -103,14 +103,15 @@ def _safe_path(value):
 def _path_tier(path):
     normalized = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", path).lower()
     if (normalized.startswith((".github/workflows/", ".github/actions/"))
-            or normalized in {"main.py", "gunicorn.conf.py"}
+            or normalized in {"main.py", "src/charles_schwab_platform/main.py", "gunicorn.conf.py"}
             or normalized.rsplit("/", 1)[-1] == "codeowners"
             or normalized == ".github/codex_auto_merge_policy.json"
             or normalized.endswith((".tf", ".tfvars"))):
         return "high"
     if normalized.startswith(("docs/", "tests/")):
         return "low"
-    root = normalized.split("/", 1)[0]
+    pkg_rel = normalized.removeprefix("src/charles_schwab_platform/") if normalized.startswith("src/charles_schwab_platform/") else normalized
+    root = pkg_rel.split("/", 1)[0]
     if root in {"application", "entrypoints", "strategy", "strategies", "infra", "terraform"}:
         return "high"
     if re.search(r"(?:^|[/_.-])(?:auth|accounts?|bindings?|brokers?|credentials?|deploy(?:ment)?|"

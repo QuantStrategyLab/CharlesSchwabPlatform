@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import json
 
 import pytest
-from notifications import unified
+from charles_schwab_platform.notifications import unified
 from test_completed_window_stages import archive
 from test_runtime_candidate_scope import payload, setup
 

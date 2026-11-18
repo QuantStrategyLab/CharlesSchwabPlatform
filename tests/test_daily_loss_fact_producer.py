@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from application.daily_loss_fact_producer import (
+from charles_schwab_platform.application.daily_loss_fact_producer import (
     EXTERNAL_CASH_FLOW_TYPES,
     derive_daily_loss_usd,
     fetch_schwab_transactions,

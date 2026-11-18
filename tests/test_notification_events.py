@@ -1,6 +1,6 @@
 import unittest
 
-from notifications.events import (
+from charles_schwab_platform.notifications.events import (
     NotificationPublisher,
     RenderedNotification,
     publish_rendered_notification,

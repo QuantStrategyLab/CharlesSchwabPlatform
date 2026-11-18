@@ -15,7 +15,7 @@ from schwab.client import Client
 from scripts import capture_schwab_transactions_once as capture
 from scripts.publish_account_facts_from_reports import _binding_id
 from scripts.publish_runtime_daily_from_reports import TARGET
-from application.external_flow_snapshot import collect_external_flow_snapshot
+from charles_schwab_platform.application.external_flow_snapshot import collect_external_flow_snapshot
 
 HASH = "synthetic-native-account"
 NOW = 1792179900

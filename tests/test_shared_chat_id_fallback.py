@@ -47,14 +47,14 @@ def install_stub_modules():
     requests_module = types.ModuleType("requests")
     requests_module.post = lambda *args, **kwargs: None
 
-    rebalance_service_module = types.ModuleType("application.rebalance_service")
+    rebalance_service_module = types.ModuleType("charles_schwab_platform.application.rebalance_service")
     rebalance_service_module.run_strategy_core = lambda *args, **kwargs: None
 
-    cloud_run_module = types.ModuleType("entrypoints.cloud_run")
+    cloud_run_module = types.ModuleType("charles_schwab_platform.entrypoints.cloud_run")
     cloud_run_module.is_market_open_now = lambda **_kwargs: True
     cloud_run_module.is_market_open_today = lambda: True
 
-    strategy_runtime_module = types.ModuleType("strategy_runtime")
+    strategy_runtime_module = types.ModuleType("charles_schwab_platform.strategy_runtime")
     strategy_runtime_module.load_strategy_runtime = lambda *_args, **_kwargs: types.SimpleNamespace(
         merged_runtime_config={
             "benchmark_symbol": "QQQ",
@@ -68,7 +68,7 @@ def install_stub_modules():
         evaluate=lambda **_kwargs: None,
     )
 
-    runtime_config_support_module = types.ModuleType("runtime_config_support")
+    runtime_config_support_module = types.ModuleType("charles_schwab_platform.runtime_config_support")
     runtime_config_support_module.load_platform_runtime_settings = lambda: types.SimpleNamespace(
         strategy_profile="tqqq_growth_income",
         strategy_display_name="TQQQ Growth Income",
@@ -103,10 +103,10 @@ def install_stub_modules():
     modules = {
         "flask": flask_module,
         "requests": requests_module,
-        "application.rebalance_service": rebalance_service_module,
-        "entrypoints.cloud_run": cloud_run_module,
-        "runtime_config_support": runtime_config_support_module,
-        "strategy_runtime": strategy_runtime_module,
+        "charles_schwab_platform.application.rebalance_service": rebalance_service_module,
+        "charles_schwab_platform.entrypoints.cloud_run": cloud_run_module,
+        "charles_schwab_platform.runtime_config_support": runtime_config_support_module,
+        "charles_schwab_platform.strategy_runtime": strategy_runtime_module,
         "google": google_module,
         "google.auth": google_auth_module,
         "google.cloud": google_cloud_module,
@@ -132,8 +132,8 @@ class SharedChatIdTests(unittest.TestCase):
                 },
                 clear=False,
             ):
-                sys.modules.pop("main", None)
-                module = importlib.import_module("main")
+                sys.modules.pop("charles_schwab_platform.main", None)
+                module = importlib.import_module("charles_schwab_platform.main")
                 module = importlib.reload(module)
 
         self.assertEqual(module.TG_CHAT_ID, "shared-chat-id")

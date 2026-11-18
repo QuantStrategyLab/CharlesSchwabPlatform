@@ -6,8 +6,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from notifications.block_reason import decision_block_reason, latest_block_reason
-from application.runtime_report_summary import summarize_execution_cycle_result
+from charles_schwab_platform.notifications.block_reason import decision_block_reason, latest_block_reason
+from charles_schwab_platform.application.runtime_report_summary import summarize_execution_cycle_result
 from scripts.project_digest_candidates import project_digest_candidates
 from scripts.runtime_daily_report_projection import project_daily_runtime
 from test_runtime_daily_report_projection import report, TARGET, NOW
@@ -152,7 +152,7 @@ def test_emitter_passes_only_reports_admitted_for_source_and_account(tmp_path, m
 
 
 def test_unified_notification_projector_carries_same_run_facts():
-    from notifications.digest_snapshot.digest_candidates import project_reports
+    from charles_schwab_platform.notifications.digest_snapshot.digest_candidates import project_reports
     source = blocked_report()
     target = {**source["runtime_target"], "platform_id": "schwab", "service_name": TARGET["service"],
               "deployment_selector": "synthetic", "dry_run_only": False}

@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 def load_resolver():
     root = Path(__file__).resolve().parents[1]
-    path = root / "notifications/display_names.py"
+    path = root / "src/charles_schwab_platform/notifications/display_names.py"
     spec = importlib.util.spec_from_file_location("display_names_under_test", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

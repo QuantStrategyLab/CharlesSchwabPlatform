@@ -4,7 +4,7 @@ import unittest
 class StrategyLoaderTests(unittest.TestCase):
     def test_load_strategy_entrypoint_resolves_global_etf_rotation(self):
         try:
-            from strategy_loader import load_strategy_entrypoint_for_profile
+            from charles_schwab_platform.strategy_loader import load_strategy_entrypoint_for_profile
 
             entrypoint = load_strategy_entrypoint_for_profile("global_etf_rotation")
         except ModuleNotFoundError as exc:
@@ -17,7 +17,7 @@ class StrategyLoaderTests(unittest.TestCase):
 
     def test_load_strategy_entrypoint_resolves_russell_top50_strategy(self):
         try:
-            from strategy_loader import load_strategy_entrypoint_for_profile
+            from charles_schwab_platform.strategy_loader import load_strategy_entrypoint_for_profile
 
             entrypoint = load_strategy_entrypoint_for_profile("russell_top50_leader_rotation")
         except ModuleNotFoundError as exc:
@@ -30,7 +30,7 @@ class StrategyLoaderTests(unittest.TestCase):
 
     def test_load_strategy_entrypoint_resolves_tqqq_growth_income(self):
         try:
-            from strategy_loader import load_strategy_entrypoint_for_profile
+            from charles_schwab_platform.strategy_loader import load_strategy_entrypoint_for_profile
 
             entrypoint = load_strategy_entrypoint_for_profile("tqqq_growth_income")
         except ModuleNotFoundError as exc:
@@ -50,7 +50,7 @@ class StrategyLoaderTests(unittest.TestCase):
 
     def test_load_strategy_entrypoint_rejects_archived_mega_cap_dynamic_top20(self):
         try:
-            from strategy_loader import load_strategy_entrypoint_for_profile
+            from charles_schwab_platform.strategy_loader import load_strategy_entrypoint_for_profile
 
             with self.assertRaises(ValueError):
                 load_strategy_entrypoint_for_profile("mega_cap_leader_rotation_dynamic_top20")
@@ -61,7 +61,7 @@ class StrategyLoaderTests(unittest.TestCase):
 
     def test_load_strategy_entrypoint_rejects_archived_dynamic_mega_leveraged_pullback(self):
         try:
-            from strategy_loader import load_strategy_entrypoint_for_profile
+            from charles_schwab_platform.strategy_loader import load_strategy_entrypoint_for_profile
 
             with self.assertRaises(ValueError):
                 load_strategy_entrypoint_for_profile("dynamic_mega_leveraged_pullback")
@@ -72,7 +72,7 @@ class StrategyLoaderTests(unittest.TestCase):
 
     def test_load_strategy_entrypoint_rejects_legacy_tqqq_alias(self):
         try:
-            from strategy_loader import load_strategy_entrypoint_for_profile
+            from charles_schwab_platform.strategy_loader import load_strategy_entrypoint_for_profile
 
             with self.assertRaises(ValueError):
                 load_strategy_entrypoint_for_profile("qqq_tqqq_growth_income")
@@ -82,7 +82,7 @@ class StrategyLoaderTests(unittest.TestCase):
             raise
 
     def test_load_strategy_runtime_adapter_declares_available_inputs(self):
-        from strategy_loader import load_strategy_runtime_adapter_for_profile
+        from charles_schwab_platform.strategy_loader import load_strategy_runtime_adapter_for_profile
 
         adapter = load_strategy_runtime_adapter_for_profile("tqqq_growth_income")
 
@@ -93,7 +93,7 @@ class StrategyLoaderTests(unittest.TestCase):
         self.assertEqual(adapter.portfolio_input_name, "portfolio_snapshot")
 
     def test_load_strategy_runtime_adapter_supports_global_etf_rotation(self):
-        from strategy_loader import load_strategy_runtime_adapter_for_profile
+        from charles_schwab_platform.strategy_loader import load_strategy_runtime_adapter_for_profile
 
         adapter = load_strategy_runtime_adapter_for_profile("global_etf_rotation")
 
@@ -104,7 +104,7 @@ class StrategyLoaderTests(unittest.TestCase):
         self.assertEqual(adapter.portfolio_input_name, "portfolio_snapshot")
 
     def test_load_strategy_runtime_adapter_supports_russell_top50_strategy(self):
-        from strategy_loader import load_strategy_runtime_adapter_for_profile
+        from charles_schwab_platform.strategy_loader import load_strategy_runtime_adapter_for_profile
 
         adapter = load_strategy_runtime_adapter_for_profile("russell_top50_leader_rotation")
 
@@ -117,7 +117,7 @@ class StrategyLoaderTests(unittest.TestCase):
 
     def test_load_strategy_entrypoint_rejects_research_only_tech_communication_pullback_enhancement(self):
         try:
-            from strategy_loader import load_strategy_entrypoint_for_profile
+            from charles_schwab_platform.strategy_loader import load_strategy_entrypoint_for_profile
 
             with self.assertRaises(ValueError):
                 load_strategy_entrypoint_for_profile("tech_communication_pullback_enhancement")
@@ -127,25 +127,25 @@ class StrategyLoaderTests(unittest.TestCase):
             raise
 
     def test_load_strategy_runtime_adapter_rejects_archived_mega_cap_on_schwab(self):
-        from strategy_loader import load_strategy_runtime_adapter_for_profile
+        from charles_schwab_platform.strategy_loader import load_strategy_runtime_adapter_for_profile
 
         with self.assertRaises(ValueError):
             load_strategy_runtime_adapter_for_profile("mega_cap_leader_rotation_dynamic_top20")
 
     def test_load_strategy_runtime_adapter_rejects_archived_dynamic_mega_leveraged_on_schwab(self):
-        from strategy_loader import load_strategy_runtime_adapter_for_profile
+        from charles_schwab_platform.strategy_loader import load_strategy_runtime_adapter_for_profile
 
         with self.assertRaises(ValueError):
             load_strategy_runtime_adapter_for_profile("dynamic_mega_leveraged_pullback")
 
     def test_load_strategy_runtime_adapter_rejects_research_only_tech_on_schwab(self):
-        from strategy_loader import load_strategy_runtime_adapter_for_profile
+        from charles_schwab_platform.strategy_loader import load_strategy_runtime_adapter_for_profile
 
         with self.assertRaises(ValueError):
             load_strategy_runtime_adapter_for_profile("tech_communication_pullback_enhancement")
 
     def test_load_strategy_runtime_adapter_supports_semiconductor_on_schwab(self):
-        from strategy_loader import load_strategy_runtime_adapter_for_profile
+        from charles_schwab_platform.strategy_loader import load_strategy_runtime_adapter_for_profile
 
         adapter = load_strategy_runtime_adapter_for_profile("soxl_soxx_trend_income")
 

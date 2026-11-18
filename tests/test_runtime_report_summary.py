@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from application.runtime_report_summary import summarize_execution_cycle_result
+from charles_schwab_platform.application.runtime_report_summary import summarize_execution_cycle_result
 
 
 def test_summarize_execution_cycle_result_counts_submitted_orders() -> None:

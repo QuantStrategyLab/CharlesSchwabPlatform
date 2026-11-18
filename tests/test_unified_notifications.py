@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from notifications import unified
-from notifications.digest_snapshot.unified_contract import NotificationEvent
+from charles_schwab_platform.notifications import unified
+from charles_schwab_platform.notifications.digest_snapshot.unified_contract import NotificationEvent
 
 NOW = dt.datetime(2026, 10, 16, 19, 45, tzinfo=dt.timezone.utc)
 
@@ -167,7 +167,7 @@ def test_unknown_identity_keeps_unknown_counts_and_cannot_claim_delivery():
 
 
 def test_orders_default_to_daily_candidate_in_contract():
-    from notifications.digest_snapshot.unified_contract import select_notification_route
+    from charles_schwab_platform.notifications.digest_snapshot.unified_contract import select_notification_route
     assert select_notification_route(event_kind="fill", env={unified.FLAG: "true"}, flag_key=unified.FLAG) == "digest_candidate"
 
 

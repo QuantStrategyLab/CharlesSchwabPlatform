@@ -3,10 +3,13 @@ from __future__ import annotations
 from contextlib import redirect_stderr, redirect_stdout
 import sys
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+_ROOT = Path(__file__).resolve().parents[1]
+for _path in (str(_ROOT / "src"), str(_ROOT)):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
 import json
 import os
-from notifications.unified import CandidateConflictError, CandidateStorageError, emit_completed_candidates  # noqa: E402
+from charles_schwab_platform.notifications.unified import CandidateConflictError, CandidateStorageError, emit_completed_candidates  # noqa: E402
 from scripts.digest_coverage_warning import warn_coverage_unconfirmed  # noqa: E402
 
 

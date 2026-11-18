@@ -5,10 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from application import account_new_risk_gate_support as support
-from application.runtime_report_summary import summarize_execution_cycle_result
-from notifications import unified
-from notifications.approved_gates import (
+from charles_schwab_platform.application import account_new_risk_gate_support as support
+from charles_schwab_platform.application.runtime_report_summary import summarize_execution_cycle_result
+from charles_schwab_platform.notifications import unified
+from charles_schwab_platform.notifications.approved_gates import (
     approved_block_reasons, clean_gate_reasons, daily_gate_reasons, decision_gate_reasons,
     render_gate_reasons, report_gate_reasons,
 )
@@ -212,7 +212,7 @@ def test_real_strategy_adapter_only_adds_approved_annotation_when_on(monkeypatch
 @pytest.mark.parametrize("approved", [False, True])
 def test_attention_and_cycle_share_immutable_store_without_event_key_collision(monkeypatch, approved):
     from datetime import datetime, timezone
-    from notifications.attention import publish_attention_telegram_transition
+    from charles_schwab_platform.notifications.attention import publish_attention_telegram_transition
     from quant_platform_kit.risk.attention import AttentionAxes, evaluate_attention
     from test_unified_notifications import MemoryStore
     class ImmutableStore(MemoryStore):

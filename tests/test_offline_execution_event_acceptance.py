@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from application.offline_execution_event_acceptance import run_offline_execution_event_acceptance
+from charles_schwab_platform.application.offline_execution_event_acceptance import run_offline_execution_event_acceptance
 
 
 def test_acceptance_runner_reports_all_frozen_cases_and_fixed_values(tmp_path):

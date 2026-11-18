@@ -388,7 +388,7 @@ def capture(*, metadata_path, output_dir, environ, token_loader=None, http_trans
     from scripts.publish_runtime_daily_from_reports import PROJECT_ID, TARGET, _select_identity
     from scripts.publish_account_facts_from_reports import _binding_id
     from scripts.schwab_native_identity import _access_token, _load_existing_token, SECRET_ID
-    from application.external_flow_snapshot import collect_external_flow_snapshot
+    from charles_schwab_platform.application.external_flow_snapshot import collect_external_flow_snapshot
 
     transport = None
     try:

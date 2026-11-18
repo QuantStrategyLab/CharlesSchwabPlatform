@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from application.paper_execution_admission import SchwabPaperExecutionAdmissionAdapter  # noqa: E402
+from charles_schwab_platform.application.paper_execution_admission import SchwabPaperExecutionAdmissionAdapter  # noqa: E402
 from quant_platform_kit.common.execution_commands import ExecutionCommand  # noqa: E402
 from quant_platform_kit.common.paper_execution_admission import (  # noqa: E402
     PAPER_RISK_ADMISSION_RECEIPT_INTENT_FIELD,

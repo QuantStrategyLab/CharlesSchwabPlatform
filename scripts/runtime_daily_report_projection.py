@@ -25,7 +25,7 @@ from zoneinfo import ZoneInfo
 
 from quant_platform_kit.common.execution_receipts import attach_execution_receipt
 
-from application.account_observation import expected_account_hash_from_selector
+from charles_schwab_platform.application.account_observation import expected_account_hash_from_selector
 from scripts.publish_account_facts_from_reports import _report_uri_parts
 from quant_platform_kit.common.runtime_heartbeat_policy import (
     _payload_value,

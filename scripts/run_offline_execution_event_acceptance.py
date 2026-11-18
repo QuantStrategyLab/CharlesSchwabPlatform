@@ -4,9 +4,15 @@
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
+from pathlib import Path
 
-from application.offline_execution_event_acceptance import run_offline_execution_event_acceptance
+_SRC = Path(__file__).resolve().parents[1] / "src"
+if str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
+
+from charles_schwab_platform.application.offline_execution_event_acceptance import run_offline_execution_event_acceptance  # noqa: E402
 
 
 def main() -> int:

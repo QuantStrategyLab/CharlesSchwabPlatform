@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from application.daily_loss_fact_producer import attach_daily_loss_fact_to_portfolio
+from charles_schwab_platform.application.daily_loss_fact_producer import attach_daily_loss_fact_to_portfolio
 
 NY = ZoneInfo("America/New_York")
 
@@ -79,11 +79,11 @@ def test_attach_default_loader_binds_expected_account_from_portfolio_metadata():
     ]
     now = datetime(2026, 9, 18, 14, 0, tzinfo=NY)
     with patch(
-        "application.daily_loss_fact_producer.resolve_nasdaq_session_bounds",
+        "charles_schwab_platform.application.daily_loss_fact_producer.resolve_nasdaq_session_bounds",
         return_value=(prior, session_open),
     ):
         with patch(
-            "application.daily_loss_fact_producer.fetch_schwab_transactions",
+            "charles_schwab_platform.application.daily_loss_fact_producer.fetch_schwab_transactions",
             return_value=[],
         ) as fetch:
             attach_daily_loss_fact_to_portfolio(

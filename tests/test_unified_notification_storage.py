@@ -5,7 +5,7 @@ import pytest
 from google.api_core.exceptions import NotFound, PreconditionFailed
 from google.cloud import storage
 
-from notifications import unified
+from charles_schwab_platform.notifications import unified
 from test_unified_notifications import NOW, event
 
 

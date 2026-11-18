@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from application.stock_inventory import collect_stock_inventory, project_stock_inventory
+from charles_schwab_platform.application.stock_inventory import collect_stock_inventory, project_stock_inventory
 
 
 def payload(positions=None):

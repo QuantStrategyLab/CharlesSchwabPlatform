@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import strategy_runtime as strategy_runtime_module
+import charles_schwab_platform.strategy_runtime as strategy_runtime_module
 from quant_platform_kit.common.models import PortfolioSnapshot, Position
 from quant_platform_kit.common.runtime_target import build_runtime_target
 from quant_platform_kit.common.strategy_contracts import (
@@ -14,7 +14,7 @@ from quant_platform_kit.common.strategy_contracts import (
     StrategyRuntimePolicy,
 )
 from quant_platform_kit.risk.contracts import RuntimeRiskLimits
-from runtime_config_support import PlatformRuntimeSettings
+from charles_schwab_platform.runtime_config_support import PlatformRuntimeSettings
 
 
 class _FakeEntrypoint:
@@ -348,7 +348,7 @@ class StrategyRuntimeTests(unittest.TestCase):
     ):
         from quant_platform_kit.common.strategy_contracts import PositionTarget
         from quant_platform_kit.risk.gate import apply_risk_gate
-        from decision_mapper import map_strategy_decision_to_plan
+        from charles_schwab_platform.decision_mapper import map_strategy_decision_to_plan
 
         snapshot = snapshot or self._soxl_snapshot()
         with patch.object(

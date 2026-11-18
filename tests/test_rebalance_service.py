@@ -13,11 +13,11 @@ QPK_SRC = ROOT.parent / "QuantPlatformKit" / "src"
 if str(QPK_SRC) not in sys.path:
     sys.path.insert(0, str(QPK_SRC))
 
-from application import rebalance_service
-from application.execution_service import execute_rebalance_cycle
-from application.rebalance_service import run_strategy_core
-from application.runtime_dependencies import SchwabRebalanceConfig, SchwabRebalanceRuntime
-from notifications.telegram import build_translator
+from charles_schwab_platform.application import rebalance_service
+from charles_schwab_platform.application.execution_service import execute_rebalance_cycle
+from charles_schwab_platform.application.rebalance_service import run_strategy_core
+from charles_schwab_platform.application.runtime_dependencies import SchwabRebalanceConfig, SchwabRebalanceRuntime
+from charles_schwab_platform.notifications.telegram import build_translator
 from quant_platform_kit.common.models import ExecutionReport, OrderIntent, PortfolioSnapshot, Position, QuoteSnapshot
 from quant_platform_kit.common.port_adapters import CallableExecutionPort, CallableMarketDataPort, CallableNotificationPort, CallablePortfolioPort
 
@@ -902,7 +902,7 @@ class RebalanceServiceTests(unittest.TestCase):
 
     # Isolate producer and legacy renderer semantics; actual daily routing is
     # exercised below with a source-bound report and durable fake store.
-    @patch("notifications.unified.publish_cycle", new=lambda result, *, config, legacy, **kwargs: legacy())
+    @patch("charles_schwab_platform.notifications.unified.publish_cycle", new=lambda result, *, config, legacy, **kwargs: legacy())
     def test_run_strategy_core_supports_execution_port_runtime_path(self):
         sent_messages = []
         observed_orders = []
@@ -1067,7 +1067,7 @@ class RebalanceServiceTests(unittest.TestCase):
             "SOXL 站上 150 日均线，持有 SOXL，交易层风险仓位 40.2%",
         )
 
-    @patch("notifications.unified.publish_cycle", new=lambda result, *, config, legacy, **kwargs: legacy())
+    @patch("charles_schwab_platform.notifications.unified.publish_cycle", new=lambda result, *, config, legacy, **kwargs: legacy())
     def test_run_strategy_core_uses_managed_wrappers(self):
         sent_messages = []
         observed = {}
@@ -1169,7 +1169,7 @@ class RebalanceServiceTests(unittest.TestCase):
         self.assertTrue(sent_messages)
         self.assertIn("strategy=TQQQ Growth Income", sent_messages[0])
 
-    @patch("notifications.unified.publish_cycle", new=lambda result, *, config, legacy, **kwargs: legacy())
+    @patch("charles_schwab_platform.notifications.unified.publish_cycle", new=lambda result, *, config, legacy, **kwargs: legacy())
     def test_run_strategy_core_accepts_normalized_portfolio_and_execution_sections(self):
         sent_messages = []
         snapshot = SimpleNamespace(
@@ -1261,7 +1261,7 @@ class RebalanceServiceTests(unittest.TestCase):
         self.assertIn("strategy=TQQQ Growth Income", sent_messages[0])
         self.assertIn("Account risk check passed", sent_messages[0])
 
-    @patch("notifications.unified.publish_cycle", new=lambda result, *, config, legacy, **kwargs: legacy())
+    @patch("charles_schwab_platform.notifications.unified.publish_cycle", new=lambda result, *, config, legacy, **kwargs: legacy())
     def test_run_strategy_core_suppresses_no_trade_plugin_heartbeat_when_configured(self):
         sent_messages = []
         snapshot = SimpleNamespace(
@@ -1490,7 +1490,7 @@ class RebalanceServiceTests(unittest.TestCase):
         self.assertEqual(snapshots, [])
         self.assertTrue(sent_messages)
 
-    @patch("notifications.unified.publish_cycle", new=lambda result, *, config, legacy, **kwargs: legacy())
+    @patch("charles_schwab_platform.notifications.unified.publish_cycle", new=lambda result, *, config, legacy, **kwargs: legacy())
     def test_run_strategy_core_skips_cash_sweep_sale_when_targets_are_below_one_share(self):
         sent_messages = []
         submitted_orders = []
@@ -2291,7 +2291,7 @@ class RebalanceServiceTests(unittest.TestCase):
     def test_dry_run_bypass_execution_marker_continues_rebalance(self):
         import os
 
-        from application.rebalance_service import DRY_RUN_BYPASS_EXECUTION_MARKER_ENV
+        from charles_schwab_platform.application.rebalance_service import DRY_RUN_BYPASS_EXECUTION_MARKER_ENV
 
         os.environ[DRY_RUN_BYPASS_EXECUTION_MARKER_ENV] = "true"
         self.addCleanup(lambda: os.environ.pop(DRY_RUN_BYPASS_EXECUTION_MARKER_ENV, None))
@@ -2398,7 +2398,7 @@ if __name__ == "__main__" and "--continuity-worker" not in sys.argv:
 
 def test_cycle_notification_keeps_structured_attention_without_free_text_inference():
     from types import SimpleNamespace
-    from application.rebalance_service import _should_publish_cycle_notification
+    from charles_schwab_platform.application.rebalance_service import _should_publish_cycle_notification
 
     config = SimpleNamespace(dry_run_only=False, notify_no_trade_cycles=False, notification_attention_reason_codes=())
     def result(execution=None, orders=()):
@@ -2416,7 +2416,7 @@ def test_cycle_notification_keeps_structured_attention_without_free_text_inferen
 
 def test_cycle_notification_quiets_successful_preview_but_keeps_real_and_rejected_orders():
     from types import SimpleNamespace
-    from application.rebalance_service import _should_publish_cycle_notification
+    from charles_schwab_platform.application.rebalance_service import _should_publish_cycle_notification
 
     config = SimpleNamespace(dry_run_only=False, notify_no_trade_cycles=False, notification_attention_reason_codes=())
     for status in ("submitted", "filled", "partiallyfilled"):
@@ -2436,7 +2436,7 @@ def continuity_case(root, day="2026-09-30", *, kind="SELL", branch="port", selec
                     account_hash="SYNTH_HASH", profile_id="SYNTH_PROFILE"):
     import json
     from dataclasses import replace
-    from application import execution_intent_continuity as ci
+    from charles_schwab_platform.application import execution_intent_continuity as ci
     from quant_platform_kit.common.execution_commands import ExecutionCommandStore
     from quant_platform_kit.common.strategy_release import StrategyReleaseIdentity, build_runtime_loaded_receipt
     from quant_platform_kit.common.runtime_target import RuntimeTarget
@@ -2602,7 +2602,7 @@ def test_original_not_backdated_to_effective_session(tmp_path):
 
 
 def test_restore_happens_before_first_plan_and_refresh_retains_originals(tmp_path):
-    from application.execution_intent_continuity import _IntentSession
+    from charles_schwab_platform.application.execution_intent_continuity import _IntentSession
     c = continuity_case(tmp_path)
     run_strategy_core(runtime=c.runtime, config=c.config)
     second = continuity_case(tmp_path, "2026-10-01")
@@ -2624,7 +2624,7 @@ def continuity_process_worker(root, day, kind, branch, fault):
     """Launched by the outer guarded evidence runner as a fresh interpreter."""
     import json
     from unittest.mock import patch
-    from application import account_new_risk_gate_support, daily_loss_fact_producer
+    from charles_schwab_platform.application import account_new_risk_gate_support, daily_loss_fact_producer
     def response(_):
         if fault == "crash":
             raise SystemExit(73) # after durable claim, before any broker receipt
@@ -2637,7 +2637,7 @@ def continuity_process_worker(root, day, kind, branch, fault):
          patch.object(account_new_risk_gate_support, "resolve_production_drift_status_from_store", return_value=None), \
          patch.object(daily_loss_fact_producer, "load_recent_runtime_reports_from_gcs", return_value=()):
         if fault == "claim_crash":
-            from application.execution_intent_continuity import _IntentSession
+            from charles_schwab_platform.application.execution_intent_continuity import _IntentSession
             original_prepare = _IntentSession.prepare
             def claim_then_crash(self, **kwargs):
                 ticket = original_prepare(self, **kwargs)
@@ -2719,7 +2719,7 @@ def _offline_caller_external_ports(monkeypatch, request, tmp_path):
     if request.instance is not None:
         request.instance.native_test_root = tmp_path
     monkeypatch.setattr(socket, "has_ipv6", False)
-    from application import account_new_risk_gate_support, daily_loss_fact_producer
+    from charles_schwab_platform.application import account_new_risk_gate_support, daily_loss_fact_producer
     monkeypatch.setattr(rebalance_service, "try_record_platform_execution", lambda *args, **kwargs: False)
     monkeypatch.setattr(daily_loss_fact_producer, "load_recent_runtime_reports_from_gcs", lambda **kwargs: ())
     monkeypatch.setattr(account_new_risk_gate_support, "resolve_production_drift_status_from_store", lambda **kwargs: None)
@@ -2731,7 +2731,7 @@ def test_final_buy_uses_the_selected_refreshed_snapshot_source(tmp_path, refresh
     from copy import deepcopy
     from datetime import timedelta
     from dataclasses import asdict
-    from application.execution_intent_continuity import _canonical_json, _digest
+    from charles_schwab_platform.application.execution_intent_continuity import _canonical_json, _digest
     c = continuity_case(tmp_path)
     qualify_synthetic_sell(c)
     # Lower cash prevents early refresh-loop exit. The best snapshot can be an
@@ -2807,8 +2807,8 @@ def resolution_material(original, current, *, terminal="FILLED", filled=None, or
     """Synthetic externally-qualified immutable source; no broker parser/auth."""
     import json
     from dataclasses import asdict
-    from application.execution_intent_continuity import _canonical_json, _digest
-    from application.execution_event_accounting import ExecutionEventLedger
+    from charles_schwab_platform.application.execution_intent_continuity import _canonical_json, _digest
+    from charles_schwab_platform.application.execution_event_accounting import ExecutionEventLedger
     refs=json.loads(original.locator.read_registered().payload_json)["references"]
     ref=refs[0]
     command=json.loads(original.store.object_store.read_text(ref["descriptor_uri"]))
@@ -2841,7 +2841,7 @@ def resolution_material(original, current, *, terminal="FILLED", filled=None, or
 
 def with_resolution_source(context, body, *, qualified=True, uri="synthetic-evidence://qualified/receipt"):
     from dataclasses import replace
-    from application.execution_intent_continuity import _canonical_json,_digest
+    from charles_schwab_platform.application.execution_intent_continuity import _canonical_json,_digest
     raw=_canonical_json(body)
     fields={"resolution_sources":{uri:_digest(raw)} if qualified else {},"resolution_receipts":{uri:raw}}
     if all(name in context.__dataclass_fields__ for name in fields):
@@ -2925,7 +2925,7 @@ def test_resolved_original_never_supplies_cash_sellable_or_new_risk_approval(tmp
 @pytest.mark.parametrize("after_commit",[False,True])
 def test_resolution_proof_registration_cas_failure_never_grants_transport(tmp_path,after_commit):
     from unittest.mock import patch
-    from application.execution_intent_continuity import _IntentSession
+    from charles_schwab_platform.application.execution_intent_continuity import _IntentSession
     def lost(_):raise TimeoutError("synthetic")
     original=continuity_case(tmp_path,fault=lost)
     run_strategy_core(runtime=original.runtime,config=original.config)
@@ -2954,7 +2954,7 @@ def test_resolution_proof_registration_cas_failure_never_grants_transport(tmp_pa
     "cross_account","cross_cohort","repeated_native_fact","unrelated_binding"])
 def test_resolution_identity_component_uniqueness_in_actual_caller(tmp_path,branch,variant):
     from copy import deepcopy
-    from application.execution_intent_continuity import _IntentSession
+    from charles_schwab_platform.application.execution_intent_continuity import _IntentSession
     def lost(_):raise TimeoutError("synthetic")
     original=continuity_case(tmp_path,branch=branch,fault=lost)
     run_strategy_core(runtime=original.runtime,config=original.config)
@@ -3012,7 +3012,7 @@ def test_resolution_identity_component_uniqueness_in_actual_caller(tmp_path,bran
 @pytest.mark.parametrize("conflict",[False,True])
 def test_resolution_receipt_collection_requires_unique_broker_binding(tmp_path,branch,known_first_identity,conflict):
     import json
-    from application.execution_intent_continuity import _canonical_json,_digest,_IntentSession
+    from charles_schwab_platform.application.execution_intent_continuity import _canonical_json,_digest,_IntentSession
     box={}
     def first_transport(intent):
         if len(box["original"].calls)==1:
@@ -3118,8 +3118,8 @@ def test_A_native_pending_sender_and_complete_raw9_remain_stable(tmp_path, monke
     import os
     from dataclasses import asdict, replace
     from unittest.mock import patch
-    from application.execution_receipt_adapter import attach_cycle_execution_receipt
-    from notifications import unified
+    from charles_schwab_platform.application.execution_receipt_adapter import attach_cycle_execution_receipt
+    from charles_schwab_platform.notifications import unified
     from quant_platform_kit.common import execution_receipts
 
     class CAS:
@@ -3175,7 +3175,7 @@ def test_A_native_pending_sender_and_complete_raw9_remain_stable(tmp_path, monke
                     "strategy_profile": case.scope.profile_id, "service_name": "synthetic-service",
                     "runtime_target": notification_target, "dry_run": False,
                     "started_at": fixed.isoformat(), "run_id": "synthetic-A-fixed-run"}
-                with patch("application.signal_snapshot._utcnow", return_value=fixed), unified.notification_context(notification_report):
+                with patch("charles_schwab_platform.application.signal_snapshot._utcnow", return_value=fixed), unified.notification_context(notification_report):
                     result = run_strategy_core(runtime=runtime, config=case.config)
                 assert sent == [], label
                 assert len(case.calls) == len(result.submitted_orders) == 1
@@ -3187,7 +3187,7 @@ def test_A_native_pending_sender_and_complete_raw9_remain_stable(tmp_path, monke
                 assert projection["runs"][0]["source_run_id"] == "synthetic-A-fixed-run"
                 assert projection["runs"][0]["order_count"] == 1
                 assert projection["runs"][0]["fill_count"] is None
-                from notifications.renderers import render_trade_notification
+                from charles_schwab_platform.notifications.renderers import render_trade_notification
                 rendered = render_trade_notification(translator=case.config.translator,
                     strategy_display_name=case.config.strategy_display_name, dry_run_only=False,
                     extra_notification_lines=case.config.extra_notification_lines,
@@ -3242,7 +3242,7 @@ def test_unproven_sell_resources_cannot_be_reused_across_cycles(tmp_path, branch
 @pytest.mark.parametrize("branch", ["port", "fallback"])
 @pytest.mark.parametrize("invalid_target", [False, True])
 def test_resource_refusal_keeps_native_old_sell_obligation_and_known_identity(tmp_path, state, branch, invalid_target):
-    from application.execution_intent_continuity import _IntentSession
+    from charles_schwab_platform.application.execution_intent_continuity import _IntentSession
     from quant_platform_kit.common.execution_commands import ExecutionCommandState
     from quant_platform_kit.common.models import OrderIntent
     old = continuity_case(tmp_path, branch=branch)
@@ -3278,7 +3278,7 @@ def qualify_synthetic_sell(case, order=None, *, context=None):
     native admission, immutable descriptors, claims and CAS still execute.
     """
     from dataclasses import asdict
-    from application.execution_intent_continuity import _IntentSession, _canonical_json, _digest
+    from charles_schwab_platform.application.execution_intent_continuity import _IntentSession, _canonical_json, _digest
     from quant_platform_kit.common.long_only_reduce import validate_long_only_reduce_only_order
     from quant_platform_kit.common.models import OrderIntent
     if order is None:
@@ -3323,7 +3323,7 @@ def qualify_synthetic_sell(case, order=None, *, context=None):
 
 def synthetic_sell_session(root, plan, order, *, snapshot=None, profile_id="SYNTH_PROFILE"):
     """Native context for old sizing/legacy tests, with explicit synthetic facts."""
-    from application.execution_intent_continuity import _IntentSession
+    from charles_schwab_platform.application.execution_intent_continuity import _IntentSession
     day = plan["execution"].get("effective_date", "2026-09-30")
     case = continuity_case(root, day, account_hash=plan["account_hash"], profile_id=profile_id)
     if snapshot is None:
@@ -3370,7 +3370,7 @@ def test_verified_original_closure_does_not_reenter_sell_resource_obligations(tm
     assert "accepted by broker" in sell_log
     assert "fill not confirmed" in sell_log
     assert "risk reduced" not in sell_log.lower()
-    from application.execution_intent_continuity import _IntentSession
+    from charles_schwab_platform.application.execution_intent_continuity import _IntentSession
     from quant_platform_kit.common.execution_commands import ExecutionCommandState
     current = continuity_case(tmp_path, "2026-10-01", branch=branch)
     quantity = 4
@@ -3414,7 +3414,7 @@ def seed_synthetic_native_sell(case, order, *, unknown=False, broker_order_id=No
     This does not exercise current execute_rebalance_cycle multi-SELL. Never
     mutate a flat proof to pretend it authorized multiple concurrent proposals.
     """
-    from application.execution_intent_continuity import _IntentSession
+    from charles_schwab_platform.application.execution_intent_continuity import _IntentSession
     qualified = qualify_synthetic_sell(case, order)
     session = _IntentSession(qualified.context, snapshot=case.snapshot, profile_id=case.scope.profile_id)
     session.register_plan_source(case.plan, case.snapshot)

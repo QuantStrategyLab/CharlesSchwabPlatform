@@ -19,14 +19,14 @@ SCRIPT_PATH = ROOT / "scripts" / "print_strategy_profile_status.py"
 SWITCH_PLAN_SCRIPT_PATH = ROOT / "scripts" / "print_strategy_switch_env_plan.py"
 
 
-from runtime_config_support import (  # noqa: E402
+from charles_schwab_platform.runtime_config_support import (  # noqa: E402
     DEFAULT_NOTIFY_LANG,
     DEFAULT_RESERVED_CASH_FLOOR_USD,
     DEFAULT_RESERVED_CASH_RATIO,
     DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
     load_platform_runtime_settings,
 )
-from strategy_registry import (
+from charles_schwab_platform.strategy_registry import (
     SCHWAB_PLATFORM,
     US_EQUITY_DOMAIN,
     get_eligible_profiles_for_platform,

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from application.account_observation import build_account_observation
+from charles_schwab_platform.application.account_observation import build_account_observation
 
 
 def row(symbol="OTHER", **changes):
@@ -61,7 +61,7 @@ def test_unknown_currency_is_not_substituted_with_usd():
 
 
 def test_inventory_metadata_survives_existing_nlv_alignment_and_reaches_observation():
-    from application.portfolio_nlv_align import align_cash_only_sleeve_to_broker_liquidation
+    from charles_schwab_platform.application.portfolio_nlv_align import align_cash_only_sleeve_to_broker_liquidation
 
     native = {"positions_field_present": True, "native_positions_count": 1,
               "positions": [row()]}
@@ -81,12 +81,12 @@ def test_reporting_metadata_does_not_change_actual_risk_plan_or_execution_identi
     from dataclasses import replace
     from hashlib import sha256
     import json
-    from application.rebalance_service import _build_execution_marker_key
-    from application.runtime_dependencies import SchwabRebalanceConfig
-    from application import execution_service
-    from application.execution_service import execute_rebalance_cycle
-    from notifications.telegram import build_translator
-    from decision_mapper import map_strategy_decision_to_plan
+    from charles_schwab_platform.application.rebalance_service import _build_execution_marker_key
+    from charles_schwab_platform.application.runtime_dependencies import SchwabRebalanceConfig
+    from charles_schwab_platform.application import execution_service
+    from charles_schwab_platform.application.execution_service import execute_rebalance_cycle
+    from charles_schwab_platform.notifications.telegram import build_translator
+    from charles_schwab_platform.decision_mapper import map_strategy_decision_to_plan
     from quant_platform_kit.common.capital_base import build_capital_base_snapshot, CapitalScope, CapitalValuationBasis
     from quant_platform_kit.common.models import PortfolioSnapshot, Position, ExecutionReport, QuoteSnapshot
     from quant_platform_kit.common.port_adapters import CallableExecutionPort, CallableMarketDataPort
@@ -163,10 +163,10 @@ def test_reporting_metadata_does_not_change_actual_risk_plan_or_execution_identi
 @pytest.mark.parametrize("declared_currency,expected", [(None, "unknown"), ("USD", "available")])
 def test_natural_cycle_passes_explicit_owner_currency_without_more_snapshot_reads(monkeypatch, capsys, declared_currency, expected):
     from unittest.mock import Mock
-    from application import rebalance_service
-    from application.rebalance_service import run_strategy_core
-    from application.runtime_dependencies import SchwabRebalanceConfig, SchwabRebalanceRuntime
-    from notifications.telegram import build_translator
+    from charles_schwab_platform.application import rebalance_service
+    from charles_schwab_platform.application.rebalance_service import run_strategy_core
+    from charles_schwab_platform.application.runtime_dependencies import SchwabRebalanceConfig, SchwabRebalanceRuntime
+    from charles_schwab_platform.notifications.telegram import build_translator
     from quant_platform_kit.common.port_adapters import CallableMarketDataPort, CallableNotificationPort, CallablePortfolioPort
 
     monkeypatch.setattr(rebalance_service, "_should_publish_cycle_notification", lambda *args, **kwargs: False)

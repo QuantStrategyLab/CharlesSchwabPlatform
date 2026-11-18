@@ -39,14 +39,14 @@ def _should_add_local_src(candidate: Path) -> bool:
     return True
 
 
-for candidate in (ROOT, QPK_SRC, UES_SRC, HES_SRC):
+for candidate in (ROOT, ROOT / "src", QPK_SRC, UES_SRC, HES_SRC):
     if not _should_add_local_src(candidate):
         continue
     candidate_str = str(candidate)
     if candidate_str not in sys.path:
         sys.path.insert(0, candidate_str)
 
-from strategy_registry import (  # noqa: E402
+from charles_schwab_platform.strategy_registry import (  # noqa: E402
     SCHWAB_PLATFORM,
     get_platform_profile_status_matrix,
     resolve_strategy_definition,

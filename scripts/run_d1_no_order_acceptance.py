@@ -14,16 +14,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from quant_platform_kit.common.models import PortfolioSnapshot
+_ROOT = Path(__file__).resolve().parents[1]
+_SRC = _ROOT / "src"
+for _path in (str(_SRC), str(_ROOT)):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
 
-from application.d1_no_order_integration import (
+from quant_platform_kit.common.models import PortfolioSnapshot  # noqa: E402
+
+from charles_schwab_platform.application.d1_no_order_integration import (  # noqa: E402
     NoOrderBrokerTransport,
     import_recorded_native_observations,
     observe_expected_cycle,
     record_synthetic_explicit_case,
     run_no_order_cycle,
 )
-from application.offline_fault_acceptance import _buy_book, _run_cycle, _scenario_risk_pause
+from charles_schwab_platform.application.offline_fault_acceptance import _buy_book, _run_cycle, _scenario_risk_pause
 
 
 class _CapturingClient:
@@ -45,14 +51,15 @@ class _CapturingClient:
 
 def _child_env() -> dict[str, str]:
     env = {key: os.environ[key] for key in ("PATH", "HOME", "LANG", "VIRTUAL_ENV") if key in os.environ}
-    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+    root = Path(__file__).resolve().parents[1]
+    env["PYTHONPATH"] = os.pathsep.join((str(root / "src"), str(root)))
     return env
 
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:1] == ["--recover"]:
-        from application.d1_no_order_integration import recover_no_order_state
+        from charles_schwab_platform.application.d1_no_order_integration import recover_no_order_state
 
         recovery = recover_no_order_state(argv[1])
         recovery["missing_cycle_recheck"] = observe_expected_cycle(argv[1], expected_date="2026-09-27")
@@ -61,7 +68,7 @@ def main(argv: list[str] | None = None) -> int:
     client = _CapturingClient()
     transport = NoOrderBrokerTransport(client)
     positive_transport = NoOrderBrokerTransport(client)
-    with patch("application.execution_service.maybe_publish_attention_for_admission", return_value={
+    with patch("charles_schwab_platform.application.execution_service.maybe_publish_attention_for_admission", return_value={
         "sent": 0, "skipped": 0, "failed": 0,
     }), redirect_stdout(io.StringIO()):
         positive_portfolio, positive_allocation = _buy_book()
@@ -130,7 +137,7 @@ def main(argv: list[str] | None = None) -> int:
         "client_trading_calls": client.calls,
         "transport_refused": cycle["transport_refused"],
         "positive_execution_probe": {
-            "real_execution_entry": "application.execution_service.execute_rebalance_cycle",
+            "real_execution_entry": "charles_schwab_platform.application.execution_service.execute_rebalance_cycle",
             "port_attempt_count": len(positive_port_calls),
             "transport_refused": positive_transport.refused,
             "execution_status": positive_result.execution.get("execution_status"),

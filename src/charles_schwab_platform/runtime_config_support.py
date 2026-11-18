@@ -1,0 +1,407 @@
+from __future__ import annotations
+
+import math
+import os
+import json
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Mapping
+
+from quant_platform_kit.common.runtime_config import (
+    resolve_bool_value,
+    resolve_cash_only_execution_env,
+    resolve_dry_run_env,
+    resolve_optional_bool_env,
+    resolve_optional_dca_mode_env,
+    resolve_optional_positive_float_env,
+    resolve_optional_ratio_env,
+    resolve_split_env_list,
+    resolve_strategy_runtime_path_settings,
+)
+from quant_platform_kit.common.runtime_target import (
+    RuntimeTarget,
+    resolve_runtime_target_from_env,
+)
+from quant_platform_kit.common.live_continuity import runtime_target_permits_standard_execution
+from charles_schwab_platform.strategy_registry import (
+    SCHWAB_PLATFORM,
+    resolve_strategy_definition,
+    resolve_strategy_metadata,
+)
+from us_equity_strategies import get_strategy_catalog
+
+DEFAULT_NOTIFY_LANG = "en"
+DEFAULT_RESERVED_CASH_FLOOR_USD = 0.0
+DEFAULT_RESERVED_CASH_RATIO = 0.0
+DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD = 1000.0
+
+
+@dataclass(frozen=True)
+class PlatformRuntimeSettings:
+    strategy_profile: str
+    strategy_display_name: str
+    strategy_domain: str
+    notify_lang: str
+    dry_run_only: bool
+    runtime_target_enabled: bool = False
+    paper_execution_admission_enabled: bool = False
+    paper_execution_command_consumer_enabled: bool = False
+    reserved_cash_floor_usd: float = DEFAULT_RESERVED_CASH_FLOOR_USD
+    reserved_cash_ratio: float = DEFAULT_RESERVED_CASH_RATIO
+    safe_haven_cash_substitute_threshold_usd: float = DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD
+    cash_only_execution: bool = True
+    income_layer_enabled: bool | None = None
+    income_layer_start_usd: float | None = None
+    income_layer_max_ratio: float | None = None
+    dca_mode: str | None = None
+    dca_base_investment_usd: float | None = None
+    market_signal_handoff_index_uri: str | None = None
+    market_signal_handoff_manifest_uri: str | None = None
+    market_signal_consumption_audit_uri: str | None = None
+    market_signal_cache_dir: str | None = None
+    market_signal_required: bool = False
+    market_signal_fallback_mode: str | None = None
+    market_signal_max_stale_days: int | None = None
+    feature_snapshot_path: str | None = None
+    feature_snapshot_manifest_path: str | None = None
+    feature_snapshot_fallback_mode: str | None = None
+    feature_snapshot_fallback_cache_dir: str | None = None
+    feature_snapshot_fallback_max_stale_days: int | None = None
+    strategy_config_path: str | None = None
+    strategy_config_source: str | None = None
+    strategy_plugin_mounts_json: str | None = None
+    strategy_plugin_alert_channels: tuple[str, ...] = ()
+    strategy_plugin_alert_email_recipients: tuple[str, ...] = ()
+    strategy_plugin_alert_email_sender_email: str | None = None
+    strategy_plugin_alert_email_sender_password: str | None = None
+    strategy_plugin_alert_email_smtp_host: str | None = None
+    strategy_plugin_alert_email_smtp_port: str | None = None
+    strategy_plugin_alert_email_smtp_security: str | None = None
+    strategy_plugin_alert_sms_recipients: tuple[str, ...] = ()
+    strategy_plugin_alert_sms_provider: str | None = None
+    strategy_plugin_alert_sms_account_id: str | None = None
+    strategy_plugin_alert_sms_auth_token: str | None = None
+    strategy_plugin_alert_sms_sender: str | None = None
+    strategy_plugin_alert_sms_messaging_service_id: str | None = None
+    strategy_plugin_alert_sms_api_base_url: str | None = None
+    strategy_plugin_alert_sms_body_max_chars: str | None = None
+    strategy_plugin_alert_push_recipients: tuple[str, ...] = ()
+    strategy_plugin_alert_push_provider: str | None = None
+    strategy_plugin_alert_push_app_token: str | None = None
+    strategy_plugin_alert_push_access_token: str | None = None
+    strategy_plugin_alert_push_api_base_url: str | None = None
+    strategy_plugin_alert_push_device: str | None = None
+    strategy_plugin_alert_push_priority: str | None = None
+    strategy_plugin_alert_push_tags: str | None = None
+    strategy_plugin_alert_push_body_max_chars: str | None = None
+    strategy_plugin_alert_telegram_chat_ids: tuple[str, ...] = ()
+    strategy_plugin_alert_telegram_bot_token: str | None = None
+    strategy_plugin_alert_telegram_api_base_url: str | None = None
+    strategy_plugin_alert_telegram_parse_mode: str | None = None
+    strategy_plugin_alert_telegram_disable_web_page_preview: str | None = None
+    strategy_plugin_alert_telegram_body_max_chars: str | None = None
+    notification_channel: str = "telegram"
+    wecom_webhook_url: str | None = None
+    dingtalk_webhook_url: str | None = None
+    feishu_webhook_url: str | None = None
+    serverchan_webhook_url: str | None = None
+    runtime_target: RuntimeTarget | None = None
+    strategy_metadata: Any = None
+    trusted_runtime_risk_policy: Mapping[str, Any] | None = None
+
+
+def _resolve_non_negative_float_env(name: str, *, default: float) -> float:
+    raw_value = os.getenv(name)
+    if raw_value is None or raw_value.strip() == "":
+        return float(default)
+    value = float(raw_value)
+    if value < 0:
+        raise ValueError(f"{name} must be non-negative, got {value}")
+    return value
+
+
+def _resolve_ratio_env(name: str, *, default: float) -> float:
+    value = _resolve_non_negative_float_env(name, default=default)
+    if value > 1.0:
+        raise ValueError(f"{name} must be in [0,1], got {value}")
+    return value
+
+
+
+def _optional_non_negative_float_env(name: str) -> float | None:
+    raw_value = os.getenv(name)
+    if raw_value is None or raw_value.strip() == "":
+        return None
+    value = float(raw_value)
+    if not math.isfinite(value):
+        raise ValueError(f"{name} must be finite, got {value}")
+    if value < 0:
+        raise ValueError(f"{name} must be non-negative, got {value}")
+    return value
+
+
+
+def _runtime_target_enabled_env() -> bool:
+    return resolve_optional_bool_env("RUNTIME_TARGET_ENABLED", default=False)
+
+
+def _optional_bool_env(name: str) -> bool | None:
+    raw_value = os.getenv(f"QSL_{name}") or os.getenv(name)
+    if raw_value is None or str(raw_value).strip() == "":
+        return None
+    return resolve_optional_bool_env(name)
+
+
+def _first_non_empty(*raw_values: str | None) -> str | None:
+    for raw_value in raw_values:
+        value = str(raw_value or "").strip()
+        if value:
+            return value
+    return None
+
+
+def _optional_int(raw_value: str | None) -> int | None:
+    value = str(raw_value or "").strip()
+    if not value:
+        return None
+    return int(value)
+
+
+def resolve_strategy_profile(raw_value: str | None = None) -> str:
+    """Resolve strategy profile from RUNTIME_TARGET_JSON (via raw_value).
+
+    The deprecated STRATEGY_PROFILE env-var fallback was removed because
+    RUNTIME_TARGET_JSON is the single source of truth.  Callers must pass
+    the value extracted from the runtime target.
+    """
+    if raw_value is None:
+        raise EnvironmentError(
+            "RUNTIME_TARGET_JSON must contain strategy_profile; "
+            "the deprecated STRATEGY_PROFILE env var is no longer read"
+        )
+    return resolve_strategy_definition(
+        raw_value,
+        platform_id=SCHWAB_PLATFORM,
+    ).profile
+
+
+def _load_trusted_runtime_risk_policy() -> Mapping[str, Any] | None:
+    """Read risk limits only from the deployment runtime target JSON."""
+    raw_target = os.getenv("RUNTIME_TARGET_JSON")
+    if raw_target is None or not raw_target.strip():
+        return None
+    try:
+        payload = json.loads(raw_target)
+    except (TypeError, ValueError) as exc:
+        raise EnvironmentError("RUNTIME_TARGET_JSON must be valid JSON") from exc
+    if not isinstance(payload, dict):
+        raise EnvironmentError("RUNTIME_TARGET_JSON must decode to an object")
+    policy = payload.get("runtime_risk_limits")
+    if policy is None:
+        return None
+    if not isinstance(policy, dict):
+        raise EnvironmentError("RUNTIME_TARGET_JSON.runtime_risk_limits must be an object")
+    return dict(policy)
+
+
+def load_platform_runtime_settings() -> PlatformRuntimeSettings:
+    runtime_target = resolve_runtime_target_from_env(env=os.environ, expected_platform_id=SCHWAB_PLATFORM)
+    trusted_runtime_risk_policy = _load_trusted_runtime_risk_policy()
+    dry_run_only = resolve_dry_run_env(os.environ, "SCHWAB_DRY_RUN_ONLY")
+    paper_execution_admission_enabled = resolve_optional_bool_env(
+        "SCHWAB_PAPER_EXECUTION_ADMISSION_ENABLED",
+        default=False,
+    )
+    paper_execution_command_consumer_enabled = resolve_optional_bool_env(
+        "SCHWAB_PAPER_EXECUTION_COMMAND_CONSUMER_ENABLED",
+        default=False,
+    )
+    if paper_execution_admission_enabled and (
+        not dry_run_only or str(runtime_target.execution_mode or "").strip().lower() != "paper"
+    ):
+        raise EnvironmentError(
+            "SCHWAB_PAPER_EXECUTION_ADMISSION_ENABLED requires a dry-run PAPER runtime target"
+        )
+    if paper_execution_command_consumer_enabled and (
+        not dry_run_only or str(runtime_target.execution_mode or "").strip().lower() != "paper"
+    ):
+        raise EnvironmentError(
+            "SCHWAB_PAPER_EXECUTION_COMMAND_CONSUMER_ENABLED requires a dry-run PAPER runtime target"
+        )
+    strategy_definition = resolve_strategy_definition(
+        runtime_target.strategy_profile,
+        platform_id=SCHWAB_PLATFORM,
+    )
+    strategy_metadata = resolve_strategy_metadata(
+        strategy_definition.profile,
+        platform_id=SCHWAB_PLATFORM,
+    )
+    runtime_paths = resolve_strategy_runtime_path_settings(
+        strategy_catalog=get_strategy_catalog(),
+        strategy_definition=strategy_definition,
+        strategy_metadata=strategy_metadata,
+        platform_env_prefix="SCHWAB",
+        env=os.environ,
+        repo_root=Path(__file__).resolve().parents[2],
+    )
+    return PlatformRuntimeSettings(
+        strategy_profile=runtime_paths.strategy_profile,
+        strategy_display_name=runtime_paths.strategy_display_name,
+        strategy_domain=runtime_paths.strategy_domain,
+        strategy_metadata=strategy_metadata,
+        notify_lang=os.getenv("QSL_NOTIFY_LANG") or os.getenv("NOTIFY_LANG", DEFAULT_NOTIFY_LANG),
+        dry_run_only=dry_run_only,
+        runtime_target_enabled=(
+            _runtime_target_enabled_env()
+            and runtime_target_permits_standard_execution(runtime_target)
+        ),
+        paper_execution_admission_enabled=paper_execution_admission_enabled,
+        paper_execution_command_consumer_enabled=paper_execution_command_consumer_enabled,
+        reserved_cash_floor_usd=_resolve_non_negative_float_env(
+            "SCHWAB_MIN_RESERVED_CASH_USD",
+            default=DEFAULT_RESERVED_CASH_FLOOR_USD,
+        ),
+        reserved_cash_ratio=_resolve_ratio_env(
+            "SCHWAB_RESERVED_CASH_RATIO",
+            default=DEFAULT_RESERVED_CASH_RATIO,
+        ),
+        safe_haven_cash_substitute_threshold_usd=_resolve_non_negative_float_env(
+            "SCHWAB_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD",
+            default=DEFAULT_SAFE_HAVEN_CASH_SUBSTITUTE_THRESHOLD_USD,
+        ),
+        cash_only_execution=resolve_cash_only_execution_env(
+            os.environ,
+            platform_env_prefix="SCHWAB",
+        ),
+        income_layer_enabled=_optional_bool_env("INCOME_LAYER_ENABLED"),
+        income_layer_start_usd=_optional_non_negative_float_env("INCOME_LAYER_START_USD"),
+        income_layer_max_ratio=resolve_optional_ratio_env("INCOME_LAYER_MAX_RATIO"),
+        dca_mode=resolve_optional_dca_mode_env("DCA_MODE"),
+        dca_base_investment_usd=resolve_optional_positive_float_env("DCA_BASE_INVESTMENT_USD"),
+        market_signal_handoff_index_uri=_first_non_empty(
+            os.getenv("SCHWAB_MARKET_SIGNAL_HANDOFF_INDEX_URI"),
+            os.getenv("MARKET_SIGNAL_HANDOFF_INDEX_URI"),
+        ),
+        market_signal_handoff_manifest_uri=_first_non_empty(
+            os.getenv("SCHWAB_MARKET_SIGNAL_HANDOFF_MANIFEST_URI"),
+            os.getenv("MARKET_SIGNAL_HANDOFF_MANIFEST_URI"),
+        ),
+        market_signal_consumption_audit_uri=_first_non_empty(
+            os.getenv("SCHWAB_MARKET_SIGNAL_CONSUMPTION_AUDIT_URI"),
+            os.getenv("MARKET_SIGNAL_CONSUMPTION_AUDIT_URI"),
+        ),
+        market_signal_cache_dir=_first_non_empty(
+            os.getenv("SCHWAB_MARKET_SIGNAL_CACHE_DIR"),
+            os.getenv("MARKET_SIGNAL_CACHE_DIR"),
+        ),
+        market_signal_required=resolve_bool_value(
+            _first_non_empty(
+                os.getenv("SCHWAB_MARKET_SIGNAL_REQUIRED"),
+                os.getenv("MARKET_SIGNAL_REQUIRED"),
+                "false",
+            )
+        ),
+        market_signal_fallback_mode=_first_non_empty(
+            os.getenv("SCHWAB_MARKET_SIGNAL_FALLBACK_MODE"),
+            os.getenv("MARKET_SIGNAL_FALLBACK_MODE"),
+        ),
+        market_signal_max_stale_days=_optional_int(
+            _first_non_empty(
+                os.getenv("SCHWAB_MARKET_SIGNAL_MAX_STALE_DAYS"),
+                os.getenv("SCHWAB_MARKET_SIGNAL_FALLBACK_MAX_STALE_DAYS"),
+                os.getenv("MARKET_SIGNAL_MAX_STALE_DAYS"),
+                os.getenv("MARKET_SIGNAL_FALLBACK_MAX_STALE_DAYS"),
+            )
+        ),
+        feature_snapshot_path=runtime_paths.feature_snapshot_path,
+        feature_snapshot_manifest_path=runtime_paths.feature_snapshot_manifest_path,
+        feature_snapshot_fallback_mode=_first_non_empty(
+            os.getenv("SCHWAB_FEATURE_SNAPSHOT_FALLBACK_MODE"),
+            os.getenv("FEATURE_SNAPSHOT_FALLBACK_MODE"),
+        ),
+        feature_snapshot_fallback_cache_dir=_first_non_empty(
+            os.getenv("SCHWAB_FEATURE_SNAPSHOT_FALLBACK_CACHE_DIR"),
+            os.getenv("FEATURE_SNAPSHOT_FALLBACK_CACHE_DIR"),
+        ),
+        feature_snapshot_fallback_max_stale_days=_optional_int(
+            _first_non_empty(
+                os.getenv("SCHWAB_FEATURE_SNAPSHOT_MAX_STALE_DAYS"),
+                os.getenv("SCHWAB_FEATURE_SNAPSHOT_FALLBACK_MAX_STALE_DAYS"),
+                os.getenv("FEATURE_SNAPSHOT_MAX_STALE_DAYS"),
+                os.getenv("FEATURE_SNAPSHOT_FALLBACK_MAX_STALE_DAYS"),
+            )
+        ),
+        strategy_config_path=runtime_paths.strategy_config_path,
+        strategy_config_source=runtime_paths.strategy_config_source,
+        strategy_plugin_mounts_json=(
+            os.getenv("SCHWAB_STRATEGY_PLUGIN_MOUNTS_JSON")
+            or os.getenv("QSL_STRATEGY_PLUGIN_MOUNTS_JSON")
+            or os.getenv("STRATEGY_PLUGIN_MOUNTS_JSON")
+        ),
+        **_load_strategy_plugin_alert_settings(),
+        notification_channel=os.getenv("NOTIFICATION_CHANNEL", "telegram"),
+        wecom_webhook_url=os.getenv("NOTIFICATION_WECOM_WEBHOOK_URL"),
+        dingtalk_webhook_url=os.getenv("NOTIFICATION_DINGTALK_WEBHOOK_URL"),
+        feishu_webhook_url=os.getenv("NOTIFICATION_FEISHU_WEBHOOK_URL"),
+        serverchan_webhook_url=os.getenv("NOTIFICATION_SERVERCHAN_WEBHOOK_URL"),
+        runtime_target=runtime_target,
+        trusted_runtime_risk_policy=trusted_runtime_risk_policy,
+    )
+
+
+def _load_strategy_plugin_alert_settings() -> dict[str, object]:
+    return {
+        'strategy_plugin_alert_channels': resolve_split_env_list("STRATEGY_PLUGIN_ALERT_CHANNELS"),
+        'strategy_plugin_alert_email_recipients': resolve_split_env_list("STRATEGY_PLUGIN_ALERT_EMAIL_RECIPIENTS"),
+        'strategy_plugin_alert_email_sender_email': _first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_EMAIL_SENDER_EMAIL")),
+        'strategy_plugin_alert_email_sender_password': _first_non_empty(
+            os.getenv("STRATEGY_PLUGIN_ALERT_EMAIL_SENDER_PASSWORD")
+        ),
+        'strategy_plugin_alert_email_smtp_host': _first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_EMAIL_SMTP_HOST")),
+        'strategy_plugin_alert_email_smtp_port': _first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_EMAIL_SMTP_PORT")),
+        'strategy_plugin_alert_email_smtp_security': _first_non_empty(
+            os.getenv("STRATEGY_PLUGIN_ALERT_EMAIL_SMTP_SECURITY")
+        ),
+        'strategy_plugin_alert_sms_recipients': resolve_split_env_list("STRATEGY_PLUGIN_ALERT_SMS_RECIPIENTS"),
+        'strategy_plugin_alert_sms_provider': _first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_SMS_PROVIDER")),
+        'strategy_plugin_alert_sms_account_id': _first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_SMS_ACCOUNT_ID")),
+        'strategy_plugin_alert_sms_auth_token': _first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_SMS_AUTH_TOKEN")),
+        'strategy_plugin_alert_sms_sender': _first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_SMS_SENDER")),
+        'strategy_plugin_alert_sms_messaging_service_id': _first_non_empty(
+            os.getenv("STRATEGY_PLUGIN_ALERT_SMS_MESSAGING_SERVICE_ID")
+        ),
+        'strategy_plugin_alert_sms_api_base_url': _first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_SMS_API_BASE_URL")),
+        'strategy_plugin_alert_sms_body_max_chars': _first_non_empty(
+            os.getenv("STRATEGY_PLUGIN_ALERT_SMS_BODY_MAX_CHARS")
+        ),
+        'strategy_plugin_alert_push_recipients': resolve_split_env_list("STRATEGY_PLUGIN_ALERT_PUSH_RECIPIENTS"),
+        'strategy_plugin_alert_push_provider': _first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_PROVIDER")),
+        'strategy_plugin_alert_push_app_token': _first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_APP_TOKEN")),
+        'strategy_plugin_alert_push_access_token': _first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_ACCESS_TOKEN")),
+        'strategy_plugin_alert_push_api_base_url': _first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_API_BASE_URL")),
+        'strategy_plugin_alert_push_device': _first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_DEVICE")),
+        'strategy_plugin_alert_push_priority': _first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_PRIORITY")),
+        'strategy_plugin_alert_push_tags': _first_non_empty(os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_TAGS")),
+        'strategy_plugin_alert_push_body_max_chars': _first_non_empty(
+            os.getenv("STRATEGY_PLUGIN_ALERT_PUSH_BODY_MAX_CHARS")
+        ),
+        'strategy_plugin_alert_telegram_chat_ids': resolve_split_env_list(
+            "STRATEGY_PLUGIN_ALERT_TELEGRAM_CHAT_IDS"
+        ),
+        'strategy_plugin_alert_telegram_bot_token': _first_non_empty(
+            os.getenv("QSL_STRATEGY_PLUGIN_ALERT_TELEGRAM_BOT_TOKEN")
+            or os.getenv("STRATEGY_PLUGIN_ALERT_TELEGRAM_BOT_TOKEN")
+        ),
+        'strategy_plugin_alert_telegram_api_base_url': _first_non_empty(
+            os.getenv("STRATEGY_PLUGIN_ALERT_TELEGRAM_API_BASE_URL")
+        ),
+        'strategy_plugin_alert_telegram_parse_mode': _first_non_empty(
+            os.getenv("STRATEGY_PLUGIN_ALERT_TELEGRAM_PARSE_MODE")
+        ),
+        'strategy_plugin_alert_telegram_disable_web_page_preview': _first_non_empty(
+            os.getenv("STRATEGY_PLUGIN_ALERT_TELEGRAM_DISABLE_WEB_PAGE_PREVIEW")
+        ),
+        'strategy_plugin_alert_telegram_body_max_chars': _first_non_empty(
+            os.getenv("STRATEGY_PLUGIN_ALERT_TELEGRAM_BODY_MAX_CHARS")
+        ),
+    }

@@ -24,10 +24,11 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+for _path in (str(ROOT / "src"), str(ROOT)):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
 
-from notifications.telegram import build_sender  # noqa: E402
+from charles_schwab_platform.notifications.telegram import build_sender  # noqa: E402
 
 _QRS_SNAPSHOT = ROOT / "tests" / "qrs_snapshot"
 _PREVIEW_PLATFORM_ID = "schwab"

@@ -10,7 +10,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from quant_platform_kit.common import build_runtime_assembly, build_runtime_target  # noqa: E402
-from application.runtime_reporting_adapters import build_runtime_reporting_adapters  # noqa: E402
+from charles_schwab_platform.application.runtime_reporting_adapters import build_runtime_reporting_adapters  # noqa: E402
 
 
 def test_runtime_reporting_adapters_start_run_builds_report_with_runtime_target():

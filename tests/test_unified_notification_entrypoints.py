@@ -2,8 +2,8 @@ import datetime as dt
 import json
 from types import SimpleNamespace
 
-from notifications import unified
-from notifications.attention import publish_attention_telegram_transition
+from charles_schwab_platform.notifications import unified
+from charles_schwab_platform.notifications.attention import publish_attention_telegram_transition
 from quant_platform_kit.risk.attention import AttentionAxes, evaluate_attention
 from scripts import execution_report_heartbeat as heartbeat
 from test_notification_quiet import NOW, mock_heartbeat, report

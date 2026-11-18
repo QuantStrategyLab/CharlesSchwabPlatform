@@ -79,7 +79,7 @@ class ReadOnlyClient:
 
 def observe(environ, *, describe=None, load_token=None, client_factory=None, now=None):
     """Read current facts only, keeping private values in memory and PAUSED unchanged."""
-    from application.broker_reconciliation import (
+    from charles_schwab_platform.application.broker_reconciliation import (
         _normalize_order, _TERMINAL_ORDER_STATUSES, collect_read_only_reconciliation_observations,
     )
     from quant_platform_kit.schwab.portfolio import fetch_account_snapshot

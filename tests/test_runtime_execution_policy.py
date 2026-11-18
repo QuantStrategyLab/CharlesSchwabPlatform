@@ -10,8 +10,9 @@ ROOT = Path(__file__).resolve().parents[1]
 QPK_SRC = ROOT.parent / "QuantPlatformKit" / "src"
 if str(QPK_SRC) not in sys.path:
     sys.path.insert(0, str(QPK_SRC))
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+for path in (str(ROOT / "src"), str(ROOT)):
+    if path not in sys.path:
+        sys.path.insert(0, path)
 
 from quant_platform_kit.common.execution_capabilities import (
     FRACTIONAL_SHARE_EXECUTION_CAPABILITY,
@@ -50,7 +51,7 @@ _FAKE_CAPABILITY_MATRIX = PlatformCapabilityMatrix(
     supported_capabilities=frozenset(),
 )
 
-_fake_registry = types.ModuleType("strategy_registry")
+_fake_registry = types.ModuleType("charles_schwab_platform.strategy_registry")
 _fake_registry.PLATFORM_CAPABILITY_MATRIX = _FAKE_CAPABILITY_MATRIX
 _fake_registry.STRATEGY_CATALOG = _FAKE_CATALOG
 
@@ -58,17 +59,17 @@ _fake_registry.STRATEGY_CATALOG = _FAKE_CATALOG
 class RuntimeExecutionPolicyTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls._original_registry = sys.modules.get("strategy_registry")
-        sys.modules["strategy_registry"] = _fake_registry
-        policy = importlib.import_module("runtime_execution_policy")
+        cls._original_registry = sys.modules.get("charles_schwab_platform.strategy_registry")
+        sys.modules["charles_schwab_platform.strategy_registry"] = _fake_registry
+        policy = importlib.import_module("charles_schwab_platform.runtime_execution_policy")
         cls._policy = importlib.reload(policy)
 
     @classmethod
     def tearDownClass(cls) -> None:
         if cls._original_registry is None:
-            sys.modules.pop("strategy_registry", None)
+            sys.modules.pop("charles_schwab_platform.strategy_registry", None)
         else:
-            sys.modules["strategy_registry"] = cls._original_registry
+            sys.modules["charles_schwab_platform.strategy_registry"] = cls._original_registry
 
     def test_dca_profiles_are_deferred_on_schwab(self) -> None:
         for profile in ("nasdaq_sp500_smart_dca", "ibit_smart_dca"):

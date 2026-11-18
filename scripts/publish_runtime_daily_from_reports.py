@@ -23,7 +23,10 @@ from zoneinfo import ZoneInfo
 if __package__ in {None, ""}:
     from pathlib import Path
 
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    _root = Path(__file__).resolve().parents[1]
+    for _path in (str(_root / "src"), str(_root)):
+        if _path not in sys.path:
+            sys.path.insert(0, _path)
 
 from scripts.publish_account_facts_from_reports import (
     PROJECT_ID,

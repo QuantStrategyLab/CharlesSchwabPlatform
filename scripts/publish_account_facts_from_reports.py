@@ -301,7 +301,7 @@ def project_schwab_account_facts_history(
         if report.get("status") == "error":
             # A validated gate-only error still carries the broker observation.
             # Validate identity/time first and never relabel execution as healthy.
-            from notifications.approved_gates import report_gate_reasons
+            from charles_schwab_platform.notifications.approved_gates import report_gate_reasons
             if not report_gate_reasons(report, observed_at=current):
                 raise _ProjectionError("report_identity_mismatch")
 
@@ -425,14 +425,14 @@ def project_schwab_account_facts_history(
                 return_body["broker_reported_positions_complete"] = False
                 return_body["observed_finished_at"] = observation["broker_reported_positions_observed_at"]
         if external_flow_enabled is True:
-            from application.external_flow_snapshot import attach_external_flow_snapshot
+            from charles_schwab_platform.application.external_flow_snapshot import attach_external_flow_snapshot
             try:
                 return_body = attach_external_flow_snapshot(
                     return_body, report.get("account_external_flows"), enabled=True,
                 )
             except (TypeError, ValueError, AttributeError):
                 raise _ProjectionError("external_flow_invalid") from None
-        from application.forward_account_qualification import FORWARD_START, qualify_forward_account_report
+        from charles_schwab_platform.application.forward_account_qualification import FORWARD_START, qualify_forward_account_report
         if observed_at >= FORWARD_START:
             return_body["forward_reconciliation"] = qualify_forward_account_report(report, observation, return_body)
         return return_body

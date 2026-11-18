@@ -67,7 +67,7 @@ jobs:
         run: |
           uv run --no-sync python - <<'PY'
           import os
-          from notifications.unified import enabled
+          from charles_schwab_platform.notifications.unified import enabled
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('legacy=' + ('false' if enabled(os.environ) else 'true') + '\n')
           PY

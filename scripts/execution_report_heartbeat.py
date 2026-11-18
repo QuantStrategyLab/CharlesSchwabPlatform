@@ -16,12 +16,15 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+_ROOT = Path(__file__).resolve().parents[1]
+for _path in (str(_ROOT / "src"), str(_ROOT)):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
 
 from scripts.digest_coverage_warning import warn_coverage_unconfirmed
-from notifications.receipt_alerts import render_receipt_alert
-from notifications.unified import enabled as unified_enabled, publish_receipt, publish_approved_receipts
-from notifications.approved_gates import report_gate_reasons
+from charles_schwab_platform.notifications.receipt_alerts import render_receipt_alert
+from charles_schwab_platform.notifications.unified import enabled as unified_enabled, publish_receipt, publish_approved_receipts
+from charles_schwab_platform.notifications.approved_gates import report_gate_reasons
 from quant_platform_kit.common.execution_receipts import attach_execution_receipt, validate_execution_receipt
 from quant_platform_kit.common.operational_notification_localization import (
     format_operational_alert,

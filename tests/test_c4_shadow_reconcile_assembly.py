@@ -3,9 +3,9 @@ from __future__ import annotations
 import inspect
 from datetime import datetime, timedelta, timezone
 
-from application.broker_reconciliation import SchwabReconciliationObservations
-from application.c4_shadow_materialization import calculate_final_risk_assessment_sha256
-from application.c4_shadow_reconcile_assembly import (
+from charles_schwab_platform.application.broker_reconciliation import SchwabReconciliationObservations
+from charles_schwab_platform.application.c4_shadow_materialization import calculate_final_risk_assessment_sha256
+from charles_schwab_platform.application.c4_shadow_reconcile_assembly import (
     assemble_c4_shadow_zero_submit_from_reconcile_observations,
 )
 from quant_platform_kit.common.broker_reconciliation import (
@@ -86,7 +86,7 @@ def test_complete_reconcile_observations_assemble_to_ready_shadow() -> None:
     observations = _observations(complete=True)
     # Final risk is supplied by the caller; assembly binds account digest after materializing.
     # Use a two-pass helper pattern: assemble once to learn digest, then with matching risk.
-    from application.c4_shadow_reconcile_assembly import (
+    from charles_schwab_platform.application.c4_shadow_reconcile_assembly import (
         build_materialized_account_facts_from_reconcile_observations,
     )
 
@@ -131,7 +131,7 @@ def test_incomplete_open_orders_assembly_parks_without_forging_execution_coverag
 
 def test_non_approve_or_authorized_risk_assembly_parks() -> None:
     observations = _observations(complete=True)
-    from application.c4_shadow_reconcile_assembly import (
+    from charles_schwab_platform.application.c4_shadow_reconcile_assembly import (
         build_materialized_account_facts_from_reconcile_observations,
     )
 
@@ -174,7 +174,7 @@ def test_non_approve_or_authorized_risk_assembly_parks() -> None:
 
 def test_strategy_mismatch_assembly_parks() -> None:
     observations = _observations(complete=True)
-    from application.c4_shadow_reconcile_assembly import (
+    from charles_schwab_platform.application.c4_shadow_reconcile_assembly import (
         build_materialized_account_facts_from_reconcile_observations,
     )
 

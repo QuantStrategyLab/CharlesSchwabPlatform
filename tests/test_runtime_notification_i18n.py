@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from notifications.telegram import build_translator
+from charles_schwab_platform.notifications.telegram import build_translator
 
 
 @pytest.mark.parametrize("locale", ["zh-CN", "zh_TW", "ZH-hans", " zh "])
@@ -26,7 +26,7 @@ def _calls_name(node, name: str) -> bool:
 
 
 def runtime_function(name, **overrides):
-    root = Path(__file__).resolve().parents[1]
+    pkg_root = Path(__file__).resolve().parents[1] / "src" / "charles_schwab_platform"
     source_name = {
         "_runtime_error_notification_message": "notifications_runtime.py",
         "_runtime_error_notification_targets": "notifications_runtime.py",
@@ -36,7 +36,7 @@ def runtime_function(name, **overrides):
         "_handle_route_runtime_error": "notifications_runtime.py",
         "_runtime_revision_diagnostics": "runtime_wiring.py",
     }.get(name, "main.py")
-    tree = ast.parse((root / source_name).read_text())
+    tree = ast.parse((pkg_root / source_name).read_text())
     function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name)
     surface = dict(
         os=os,
@@ -80,7 +80,7 @@ def test_startup_alert_is_compact_localized_and_does_not_embed_provider_text(loc
 @pytest.mark.parametrize("handler_name", ['_handle_schwab_cycle', '_handle_schwab_probe'])
 def test_actual_cycle_exception_handler_emits_no_provider_text(handler_name, monkeypatch):
     monkeypatch.setenv("K_REVISION", "synthetic-runtime-revision")
-    source = (Path(__file__).resolve().parents[1] / "http_routes.py").read_text()
+    source = (Path(__file__).resolve().parents[1] / "src" / "charles_schwab_platform" / "http_routes.py").read_text()
     function = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef) and n.name == handler_name)
     handler = next(
         n for n in ast.walk(function)

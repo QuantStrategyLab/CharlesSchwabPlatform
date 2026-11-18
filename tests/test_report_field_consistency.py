@@ -5,14 +5,14 @@ from types import SimpleNamespace
 
 import pytest
 
-from application.runtime_report_summary import summarize_execution_cycle_result
-from notifications import unified
+from charles_schwab_platform.application.runtime_report_summary import summarize_execution_cycle_result
+from charles_schwab_platform.notifications import unified
 
 
 @pytest.mark.parametrize('status', ['blocked', 'unknown', 'failed', 'no_action', 'pending_reconciliation'])
 @pytest.mark.parametrize('observations', [None, {}, {'watch': 1}])
 def test_early_and_archived_candidates_agree(status, observations):
-    from application.runtime_report_summary import execution_report_status
+    from charles_schwab_platform.application.runtime_report_summary import execution_report_status
     target = dict(platform_id='schwab', strategy_profile='fake-strategy', service_name='fake-service',
                   account_scope='fake', account_selector=['fake'], deployment_selector='fake', dry_run_only=False)
     now = datetime.now(timezone.utc)
@@ -42,7 +42,7 @@ def test_early_and_archived_candidates_agree(status, observations):
 
 
 def test_missing_execution_fails_closed():
-    from application.runtime_report_summary import execution_report_status
+    from charles_schwab_platform.application.runtime_report_summary import execution_report_status
     assert execution_report_status({}) == 'error'
 
 
@@ -75,8 +75,8 @@ def test_current_execution_overrides_stale_summary_without_mutating_it():
 
 @pytest.mark.parametrize('previous', [{}, {'execution_status': 'completed', 'result': 'completed'}])
 def test_completed_zero_order_cycle_is_healthy_without_submission_status(monkeypatch, previous):
-    from application.runtime_report_summary import execution_report_status
-    from notifications.accepted_orders import cycle_notification_evidence
+    from charles_schwab_platform.application.runtime_report_summary import execution_report_status
+    from charles_schwab_platform.notifications.accepted_orders import cycle_notification_evidence
     from scripts import execution_report_heartbeat as heartbeat
     from test_notification_quiet import NOW, mock_heartbeat
     from test_runtime_daily_report_projection import report
@@ -105,7 +105,7 @@ def test_completed_zero_order_cycle_is_healthy_without_submission_status(monkeyp
 ])
 @pytest.mark.parametrize('dry_run', [False, True])
 def test_completion_marker_cannot_hide_missing_or_conflicting_evidence(change, dry_run):
-    from application.runtime_report_summary import execution_report_status
+    from charles_schwab_platform.application.runtime_report_summary import execution_report_status
     result = SimpleNamespace(execution={'notification_cycle_completed': True, **change},
                              submitted_orders=[], trade_logs=[])
     summary = summarize_execution_cycle_result(result, dry_run=dry_run)
@@ -113,7 +113,7 @@ def test_completion_marker_cannot_hide_missing_or_conflicting_evidence(change, d
 
 
 def test_completion_marker_does_not_establish_submission_outcome():
-    from application.runtime_report_summary import execution_report_status
+    from charles_schwab_platform.application.runtime_report_summary import execution_report_status
     result = SimpleNamespace(execution={'notification_cycle_completed': True},
                              submitted_orders=[{'status': 'unknown'}], trade_logs=[])
     assert execution_report_status(summarize_execution_cycle_result(result, dry_run=False)) == 'error'
@@ -121,8 +121,8 @@ def test_completion_marker_does_not_establish_submission_outcome():
 
 @pytest.mark.parametrize('previous', [{}, {'execution_status': 'completed', 'result': 'completed'}])
 def test_completed_empty_dry_run_is_healthy_without_live_digest_evidence(previous):
-    from application.runtime_report_summary import execution_report_status
-    from notifications.accepted_orders import cycle_notification_evidence
+    from charles_schwab_platform.application.runtime_report_summary import execution_report_status
+    from charles_schwab_platform.notifications.accepted_orders import cycle_notification_evidence
 
     result = SimpleNamespace(execution={'notification_cycle_completed': True}, submitted_orders=[], trade_logs=[])
     before = copy.deepcopy(result)
@@ -142,6 +142,6 @@ def test_completed_empty_dry_run_is_healthy_without_live_digest_evidence(previou
 
 @pytest.mark.parametrize('dry_run', [False, True])
 def test_empty_execution_without_completion_is_not_healthy(dry_run):
-    from application.runtime_report_summary import execution_report_status
+    from charles_schwab_platform.application.runtime_report_summary import execution_report_status
     result = SimpleNamespace(execution={}, submitted_orders=[], trade_logs=[])
     assert execution_report_status(summarize_execution_cycle_result(result, dry_run=dry_run)) == 'error'

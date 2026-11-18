@@ -2,8 +2,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from application.account_new_risk_gate_support import maybe_publish_attention_for_admission
-from application.rebalance_service import _should_publish_cycle_notification
+from charles_schwab_platform.application.account_new_risk_gate_support import maybe_publish_attention_for_admission
+from charles_schwab_platform.application.rebalance_service import _should_publish_cycle_notification
 from quant_platform_kit.risk.account_new_risk_gate import NewRiskAdmissionResult, NewRiskDisposition
 
 

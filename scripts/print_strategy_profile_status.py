@@ -9,12 +9,12 @@ ROOT = Path(__file__).resolve().parents[1]
 QPK_SRC = ROOT.parent / "QuantPlatformKit" / "src"
 UES_SRC = ROOT.parent / "UsEquityStrategies" / "src"
 
-for candidate in (ROOT, QPK_SRC, UES_SRC):
+for candidate in (ROOT, ROOT / "src", QPK_SRC, UES_SRC):
     candidate_str = str(candidate)
     if candidate_str not in sys.path:
         sys.path.insert(0, candidate_str)
 
-from strategy_registry import SCHWAB_PLATFORM, get_platform_profile_status_matrix  # noqa: E402
+from charles_schwab_platform.strategy_registry import SCHWAB_PLATFORM, get_platform_profile_status_matrix  # noqa: E402
 from us_equity_strategies.runtime_adapters import describe_platform_runtime_requirements  # noqa: E402
 
 

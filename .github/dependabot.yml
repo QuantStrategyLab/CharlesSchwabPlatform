@@ -13,8 +13,10 @@ updates:
   directory: /
   schedule:
     interval: weekly
+  commit-message:
+    prefix: "chore"
   groups:
-    actions-minor-and-patch:
+    actions:
       patterns:
         - "*"
   open-pull-requests-limit: 3

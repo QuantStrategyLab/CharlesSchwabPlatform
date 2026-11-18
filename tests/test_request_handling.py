@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from notifications.telegram import build_translator as build_notification_translator
+from charles_schwab_platform.notifications.telegram import build_translator as build_notification_translator
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -303,23 +303,23 @@ def install_stub_modules(
         def resolve_rebalance_plan(self, **_kwargs):
             return {}
 
-    runtime_broker_adapters_module = types.ModuleType("application.runtime_broker_adapters")
+    runtime_broker_adapters_module = types.ModuleType("charles_schwab_platform.application.runtime_broker_adapters")
     runtime_broker_adapters_module.build_runtime_broker_adapters = lambda **kwargs: FakeBrokerAdapters(**kwargs)
 
-    runtime_composer_module = types.ModuleType("application.runtime_composer")
+    runtime_composer_module = types.ModuleType("charles_schwab_platform.application.runtime_composer")
     runtime_composer_module.build_runtime_composer = lambda **kwargs: FakeRuntimeComposer(**kwargs)
 
-    runtime_strategy_adapters_module = types.ModuleType("application.runtime_strategy_adapters")
+    runtime_strategy_adapters_module = types.ModuleType("charles_schwab_platform.application.runtime_strategy_adapters")
     runtime_strategy_adapters_module.build_runtime_strategy_adapters = lambda **kwargs: FakeStrategyAdapters(**kwargs)
 
     runtime_reporting_adapters_module = types.ModuleType(
-        "application.runtime_reporting_adapters"
+        "charles_schwab_platform.application.runtime_reporting_adapters"
     )
 
-    rebalance_service_module = types.ModuleType("application.rebalance_service")
+    rebalance_service_module = types.ModuleType("charles_schwab_platform.application.rebalance_service")
     rebalance_service_module.run_strategy_core = lambda *args, **kwargs: None
 
-    broker_reconciliation_module = types.ModuleType("application.broker_reconciliation")
+    broker_reconciliation_module = types.ModuleType("charles_schwab_platform.application.broker_reconciliation")
     broker_reconciliation_module.SchwabReconciliationReadError = RuntimeError
     broker_reconciliation_module.build_reconciliation_candidate = lambda *args, **kwargs: None
     broker_reconciliation_module.collect_read_only_reconciliation_observations = lambda *args, **kwargs: ()
@@ -335,7 +335,7 @@ def install_stub_modules(
 
     broker_reconciliation_module.validate_reconciliation_preconditions = validate_reconciliation_preconditions
 
-    c4_shadow_reconcile_runtime_module = types.ModuleType("application.c4_shadow_reconcile_runtime")
+    c4_shadow_reconcile_runtime_module = types.ModuleType("charles_schwab_platform.application.c4_shadow_reconcile_runtime")
 
     def _build_reconcile_c4_report_attachment(**_kwargs):
         return {
@@ -362,23 +362,23 @@ def install_stub_modules(
         _build_reconcile_c4_report_attachment
     )
 
-    paper_execution_command_consumer_module = types.ModuleType("application.paper_execution_command_consumer")
+    paper_execution_command_consumer_module = types.ModuleType("charles_schwab_platform.application.paper_execution_command_consumer")
     paper_execution_command_consumer_module.consume_due_paper_execution_commands = lambda *args, **kwargs: None
 
-    runtime_report_summary_module = types.ModuleType("application.runtime_report_summary")
+    runtime_report_summary_module = types.ModuleType("charles_schwab_platform.application.runtime_report_summary")
     runtime_report_summary_module.summarize_execution_cycle_result = lambda *args, **kwargs: {}
 
-    signal_snapshot_module = types.ModuleType("application.signal_snapshot")
+    signal_snapshot_module = types.ModuleType("charles_schwab_platform.application.signal_snapshot")
     signal_snapshot_module.build_signal_snapshot = lambda *args, **kwargs: {}
 
-    decision_mapper_module = types.ModuleType("decision_mapper")
+    decision_mapper_module = types.ModuleType("charles_schwab_platform.decision_mapper")
     decision_mapper_module.map_strategy_decision_to_plan = lambda *args, **kwargs: {}
 
-    cloud_run_module = types.ModuleType("entrypoints.cloud_run")
+    cloud_run_module = types.ModuleType("charles_schwab_platform.entrypoints.cloud_run")
     cloud_run_module.is_market_open_now = lambda **_kwargs: True
     cloud_run_module.is_market_open_today = lambda **_kwargs: True
 
-    telegram_module = types.ModuleType("notifications.telegram")
+    telegram_module = types.ModuleType("charles_schwab_platform.notifications.telegram")
     telegram_module.build_signal_text = lambda translator: (lambda key, **kwargs: translator(key, **kwargs))
     telegram_module.build_strategy_display_name = lambda translator: (
         lambda _profile, fallback_name="", metadata=None: fallback_name
@@ -440,7 +440,7 @@ def install_stub_modules(
     qpk_strategy_contracts_module = types.ModuleType("quant_platform_kit.common.runtime_inputs")
     qpk_strategy_contracts_module.build_strategy_evaluation_inputs = lambda *args, **kwargs: {}
 
-    runtime_config_support_module = types.ModuleType("runtime_config_support")
+    runtime_config_support_module = types.ModuleType("charles_schwab_platform.runtime_config_support")
     runtime_config_support_module.load_platform_runtime_settings = lambda: types.SimpleNamespace(
         strategy_profile="tqqq_growth_income",
         strategy_display_name="TQQQ Growth Income",
@@ -462,7 +462,7 @@ def install_stub_modules(
         runtime_target_enabled=True,
     )
 
-    strategy_runtime_module = types.ModuleType("strategy_runtime")
+    strategy_runtime_module = types.ModuleType("charles_schwab_platform.strategy_runtime")
     strategy_runtime_module.load_strategy_runtime = lambda *_args, **_kwargs: types.SimpleNamespace(
         merged_runtime_config={
             "benchmark_symbol": "QQQ",
@@ -477,7 +477,7 @@ def install_stub_modules(
         evaluate=lambda **_kwargs: None,
     )
 
-    runtime_logging_module = types.ModuleType("runtime_logging")
+    runtime_logging_module = types.ModuleType("charles_schwab_platform.runtime_logging")
     runtime_logging_module.build_run_id = lambda *args, **kwargs: "test-run"
     runtime_logging_module.emit_runtime_log = lambda *args, **kwargs: None
 
@@ -507,26 +507,26 @@ def install_stub_modules(
 
     pandas_market_calendars = types.ModuleType("pandas_market_calendars")
 
-    runtime_execution_policy_module = types.ModuleType("runtime_execution_policy")
+    runtime_execution_policy_module = types.ModuleType("charles_schwab_platform.runtime_execution_policy")
     runtime_execution_policy_module.dca_execution_unsupported_reason = lambda _profile: None
 
     modules = {
         "flask": flask_module_override or flask_module,
         "requests": requests_module,
         "pandas": pandas_module,
-        "application.runtime_broker_adapters": runtime_broker_adapters_module,
-        "application.runtime_composer": runtime_composer_module,
-        "application.runtime_reporting_adapters": runtime_reporting_adapters_module,
-        "application.runtime_strategy_adapters": runtime_strategy_adapters_module,
-        "application.rebalance_service": rebalance_service_module,
-        "application.broker_reconciliation": broker_reconciliation_module,
-        "application.c4_shadow_reconcile_runtime": c4_shadow_reconcile_runtime_module,
-        "application.paper_execution_command_consumer": paper_execution_command_consumer_module,
-        "application.runtime_report_summary": runtime_report_summary_module,
-        "application.signal_snapshot": signal_snapshot_module,
-        "decision_mapper": decision_mapper_module,
-        "entrypoints.cloud_run": cloud_run_module,
-        "notifications.telegram": telegram_module,
+        "charles_schwab_platform.application.runtime_broker_adapters": runtime_broker_adapters_module,
+        "charles_schwab_platform.application.runtime_composer": runtime_composer_module,
+        "charles_schwab_platform.application.runtime_reporting_adapters": runtime_reporting_adapters_module,
+        "charles_schwab_platform.application.runtime_strategy_adapters": runtime_strategy_adapters_module,
+        "charles_schwab_platform.application.rebalance_service": rebalance_service_module,
+        "charles_schwab_platform.application.broker_reconciliation": broker_reconciliation_module,
+        "charles_schwab_platform.application.c4_shadow_reconcile_runtime": c4_shadow_reconcile_runtime_module,
+        "charles_schwab_platform.application.paper_execution_command_consumer": paper_execution_command_consumer_module,
+        "charles_schwab_platform.application.runtime_report_summary": runtime_report_summary_module,
+        "charles_schwab_platform.application.signal_snapshot": signal_snapshot_module,
+        "charles_schwab_platform.decision_mapper": decision_mapper_module,
+        "charles_schwab_platform.entrypoints.cloud_run": cloud_run_module,
+        "charles_schwab_platform.notifications.telegram": telegram_module,
         "quant_platform_kit": quant_platform_kit_module,
         "quant_platform_kit.common": qpk_common_module,
         "quant_platform_kit.common.execution_receipts": qpk_execution_receipts_module,
@@ -540,10 +540,10 @@ def install_stub_modules(
         "quant_platform_kit.common.runtime_reports": qpk_runtime_reports_module,
         "quant_platform_kit.common.strategy_plugins": qpk_strategy_plugins_module,
         "quant_platform_kit.common.runtime_inputs": qpk_strategy_contracts_module,
-        "runtime_config_support": runtime_config_support_module,
-        "runtime_execution_policy": runtime_execution_policy_module,
-        "strategy_runtime": strategy_runtime_module,
-        "runtime_logging": runtime_logging_module,
+        "charles_schwab_platform.runtime_config_support": runtime_config_support_module,
+        "charles_schwab_platform.runtime_execution_policy": runtime_execution_policy_module,
+        "charles_schwab_platform.strategy_runtime": strategy_runtime_module,
+        "charles_schwab_platform.runtime_logging": runtime_logging_module,
         "google": google_module,
         "google.auth": google_auth_module,
         "google.auth.transport": google_auth_transport_module,
@@ -575,8 +575,8 @@ def load_module(*, strategy_plugin_mounts_json=None, notify_lang="en"):
             },
             clear=False,
         ):
-            sys.modules.pop("main", None)
-            module = importlib.import_module("main")
+            sys.modules.pop("charles_schwab_platform.main", None)
+            module = importlib.import_module("charles_schwab_platform.main")
             return importlib.reload(module)
 
 
@@ -586,7 +586,7 @@ class RequestHandlingTests(unittest.TestCase):
         original_import = __import__
 
         def missing_c4(name, *args, **kwargs):
-            if name == "application.c4_shadow_reconcile_runtime":
+            if name == "charles_schwab_platform.application.c4_shadow_reconcile_runtime":
                 raise ModuleNotFoundError(
                     "C4 consumer unavailable",
                     name="us_equity_strategies.research.c4_shadow_zero_submit_cycle",
@@ -710,8 +710,8 @@ class RequestHandlingTests(unittest.TestCase):
                 },
                 clear=False,
             ):
-                sys.modules.pop("main", None)
-                module = importlib.import_module("main")
+                sys.modules.pop("charles_schwab_platform.main", None)
+                module = importlib.import_module("charles_schwab_platform.main")
                 side_effect_calls = []
 
                 def fail_on_call(*args, **kwargs):
@@ -1352,7 +1352,7 @@ def _run_external_flow_probe(*, enabled="true", rows=None, status_code=200, curr
 
 
 def test_probe_external_flow_report_hook_uses_bound_collector():
-    from application.external_flow_snapshot import attach_external_flow_snapshot
+    from charles_schwab_platform.application.external_flow_snapshot import attach_external_flow_snapshot
     from test_external_flow_snapshot import END, TX, project
     result, client, report = _run_external_flow_probe()
     assert result == ("Probe OK", 200)
@@ -1388,7 +1388,7 @@ def test_probe_external_flow_failed_source_omits_slot_and_preserves_probe_result
 
 
 def test_probe_external_flow_empty_source_is_not_complete():
-    from application.external_flow_snapshot import attach_external_flow_snapshot
+    from charles_schwab_platform.application.external_flow_snapshot import attach_external_flow_snapshot
     from test_external_flow_snapshot import END
     result, client, report = _run_external_flow_probe(rows=[])
     assert result == ("Probe OK", 200)

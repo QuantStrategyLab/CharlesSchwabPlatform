@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from application.d1_native_read_only import D1NativeInputError, parse_recorded_native
+from charles_schwab_platform.application.d1_native_read_only import D1NativeInputError, parse_recorded_native
 
 
 def _synthetic_order() -> dict:

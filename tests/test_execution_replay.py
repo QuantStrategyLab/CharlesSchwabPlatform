@@ -6,10 +6,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from application import rebalance_service
-from application.runtime_dependencies import SchwabRebalanceConfig, SchwabRebalanceRuntime
-from application.runtime_report_summary import summarize_execution_cycle_result
-from notifications.telegram import build_translator
+from charles_schwab_platform.application import rebalance_service
+from charles_schwab_platform.application.runtime_dependencies import SchwabRebalanceConfig, SchwabRebalanceRuntime
+from charles_schwab_platform.application.runtime_report_summary import summarize_execution_cycle_result
+from charles_schwab_platform.notifications.telegram import build_translator
 from quant_platform_kit.common.execution_state import ExecutionMarkerStore
 from quant_platform_kit.common.execution_state import claim_account_owner
 from quant_platform_kit.common.models import ExecutionReport, OrderIntent, QuoteSnapshot

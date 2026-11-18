@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from application.external_flow_snapshot import (
+from charles_schwab_platform.application.external_flow_snapshot import (
     attach_external_flow_snapshot,
     collect_external_flow_snapshot,
     external_flow_enabled,

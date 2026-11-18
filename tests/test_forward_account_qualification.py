@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from application.account_observation import build_account_observation
+from charles_schwab_platform.application.account_observation import build_account_observation
 from scripts import publish_account_facts_from_reports as publisher
 from test_publish_account_facts_from_reports import _valid_report
 
@@ -148,5 +148,5 @@ def test_pinned_same_response_collection_window_is_preserved_only_with_digest_an
 @pytest.mark.parametrize('value', ['2026-11-03T05:00:00.0000001Z', '2026-11-03T05:00:00',
                                    '2026-11-03', True, 'PRIVATE_CANARY'])
 def test_unrepresentable_or_naive_timing_cannot_become_a_verified_receipt(value):
-    from application.forward_account_qualification import parse_observation_instant
+    from charles_schwab_platform.application.forward_account_qualification import parse_observation_instant
     assert parse_observation_instant(value) is None

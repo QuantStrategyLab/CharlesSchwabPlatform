@@ -54,7 +54,7 @@ def isolated_execution(monkeypatch):
     original_import = builtins.__import__
 
     def no_business(name, *args, **kwargs):
-        if name.split(".")[0] in {"main", "application", "strategy_registry", "us_equity_strategies", "quant_platform_kit", "schwab", "notifications"}:
+        if name.split(".")[0] in {"charles_schwab_platform", "main", "application", "strategy_registry", "us_equity_strategies", "quant_platform_kit", "schwab", "notifications"}:
             calls.append("business-import")
             raise AssertionError("Business import is forbidden")
         return original_import(name, *args, **kwargs)
@@ -719,7 +719,7 @@ for name in ("mkdir", "remove", "unlink", "rmdir", "rename", "replace", "chmod",
     setattr(os, name, forbidden("write"))
 original_import = builtins.__import__
 def safe_import(name, *args, **kwargs):
-    if name.split(".")[0] in {"main", "application", "strategy_registry", "us_equity_strategies", "quant_platform_kit", "schwab", "notifications"}:
+    if name.split(".")[0] in {"charles_schwab_platform", "main", "application", "strategy_registry", "us_equity_strategies", "quant_platform_kit", "schwab", "notifications"}:
         return forbidden("business-import")()
     return original_import(name, *args, **kwargs)
 builtins.__import__ = safe_import

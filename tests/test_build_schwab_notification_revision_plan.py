@@ -47,7 +47,7 @@ def no_external_activity(monkeypatch):
     original_import = builtins.__import__
 
     def guarded_import(name, *args, **kwargs):
-        if name.split(".")[0] in {"main", "application", "schwab", "notifications", "strategy_registry",
+        if name.split(".")[0] in {"charles_schwab_platform", "main", "application", "schwab", "notifications", "strategy_registry",
                                  "strategy_runtime", "strategy_loader", "quant_platform_kit", "us_equity_strategies"}:
             calls.append("business-import")
             raise AssertionError("Business import forbidden")
@@ -612,7 +612,7 @@ try:
     elif mode == "write":
         Path("forbidden-output").write_text("forbidden")
     elif mode == "business-import":
-        __import__("application")
+        __import__("charles_schwab_platform")
     elif mode == "unapproved-read":
         Path("unapproved-private-file").read_text()
     else:
