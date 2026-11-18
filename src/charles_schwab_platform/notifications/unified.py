@@ -451,8 +451,13 @@ def _notification_report(report):
 
 def _account_snapshots(report, target, now, *, allow_carryover=False, allow_live_probe=False, cutoff=None):
     """Use the archive's broker observation only for the configured account."""
-    from scripts.publish_account_facts_from_reports import POSITIONS_SCOPE, _ProjectionError, _money_text, _project_positions
-    from scripts.schwab_native_identity import _account_hash_matches
+    from charles_schwab_platform.notifications.report_projection_support import (
+        POSITIONS_SCOPE,
+        ProjectionError as _ProjectionError,
+        account_hash_matches as _account_hash_matches,
+        money_text as _money_text,
+        project_positions as _project_positions,
+    )
 
     try:
         if report.get("dry_run") is not False and not (
@@ -569,7 +574,7 @@ def _project_runs(reports, *, archived_risk_blocks=None, **kwargs):
                     row.update(status="alert", reason_code="+".join(filter(None, (reason, "receipt_time_unconfirmed"))))
                 elif (archived_risk_blocks is not None and legacy_unknown
                         and row.get("execution_status") == "blocked" and receipt.get("outcome") == "risk_blocked"):
-                    from scripts.runtime_daily_report_projection import _run
+                    from charles_schwab_platform.notifications.report_projection_support import project_run_summary as _run
                     if _run(report, kwargs["now"])["evidence"]["receipt_state"] == "valid":
                         archived_risk_blocks.add(run_id)
             from .approved_gates import report_gate_reasons, render_gate_reasons
@@ -611,7 +616,7 @@ def _canonical_candidate_row(row):
 
 def _reconcile_empty_holdings_facts(prior_facts, current_facts):
     """Allow an explicit empty-holdings coverage upgrade over an older legacy snapshot."""
-    from scripts.publish_account_facts_from_reports import POSITIONS_SCOPE
+    from charles_schwab_platform.notifications.report_projection_support import POSITIONS_SCOPE
 
     if (not isinstance(prior_facts, dict) or not isinstance(current_facts, dict)
             or {k: v for k, v in prior_facts.items() if k != "snapshots"}

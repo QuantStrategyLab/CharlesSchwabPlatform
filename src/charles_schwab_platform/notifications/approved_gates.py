@@ -120,7 +120,7 @@ def report_gate_reasons(report, *, observed_at=None):
     reasons = approved_block_reasons(summary, order_count=summary.get("orders_submitted_count"))
     if not reasons:
         return []
-    from scripts.runtime_daily_report_projection import _run
+    from charles_schwab_platform.notifications.report_projection_support import project_run_summary as _run
     from datetime import datetime, timezone
     try:
         evidence = _run(report, observed_at or datetime.now(timezone.utc)).get("evidence", {})

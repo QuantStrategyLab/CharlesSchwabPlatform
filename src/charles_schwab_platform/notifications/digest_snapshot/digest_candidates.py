@@ -144,7 +144,7 @@ def project_reports(reports: Sequence[Mapping], *, expected_target: Mapping,
                        execution_status="execution_alert" if error else "execution_unknown")
     if block_reports:
         from charles_schwab_platform.notifications.block_reason import latest_block_reason
-        from scripts.runtime_daily_report_projection import _run
+        from charles_schwab_platform.notifications.report_projection_support import project_run_summary as _run
         for day, sources in block_reports.items():
             reason = latest_block_reason({"conflicts": [], "runs": [_run(report, now) for report in sources]}, sources)
             if reason:

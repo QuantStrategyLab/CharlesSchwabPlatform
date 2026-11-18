@@ -22,6 +22,15 @@ _SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 if _SRC_DIR.is_dir() and str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
+from charles_schwab_platform.notifications.report_projection_support import (  # noqa: E402
+    MAX_POSITIONS as _MAX_POSITIONS,
+    POSITIONS_KEYS,
+    POSITIONS_SCOPE,
+    ProjectionError as _ProjectionError,
+    money_text as _money_text,
+    project_positions as _project_positions,
+)
+
 
 HISTORY_SCHEMA = "schwab_account_snapshot_history.v1"
 SNAPSHOT_SCHEMA = "schwab_account_snapshot.v1"
@@ -75,69 +84,6 @@ _ACCOUNT_TYPE_TOKEN = re.compile(r"[A-Za-z_]{1,32}\Z", re.ASCII)
 _REVISION = re.compile(r"^[a-z][a-z0-9-]{0,62}$")
 
 
-POSITIONS_SCOPE = "strategy_symbols_only"
-# QRS accepts these optional fields. Upload requires an explicit opt-in;
-# archived projections remain available to existing offline consumers.
-POSITIONS_KEYS = ("broker_reported_positions", "broker_reported_positions_scope", "broker_reported_positions_complete")
-_POSITION_SYMBOL = re.compile(r"[A-Z0-9][A-Z0-9./ -]{0,31}\Z", re.ASCII)
-_MAX_POSITIONS = 64
-
-
-def _project_positions(observation: Mapping[str, Any]) -> list[dict[str, Any]] | None:
-    """Validate runtime ``broker_reported_positions``; None (omit) on any doubt."""
-    raw = observation.get("broker_reported_positions")
-    scope = observation.get("broker_reported_positions_scope")
-    native_stocks = scope == "stocks_only" and (
-        observation.get("broker_reported_positions_complete") is True
-        or (observation.get("broker_reported_positions_complete") is False
-            and observation.get("broker_stock_inventory_status") == "available")
-    )
-    if scope != POSITIONS_SCOPE and not native_stocks:
-        return None
-    if not isinstance(raw, list) or (not raw and not native_stocks) or len(raw) > _MAX_POSITIONS:
-        return None
-    rows: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for item in raw:
-        if not isinstance(item, Mapping):
-            return None
-        if set(item) - {"symbol", "quantity", "market_value", "currency", "avg_cost", "currency_source"}:
-            return None
-        symbol = item.get("symbol")
-        if (
-            not isinstance(symbol, str)
-            or _POSITION_SYMBOL.fullmatch(symbol) is None
-            or symbol in seen
-        ):
-            return None
-        seen.add(symbol)
-        if item.get("currency") not in (None, "USD"):
-            return None
-        if "currency_source" in item and item["currency_source"] != "owner_confirmed":
-            return None
-        try:
-            quantity = _money_text(item.get("quantity"))
-            market_value = (None if native_stocks and item.get("market_value") is None
-                            else _money_text(item.get("market_value")))
-        except _ProjectionError:
-            return None
-        rows.append(
-            {
-                "symbol": symbol,
-                "quantity": quantity,
-                "market_value": market_value,
-                "currency": "USD",
-                "currency_source": "owner_confirmed",
-            }
-        )
-        if item.get("avg_cost") is not None:
-            try:
-                rows[-1]["avg_cost"] = _money_text(item["avg_cost"])
-            except _ProjectionError:
-                pass  # Unknown optional cost; retain the validated holding.
-    return rows
-
-
 def prepare_sync_payload(
     body: Mapping[str, Any], *, include_positions: bool = False, include_external_flow: bool = False,
 ) -> dict[str, Any]:
@@ -155,12 +101,6 @@ def prepare_sync_payload(
     return {key: value for key, value in body.items() if key in allowed}
 
 
-class _ProjectionError(ValueError):
-    def __init__(self, reason: str) -> None:
-        super().__init__(reason)
-        self.reason = reason
-
-
 def _instant(value: object) -> datetime:
     if not isinstance(value, str) or not value:
         raise _ProjectionError("invalid_observation_time")
@@ -171,21 +111,6 @@ def _instant(value: object) -> datetime:
         return parsed.astimezone(timezone.utc)
     except (OverflowError, ValueError):
         raise _ProjectionError("invalid_observation_time") from None
-
-
-def _money_text(value: object) -> str:
-    if not isinstance(value, str) or _DECIMAL_TEXT.fullmatch(value) is None:
-        raise _ProjectionError("invalid_net_assets")
-    try:
-        amount = Decimal(value)
-    except InvalidOperation:
-        raise _ProjectionError("invalid_net_assets") from None
-    if not amount.is_finite():
-        raise _ProjectionError("invalid_net_assets")
-    whole, _, fraction = value.lstrip("-").partition(".")
-    if len(whole) > 15 or len(fraction) > 8:
-        raise _ProjectionError("invalid_net_assets")
-    return value
 
 
 def _report_uri_parts(uri: str, report_prefix: str) -> tuple[str, str]:
