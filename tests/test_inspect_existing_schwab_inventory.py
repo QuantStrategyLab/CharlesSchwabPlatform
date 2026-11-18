@@ -49,7 +49,11 @@ def case(monkeypatch):
     monkeypatch.setattr(publisher.os, 'getenv', getenv)
     original_import = builtins.__import__
     def checked_import(name, *args, **kwargs):
-        assert name.split('.')[0] not in {'schwab', 'httpx', 'requests', 'main'}, 'must not import broker/runtime clients'
+        assert (
+            name.split('.')[0] not in {'schwab', 'httpx', 'requests', 'main'}
+            and name != 'charles_schwab_platform.main'
+            and not name.startswith('charles_schwab_platform.main.')
+        ), 'must not import broker/runtime clients'
         return original_import(name, *args, **kwargs)
     monkeypatch.setattr(builtins, '__import__', checked_import)
     return case

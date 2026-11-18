@@ -18,6 +18,11 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
+
+_SRC_DIR = Path(__file__).resolve().parents[1] / "src"
+if _SRC_DIR.is_dir() and str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
 
 SAFE_ENV_VALUES = {"STRATEGY_PROFILE", "NOTIFY_LANG", "CASH_ONLY_EXECUTION", "IBKR_CASH_ONLY_EXECUTION",
                    "IBKR_DRY_RUN_ONLY", "RUNTIME_TARGET_ENABLED", "INCOME_LAYER_ENABLED",
@@ -64,7 +69,10 @@ try:
 except Exception as exc:
     out["ibkr_duration_error"] = type(exc).__name__
 try:
-    import application.runtime_strategy_adapters as a
+    try:
+        import charles_schwab_platform.application.runtime_strategy_adapters as a
+    except ModuleNotFoundError:
+        import application.runtime_strategy_adapters as a
     if hasattr(a, "fetch_yfinance_historical_candles"):
         src = inspect.getsource(a)
         out["ibkr_yf_period_420D"] = a._duration_to_yfinance_period("420 D")
@@ -86,7 +94,10 @@ YF_PROBE = r'''
 import json
 out = {}
 try:
-    import application.runtime_strategy_adapters as a
+    try:
+        import charles_schwab_platform.application.runtime_strategy_adapters as a
+    except ModuleNotFoundError:
+        import application.runtime_strategy_adapters as a
     import yfinance as yf
     for sym, dur in (("SOXL", "420 D"), ("SOXX", "420 D"), ("QQQ", "2 Y")):
         c = a.fetch_yfinance_historical_candles(sym, duration=dur)

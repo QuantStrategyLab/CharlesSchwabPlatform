@@ -13,10 +13,10 @@ requests_stub = types.ModuleType("requests")
 requests_stub.post = lambda *args, **kwargs: None
 
 with patch.dict(sys.modules, {"requests": requests_stub}):
-    from notifications.renderers import render_heartbeat_notification, render_trade_notification
-    from notifications.telegram import build_sender, build_signal_text, build_strategy_display_name, build_translator
+    from charles_schwab_platform.notifications.renderers import render_heartbeat_notification, render_trade_notification
+    from charles_schwab_platform.notifications.telegram import build_sender, build_signal_text, build_strategy_display_name, build_translator
 
-from strategy_registry import SUPPORTED_STRATEGY_PROFILES
+from charles_schwab_platform.strategy_registry import SUPPORTED_STRATEGY_PROFILES
 
 
 class FakeRequests:

@@ -138,21 +138,9 @@ def _finite_timestamp(value: object) -> bool:
     )
 
 
-def _account_hash_matches(expected: object, observed: object) -> bool:
-    """Preserve exact IDs; compare Schwab's 64-digit hex digest by its bytes.
-
-    The serving strategy already treats hex case as representation. This does
-    not apply lossy storage-key cleaning or case folding to arbitrary IDs.
-    """
-    import re
-
-    if not isinstance(expected, str) or not isinstance(observed, str):
-        return False
-    if expected == observed:
-        return True
-    if not all(re.fullmatch(r"[0-9A-Fa-f]{64}", value) for value in (expected, observed)):
-        return False
-    return bytes.fromhex(expected) == bytes.fromhex(observed)
+from charles_schwab_platform.notifications.report_projection_support import (
+    account_hash_matches as _account_hash_matches,
+)
 
 
 def _read_renewal_app_credential(client, name):

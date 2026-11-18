@@ -1,0 +1,304 @@
+"""Builder helpers for Schwab strategy evaluation adapters."""
+
+from __future__ import annotations
+
+from collections.abc import Collection, Mapping, Callable
+from dataclasses import dataclass
+from typing import Any
+
+from quant_platform_kit.common.runtime_inputs import build_semiconductor_rotation_indicators_from_history
+from quant_platform_kit.common.strategy_plugins import (
+    build_strategy_plugin_alert_messages,
+    build_strategy_plugin_error_notification_lines,
+    build_strategy_plugin_notification_lines,
+    should_alert_strategy_plugin_signal,
+    translate_strategy_plugin_value,
+)
+from quant_platform_kit.common.runtime_inputs import build_account_state_from_portfolio_snapshot
+from us_equity_strategies.cash_only_equity import (
+    normalize_account_state_from_snapshot,
+)
+from charles_schwab_platform.notifications.block_reason import decision_block_reason
+
+
+def required_trend_ma_window(config: Mapping[str, Any]) -> int:
+    """Return the manifest/merged ``trend_ma_window``; never guess a default.
+
+    strategy_runtime_config starts from ``manifest.default_config``, so the key
+    is always present for semiconductor-rotation profiles. A missing or invalid
+    value now fails closed instead of silently using 150 (RS-08 fix 2).
+    """
+    raw = config.get("trend_ma_window") if isinstance(config, Mapping) else None
+    if raw is None or isinstance(raw, bool) or str(raw).strip() == "":
+        raise ValueError("trend_ma_window missing from merged strategy config (manifest default_config)")
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"trend_ma_window must be an integer, got {raw!r}") from exc
+    if value <= 0 or value != float(raw):
+        raise ValueError(f"trend_ma_window must be a positive integer, got {raw!r}")
+    return value
+
+@dataclass(frozen=True)
+class SchwabRuntimeStrategyAdapters:
+    strategy_runtime: Any
+    strategy_profile: str
+    strategy_runtime_config: Mapping[str, Any]
+    available_inputs: Collection[str]
+    benchmark_symbol: str
+    managed_symbols: tuple[str, ...]
+    signal_text_fn: Callable[[str], str]
+    translator: Callable[..., str]
+    broker_adapters: Any
+    build_strategy_evaluation_inputs_fn: Callable[..., dict[str, Any]]
+    map_strategy_decision_to_plan_fn: Callable[..., dict[str, Any]]
+    build_strategy_plugin_report_payload_fn: Callable[..., dict[str, Any]]
+    load_configured_strategy_plugin_signals_fn: Callable[..., Any]
+    parse_strategy_plugin_mounts_fn: Callable[..., Any]
+    reserved_cash_floor_usd: float = 0.0
+    reserved_cash_ratio: float = 0.0
+    cash_only_execution: bool = True
+
+    def load_strategy_plugin_signals(self, raw_mounts):
+        if not raw_mounts:
+            return (), None
+        try:
+            mounts = self.parse_strategy_plugin_mounts_fn(raw_mounts)
+            if not mounts:
+                return (), None
+            return (
+                self.load_configured_strategy_plugin_signals_fn(
+                    mounts,
+                    strategy_profile=self.strategy_profile,
+                ),
+                None,
+            )
+        except Exception as exc:
+            return (), f"{type(exc).__name__}: {exc}"
+
+    def attach_strategy_plugin_report(self, report, *, signals, error: str | None = None):
+        if signals:
+            report.setdefault("summary", {}).update(self.build_strategy_plugin_report_payload_fn(signals))
+        if error:
+            report.setdefault("diagnostics", {})["strategy_plugin_error"] = error
+
+    def translate_strategy_plugin_value(self, category: str, raw_value: str | None) -> str:
+        return translate_strategy_plugin_value(category, raw_value, translator=self.translator)
+
+    def build_strategy_plugin_notification_lines(self, signals) -> tuple[str, ...]:
+        return build_strategy_plugin_notification_lines(signals, translator=self.translator)
+
+    def build_strategy_plugin_error_notification_lines(self, error) -> tuple[str, ...]:
+        return build_strategy_plugin_error_notification_lines(error, translator=self.translator)
+
+    def should_alert_strategy_plugin_signal(self, signal) -> bool:
+        return should_alert_strategy_plugin_signal(signal)
+
+    def build_strategy_plugin_alert_messages(self, signals):
+        return build_strategy_plugin_alert_messages(
+            signals,
+            translator=self.translator,
+            strategy_label=self.strategy_profile,
+        )
+
+
+    def _nasdaq_dca_signal_symbols(self) -> tuple[str, ...]:
+        raw = self.strategy_runtime_config.get("signal_symbols") or ("QQQ", "SPY")
+        if isinstance(raw, str):
+            raw = raw.replace(";", ",").split(",")
+        symbols = tuple(
+            dict.fromkeys(
+                str(symbol).strip().upper().removesuffix(".US")
+                for symbol in raw
+                if str(symbol).strip()
+            )
+        )
+        if not symbols:
+            raise ValueError(
+                f"{self.strategy_profile} signal_symbols must contain at least one symbol for prefetch"
+            )
+        return symbols
+
+    def _build_prefetched_market_history(self, market_data_port) -> dict[str, object]:
+        """Materialize DCA signal-symbol history in the input builder (B07 Phase B)."""
+        loader = self.broker_adapters.build_market_history_loader(market_data_port)
+        prefetched: dict[str, object] = {}
+        for symbol in self._nasdaq_dca_signal_symbols():
+            history = loader(None, symbol)
+            if history is None:
+                raise RuntimeError(
+                    f"prefetched_market_history missing for signal symbol {symbol!r}"
+                )
+            try:
+                length = len(history)
+            except TypeError as exc:
+                raise RuntimeError(
+                    f"prefetched_market_history for {symbol!r} is not sized: {type(history).__name__}"
+                ) from exc
+            if length == 0:
+                raise RuntimeError(
+                    f"prefetched_market_history empty for signal symbol {symbol!r}"
+                )
+            prefetched[symbol] = history
+        return prefetched
+
+    def fetch_reference_history(self, market_data_port):
+        available_inputs = set(self.available_inputs)
+        if "feature_snapshot" in available_inputs and not (
+            {"market_history", "benchmark_history", "qqq_history", "derived_indicators", "indicators"}
+            & available_inputs
+        ):
+            return {}
+        if "market_history" in available_inputs:
+            market_inputs = {
+                "market_history": self.broker_adapters.build_market_history_loader(market_data_port),
+            }
+            if self.strategy_profile == "nasdaq_sp500_smart_dca":
+                # B07 Phase B: prefetch signal history in the input builder; strategy
+                # prefers technical_indicator_snapshot, then prefetched_market_history,
+                # then the callable loader (kept for non-smart / compat).
+                market_inputs["prefetched_market_history"] = self._build_prefetched_market_history(
+                    market_data_port
+                )
+            if "benchmark_history" in available_inputs:
+                market_inputs["benchmark_history"] = self.broker_adapters.build_price_history(
+                    market_data_port,
+                    self.benchmark_symbol,
+                )
+            if "qqq_history" in available_inputs:
+                market_inputs["qqq_history"] = self.broker_adapters.build_price_history(
+                    market_data_port,
+                    self.benchmark_symbol,
+                )
+            return market_inputs
+        if "benchmark_history" in available_inputs or "qqq_history" in available_inputs:
+            return self.broker_adapters.build_price_history(market_data_port, self.benchmark_symbol)
+        if "derived_indicators" in available_inputs or "indicators" in available_inputs:
+            return self.build_semiconductor_indicators(
+                market_data_port,
+                trend_window=required_trend_ma_window(self.strategy_runtime_config),
+            )
+        raise ValueError(
+            f"Unsupported Schwab runtime inputs for {self.strategy_profile}: {sorted(available_inputs)}"
+        )
+
+    def build_semiconductor_indicators(self, market_data_source, *, trend_window: int) -> dict[str, dict[str, float]]:
+        market_data_port = (
+            market_data_source
+            if hasattr(market_data_source, "get_price_series")
+            else self.broker_adapters.build_market_data_port(market_data_source)
+        )
+        soxl_history = self.broker_adapters.build_price_history(market_data_port, "SOXL")
+        soxx_history = self.broker_adapters.build_price_history(market_data_port, "SOXX")
+        if len(soxl_history) < trend_window:
+            raise RuntimeError(f"SOXL history has {len(soxl_history)} candles; need at least {trend_window}")
+        if len(soxx_history) < trend_window:
+            raise RuntimeError(f"SOXX history has {len(soxx_history)} candles; need at least {trend_window}")
+
+        return build_semiconductor_rotation_indicators_from_history(
+            soxl_history=(float(candle["close"]) for candle in soxl_history),
+            soxx_history=(float(candle["close"]) for candle in soxx_history),
+            trend_ma_window=trend_window,
+        )
+
+    def build_account_state_from_snapshot(self, snapshot) -> dict[str, object]:
+        account_state = build_account_state_from_portfolio_snapshot(
+            snapshot,
+            strategy_symbols=self.managed_symbols,
+        )
+        if self.managed_symbols:
+            return normalize_account_state_from_snapshot(
+                account_state,
+                snapshot,
+                cash_only_execution=self.cash_only_execution,
+            )
+        return account_state
+
+    def resolve_rebalance_plan(self, *, qqq_history, snapshot):
+        account_state = None
+        if "account_state" in self.available_inputs:
+            account_state = self.build_account_state_from_snapshot(snapshot)
+        market_inputs = {
+            "market_history": qqq_history,
+            "benchmark_history": qqq_history,
+            "qqq_history": qqq_history,
+            "derived_indicators": qqq_history,
+            "indicators": qqq_history,
+        }
+        if isinstance(qqq_history, dict) and any(
+            key in qqq_history for key in ("market_history", "benchmark_history", "qqq_history")
+        ):
+            market_inputs.update(qqq_history)
+        evaluation_inputs = self.build_strategy_evaluation_inputs_fn(
+            available_inputs=self.available_inputs,
+            market_inputs=market_inputs,
+            portfolio_snapshot=snapshot,
+            account_state=account_state,
+            translator=self.translator,
+            signal_text_fn=self.signal_text_fn,
+        )
+        evaluation = self.strategy_runtime.evaluate(**evaluation_inputs)
+        runtime_metadata = dict(getattr(evaluation, "metadata", None) or {})
+        runtime_metadata["schwab_execution_policy"] = {
+            "reserved_cash_floor_usd": float(self.reserved_cash_floor_usd or 0.0),
+            "reserved_cash_ratio": float(self.reserved_cash_ratio or 0.0),
+            "cash_only_execution": bool(self.cash_only_execution),
+        }
+        plan = self.map_strategy_decision_to_plan_fn(
+            evaluation.decision,
+            snapshot=snapshot,
+            strategy_profile=self.strategy_profile,
+            runtime_metadata=runtime_metadata,
+        )
+        # Append presentation facts only after the existing plan is complete.
+        reason = decision_block_reason(evaluation.decision)
+        if reason:
+            plan.setdefault("execution", {})["notification_block_reason"] = reason
+        from charles_schwab_platform.notifications.unified import enabled
+        if enabled():
+            from charles_schwab_platform.notifications.approved_gates import decision_gate_reasons
+            approved = decision_gate_reasons(evaluation.decision)
+            if approved:
+                plan.setdefault("execution", {})["notification_approved_gates"] = approved
+        return plan
+
+
+def build_runtime_strategy_adapters(
+    *,
+    strategy_runtime: Any,
+    strategy_profile: str,
+    strategy_runtime_config: Mapping[str, Any],
+    available_inputs: Collection[str],
+    benchmark_symbol: str,
+    managed_symbols: tuple[str, ...],
+    signal_text_fn: Callable[[str], str],
+    translator: Callable[..., str],
+    broker_adapters: Any,
+    build_strategy_evaluation_inputs_fn: Callable[..., dict[str, Any]],
+    map_strategy_decision_to_plan_fn: Callable[..., dict[str, Any]],
+    build_strategy_plugin_report_payload_fn: Callable[..., dict[str, Any]],
+    load_configured_strategy_plugin_signals_fn: Callable[..., Any],
+    parse_strategy_plugin_mounts_fn: Callable[..., Any],
+    reserved_cash_floor_usd: float = 0.0,
+    reserved_cash_ratio: float = 0.0,
+    cash_only_execution: bool = True,
+) -> SchwabRuntimeStrategyAdapters:
+    return SchwabRuntimeStrategyAdapters(
+        strategy_runtime=strategy_runtime,
+        strategy_profile=str(strategy_profile),
+        strategy_runtime_config=dict(strategy_runtime_config),
+        available_inputs=frozenset(available_inputs),
+        benchmark_symbol=str(benchmark_symbol or ""),
+        managed_symbols=tuple(managed_symbols),
+        signal_text_fn=signal_text_fn,
+        translator=translator,
+        broker_adapters=broker_adapters,
+        build_strategy_evaluation_inputs_fn=build_strategy_evaluation_inputs_fn,
+        map_strategy_decision_to_plan_fn=map_strategy_decision_to_plan_fn,
+        build_strategy_plugin_report_payload_fn=build_strategy_plugin_report_payload_fn,
+        load_configured_strategy_plugin_signals_fn=load_configured_strategy_plugin_signals_fn,
+        parse_strategy_plugin_mounts_fn=parse_strategy_plugin_mounts_fn,
+        reserved_cash_floor_usd=float(reserved_cash_floor_usd or 0.0),
+        reserved_cash_ratio=float(reserved_cash_ratio or 0.0),
+        cash_only_execution=bool(cash_only_execution),
+    )

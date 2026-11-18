@@ -23,7 +23,7 @@ from unittest.mock import patch
 
 import pytest
 
-from application.execution_intent_continuity import (
+from charles_schwab_platform.application.execution_intent_continuity import (
     _EvidenceRequired, _LocatorConflict, _LocatorStateError, _LocatorUncertain,
     _LocatorUnavailable, _LocatorVersion, _RecoveryLocatorStore, _RecoveryScope,
     _read_schwab_position_quantities,
@@ -616,7 +616,7 @@ class MultiFileClient:
 
 def test_locator_competition_preserves_winner_and_later_reference_union(tmp_path):
     from test_rebalance_service import continuity_case
-    from application.execution_intent_continuity import _IntentSession
+    from charles_schwab_platform.application.execution_intent_continuity import _IntentSession
     c = continuity_case(tmp_path)
     a = _IntentSession(c.context, snapshot=c.snapshot, profile_id=c.scope.profile_id)
     b = _IntentSession(c.context, snapshot=c.snapshot, profile_id=c.scope.profile_id)
@@ -637,7 +637,7 @@ def test_locator_competition_preserves_winner_and_later_reference_union(tmp_path
 
 def test_competing_native_attempt_writers_have_one_durable_claim(tmp_path):
     from test_rebalance_service import continuity_case
-    from application.execution_intent_continuity import _IntentSession
+    from charles_schwab_platform.application.execution_intent_continuity import _IntentSession
     c = continuity_case(tmp_path)
     session = _IntentSession(c.context, snapshot=c.snapshot, profile_id=c.scope.profile_id)
     with patch.object(type(c.store), "claim_due", return_value=None):
@@ -659,7 +659,7 @@ def test_competing_native_attempt_writers_have_one_durable_claim(tmp_path):
 @pytest.mark.parametrize("qualification", ["complete", "absent", "same_symbol", "missing_sellable", "incomplete_obligations", "missing_release", "wrong_snapshot"])
 def test_native_independent_reduction_requires_complete_original_resource_facts(tmp_path, qualification):
     from test_rebalance_service import continuity_case, run_strategy_core
-    from application.execution_intent_continuity import _canonical_json, _digest
+    from charles_schwab_platform.application.execution_intent_continuity import _canonical_json, _digest
     from quant_platform_kit.common.port_adapters import CallablePortfolioPort
     c = continuity_case(tmp_path)
     run_strategy_core(runtime=c.runtime, config=c.config)
@@ -670,7 +670,7 @@ def test_native_independent_reduction_requires_complete_original_resource_facts(
     later.plan["allocation"].update(strategy_symbols=(symbol,), risk_symbols=(symbol,), targets={symbol: 0})
     later.snapshot = replace(later.snapshot, positions=(Position(symbol, 4, 400),))
     later.runtime = replace(later.runtime, portfolio_port=CallablePortfolioPort(lambda: later.snapshot))
-    session = __import__("application.execution_intent_continuity", fromlist=["_IntentSession"])._IntentSession(
+    session = __import__("charles_schwab_platform.application.execution_intent_continuity", fromlist=["_IntentSession"])._IntentSession(
         later.context, snapshot=later.snapshot, profile_id=later.scope.profile_id)
     obligations = [{"command_id": cmd.command_id, "descriptor_sha256": _digest(_canonical_json(cmd.to_dict())),
                     "order": cmd.intent["order"], "routing_account_hash": cmd.intent["routing_account_hash"]} for cmd, _ in session.originals]
@@ -702,7 +702,7 @@ from test_rebalance_service import _offline_caller_external_ports
     "duplicate_fill","missing_fill","fee_total","owner_fee_total","quarantine","unsupported_correction","late_fill","late_source",
     "incomplete_coverage","snapshot","unqualified_source","changed_source_bytes"])
 def test_resolution_contract_refuses_inconsistent_or_unqualified_original_facts(tmp_path,fault):
-    from application.execution_intent_continuity import _IntentSession
+    from charles_schwab_platform.application.execution_intent_continuity import _IntentSession
     from test_rebalance_service import continuity_case,resolution_material,with_resolution_source,run_strategy_core
     def lost(_):raise TimeoutError("synthetic")
     original=continuity_case(tmp_path,fault=lost);run_strategy_core(runtime=original.runtime,config=original.config)
@@ -743,7 +743,7 @@ def test_resolution_contract_refuses_inconsistent_or_unqualified_original_facts(
 
 def test_resolution_preserves_known_broker_identity_and_unsupported_notional_hold(tmp_path):
     from test_rebalance_service import continuity_case,resolution_material,with_resolution_source,run_strategy_core
-    from application.execution_intent_continuity import _IntentSession
+    from charles_schwab_platform.application.execution_intent_continuity import _IntentSession
     for label,kind,lost_reply in [("known_id","SELL",False),("notional","BUY_NOTIONAL",True)]:
         def lost(_):raise TimeoutError("synthetic")
         original=continuity_case(tmp_path/label,kind=kind,fault=lost if lost_reply else None)
@@ -764,7 +764,7 @@ def test_resolution_preserves_known_broker_identity_and_unsupported_notional_hol
     "unknown_events_collection","unknown_quarantined_orders","unknown_quarantined_events"])
 def test_zero_fill_resolution_requires_complete_typed_conflict_collections(tmp_path,fault):
     from test_rebalance_service import continuity_case,resolution_material,with_resolution_source,run_strategy_core
-    from application.execution_intent_continuity import _IntentSession
+    from charles_schwab_platform.application.execution_intent_continuity import _IntentSession
     def lost(_):raise TimeoutError("synthetic")
     original=continuity_case(tmp_path,fault=lost)
     run_strategy_core(runtime=original.runtime,config=original.config)
@@ -786,7 +786,7 @@ def test_zero_fill_resolution_requires_complete_typed_conflict_collections(tmp_p
 
 def test_resolution_anchor_refuses_later_changed_fills_and_never_resubmits_original(tmp_path):
     from test_rebalance_service import continuity_case,resolution_material,with_resolution_source,run_strategy_core
-    from application.execution_intent_continuity import _IntentSession
+    from charles_schwab_platform.application.execution_intent_continuity import _IntentSession
     def lost(_):raise TimeoutError("synthetic")
     original=continuity_case(tmp_path,fault=lost);run_strategy_core(runtime=original.runtime,config=original.config)
     current=continuity_case(tmp_path,"2026-10-01",kind="BUY_LIMIT")
@@ -811,7 +811,7 @@ def test_resolution_anchor_refuses_later_changed_fills_and_never_resubmits_origi
     # The existing ledger retains an original fill when a contradictory copy
     # arrives. A qualified source cannot hide that conflict with a new digest.
     fill=dict(ledger.snapshot()["events"][0]);fill.pop("event_digest");fill["fee"]="0.50"
-    from application.execution_event_accounting import ExecutionEventError
+    from charles_schwab_platform.application.execution_event_accounting import ExecutionEventError
     with pytest.raises(ExecutionEventError):ledger.record_execution_event(fill)
     changed={**body,"ledger":ledger.snapshot()}
     conflict=_IntentSession(with_resolution_source(current.context,changed),snapshot=current.snapshot,profile_id=current.scope.profile_id)
@@ -822,8 +822,8 @@ def test_resolution_anchor_refuses_later_changed_fills_and_never_resubmits_origi
 
 def test_resolution_anchor_rejects_new_self_consistent_contradiction_and_old_observation(tmp_path):
     from test_rebalance_service import continuity_case,resolution_material,with_resolution_source,run_strategy_core
-    from application.execution_intent_continuity import _IntentSession,_canonical_json,_digest,_validated_original_resolution,_EvidenceRequired
-    from application.execution_event_accounting import _json_digest
+    from charles_schwab_platform.application.execution_intent_continuity import _IntentSession,_canonical_json,_digest,_validated_original_resolution,_EvidenceRequired
+    from charles_schwab_platform.application.execution_event_accounting import _json_digest
     def lost(_):raise TimeoutError("synthetic")
     original=continuity_case(tmp_path,fault=lost);run_strategy_core(runtime=original.runtime,config=original.config)
     current=continuity_case(tmp_path,"2026-10-01",kind="BUY_LIMIT")

@@ -5,8 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from application import signal_provenance
-from application.runtime_broker_adapters import build_runtime_broker_adapters
+from charles_schwab_platform.application import signal_provenance
+from charles_schwab_platform.application.runtime_broker_adapters import build_runtime_broker_adapters
 
 
 @pytest.fixture(autouse=True)

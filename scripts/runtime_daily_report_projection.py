@@ -25,7 +25,10 @@ from zoneinfo import ZoneInfo
 
 from quant_platform_kit.common.execution_receipts import attach_execution_receipt
 
-from application.account_observation import expected_account_hash_from_selector
+from charles_schwab_platform.application.account_observation import expected_account_hash_from_selector
+from charles_schwab_platform.notifications.report_projection_support import (
+    project_run_summary as _run,
+)
 from scripts.publish_account_facts_from_reports import _report_uri_parts
 from quant_platform_kit.common.runtime_heartbeat_policy import (
     _payload_value,
@@ -558,138 +561,6 @@ def _execution_lane(payload: Mapping[str, Any], summary: Mapping[str, Any]) -> s
         if payload.get("dry_run") is False and runtime.get("execution_mode") == "live"
         else "insufficient"
     )
-
-
-def _run(payload: Mapping[str, Any], observed: dt.datetime) -> dict[str, Any]:
-    summary = (
-        payload.get("summary") if isinstance(payload.get("summary"), Mapping) else {}
-    )
-    runtime = payload["runtime_target"]
-    started, finished = (
-        _instant(payload.get("started_at")),
-        _instant(payload.get("finished_at")),
-    )
-    raw_id = payload.get("run_id")
-    run_id = (
-        "run." + hashlib.sha256(raw_id.encode()).hexdigest()[:32]
-        if isinstance(raw_id, str) and raw_id
-        else None
-    )
-    receipt: Mapping[str, Any] = {}
-    receipt_state = "missing"
-    if payload.get("execution_receipt") is not None:
-        receipt_state = "invalid"
-        try:
-            # Validate only the existing receipt. A shallow copy avoids changing
-            # the original report; this API does not synthesize a new receipt.
-            receipt = attach_execution_receipt(
-                dict(payload), payload["execution_receipt"]
-            )["execution_receipt"]
-            instant = _instant(receipt.get("observed_at"))
-            if (
-                instant is None
-                or instant > observed
-                or started is None
-                or finished is None
-                or not (started.replace(microsecond=0) <= instant <= finished)
-            ):
-                receipt = {}
-            else:
-                receipt_state = "valid"
-        except (ValueError, TypeError, OverflowError):
-            receipt = {}
-    status = payload.get("status")
-    status = (
-        status
-        if isinstance(status, str) and status in _GOOD_STATUSES | _BAD_STATUSES
-        else None
-    )
-    execution = summary.get("execution_status")
-    execution = (
-        execution
-        if isinstance(execution, str) and execution in _EXECUTION_STATUSES
-        else None
-    )
-    count = summary.get("orders_pending_count")
-    count = count if type(count) is int and count >= 0 else None
-    broker = summary.get("broker_submission_done")
-    broker = broker if type(broker) is bool else None
-    action = summary.get("action_done")
-    action = action if type(action) is bool else None
-    errors = bool(
-        payload.get("errors") or payload.get("error") or payload.get("error_summary")
-    )
-    lane = _execution_lane(payload, summary)
-    outcome = receipt.get("outcome")
-    activity = "insufficient"
-    if (
-        execution in {"pending_reconciliation", "reconciliation_required"}
-        or (count is not None and count > 0)
-        or outcome == "reconciliation_required"
-        or receipt.get("broker_confirmation") == "reconciliation_required"
-    ):
-        activity = "reconciliation_required"
-    elif execution in {"unknown", "unknown_order"}:
-        activity = "unknown"
-    elif execution in {"blocked", "risk_blocked"} or outcome == "risk_blocked":
-        activity = "blocked"
-    elif (
-        errors
-        or execution in {"error", "failed", "failure"}
-        or status in _BAD_STATUSES
-        or outcome == "failed"
-    ):
-        activity = "failed"
-    elif (
-        receipt_state == "valid" and status in _GOOD_STATUSES and lane != "insufficient"
-    ):
-        if lane in _NON_REAL_LANES:
-            activity = "previewed"
-        elif outcome in _ORDERS:
-            activity = outcome
-        elif (
-            outcome in {"no_signal", "no_rebalance", "no_action"}
-            and broker is False
-            and action is not True
-            and count == 0
-            and (
-                summary.get("execution_status") is None
-                or execution
-                in {
-                    "no_op",
-                    "no_action",
-                    "no_signal",
-                    "no_rebalance",
-                    "skipped",
-                    "outside_market_hours",
-                    "completed",
-                }
-            )
-        ):
-            activity = "no_submission" if outcome == "no_action" else outcome
-    return {
-        "run_id": run_id,
-        "source_object": None,
-        "source_objects": [],
-        "started_at": _iso(started),
-        "finished_at": _iso(finished),
-        "object_updated_at": None,
-        "report_status": status,
-        "execution_lane": lane,
-        "activity": activity,
-        "run_time_known": started is not None or finished is not None,
-        "evidence": {
-            "execution_status": execution,
-            "broker_submission_done": broker,
-            "action_done": action,
-            "orders_pending_count": count,
-            "errors_present": errors,
-            "receipt_outcome": outcome,
-            "receipt_broker_confirmation": receipt.get("broker_confirmation"),
-            "receipt_state": receipt_state,
-            "receipt_id": receipt.get("receipt_id"),
-        },
-    }
 
 
 def _time_problem(

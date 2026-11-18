@@ -1,0 +1,104 @@
+from __future__ import annotations
+
+from collections import Counter
+from collections.abc import Iterable, Mapping
+
+from charles_schwab_platform.notifications.block_reason import clean_block_reason
+
+
+def _as_mapping(value: object) -> dict[str, object]:
+    if isinstance(value, Mapping):
+        return dict(value)
+    return {}
+
+
+def _normalize_submitted_orders(result: object) -> tuple[dict[str, object], ...]:
+    raw_orders = getattr(result, "submitted_orders", ()) or ()
+    normalized: list[dict[str, object]] = []
+    for raw in raw_orders:
+        if isinstance(raw, Mapping):
+            normalized.append(dict(raw))
+    return tuple(normalized)
+
+
+def _counter_by_key(items: Iterable[Mapping[str, object]], key: str) -> dict[str, int]:
+    counter: Counter[str] = Counter()
+    for item in items:
+        value = str(item.get(key) or "").strip().lower()
+        if value:
+            counter[value] += 1
+    return dict(counter)
+
+
+def summarize_execution_cycle_result(
+    result: object, *, dry_run: bool, existing_summary: Mapping | None = None,
+) -> dict[str, object]:
+    execution = _as_mapping(getattr(result, "execution", {}))
+    submitted_orders = _normalize_submitted_orders(result)
+    trade_logs = tuple(str(item) for item in (getattr(result, "trade_logs", ()) or ()) if str(item).strip())
+
+    execution_status = str(execution.get("execution_status") or "").strip()
+    no_op_reason = str(execution.get("no_op_reason") or "").strip()
+    pending_reconciliation = execution_status == "pending_reconciliation"
+    summary: dict[str, object] = {
+        "result": execution_status or ("dry_run" if dry_run and submitted_orders else "ok"),
+        "execution_status": execution_status or None,
+        "no_op_reason": no_op_reason or None,
+        "orders_submitted_count": len(submitted_orders),
+        "broker_submission_done": bool(execution.get("broker_submission_done")),
+        "orders_pending_count": (
+            int(execution.get("orders_pending_count") or len(submitted_orders))
+            if pending_reconciliation
+            else 0
+        ),
+        "order_events_count": 0 if pending_reconciliation else None,
+        "orders_previewed_count": len(submitted_orders) if dry_run else 0,
+        "dry_run_order_preview_available": bool(dry_run and submitted_orders),
+        "dry_run_preview": bool(dry_run and submitted_orders),
+        "notes_count": len(trade_logs),
+        "submitted_order_status_counts": _counter_by_key(submitted_orders, "status"),
+        "submitted_order_side_counts": _counter_by_key(submitted_orders, "side"),
+        "submitted_order_type_counts": _counter_by_key(submitted_orders, "order_type"),
+    }
+    reason = clean_block_reason(execution.get("notification_block_reason"))
+    if reason:
+        summary["notification_block_reason"] = reason
+    for field_name in ("signal_date", "effective_date", "execution_timing_contract"):
+        value = execution.get(field_name)
+        if value is not None and value != "":
+            summary[field_name] = value
+    notification_delivery_summary = _as_mapping(execution.get("notification_delivery_summary"))
+    if notification_delivery_summary:
+        summary["notification_delivery_summary"] = notification_delivery_summary
+    from charles_schwab_platform.notifications.unified import enabled as unified_enabled
+    from charles_schwab_platform.notifications.accepted_orders import cycle_notification_evidence
+    raw_orders = tuple(getattr(result, "submitted_orders", ()) or ())
+    summary["notification_digest"] = cycle_notification_evidence(execution, raw_orders, dry_run=dry_run)
+    if not execution_status and not raw_orders:
+        # Validate completion independently of dry-run digest eligibility. Keep
+        # the original preview evidence above: no live orders or fills are proved.
+        completion = cycle_notification_evidence(execution, raw_orders)
+        if completion["routine"] is True:
+            status = "dry_run_completed" if dry_run else "no_action"
+            summary.update(result=status, execution_status=status)
+    if unified_enabled() and execution.get("notification_approved_gates"):
+        from charles_schwab_platform.notifications.approved_gates import clean_gate_reasons
+        summary["notification_approved_gates"] = clean_gate_reasons(execution["notification_approved_gates"])
+        if execution.get("notification_attention_reason_codes"):
+            summary["notification_attention_reason_codes"] = list(execution["notification_attention_reason_codes"])
+    if execution.get("notification_events"):
+        summary["notification_events"] = execution["notification_events"]
+    return {**dict(existing_summary or {}), **summary}
+
+
+def execution_report_status(summary: Mapping) -> str:
+    """Report completion must not claim success for blocked or unknown execution.
+
+    Keep the runtime_report.v1 outer vocabulary (ok/error); precise execution
+    outcomes remain in summary.execution_status. This grants no trading authority.
+    """
+    status = str(summary.get("execution_status") or "").strip().lower()
+    healthy = {"no_action", "no_op", "completed", "executed", "submitted",
+               "broker_acknowledged", "pending", "partially_filled", "pending_reconciliation",
+               "dry_run", "dry_run_completed"}
+    return "ok" if status in healthy else "error"

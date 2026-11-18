@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 import unittest
 
-from application.execution_receipt_adapter import attach_cycle_execution_receipt
+from charles_schwab_platform.application.execution_receipt_adapter import attach_cycle_execution_receipt
 
 
 REVISION = "a" * 40

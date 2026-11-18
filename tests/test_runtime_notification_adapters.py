@@ -1,4 +1,4 @@
-from application.runtime_notification_adapters import build_runtime_notification_adapters
+from charles_schwab_platform.application.runtime_notification_adapters import build_runtime_notification_adapters
 
 
 def test_runtime_notification_adapter_records_negative_ack_as_failed():

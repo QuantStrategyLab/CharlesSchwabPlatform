@@ -31,11 +31,11 @@ test = [
 ]
 
 [project.scripts]
-schwab-d1-no-order-acceptance = "scripts.run_d1_no_order_acceptance:main"
+schwab-d1-no-order-acceptance = "charles_schwab_platform.entrypoints.d1_no_order_acceptance:main"
 
 [tool.coverage.run]
 branch = true
-source = ["."]
+source = ["src/charles_schwab_platform"]
 omit = ["tests/*", "*/external/*", ".venv/*", "build/*", "dist/*", "release-overlays/*", "research/*"]
 
 [tool.coverage.report]
@@ -43,29 +43,17 @@ show_missing = true
 include_namespace_packages = true
 
 [tool.setuptools]
-py-modules = [
-  "decision_mapper",
-  "http_routes",
-  "main",
-  "notifications_runtime",
-  "runtime_config_support",
-  "runtime_execution_policy",
-  "runtime_logging",
-  "runtime_wiring",
-  "strategy_loader",
-  "strategy_plugins_runtime",
-  "strategy_registry",
-  "strategy_runtime",
-]
+package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
-include = [
-  "application*",
-  "entrypoints*",
-  "notifications*",
-  "scripts*",
-  "strategy*",
-]
+where = ["src"]
+
+[tool.setuptools.package-data]
+charles_schwab_platform = ["notifications/*.json", "notifications/digest_snapshot/*.json"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src", "."]
+testpaths = ["tests"]
 
 [tool.uv]
 override-dependencies = [

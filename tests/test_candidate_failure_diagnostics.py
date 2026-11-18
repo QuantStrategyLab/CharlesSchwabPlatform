@@ -4,7 +4,7 @@ import json
 import pytest
 from google.api_core.exceptions import DeadlineExceeded, Forbidden, PreconditionFailed
 
-from notifications import unified
+from charles_schwab_platform.notifications import unified
 from scripts import emit_unified_digest_candidates as publisher
 from scripts import execution_report_heartbeat as heartbeat
 from test_heartbeat_archive_reader import NOW, candidate

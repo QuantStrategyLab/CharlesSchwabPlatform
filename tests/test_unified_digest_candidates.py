@@ -1,7 +1,7 @@
 from copy import deepcopy
 from datetime import datetime, timezone
 import pytest
-from notifications.digest_snapshot.digest_candidates import cycle_evidence, project_reports
+from charles_schwab_platform.notifications.digest_snapshot.digest_candidates import cycle_evidence, project_reports
 
 TARGET = dict(platform_id="synthetic", strategy_profile="core", service_name="test-service",
     account_scope="test-scope", account_selector=["test-selector"], deployment_selector="test-slot", dry_run_only=False)
@@ -50,7 +50,7 @@ def test_bad_source_stays_visible_or_rejects(mutation):
 
 
 def test_archive_default_off_and_disabled_target_never_read_or_upload():
-    from notifications.digest_snapshot.digest_archive import emit
+    from charles_schwab_platform.notifications.digest_snapshot.digest_archive import emit
     def forbidden(*args): raise AssertionError("unexpected I/O")
     assert emit({}, read=forbidden, upload=forbidden)["status"] == "disabled"
     assert emit({"QSL_ROUTINE_NOTIFICATION_MODE": "daily_digest", "RUNTIME_TARGET_ENABLED": "false"},
@@ -59,7 +59,7 @@ def test_archive_default_off_and_disabled_target_never_read_or_upload():
 
 def test_archive_aggregates_window_and_uploads_once_without_private_output():
     import json
-    from notifications.digest_snapshot.digest_archive import emit
+    from charles_schwab_platform.notifications.digest_snapshot.digest_archive import emit
     env = dict(QSL_ROUTINE_NOTIFICATION_MODE="daily_digest", RUNTIME_TARGET_ENABLED="true",
         RUNTIME_TARGET_JSON=json.dumps(TARGET), DIGEST_STORE_TARGET="synthetic-slot",
         DIGEST_OPAQUE_ACCOUNT_UID="synthetic-uid", DIGEST_TARGET_ID="synthetic-target",
@@ -89,7 +89,7 @@ def test_archive_aggregates_window_and_uploads_once_without_private_output():
 def test_configured_closed_session_proves_idle_without_inventing_runs(monkeypatch):
     import json
     import quant_platform_kit.common.runtime_heartbeat_policy as policy
-    from notifications.digest_snapshot.digest_archive import emit
+    from charles_schwab_platform.notifications.digest_snapshot.digest_archive import emit
     env = dict(QSL_ROUTINE_NOTIFICATION_MODE="daily_digest", RUNTIME_TARGET_ENABLED="true",
         RUNTIME_TARGET_JSON=json.dumps(TARGET), DIGEST_STORE_TARGET="synthetic-slot",
         DIGEST_OPAQUE_ACCOUNT_UID="synthetic-uid", DIGEST_TARGET_ID="synthetic-target",
@@ -110,7 +110,7 @@ def test_configured_closed_session_proves_idle_without_inventing_runs(monkeypatc
 
 def test_multi_target_bindings_use_each_explicit_enablement_without_a_global_target():
     import json
-    from notifications.digest_snapshot.digest_archive import emit
+    from charles_schwab_platform.notifications.digest_snapshot.digest_archive import emit
     result = emit({"QSL_ROUTINE_NOTIFICATION_MODE": "daily_digest",
         "DIGEST_TARGET_BINDINGS_JSON": json.dumps([{"RUNTIME_TARGET_ENABLED": "false"}])},
         read=lambda args: pytest.fail("disabled target must not be read"),

@@ -22,7 +22,7 @@ for _qpk_src in (
         sys.path.append(str(_qpk_src))
         break
 
-from application.account_new_risk_gate_support import (
+from charles_schwab_platform.application.account_new_risk_gate_support import (
     ACCOUNT_NEW_RISK_GATE_ENV,
     apply_combined_scale_to_allocation_targets,
     build_account_new_risk_snapshot,
@@ -33,10 +33,10 @@ from application.account_new_risk_gate_support import (
     reset_attention_sent_keys_for_tests,
     set_cycle_snapshot,
 )
-from application.execution_service import execute_rebalance_cycle
-from application.rebalance_service import run_strategy_core
-from application.runtime_dependencies import SchwabRebalanceConfig, SchwabRebalanceRuntime
-from notifications.telegram import build_translator
+from charles_schwab_platform.application.execution_service import execute_rebalance_cycle
+from charles_schwab_platform.application.rebalance_service import run_strategy_core
+from charles_schwab_platform.application.runtime_dependencies import SchwabRebalanceConfig, SchwabRebalanceRuntime
+from charles_schwab_platform.notifications.telegram import build_translator
 from quant_platform_kit.common.models import PortfolioSnapshot, QuoteSnapshot
 from quant_platform_kit.common.port_adapters import (
     CallableExecutionPort,
@@ -108,7 +108,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
             "metadata": {"total_equity_source": "broker_liquidation_value"},
         }
         with patch(
-            "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+            "charles_schwab_platform.application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
             return_value=None,
         ):
             snapshot = build_account_new_risk_snapshot(portfolio)
@@ -145,7 +145,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
             },
         }
         with patch(
-            "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+            "charles_schwab_platform.application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
             return_value=None,
         ):
             snapshot = build_snapshot_from_portfolio(portfolio)
@@ -164,7 +164,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
             "account_new_risk_snapshot": {"daily_loss_usd": float("nan")},
         }
         with patch(
-            "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+            "charles_schwab_platform.application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
             return_value=None,
         ):
             result = evaluate_portfolio_new_risk_admission(portfolio)
@@ -179,7 +179,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
             "account_new_risk_snapshot": {"max_daily_loss_usd": 100.0},
         }
         with patch(
-            "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+            "charles_schwab_platform.application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
             return_value=None,
         ):
             result = evaluate_portfolio_new_risk_admission(portfolio)
@@ -187,7 +187,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
         self.assertIn("DAILY_LOSS_UNKNOWN_FAIL_CLOSED", result.reason_codes)
 
     def test_equity_formula_smooths_from_aggressive_to_conservative(self) -> None:
-        from application.account_new_risk_gate_support import (
+        from charles_schwab_platform.application.account_new_risk_gate_support import (
             resolve_max_daily_loss_usd,
             resolve_max_daily_loss_usd_from_equity_formula,
         )
@@ -223,7 +223,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
         )
         with patch.dict(os.environ, {"RUNTIME_TARGET_JSON": target}, clear=False):
             with patch(
-                "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+                "charles_schwab_platform.application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
                 return_value=None,
             ):
                 self.assertAlmostEqual(
@@ -235,7 +235,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
         self.assertIn("DAILY_LOSS_LIMIT_EXCEEDED", result.reason_codes)
 
     def test_equity_formula_invalid_or_missing_equity_fails_closed_not_absent(self) -> None:
-        from application.account_new_risk_gate_support import (
+        from charles_schwab_platform.application.account_new_risk_gate_support import (
             resolve_max_daily_loss_resolution,
             resolve_max_daily_loss_usd_from_equity_formula,
         )
@@ -276,7 +276,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
                 )
                 with patch.dict(os.environ, {"RUNTIME_TARGET_JSON": target}, clear=False):
                     with patch(
-                        "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+                        "charles_schwab_platform.application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
                         return_value=None,
                     ):
                         resolution = resolve_max_daily_loss_resolution(healthy)
@@ -307,7 +307,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
         )
         with patch.dict(os.environ, {"RUNTIME_TARGET_JSON": target}, clear=False):
             with patch(
-                "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+                "charles_schwab_platform.application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
                 return_value=None,
             ):
                 resolution = resolve_max_daily_loss_resolution(missing_equity)
@@ -320,7 +320,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("RUNTIME_TARGET_JSON", None)
             with patch(
-                "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+                "charles_schwab_platform.application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
                 return_value=None,
             ):
                 resolution = resolve_max_daily_loss_resolution(healthy)
@@ -329,7 +329,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
         self.assertEqual(result.disposition, NewRiskDisposition.ALLOW_NEW_RISK)
 
     def test_equity_schedule_uses_larger_pct_for_small_account(self) -> None:
-        from application.account_new_risk_gate_support import (
+        from charles_schwab_platform.application.account_new_risk_gate_support import (
             resolve_max_daily_loss_usd,
             resolve_max_daily_loss_usd_from_equity_schedule,
         )
@@ -369,7 +369,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
         )
         with patch.dict(os.environ, {"RUNTIME_TARGET_JSON": target}, clear=False):
             with patch(
-                "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+                "charles_schwab_platform.application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
                 return_value=None,
             ):
                 self.assertAlmostEqual(resolve_max_daily_loss_usd(portfolio) or 0.0, 20.0)
@@ -443,7 +443,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
             "metadata": {"total_equity_source": "broker_liquidation_value"},
         }
         with patch(
-            "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+            "charles_schwab_platform.application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
             return_value=None,
         ):
             result = evaluate_portfolio_new_risk_admission(portfolio)
@@ -455,7 +455,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
             "metadata": {"total_equity_source": "broker_liquidation_value"},
         }
         with patch(
-            "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+            "charles_schwab_platform.application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
             return_value="critical",
         ) as store_resolver:
             result = evaluate_portfolio_new_risk_admission(portfolio)
@@ -470,7 +470,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
             "account_new_risk_snapshot": {"production_drift_status": "critical"},
         }
         with patch(
-            "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+            "charles_schwab_platform.application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
             return_value="review",
         ) as store_resolver:
             result = evaluate_portfolio_new_risk_admission(portfolio)
@@ -520,7 +520,7 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
             metadata={},
         )
         resolver = patch(
-            "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+            "charles_schwab_platform.application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
             return_value=None,
         )
         with resolver as store_resolver:
@@ -717,11 +717,11 @@ class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
         )
         with patch.dict(os.environ, {"RUNTIME_TARGET_JSON": target}, clear=False):
             with patch(
-                "application.execution_service.attach_daily_loss_fact_to_portfolio",
+                "charles_schwab_platform.application.execution_service.attach_daily_loss_fact_to_portfolio",
                 side_effect=lambda portfolio, **_kwargs: dict(portfolio),
             ):
                 with patch(
-                    "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+                    "charles_schwab_platform.application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
                     return_value=None,
                 ):
                     _result, submitted_orders = self._run_buy_cycle(
@@ -751,11 +751,11 @@ class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
             return out
 
         with patch(
-            "application.execution_service.attach_daily_loss_fact_to_portfolio",
+            "charles_schwab_platform.application.execution_service.attach_daily_loss_fact_to_portfolio",
             side_effect=_omit_unverified_fact,
         ):
             with patch(
-                "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+                "charles_schwab_platform.application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
                 return_value=None,
             ):
                 result, submitted_orders = self._run_buy_cycle(
@@ -783,11 +783,11 @@ class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
             return dict(portfolio)
 
         with patch(
-            "application.execution_service.attach_daily_loss_fact_to_portfolio",
+            "charles_schwab_platform.application.execution_service.attach_daily_loss_fact_to_portfolio",
             side_effect=_capture_attach,
         ):
             with patch(
-                "application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
+                "charles_schwab_platform.application.account_new_risk_gate_support.resolve_production_drift_status_from_store",
                 return_value=None,
             ):
                 _result, _submitted = self._run_buy_cycle(

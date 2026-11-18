@@ -23,6 +23,12 @@ _FORBIDDEN_IMPORT_ROOTS = (
     "decision_mapper",
     "entrypoints",
     "runtime_config_support",
+    "charles_schwab_platform.main",
+    "charles_schwab_platform.application",
+    "charles_schwab_platform.strategy_runtime",
+    "charles_schwab_platform.decision_mapper",
+    "charles_schwab_platform.entrypoints",
+    "charles_schwab_platform.runtime_config_support",
 )
 
 _FORBIDDEN_TEXT = (
@@ -121,7 +127,7 @@ def test_preview_script_has_no_broker_or_execution_imports():
             name == forbidden or name.startswith(f"{forbidden}.") for name in imported
         )
 
-    assert "notifications.telegram" in imported
+    assert "charles_schwab_platform.notifications.telegram" in imported
 
 
 def test_send_preview_fails_closed_without_telegram_target(monkeypatch):
@@ -212,6 +218,7 @@ def test_workflow_static_safety_constraints():
         "strategy_profile",
         "main.py",
         "application/",
+        "charles_schwab_platform",
         "schwab-py",
         "SCHWAB_APP_KEY",
         "SCHWAB_APP_SECRET",

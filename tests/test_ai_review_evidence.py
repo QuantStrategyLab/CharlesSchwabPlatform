@@ -192,6 +192,7 @@ class ReviewEvidenceTests(unittest.TestCase):
             ".github/engineering.md": "standard",
             "scripts/general_helper.py": "standard",
             "application/client.py": "high",
+            "src/charles_schwab_platform/application/client.py": "high",
             "scripts/setRiskControls.py": "high",
             ".github/workflows/ci.yml": "high",
             ".github/CODEOWNERS": "high",
@@ -240,7 +241,7 @@ class ReviewEvidenceTests(unittest.TestCase):
             self.assertEqual(self.assert_result(document, "BLOCKED")["risk_tier"], "high")
 
     def test_known_root_runtime_entrypoints_raise_current_and_previous_path_risk(self):
-        for path in ("main.py", "gunicorn.conf.py"):
+        for path in ("main.py", "src/charles_schwab_platform/main.py", "gunicorn.conf.py"):
             for state in ("modified", "renamed", "copied"):
                 with self.subTest(path=path, state=state):
                     document = fixture()

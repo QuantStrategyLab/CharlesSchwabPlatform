@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import unittest
 
-from application.execution_kernel_adapter import (
+from charles_schwab_platform.application.execution_kernel_adapter import (
     consult_t1_live_submit,
     evaluate_halted_resubmit_guards,
     should_block_halted_resubmit,
     should_block_live_submit_for_t1,
 )
-from application.runtime_dependencies import SchwabRebalanceConfig
+from charles_schwab_platform.application.runtime_dependencies import SchwabRebalanceConfig
 
 
 def _minimal_config(**kwargs) -> SchwabRebalanceConfig:
@@ -117,7 +117,7 @@ class ExecutionKernelAdapterTests(unittest.TestCase):
 
 class ExecutionKernelT1EnforceEnvTests(unittest.TestCase):
     def test_env_flag_enables_when_config_false(self):
-        from application import rebalance_service
+        from charles_schwab_platform.application import rebalance_service
 
         config = _minimal_config(execution_kernel_t1_enforce=False)
         old = rebalance_service.os.environ.get(
@@ -139,7 +139,7 @@ class ExecutionKernelT1EnforceEnvTests(unittest.TestCase):
                 ] = old
 
     def test_config_true_enables_without_env(self):
-        from application import rebalance_service
+        from charles_schwab_platform.application import rebalance_service
 
         config = _minimal_config(execution_kernel_t1_enforce=True)
         old = rebalance_service.os.environ.pop(

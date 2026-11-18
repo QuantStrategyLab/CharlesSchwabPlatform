@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
-from application.account_observation import build_account_observation
+from charles_schwab_platform.application.account_observation import build_account_observation
 
 
 def test_owner_declared_usd_applies_only_to_verified_nlv_and_preserves_observation() -> None:

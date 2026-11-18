@@ -4,12 +4,12 @@ import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
-from application.broker_reconciliation import SchwabReconciliationObservations
-from application.c4_shadow_materialization import calculate_final_risk_assessment_sha256
-from application.c4_shadow_reconcile_assembly import (
+from charles_schwab_platform.application.broker_reconciliation import SchwabReconciliationObservations
+from charles_schwab_platform.application.c4_shadow_materialization import calculate_final_risk_assessment_sha256
+from charles_schwab_platform.application.c4_shadow_reconcile_assembly import (
     build_materialized_account_facts_from_reconcile_observations,
 )
-from application.c4_shadow_reconcile_runtime import (
+from charles_schwab_platform.application.c4_shadow_reconcile_runtime import (
     c4_shadow_zero_submit_to_safe_diagnostics,
     run_c4_shadow_zero_submit_for_reconcile,
 )
@@ -261,7 +261,7 @@ def test_safe_diagnostics_omit_account_detail_fields() -> None:
 
 
 def test_report_attachment_is_internal_only_and_omits_account_details() -> None:
-    from application.c4_shadow_reconcile_runtime import build_reconcile_c4_report_attachment
+    from charles_schwab_platform.application.c4_shadow_reconcile_runtime import build_reconcile_c4_report_attachment
 
     observations = _observations(complete=True)
     runtime_target = SimpleNamespace(
@@ -303,7 +303,7 @@ def test_report_attachment_is_internal_only_and_omits_account_details() -> None:
 def test_main_reconcile_path_wires_c4_into_report_not_public_body() -> None:
     from pathlib import Path
 
-    source = Path("http_routes.py").read_text(encoding="utf-8")
+    source = Path("src/charles_schwab_platform/http_routes.py").read_text(encoding="utf-8")
     assert "build_reconcile_c4_report_attachment" in source
     assert '**c4_attachment["diagnostics"]' in source or "**c4_attachment['diagnostics']" in source
     assert "json.dumps(payload" in source

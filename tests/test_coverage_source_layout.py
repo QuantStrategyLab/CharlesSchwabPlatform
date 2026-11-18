@@ -19,6 +19,27 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+PACKAGE_NAME = "charles_schwab_platform"
+SOURCE_ROOT = Path("src") / PACKAGE_NAME
+LEGACY_MOVED_ROOT_PATHS = (
+    "application",
+    "entrypoints",
+    "notifications",
+    "strategy",
+    "decision_mapper.py",
+    "http_routes.py",
+    "main.py",
+    "notifications_runtime.py",
+    "platform_entry.py",
+    "runtime_config_support.py",
+    "runtime_execution_policy.py",
+    "runtime_logging.py",
+    "runtime_wiring.py",
+    "strategy_loader.py",
+    "strategy_plugins_runtime.py",
+    "strategy_registry.py",
+    "strategy_runtime.py",
+)
 
 SYNTHETIC_MODULE = (
     "def executed():\n"
@@ -56,10 +77,13 @@ def coverage_report_config():
 
 
 def declared_production_sources():
-    data = pyproject()
-    modules = data["tool"]["setuptools"]["py-modules"]
-    include = data["tool"]["setuptools"]["packages"]["find"]["include"]
-    packages = sorted({p.name for pattern in include for p in ROOT.glob(pattern) if p.is_dir()})
+    pkg_dir = ROOT / SOURCE_ROOT
+    modules = sorted(
+        p.stem for p in pkg_dir.glob("*.py") if p.is_file() and p.name != "__init__.py"
+    )
+    packages = sorted(
+        p.name for p in pkg_dir.iterdir() if p.is_dir() and any(p.rglob("*.py"))
+    )
     return modules, packages
 
 
@@ -88,37 +112,49 @@ def measurement_step_block():
 
 
 class CoverageSourceLayoutTests(unittest.TestCase):
-    def test_source_is_repository_root_with_explicit_category_exclusions(self):
+    def test_source_uses_src_package_layout_with_explicit_category_exclusions(self):
+        data = pyproject()
         run = coverage_run_config()
         report = coverage_report_config()
-        self.assertEqual(run["source"], ["."])
+        self.assertEqual(run["source"], [SOURCE_ROOT.as_posix()])
         self.assertTrue(report.get("include_namespace_packages"))
-        self.assertFalse((ROOT / "src").exists())
-        self.assertNotIn("fail_under", str(pyproject()["tool"]["coverage"]))
+        self.assertTrue((ROOT / SOURCE_ROOT / "__init__.py").is_file())
+        self.assertEqual(data["tool"]["setuptools"]["package-dir"], {"": "src"})
+        self.assertEqual(data["tool"]["setuptools"]["packages"]["find"]["where"], ["src"])
+        for legacy_path in LEGACY_MOVED_ROOT_PATHS:
+            self.assertFalse((ROOT / legacy_path).exists(), legacy_path)
+        self.assertNotIn("fail_under", str(data["tool"]["coverage"]))
         omit = " ".join(run["omit"])
         for category in CANONICAL_OMIT_CATEGORIES:
             self.assertIn(category, omit)
 
     def test_declared_production_paths_are_measured(self):
         modules, packages = declared_production_sources()
+        self.assertTrue(modules)
+        self.assertTrue(packages)
         omit = coverage_run_config()["omit"]
         for module in modules:
-            relative = f"{module}.py"
+            relative = (SOURCE_ROOT / f"{module}.py").as_posix()
             self.assertTrue((ROOT / relative).exists(), relative)
             self.assertFalse(matches_any_omit(relative, omit), relative)
         for package in packages:
-            self.assertFalse(matches_any_omit(package, omit), package)
+            relative = (SOURCE_ROOT / package).as_posix()
+            self.assertFalse(matches_any_omit(relative, omit), relative)
 
     def test_unexecuted_in_scope_files_remain_in_denominator(self):
         modules, packages = declared_production_sources()
         run = coverage_run_config()
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            pkg_root = root / SOURCE_ROOT
+            pkg_root.mkdir(parents=True)
+            (pkg_root / "__init__.py").write_text("", encoding="utf-8")
             for module in modules:
-                (root / f"{module}.py").write_text(SYNTHETIC_MODULE, encoding="utf-8")
+                (pkg_root / f"{module}.py").write_text(SYNTHETIC_MODULE, encoding="utf-8")
             for package in packages:
-                (root / package).mkdir()
-            (root / packages[0] / "synthetic_service.py").write_text(
+                (pkg_root / package).mkdir()
+                (pkg_root / package / "__init__.py").write_text("", encoding="utf-8")
+            (pkg_root / packages[0] / "synthetic_service.py").write_text(
                 SYNTHETIC_MODULE, encoding="utf-8"
             )
             excluded = "def never_executed():\n    value = 1\n    return value\n"
@@ -135,10 +171,14 @@ class CoverageSourceLayoutTests(unittest.TestCase):
                 (root / directory / "excluded_module.py").write_text(excluded, encoding="utf-8")
             imported = modules[:-1]
             imports = [
-                f"importlib.import_module({module!r}).executed()" for module in imported
+                f"importlib.import_module({f'{PACKAGE_NAME}.{module}'!r}).executed()"
+                for module in imported
             ]
             (root / "runner.py").write_text(
-                "import importlib\n" + "\n".join(imports) + "\nprint('done')\n",
+                "import importlib, sys\n"
+                "sys.path.insert(0, 'src')\n"
+                + "\n".join(imports)
+                + "\nprint('done')\n",
                 encoding="utf-8",
             )
             (root / ".coveragerc").write_text(
@@ -178,12 +218,14 @@ class CoverageSourceLayoutTests(unittest.TestCase):
                 if candidate and not candidate.startswith(("Name", "-", "TOTAL"))
             }
             for module in imported:
-                self.assertIn(module + ".py", lines)
-                self.assertIn("6-7", lines[module + ".py"])
+                rel = (SOURCE_ROOT / f"{module}.py").as_posix()
+                self.assertIn(rel, lines)
+                self.assertIn("6-7", lines[rel])
             never_imported = modules[-1]
-            self.assertIn(never_imported + ".py", lines)
-            self.assertIn("0%", lines[never_imported + ".py"])
-            service_path = f"{packages[0]}/synthetic_service.py"
+            never_rel = (SOURCE_ROOT / f"{never_imported}.py").as_posix()
+            self.assertIn(never_rel, lines)
+            self.assertIn("0%", lines[never_rel])
+            service_path = (SOURCE_ROOT / packages[0] / "synthetic_service.py").as_posix()
             self.assertIn(service_path, lines)
             self.assertIn("0%", lines[service_path])
             for directory in (

@@ -4,7 +4,7 @@ import datetime as dt
 
 import pytest
 
-from notifications.accepted_orders import confirmed_acceptances
+from charles_schwab_platform.notifications.accepted_orders import confirmed_acceptances
 
 
 def acknowledged():
@@ -32,7 +32,7 @@ def test_acknowledgement_requires_complete_positive_evidence():
 
 
 def test_empty_execution_is_not_invented_as_a_completed_cycle():
-    from notifications.accepted_orders import cycle_notification_evidence
+    from charles_schwab_platform.notifications.accepted_orders import cycle_notification_evidence
     assert cycle_notification_evidence({}, [])["routine"] is False
     assert cycle_notification_evidence({"notification_cycle_completed": True, "errors": ["error"]}, [])["routine"] is False
     assert cycle_notification_evidence({"notification_cycle_completed": True, "signal_metadata": {"errors": ["error"]}}, [])["routine"] is False
@@ -50,7 +50,7 @@ def test_empty_execution_is_not_invented_as_a_completed_cycle():
 
 @pytest.mark.parametrize("flag", [None, "false", "true"])
 def test_healthy_dry_run_does_not_require_candidate_or_send(flag, monkeypatch):
-    from notifications.unified import publish_cycle
+    from charles_schwab_platform.notifications.unified import publish_cycle
     from types import SimpleNamespace
     if flag is None:
         monkeypatch.delenv("SCHWAB_UNIFIED_NOTIFICATION_ENABLED", raising=False)
@@ -60,14 +60,14 @@ def test_healthy_dry_run_does_not_require_candidate_or_send(flag, monkeypatch):
     result = SimpleNamespace(execution={"execution_status": "dry_run", "signal_metadata": {}},
                              submitted_orders=[{"status": "dry_run"}])
     config = SimpleNamespace(dry_run_only=True, strategy_profile="synthetic", notification_attention_reason_codes=())
-    monkeypatch.setattr("notifications.unified.GCSNotificationStore", lambda *a: pytest.fail("preview tried to access storage"))
+    monkeypatch.setattr("charles_schwab_platform.notifications.unified.GCSNotificationStore", lambda *a: pytest.fail("preview tried to access storage"))
     assert publish_cycle(result, config=config, legacy=lambda: calls.append("normal"),
                          coverage_failure=lambda: calls.append("coverage")) is None
     assert calls == []
 
 
 def test_uncertain_dry_run_keeps_existing_error_route(monkeypatch):
-    from notifications.unified import publish_cycle
+    from charles_schwab_platform.notifications.unified import publish_cycle
     from types import SimpleNamespace
     monkeypatch.setenv("SCHWAB_UNIFIED_NOTIFICATION_ENABLED", "false")
     calls = []
@@ -79,7 +79,7 @@ def test_uncertain_dry_run_keeps_existing_error_route(monkeypatch):
 
 def test_archived_ack_proof_preserves_unknown_fill_and_rejects_conflicts():
     from types import SimpleNamespace
-    from application.runtime_report_summary import summarize_execution_cycle_result
+    from charles_schwab_platform.application.runtime_report_summary import summarize_execution_cycle_result
     from quant_platform_kit.common.execution_receipts import build_execution_receipt
     from scripts.execution_report_heartbeat import _is_proven_accepted_report
 
@@ -110,8 +110,8 @@ def test_archived_ack_proof_preserves_unknown_fill_and_rejects_conflicts():
 
 def test_archive_projection_preserves_ack_count_and_unknown_fill():
     from types import SimpleNamespace
-    from application.runtime_report_summary import summarize_execution_cycle_result
-    from notifications.unified import _project_runs
+    from charles_schwab_platform.application.runtime_report_summary import summarize_execution_cycle_result
+    from charles_schwab_platform.notifications.unified import _project_runs
     execution, orders = acknowledged()
     now = dt.datetime.now(dt.timezone.utc)
     target = {"platform_id": "schwab", "strategy_profile": "synthetic", "service_name": "synthetic-service",
@@ -133,8 +133,8 @@ def test_archive_projection_preserves_ack_count_and_unknown_fill():
 def test_completed_window_export_reads_schwab_alias_with_bound_target():
     import json
     from types import SimpleNamespace
-    from application.runtime_report_summary import summarize_execution_cycle_result
-    from notifications.unified import emit_completed_candidates
+    from charles_schwab_platform.application.runtime_report_summary import summarize_execution_cycle_result
+    from charles_schwab_platform.notifications.unified import emit_completed_candidates
     execution, orders = acknowledged()
     now = dt.datetime(2026, 10, 30, 3, tzinfo=dt.timezone.utc)
     start = dt.datetime(2026, 10, 29, 20, tzinfo=dt.timezone.utc)
@@ -164,7 +164,7 @@ def test_completed_window_export_reads_schwab_alias_with_bound_target():
 
 @pytest.mark.parametrize("flag", [None, "false", "true"])
 def test_routine_ack_is_deferred_for_every_flag(flag, monkeypatch):
-    from notifications.unified import publish_cycle
+    from charles_schwab_platform.notifications.unified import publish_cycle
     from types import SimpleNamespace
     execution, orders = acknowledged()
     if flag is None:
@@ -178,10 +178,10 @@ def test_routine_ack_is_deferred_for_every_flag(flag, monkeypatch):
     monkeypatch.setenv("DIGEST_OPAQUE_ACCOUNT_UID", "synthetic-account")
     monkeypatch.setenv("DIGEST_TARGET_ID", "synthetic-target")
     monkeypatch.setenv("GITHUB_RUN_ID", "synthetic-run")
-    monkeypatch.setattr("notifications.unified._cycle_projection", lambda *a: {"runs": ["synthetic"]})
-    monkeypatch.setattr("notifications.unified.GCSNotificationStore", lambda: SimpleNamespace(
+    monkeypatch.setattr("charles_schwab_platform.notifications.unified._cycle_projection", lambda *a: {"runs": ["synthetic"]})
+    monkeypatch.setattr("charles_schwab_platform.notifications.unified.GCSNotificationStore", lambda: SimpleNamespace(
         persist=lambda fact, projection: persisted.append((fact, projection)) or True))
-    monkeypatch.setattr("notifications.unified._incident", lambda *a, **kw: None)
+    monkeypatch.setattr("charles_schwab_platform.notifications.unified._incident", lambda *a, **kw: None)
     publish_cycle(result, config=config, legacy=lambda: calls.append("sent"))
     assert calls == []
     assert len(persisted) == 1
@@ -192,7 +192,7 @@ def test_routine_ack_is_deferred_for_every_flag(flag, monkeypatch):
 
 @pytest.mark.parametrize("flag", [None, "false", "true"])
 def test_unknown_submission_stays_urgent(flag, monkeypatch):
-    from notifications.unified import publish_cycle
+    from charles_schwab_platform.notifications.unified import publish_cycle
     from types import SimpleNamespace
     execution, orders = acknowledged()
     execution["broker_submission_done"] = False
@@ -206,9 +206,9 @@ def test_unknown_submission_stays_urgent(flag, monkeypatch):
     monkeypatch.setenv("DIGEST_OPAQUE_ACCOUNT_UID", "synthetic-account")
     monkeypatch.setenv("DIGEST_TARGET_ID", "synthetic-target")
     monkeypatch.setenv("GITHUB_RUN_ID", "synthetic-run")
-    monkeypatch.setattr("notifications.unified._cycle_projection", lambda *a: None)
-    monkeypatch.setattr("notifications.unified.GCSNotificationStore", lambda *a: SimpleNamespace(persist=lambda *a: True))
-    monkeypatch.setattr("notifications.unified._incident", lambda event, **kw: kw["sender"]())
+    monkeypatch.setattr("charles_schwab_platform.notifications.unified._cycle_projection", lambda *a: None)
+    monkeypatch.setattr("charles_schwab_platform.notifications.unified.GCSNotificationStore", lambda *a: SimpleNamespace(persist=lambda *a: True))
+    monkeypatch.setattr("charles_schwab_platform.notifications.unified._incident", lambda event, **kw: kw["sender"]())
     publish_cycle(SimpleNamespace(execution=execution, submitted_orders=orders), config=config,
                   legacy=lambda: calls.append("urgent"))
     assert calls == ["urgent"]
@@ -218,7 +218,7 @@ def test_unknown_submission_stays_urgent(flag, monkeypatch):
 @pytest.mark.parametrize("flag", [None, "false", "true"])
 @pytest.mark.parametrize("status", [None, "no_action"])
 def test_no_trade_cycle_is_staged_and_not_pushed(flag, status, monkeypatch):
-    from notifications.unified import publish_cycle
+    from charles_schwab_platform.notifications.unified import publish_cycle
     from types import SimpleNamespace
     if flag is None:
         monkeypatch.delenv("SCHWAB_UNIFIED_NOTIFICATION_ENABLED", raising=False)
@@ -228,10 +228,10 @@ def test_no_trade_cycle_is_staged_and_not_pushed(flag, status, monkeypatch):
     monkeypatch.setenv("DIGEST_TARGET_ID", "synthetic-target")
     monkeypatch.setenv("GITHUB_RUN_ID", "synthetic-run")
     staged, sent = [], []
-    monkeypatch.setattr("notifications.unified._cycle_projection", lambda *a: {"runs": ["synthetic"]})
-    monkeypatch.setattr("notifications.unified.GCSNotificationStore", lambda: SimpleNamespace(
+    monkeypatch.setattr("charles_schwab_platform.notifications.unified._cycle_projection", lambda *a: {"runs": ["synthetic"]})
+    monkeypatch.setattr("charles_schwab_platform.notifications.unified.GCSNotificationStore", lambda: SimpleNamespace(
         persist=lambda fact, projection: staged.append(fact) or True))
-    monkeypatch.setattr("notifications.unified._incident", lambda *a, **kw: None)
+    monkeypatch.setattr("charles_schwab_platform.notifications.unified._incident", lambda *a, **kw: None)
     result = SimpleNamespace(execution={"execution_status": status, "notification_cycle_completed": True}, submitted_orders=[])
     config = SimpleNamespace(dry_run_only=False, strategy_profile="synthetic", notification_attention_reason_codes=())
     publish_cycle(result, config=config, legacy=lambda: sent.append("routine"))
@@ -242,7 +242,7 @@ def test_no_trade_cycle_is_staged_and_not_pushed(flag, status, monkeypatch):
 @pytest.mark.parametrize("locale", ["zh", "en"])
 @pytest.mark.parametrize("flag", [None, "false", "true"])
 def test_routine_coverage_failure_uses_fixed_error_only(flag, locale, monkeypatch):
-    from notifications.unified import publish_cycle
+    from charles_schwab_platform.notifications.unified import publish_cycle
     from types import SimpleNamespace
     execution, orders = acknowledged()
     if flag is None:
@@ -251,7 +251,7 @@ def test_routine_coverage_failure_uses_fixed_error_only(flag, locale, monkeypatc
         monkeypatch.setenv("SCHWAB_UNIFIED_NOTIFICATION_ENABLED", flag)
     sent = []
     config = SimpleNamespace(dry_run_only=False, strategy_profile="synthetic", notification_attention_reason_codes=())
-    monkeypatch.setattr("notifications.unified._cycle_projection", lambda *a: (_ for _ in ()).throw(ValueError("private order detail")))
+    monkeypatch.setattr("charles_schwab_platform.notifications.unified._cycle_projection", lambda *a: (_ for _ in ()).throw(ValueError("private order detail")))
     publish_cycle(SimpleNamespace(execution=execution, submitted_orders=orders), config=config,
                   legacy=lambda: sent.append("private trade body"),
                   coverage_failure=lambda: sent.append("摘要记录未确认" if locale == "zh" else "coverage unconfirmed"))
@@ -279,8 +279,8 @@ def test_healthy_heartbeat_coverage_failure_is_urgent_and_private(locale, monkey
 @pytest.mark.parametrize("flag", [None, "false", "true"])
 def test_receipt_fact_persists_and_links_to_archive_for_all_flags(flag, monkeypatch):
     from types import SimpleNamespace
-    from notifications import unified
-    from notifications.digest_snapshot.unified_contract import NotificationEvent
+    from charles_schwab_platform.notifications import unified
+    from charles_schwab_platform.notifications.digest_snapshot.unified_contract import NotificationEvent
     if flag is None:
         monkeypatch.delenv(unified.FLAG, raising=False)
     else:
@@ -306,7 +306,7 @@ def test_manual_healthy_heartbeat_never_pushes(monkeypatch):
 
 def test_plugin_filter_keeps_errors_and_defers_routine_regardless_of_default_mode():
     from types import SimpleNamespace
-    from notifications.digest_snapshot.digest_routing import immediate_plugin_signals
+    from charles_schwab_platform.notifications.digest_snapshot.digest_routing import immediate_plugin_signals
     watch = SimpleNamespace(canonical_route="watch", suggested_action="observe")
     urgent = SimpleNamespace(canonical_route="watch", suggested_action="observe", error="synthetic error")
     assert immediate_plugin_signals([watch, urgent], mode="daily_digest") == (urgent,)
@@ -315,7 +315,7 @@ def test_plugin_filter_keeps_errors_and_defers_routine_regardless_of_default_mod
 @pytest.mark.parametrize("unified", [False, True])
 def test_actual_heartbeat_uses_archived_ack_as_routine(monkeypatch, unified):
     from types import SimpleNamespace
-    from application.runtime_report_summary import summarize_execution_cycle_result
+    from charles_schwab_platform.application.runtime_report_summary import summarize_execution_cycle_result
     from quant_platform_kit.common.execution_receipts import build_execution_receipt
     from scripts import execution_report_heartbeat as heartbeat
     execution, orders = acknowledged()

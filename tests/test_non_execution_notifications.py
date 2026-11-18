@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from notifications import unified
+from charles_schwab_platform.notifications import unified
 from test_unified_notification_storage import fake_gcs as _fake_gcs
 
 
@@ -84,7 +84,7 @@ def test_non_run_conflict_is_not_overwritten(candidate_store):
 
 @pytest.mark.parametrize("enabled,persist_fails", [(False, False), (True, False), (True, True)])
 def test_actual_early_guard_persists_only_when_enabled_and_never_builds_client(monkeypatch, enabled, persist_fails):
-    source = Path(__file__).resolve().parents[1] / "http_routes.py"
+    source = Path(__file__).resolve().parents[1] / "src" / "charles_schwab_platform" / "http_routes.py"
     node = next(x for x in ast.parse(source.read_text()).body if isinstance(x, ast.FunctionDef) and x.name == "_handle_schwab_cycle")
     calls = []
     monkeypatch.setattr(unified, "enabled", lambda: enabled)

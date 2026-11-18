@@ -1,7 +1,7 @@
 """Shared-renderer rollout and actual run context, using synthetic metadata."""
 import pytest
 
-from notifications import attention, unified
+from charles_schwab_platform.notifications import attention, unified
 from quant_platform_kit.risk.attention import AttentionAxes, evaluate_attention
 
 

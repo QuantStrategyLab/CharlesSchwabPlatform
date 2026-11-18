@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from application.account_observation import (
+from charles_schwab_platform.application.account_observation import (
     POSITIONS_SCOPE,
     build_account_observation,
     build_broker_reported_positions,

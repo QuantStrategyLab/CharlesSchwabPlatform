@@ -783,7 +783,7 @@ def test_account_scope_mode_token_classified():
 
 
 def test_prepare_preserves_projected_external_flow_only_when_opted_in():
-    from application.external_flow_snapshot import attach_external_flow_snapshot, collect_external_flow_snapshot
+    from charles_schwab_platform.application.external_flow_snapshot import attach_external_flow_snapshot, collect_external_flow_snapshot
     from test_external_flow_snapshot import START, END, TX
     from unittest.mock import Mock
     client = Mock()
@@ -823,7 +823,7 @@ def test_main_uses_same_exact_opt_in_for_projection_and_prepare():
 
 
 def test_external_flow_opt_in_preserves_independent_positions_opt_in():
-    from application.external_flow_snapshot import attach_external_flow_snapshot, collect_external_flow_snapshot
+    from charles_schwab_platform.application.external_flow_snapshot import attach_external_flow_snapshot, collect_external_flow_snapshot
     from test_external_flow_snapshot import START, END, TX
     from unittest.mock import Mock
     client = Mock()
@@ -887,7 +887,7 @@ def _project_completed_risk_block(source):
 @pytest.mark.parametrize("reason_codes", ["consecutive", "daily", "both"])
 def test_completed_risk_block_preserves_account_facts_and_execution_rejection(reason_codes):
     import copy
-    from notifications.approved_gates import report_gate_reasons
+    from charles_schwab_platform.notifications.approved_gates import report_gate_reasons
     from scripts.execution_report_heartbeat import _is_accepted_report
     from test_notification_approved_gates import CONSECUTIVE, DAILY
 

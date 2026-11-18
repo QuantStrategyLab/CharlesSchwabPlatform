@@ -1,4 +1,4 @@
-from notifications.compact_adapter import adapt_compact_sections
+from charles_schwab_platform.notifications.compact_adapter import adapt_compact_sections
 
 
 def test_adapter_keeps_only_nonzero_holdings_and_appends_supplements():

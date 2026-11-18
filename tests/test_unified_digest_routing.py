@@ -4,7 +4,7 @@ import copy
 
 import pytest
 
-from notifications.digest_snapshot.digest_routing import defer_routine_cycle_to_digest
+from charles_schwab_platform.notifications.digest_snapshot.digest_routing import defer_routine_cycle_to_digest
 
 
 def test_default_off_and_explicit_opt_in(monkeypatch):

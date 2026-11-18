@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from quant_platform_kit.common import build_runtime_target  # noqa: E402
-from application.runtime_composer import SchwabRuntimeComposer
+from charles_schwab_platform.application.runtime_composer import SchwabRuntimeComposer
 
 
 @pytest.mark.parametrize("resource_case", [
@@ -151,7 +151,7 @@ def test_runtime_composer_builds_runtime_and_config_from_local_builders(tmp_path
         assert result.execution["continuity_coverage"] == "managed_new_cohort"
         assert result.execution["execution_status"] == "pending_reconciliation"
         assert result.submitted_orders[0]["broker_order_id"] == "SYNTH_ACK"
-        from application.execution_intent_continuity import _IntentSession
+        from charles_schwab_platform.application.execution_intent_continuity import _IntentSession
         recorded = _IntentSession(c.context, snapshot=c.snapshot, profile_id=c.scope.profile_id)
         assert recorded.fatal_reason is None
         assert len(recorded.originals) == 1

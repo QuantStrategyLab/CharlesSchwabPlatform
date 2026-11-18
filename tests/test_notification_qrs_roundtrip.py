@@ -8,8 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from application.runtime_report_summary import summarize_execution_cycle_result
-from notifications import unified
+from charles_schwab_platform.application.runtime_report_summary import summarize_execution_cycle_result
+from charles_schwab_platform.notifications import unified
 from test_unified_notifications import MemoryStore
 
 SNAPSHOT = Path(__file__).parent / "qrs_snapshot"

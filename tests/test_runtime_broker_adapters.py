@@ -5,9 +5,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from application import runtime_broker_adapters as broker_adapters_module
-from application.rebalance_service import run_strategy_core
-from application.runtime_broker_adapters import build_runtime_broker_adapters
+from charles_schwab_platform.application import runtime_broker_adapters as broker_adapters_module
+from charles_schwab_platform.application.rebalance_service import run_strategy_core
+from charles_schwab_platform.application.runtime_broker_adapters import build_runtime_broker_adapters
 from quant_platform_kit.risk.engine import RiskEngine
 from quant_platform_kit.schwab.portfolio import fetch_account_snapshot
 

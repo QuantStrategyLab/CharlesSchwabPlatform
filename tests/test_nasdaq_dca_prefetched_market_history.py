@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 
-from application.runtime_strategy_adapters import SchwabRuntimeStrategyAdapters
+from charles_schwab_platform.application.runtime_strategy_adapters import SchwabRuntimeStrategyAdapters
 
 
 def _adapters(*, profile: str = "nasdaq_sp500_smart_dca", signal_symbols=("QQQ", "SPY"), history_by_symbol=None):

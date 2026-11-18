@@ -42,7 +42,7 @@ def test_flags_off_preserves_business_calls_and_urgent_output(monkeypatch, flag,
 
 @pytest.mark.parametrize("cost", [None, "80.00"])
 def test_optional_main_cost_fact_normalizes_only_unknown_and_preserves_known_values(monkeypatch, cost):
-    from application import rebalance_service
+    from charles_schwab_platform.application import rebalance_service
 
     monkeypatch.setenv("ACCOUNT_NEW_RISK_GATE", "0")
     monkeypatch.delenv("SCHWAB_UNIFIED_NOTIFICATION_ENABLED", raising=False)

@@ -6,7 +6,7 @@ import subprocess
 import pytest
 from google.api_core.exceptions import Forbidden
 
-from notifications import unified
+from charles_schwab_platform.notifications import unified
 from test_publish_digest_before_read import ENV, PLATFORM
 import test_publish_digest_before_read as prepub
 
@@ -86,7 +86,7 @@ def test_invalid_archive_json_remains_a_read_failure(client):
 
 
 def test_cross_month_report_in_october_is_preserved_when_november_is_empty(client):
-    from notifications.digest_snapshot.digest_candidates import cycle_evidence
+    from charles_schwab_platform.notifications.digest_snapshot.digest_candidates import cycle_evidence
     target = json.loads(ENV["RUNTIME_TARGET_JSON"])
     report = {"schema_version": "runtime_report.v1", "platform": SOURCE_PLATFORM,
               "strategy_profile": target["strategy_profile"], "service_name": target["service_name"],

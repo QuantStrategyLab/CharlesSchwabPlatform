@@ -6,8 +6,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from application.broker_reconciliation import SchwabReconciliationObservations
-from application.c4_shadow_materialization import (
+from charles_schwab_platform.application.broker_reconciliation import SchwabReconciliationObservations
+from charles_schwab_platform.application.c4_shadow_materialization import (
     calculate_final_risk_assessment_sha256,
     calculate_materialized_account_facts_sha256,
     calculate_materialized_orders_sha256,

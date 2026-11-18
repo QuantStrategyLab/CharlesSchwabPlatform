@@ -20,6 +20,10 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 
 class AdmissionError(ValueError):
     """A deployed runtime target is not safe to receive a new image."""
@@ -70,7 +74,7 @@ def verify_service(*, service: str, service_json: Mapping[str, Any]) -> dict[str
 
     # The local projection preflight reuses only the file-based pin check below.
     # Importing this helper must not load strategies or application adapters.
-    from strategy_registry import SCHWAB_PLATFORM, resolve_strategy_definition
+    from charles_schwab_platform.strategy_registry import SCHWAB_PLATFORM, resolve_strategy_definition
 
     env = _container_env(service_json)
     raw_target = env.get("RUNTIME_TARGET_JSON") or env.get("QSL_RUNTIME_TARGET_JSON")

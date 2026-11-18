@@ -8,7 +8,7 @@ from google.api_core.exceptions import Forbidden, NotFound, PreconditionFailed
 from google.cloud import storage
 
 from scripts import publish_digest_before_read as publisher
-from notifications.unified import CandidateConflictError
+from charles_schwab_platform.notifications.unified import CandidateConflictError
 
 NOW = datetime(2026, 10, 31, 22, 10, tzinfo=timezone.utc)
 PLATFORM = "schwab"
@@ -192,7 +192,7 @@ def test_watchdog_escapes_producer_exception_handlers(monkeypatch, capsys):
 
 
 def test_existing_business_report_uses_native_archive_reader_and_verified_publication(client):
-    from notifications.digest_snapshot.digest_candidates import cycle_evidence
+    from charles_schwab_platform.notifications.digest_snapshot.digest_candidates import cycle_evidence
     env = {**ENV, "SCHWAB_UNIFIED_NOTIFICATION_ENABLED": "true",
            "RUNTIME_HEARTBEAT_REPORT_PLATFORM": "charles_schwab",
            "IBKR_NOTIFICATION_MARKER_GCS_URI": "gs://synthetic-candidates/markers"}
@@ -220,7 +220,7 @@ def test_existing_business_report_uses_native_archive_reader_and_verified_public
     ("execution_unknown", True, True),
 ])
 def test_completed_report_and_job_use_the_same_blocked_projection(client, monkeypatch, existing_status, finished, changed_count):
-    from notifications import unified
+    from charles_schwab_platform.notifications import unified
 
     class FrozenTime(datetime):
         @classmethod

@@ -4,7 +4,7 @@ from decimal import Decimal
 
 import pytest
 
-from application.execution_event_accounting import (
+from charles_schwab_platform.application.execution_event_accounting import (
     ExecutionEventError,
     ExecutionEventLedger,
 )

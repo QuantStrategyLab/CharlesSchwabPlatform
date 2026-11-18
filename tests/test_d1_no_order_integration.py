@@ -14,7 +14,7 @@ from unittest.mock import patch
 import pytest
 from quant_platform_kit.common.models import OrderIntent, PortfolioSnapshot
 
-from application.d1_no_order_integration import (
+from charles_schwab_platform.application.d1_no_order_integration import (
     D1IntegrationError,
     NoOrderBrokerTransport,
     NoOrderTransportError,
@@ -24,8 +24,8 @@ from application.d1_no_order_integration import (
     recover_no_order_state,
     run_no_order_cycle,
 )
-from application.execution_event_accounting import ExecutionEventLedger
-from application.offline_fault_acceptance import _buy_book, _run_cycle
+from charles_schwab_platform.application.execution_event_accounting import ExecutionEventLedger
+from charles_schwab_platform.application.offline_fault_acceptance import _buy_book, _run_cycle
 
 
 class _CapturingClient:
@@ -112,7 +112,7 @@ def test_positive_synthetic_plan_reaches_real_execution_port_but_not_client():
     client = _CapturingClient()
     transport = NoOrderBrokerTransport(client)
     portfolio, allocation = _buy_book()
-    with patch("application.execution_service.maybe_publish_attention_for_admission", return_value={
+    with patch("charles_schwab_platform.application.execution_service.maybe_publish_attention_for_admission", return_value={
         "sent": 0, "skipped": 0, "failed": 0,
     }), redirect_stdout(io.StringIO()):
         result, port_calls = _run_cycle(portfolio, allocation, transport.submit_order)
@@ -146,8 +146,8 @@ def test_cycle_calls_real_components_and_does_not_reach_the_client(tmp_path: Pat
     assert result["positive_target_count"] == 0
     assert result["claim_acquired"] is True
     assert result["input_label"] == "synthetic"
-    assert "decision_mapper.map_strategy_decision_to_plan" in result["call_path"]
-    assert "application.execution_claim.claim_execution_marker" in result["call_path"]
+    assert "charles_schwab_platform.decision_mapper.map_strategy_decision_to_plan" in result["call_path"]
+    assert "charles_schwab_platform.application.execution_claim.claim_execution_marker" in result["call_path"]
     assert any(item.endswith("CallableStrategyEntrypoint.evaluate") for item in result["call_path"])
     assert client.calls == []
     assert transport.refused == ["place_order", "cancel_order", "replace_order", "submit_order"]
@@ -217,14 +217,16 @@ def test_new_process_recovery_replays_synthetic_case_once(tmp_path: Path):
     record_synthetic_explicit_case(tmp_path)
     partial = import_recorded_native_observations(tmp_path, _native_payload(), input_label="synthetic")
     before = ExecutionEventLedger(tmp_path / "ledger.json").snapshot()
+    root = Path(__file__).resolve().parents[1]
+    pythonpath = os.pathsep.join((str(root / "src"), str(root)))
     env = {key: os.environ[key] for key in ("PATH", "HOME", "LANG", "VIRTUAL_ENV") if key in os.environ}
-    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+    env["PYTHONPATH"] = pythonpath
     completed = subprocess.run(
         [
             sys.executable,
             "-c",
             (
-                "import json; from application.d1_no_order_integration import recover_no_order_state; "
+                "import json; from charles_schwab_platform.application.d1_no_order_integration import recover_no_order_state; "
                 "print(json.dumps(recover_no_order_state(%r)))" % str(tmp_path)
             ),
         ],
@@ -281,15 +283,17 @@ def test_missing_cycle_alert_deduplicates_across_processes(tmp_path: Path):
     first = observe_expected_cycle(tmp_path, expected_date="2026-09-27")
     assert first["receipt_present"] is False
     assert first["alert_event_created"] is True
+    root = Path(__file__).resolve().parents[1]
+    pythonpath = os.pathsep.join((str(root / "src"), str(root)))
     completed = subprocess.run(
         [sys.executable, "-c", (
-            "import json; from application.d1_no_order_integration import observe_expected_cycle; "
+            "import json; from charles_schwab_platform.application.d1_no_order_integration import observe_expected_cycle; "
             "print(json.dumps(observe_expected_cycle(%r, expected_date='2026-09-27')))" % str(tmp_path)
         )],
         check=False,
         capture_output=True,
         text=True,
-        env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])},
+        env={**os.environ, "PYTHONPATH": pythonpath},
     )
     assert completed.returncode == 0, completed.stderr
     second = json.loads(completed.stdout)
@@ -299,12 +303,13 @@ def test_missing_cycle_alert_deduplicates_across_processes(tmp_path: Path):
 
 
 def test_forced_process_stop_preserves_claim_and_known_economics(tmp_path: Path):
-    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1])}
+    repo_root = Path(__file__).resolve().parents[1]
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join((str(repo_root / "src"), str(repo_root)))}
     child = subprocess.run(
         [sys.executable, "-c", (
-            "import os,signal; from application.d1_no_order_integration import "
+            "import os,signal; from charles_schwab_platform.application.d1_no_order_integration import "
             "_MARKER_KEY,_claim_store,record_synthetic_explicit_case; "
-            "from application.execution_claim import claim_execution_marker; "
+            "from charles_schwab_platform.application.execution_claim import claim_execution_marker; "
             "from pathlib import Path; root=Path(%r); "
             "claim_execution_marker(_claim_store(root),_MARKER_KEY,metadata={'phase':'before-event'}); "
             "record_synthetic_explicit_case(root); os.kill(os.getpid(),signal.SIGKILL)" % str(tmp_path)
@@ -317,7 +322,7 @@ def test_forced_process_stop_preserves_claim_and_known_economics(tmp_path: Path)
     assert child.returncode == -signal.SIGKILL
     recovered = subprocess.run(
         [sys.executable, "-c", (
-            "import json; from application.d1_no_order_integration import recover_no_order_state; "
+            "import json; from charles_schwab_platform.application.d1_no_order_integration import recover_no_order_state; "
             "print(json.dumps(recover_no_order_state(%r)))" % str(tmp_path)
         )],
         check=False,

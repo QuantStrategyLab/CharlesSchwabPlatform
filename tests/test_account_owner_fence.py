@@ -10,9 +10,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from application.rebalance_service import run_strategy_core
-from application.runtime_dependencies import SchwabRebalanceConfig, SchwabRebalanceRuntime
-from notifications.telegram import build_translator
+from charles_schwab_platform.application.rebalance_service import run_strategy_core
+from charles_schwab_platform.application.runtime_dependencies import SchwabRebalanceConfig, SchwabRebalanceRuntime
+from charles_schwab_platform.notifications.telegram import build_translator
 from quant_platform_kit.common.execution_state import (
     ExecutionMarkerStore,
     build_account_owner_marker_key,
@@ -182,7 +182,7 @@ class AccountOwnerFenceTests(unittest.TestCase):
             observed_orders: list = []
 
             with patch(
-                "application.rebalance_service.claim_account_owner",
+                "charles_schwab_platform.application.rebalance_service.claim_account_owner",
                 wraps=claim_account_owner,
             ) as claim_spy:
                 _run_core(
@@ -207,7 +207,7 @@ class AccountOwnerFenceTests(unittest.TestCase):
 
             first_orders: list = []
             with patch(
-                "application.rebalance_service.claim_account_owner",
+                "charles_schwab_platform.application.rebalance_service.claim_account_owner",
                 wraps=claim_account_owner,
             ) as claim_spy:
                 _run_core(
@@ -229,7 +229,7 @@ class AccountOwnerFenceTests(unittest.TestCase):
             plan_replay["execution"]["effective_date"] = "2026-06-04"
             replay_orders: list = []
             with patch(
-                "application.rebalance_service.claim_account_owner",
+                "charles_schwab_platform.application.rebalance_service.claim_account_owner",
                 wraps=claim_account_owner,
             ) as claim_spy:
                 _run_core(
@@ -287,7 +287,7 @@ class AccountOwnerFenceTests(unittest.TestCase):
 
             dry_orders: list = []
             with patch(
-                "application.rebalance_service.claim_account_owner",
+                "charles_schwab_platform.application.rebalance_service.claim_account_owner",
                 wraps=claim_account_owner,
             ) as claim_spy:
                 _run_core(
@@ -303,7 +303,7 @@ class AccountOwnerFenceTests(unittest.TestCase):
 
             live_orders: list = []
             with patch(
-                "application.rebalance_service.claim_account_owner",
+                "charles_schwab_platform.application.rebalance_service.claim_account_owner",
                 wraps=claim_account_owner,
             ) as claim_spy:
                 _run_core(

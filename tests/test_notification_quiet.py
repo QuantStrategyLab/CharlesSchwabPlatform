@@ -343,7 +343,7 @@ def test_confirmed_manual_opt_in_does_not_send_healthy_heartbeat(monkeypatch):
 
 
 def test_native_schwab_summary_and_alias_remain_healthy_quiet(monkeypatch):
-    from application.runtime_report_summary import summarize_execution_cycle_result
+    from charles_schwab_platform.application.runtime_report_summary import summarize_execution_cycle_result
     from quant_platform_kit.common.execution_receipts import build_execution_receipt
     payload = report()
     payload['platform'] = 'charles_schwab'

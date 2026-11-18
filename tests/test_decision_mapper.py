@@ -11,7 +11,7 @@ from quant_platform_kit.common.strategy_contracts import (
 from quant_platform_kit.risk.contracts import RuntimeRiskLimits
 from quant_platform_kit.risk.gate import apply_risk_gate
 
-from decision_mapper import map_strategy_decision_to_plan
+from charles_schwab_platform.decision_mapper import map_strategy_decision_to_plan
 
 
 class DecisionMapperTests(unittest.TestCase):
@@ -90,11 +90,11 @@ class DecisionMapperTests(unittest.TestCase):
     def test_synthetic_bound_limits_gate_mapper_cycle(self):
         """Binding-success limits → QPK gate → mapper plan (E denominator, reserve, budgets)."""
         from quant_platform_kit.common.strategy_contracts import BudgetIntent
-        import strategy_runtime as strategy_runtime_module
+        import charles_schwab_platform.strategy_runtime as strategy_runtime_module
         from dataclasses import replace
         from unittest.mock import patch
         from quant_platform_kit.common.runtime_target import build_runtime_target
-        from runtime_config_support import PlatformRuntimeSettings
+        from charles_schwab_platform.runtime_config_support import PlatformRuntimeSettings
         from quant_platform_kit.common.strategy_contracts import (
             StrategyManifest,
             StrategyRuntimeAdapter,

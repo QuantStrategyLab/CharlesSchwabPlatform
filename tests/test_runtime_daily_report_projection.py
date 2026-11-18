@@ -78,15 +78,15 @@ def production_report(selector_kind="native"):
     from decimal import Decimal
     from types import SimpleNamespace
 
-    from application.account_observation import build_account_observation
-    from application.runtime_composer import SchwabRuntimeComposer
-    from application.runtime_reporting_adapters import build_runtime_reporting_adapters
+    from charles_schwab_platform.application.account_observation import build_account_observation
+    from charles_schwab_platform.application.runtime_composer import SchwabRuntimeComposer
+    from charles_schwab_platform.application.runtime_reporting_adapters import build_runtime_reporting_adapters
     from quant_platform_kit.common.runtime_reports import (
         build_runtime_report_base,
         finalize_runtime_report,
     )
     from quant_platform_kit.common.runtime_target import resolve_runtime_target_from_env
-    from strategy_registry import SCHWAB_PLATFORM
+    from charles_schwab_platform.strategy_registry import SCHWAB_PLATFORM
 
     def forbidden(*_args, **_kwargs):
         raise AssertionError("No client, persistence or notification in this fixture")

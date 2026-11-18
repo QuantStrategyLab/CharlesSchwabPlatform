@@ -2,8 +2,8 @@ import copy
 
 import pytest
 
-from notifications.renderers import render_heartbeat_notification
-from notifications.telegram import build_translator
+from charles_schwab_platform.notifications.renderers import render_heartbeat_notification
+from charles_schwab_platform.notifications.telegram import build_translator
 
 
 def _render(execution, *, locale):

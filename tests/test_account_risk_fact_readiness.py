@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 import unittest
 
-from application.account_observation import build_account_observation
+from charles_schwab_platform.application.account_observation import build_account_observation
 
 
 class AccountRiskFactReadinessTest(unittest.TestCase):

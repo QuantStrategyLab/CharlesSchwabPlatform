@@ -2,9 +2,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from application.execution_service import execute_rebalance_cycle
-from application.rebalance_service import _record_execution_outcome
-from notifications.telegram import build_translator
+from charles_schwab_platform.application.execution_service import execute_rebalance_cycle
+from charles_schwab_platform.application.rebalance_service import _record_execution_outcome
+from charles_schwab_platform.notifications.telegram import build_translator
 from quant_platform_kit.common.execution_state import ExecutionMarkerStore
 from quant_platform_kit.common.models import ExecutionReport, QuoteSnapshot
 from quant_platform_kit.common.port_adapters import CallableExecutionPort, CallableMarketDataPort
@@ -218,8 +218,8 @@ def test_outcome_persistence_failure_is_sanitized_even_if_notification_fails():
 
 
 def test_caller_summary_notification_failure_does_not_drop_unknown(monkeypatch):
-    from application import rebalance_service
-    from application.runtime_dependencies import SchwabRebalanceConfig, SchwabRebalanceRuntime
+    from charles_schwab_platform.application import rebalance_service
+    from charles_schwab_platform.application.runtime_dependencies import SchwabRebalanceConfig, SchwabRebalanceRuntime
     from quant_platform_kit.common.port_adapters import CallableNotificationPort, CallablePortfolioPort
 
     def submit(_):
@@ -253,7 +253,7 @@ def test_caller_summary_notification_failure_does_not_drop_unknown(monkeypatch):
 from dataclasses import replace
 from unittest.mock import patch
 from test_rebalance_service import continuity_case, run_strategy_core
-from application.execution_intent_continuity import _IntentSession
+from charles_schwab_platform.application.execution_intent_continuity import _IntentSession
 
 
 @pytest.mark.parametrize("boundary", ["descriptor", "descriptor_lost_ack", "locator", "locator_lost_ack", "claim", "claim_lost_ack", "partial_list", "list_error"])
@@ -358,7 +358,7 @@ def test_untrusted_long_quantity_never_reconstructs_sell_from_value(tmp_path, qu
         c.plan["portfolio"]["quantities"].pop("SOXL")
     else:
         c.plan["portfolio"]["quantities"]["SOXL"] = quantity
-    result = __import__("application.rebalance_service", fromlist=["run_strategy_core"]).run_strategy_core(
+    result = __import__("charles_schwab_platform.application.rebalance_service", fromlist=["run_strategy_core"]).run_strategy_core(
         runtime=c.runtime, config=replace(c.config, dry_run_only=preview))
     assert c.calls == []
     assert result.submitted_orders == ()

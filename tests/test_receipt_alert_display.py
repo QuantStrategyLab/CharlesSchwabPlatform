@@ -3,9 +3,9 @@ import datetime as dt
 
 import pytest
 
-from notifications.receipt_alerts import render_receipt_alert
+from charles_schwab_platform.notifications.receipt_alerts import render_receipt_alert
 # Preserve the pinned fallback's existing assertions through the coordinated rollout.
-from notifications.attention import _render_legacy_attention as render_attention
+from charles_schwab_platform.notifications.attention import _render_legacy_attention as render_attention
 from quant_platform_kit.risk.attention import AttentionAxes, evaluate_attention
 from scripts import execution_report_heartbeat as heartbeat
 
@@ -100,7 +100,7 @@ def test_real_heartbeat_entrypoint_keeps_rejection_exit_and_raw_logs(monkeypatch
 
 
 def test_attention_render_wrapper_keeps_shared_transition_key(monkeypatch):
-    from notifications.attention import publish_attention_telegram_transition
+    from charles_schwab_platform.notifications.attention import publish_attention_telegram_transition
     from quant_platform_kit.risk.attention import attention_transition_key
 
     decision = evaluate_attention(AttentionAxes(new_risk_prohibited=True))
