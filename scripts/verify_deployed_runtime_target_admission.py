@@ -20,6 +20,10 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 
 class AdmissionError(ValueError):
     """A deployed runtime target is not safe to receive a new image."""
