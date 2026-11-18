@@ -9,8 +9,6 @@ from collections.abc import Mapping
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from quant_platform_kit.common.execution_receipts import attach_execution_receipt
-
 POSITIONS_SCOPE = "strategy_symbols_only"
 POSITIONS_KEYS = (
     "broker_reported_positions",
@@ -220,6 +218,8 @@ def project_run_summary(payload: Mapping[str, Any], observed: dt.datetime) -> di
     if payload.get("execution_receipt") is not None:
         receipt_state = "invalid"
         try:
+            from quant_platform_kit.common.execution_receipts import attach_execution_receipt
+
             receipt = attach_execution_receipt(
                 dict(payload), payload["execution_receipt"]
             )["execution_receipt"]
