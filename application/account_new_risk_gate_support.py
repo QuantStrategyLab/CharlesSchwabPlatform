@@ -64,6 +64,12 @@ def _coerce_optional_float(value: object) -> float | None:
     return number
 
 
+def _coerce_positive_float(value: object) -> float | None:
+    """Accept only finite strictly positive floats."""
+    number = _coerce_optional_float(value)
+    return number if number is not None and number > 0.0 else None
+
+
 def _risk_input(value: object) -> float | str | None:
     """Preserve invalidity without putting non-finite numbers into JSON."""
     if value is None:
@@ -74,42 +80,63 @@ def _risk_input(value: object) -> float | str | None:
 
 def _positive_limit_or_none(value: object) -> float | None:
     """Accept only finite positive limits; never invent a production default."""
-    number = _coerce_optional_float(value)
-    if number is None or number <= 0.0:
-        return None
-    return number
+    return _coerce_positive_float(value)
+
+
+def _mapping_or_empty(value: object) -> Mapping[str, Any]:
+    return value if isinstance(value, Mapping) else {}
+
+
+def _first_env_nonempty(*keys: str) -> str:
+    for key in keys:
+        value = str(os.environ.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _first_nonempty_str(
+    sources: tuple[Mapping[str, Any], ...],
+    keys: tuple[str, ...],
+    *,
+    require_str: bool = True,
+) -> str | None:
+    for source in sources:
+        for key in keys:
+            value = source.get(key)
+            if require_str:
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+            elif value is not None and str(value).strip():
+                return str(value).strip()
+    return None
+
+
+def _invalid_daily_loss(reason: str) -> MaxDailyLossResolution:
+    return MaxDailyLossResolution(status="invalid", reason=reason)
+
+
+def _prohibited_admission(reason_code: str) -> NewRiskAdmissionResult:
+    return NewRiskAdmissionResult(
+        disposition=NewRiskDisposition.NEW_RISK_PROHIBITED,
+        reason_codes=(reason_code,),
+    )
 
 
 def _resolve_equity_usd(portfolio: Mapping[str, Any], execution: Mapping[str, Any] | None) -> float | None:
     """Map Schwab account equity from broker liquidation value or plan portfolio."""
     for key in ("total_equity", "total_strategy_equity"):
-        equity = _coerce_optional_float(portfolio.get(key))
-        if equity is not None and equity > 0.0:
+        equity = _coerce_positive_float(portfolio.get(key))
+        if equity is not None:
             return equity
-    metadata = portfolio.get("metadata")
-    if isinstance(metadata, Mapping):
-        if metadata.get("total_equity_source") == "broker_liquidation_value":
-            equity = _coerce_optional_float(portfolio.get("total_equity"))
-            if equity is not None and equity > 0.0:
-                return equity
-    broker_capital = portfolio.get("broker_capital")
-    if isinstance(broker_capital, Mapping):
-        equity = _coerce_optional_float(broker_capital.get("net_assets"))
-        if equity is not None and equity > 0.0:
-            return equity
-    if execution is not None:
-        equity = _coerce_optional_float(execution.get("portfolio_total_equity"))
-        if equity is not None and equity > 0.0:
-            return equity
-    return None
+    equity = _coerce_positive_float(_mapping_or_empty(portfolio.get("broker_capital")).get("net_assets"))
+    if equity is not None:
+        return equity
+    return _coerce_positive_float(_mapping_or_empty(execution).get("portfolio_total_equity"))
 
 
 def _is_explicit_open(value: object) -> bool:
     return str(value or "").strip().upper() == "OPEN"
-
-
-def _mapping_or_empty(value: object) -> Mapping[str, Any]:
-    return value if isinstance(value, Mapping) else {}
 
 
 def _build_cycle_new_risk_health_evidence(
@@ -126,29 +153,35 @@ def _build_cycle_new_risk_health_evidence(
     circuit-breaker trip.
     """
     metadata = _mapping_or_empty(portfolio.get("metadata"))
-    execution_metadata = _mapping_or_empty(_mapping_or_empty(execution).get("metadata"))
+    execution_map = _mapping_or_empty(execution)
+    execution_metadata = _mapping_or_empty(execution_map.get("metadata"))
 
-    unknown_pending = bool(
-        portfolio.get("unknown_pending_orders")
-        or metadata.get("unknown_pending_orders")
-        or portfolio.get("pending_reconciliation")
-        or metadata.get("pending_reconciliation")
-        or _mapping_or_empty(execution).get("pending_reconciliation")
-        or execution_metadata.get("pending_reconciliation")
+    unknown_pending = any(
+        source.get(key)
+        for source, key in (
+            (portfolio, "unknown_pending_orders"),
+            (metadata, "unknown_pending_orders"),
+            (portfolio, "pending_reconciliation"),
+            (metadata, "pending_reconciliation"),
+            (execution_map, "pending_reconciliation"),
+            (execution_metadata, "pending_reconciliation"),
+        )
     )
 
-    durable_breaker_open = (
-        _is_explicit_open(portfolio.get("durable_circuit_breaker_state"))
-        or _is_explicit_open(metadata.get("durable_circuit_breaker_state"))
-        or _is_explicit_open(projection.get("circuit_breaker_state"))
+    durable_breaker_open = any(
+        _is_explicit_open(source.get(key))
+        for source, key in (
+            (portfolio, "durable_circuit_breaker_state"),
+            (metadata, "durable_circuit_breaker_state"),
+            (projection, "circuit_breaker_state"),
+        )
     )
 
     digests_configured = bool(projection.get("digests_configured") or metadata.get("digests_configured"))
-    digests_verified = bool(
-        projection.get("digests_verified")
-        or metadata.get("digests_verified")
-        or projection.get("permits_active_lkg")
-        or metadata.get("permits_active_lkg")
+    digests_verified = any(
+        source.get(key)
+        for source in (projection, metadata)
+        for key in ("digests_verified", "permits_active_lkg")
     )
 
     cycle_trip_open = bool(projection.get("cycle_trip_open") or metadata.get("cycle_trip_open"))
@@ -199,42 +232,31 @@ def build_account_new_risk_snapshot(
     return projection
 
 
+def _resolve_strategy_profile(sources: tuple[Mapping[str, Any], ...]) -> str:
+    return (
+        _first_nonempty_str(sources, ("strategy_profile",), require_str=True)
+        or _first_env_nonempty("STRATEGY_PROFILE")
+        or _DEFAULT_STRATEGY_PROFILE
+    )
+
+
 def _resolve_production_drift_status(portfolio: Mapping[str, Any], projection: Mapping[str, Any]) -> str | None:
     """Prefer explicit inject; else read-only PerformanceStore (Policy A). Fail-soft."""
-    for source in (projection, portfolio, _mapping_or_empty(portfolio.get("metadata"))):
+    sources = (projection, portfolio, _mapping_or_empty(portfolio.get("metadata")))
+    for source in sources:
         raw = source.get("production_drift_status")
         if raw is not None and raw != "":
             return str(raw).strip()
-    profile = ""
-    domain = ""
-    for source in (projection, portfolio, _mapping_or_empty(portfolio.get("metadata"))):
-        if not profile:
-            value = source.get("strategy_profile")
-            if isinstance(value, str) and value.strip():
-                profile = value.strip()
-        if not domain:
-            value = source.get("strategy_domain") or source.get("domain")
-            if isinstance(value, str) and value.strip():
-                domain = value.strip()
-    profile = profile or str(os.environ.get("STRATEGY_PROFILE") or "").strip() or _DEFAULT_STRATEGY_PROFILE
-    domain = domain or str(os.environ.get("STRATEGY_DOMAIN") or "").strip() or _DEFAULT_DOMAIN
+    profile = _resolve_strategy_profile(sources)
+    domain = (
+        _first_nonempty_str(sources, ("strategy_domain", "domain"), require_str=True)
+        or _first_env_nonempty("STRATEGY_DOMAIN")
+        or _DEFAULT_DOMAIN
+    )
     return resolve_production_drift_status_from_store(
         strategy_profile=profile,
         domain=domain,
     )
-
-
-def _resolve_drawdown_from_peak(
-    *,
-    equity_usd: float | None,
-    peak_equity_usd: float | None,
-    explicit: float | None,
-) -> float | None:
-    if explicit is not None:
-        return explicit
-    if equity_usd is None or peak_equity_usd is None or peak_equity_usd <= 0.0:
-        return None
-    return max(0.0, 1.0 - (equity_usd / peak_equity_usd))
 
 
 def _resolve_explicit_daily_loss_usd(
@@ -274,10 +296,8 @@ def resolve_max_daily_loss_usd_from_equity_schedule(
     a smaller pct. No approved production default lives in code — omit when the
     schedule is absent/invalid or equity is missing/non-positive.
     """
-    equity = _coerce_optional_float(equity_usd)
-    if equity is None or equity <= 0.0:
-        return None
-    if not isinstance(schedule, list) or not schedule:
+    equity = _coerce_positive_float(equity_usd)
+    if equity is None or not isinstance(schedule, list) or not schedule:
         return None
 
     tiers: list[tuple[float, float]] = []
@@ -293,8 +313,8 @@ def resolve_max_daily_loss_usd_from_equity_schedule(
                 return None
             catch_all_pct = pct
             continue
-        ceiling = _coerce_optional_float(raw.get("equity_lte_usd"))
-        if ceiling is None or ceiling <= 0.0:
+        ceiling = _coerce_positive_float(raw.get("equity_lte_usd"))
+        if ceiling is None:
             return None
         tiers.append((ceiling, pct))
 
@@ -306,16 +326,8 @@ def resolve_max_daily_loss_usd_from_equity_schedule(
             return None
         last_ceiling = ceiling
 
-    chosen_pct: float | None = None
-    for ceiling, pct in tiers:
-        if equity <= ceiling:
-            chosen_pct = pct
-            break
-    if chosen_pct is None:
-        chosen_pct = catch_all_pct
-    if chosen_pct is None:
-        return None
-    return equity * chosen_pct
+    chosen_pct = next((pct for ceiling, pct in tiers if equity <= ceiling), catch_all_pct)
+    return equity * chosen_pct if chosen_pct is not None else None
 
 
 def _classify_equity_formula(
@@ -324,23 +336,23 @@ def _classify_equity_formula(
 ) -> MaxDailyLossResolution:
     """Classify an explicit equity formula: valid limit, or invalid (never absent)."""
     if not isinstance(formula, Mapping):
-        return MaxDailyLossResolution(status="invalid", reason="formula_not_mapping")
-    equity = _coerce_optional_float(equity_usd)
-    if equity is None or equity <= 0.0:
-        return MaxDailyLossResolution(status="invalid", reason="formula_equity_unavailable")
+        return _invalid_daily_loss("formula_not_mapping")
+    equity = _coerce_positive_float(equity_usd)
+    if equity is None:
+        return _invalid_daily_loss("formula_equity_unavailable")
     pct_max = _coerce_optional_float(formula.get("pct_max"))
     pct_min = _coerce_optional_float(formula.get("pct_min"))
     if "equity_scale_usd" not in formula and "E0_usd" not in formula:
-        return MaxDailyLossResolution(status="invalid", reason="formula_scale_missing")
+        return _invalid_daily_loss("formula_scale_missing")
     scale = _coerce_optional_float(
         formula.get("equity_scale_usd") if "equity_scale_usd" in formula else formula.get("E0_usd")
     )
     if pct_max is None or pct_min is None or scale is None:
-        return MaxDailyLossResolution(status="invalid", reason="formula_params_invalid")
+        return _invalid_daily_loss("formula_params_invalid")
     if not (0.0 < pct_min <= pct_max <= 1.0):
-        return MaxDailyLossResolution(status="invalid", reason="formula_bounds_invalid")
+        return _invalid_daily_loss("formula_bounds_invalid")
     if scale <= 0.0:
-        return MaxDailyLossResolution(status="invalid", reason="formula_scale_non_positive")
+        return _invalid_daily_loss("formula_scale_non_positive")
     pct = pct_min + (pct_max - pct_min) * (scale / (scale + equity))
     return MaxDailyLossResolution(status="valid", limit_usd=equity * pct, reason="formula")
 
@@ -361,9 +373,7 @@ def resolve_max_daily_loss_usd_from_equity_formula(
     illegal explicit config from a true absent axis.
     """
     classified = _classify_equity_formula(equity_usd, formula)
-    if classified.status == "valid":
-        return classified.limit_usd
-    return None
+    return classified.limit_usd if classified.status == "valid" else None
 
 
 def _classify_equity_schedule(
@@ -371,12 +381,12 @@ def _classify_equity_schedule(
     schedule: object,
 ) -> MaxDailyLossResolution:
     """Classify an explicit equity schedule: valid limit, or invalid (never absent)."""
-    equity = _coerce_optional_float(equity_usd)
-    if equity is None or equity <= 0.0:
-        return MaxDailyLossResolution(status="invalid", reason="schedule_equity_unavailable")
+    equity = _coerce_positive_float(equity_usd)
+    if equity is None:
+        return _invalid_daily_loss("schedule_equity_unavailable")
     scheduled = resolve_max_daily_loss_usd_from_equity_schedule(equity, schedule)
     if scheduled is None:
-        return MaxDailyLossResolution(status="invalid", reason="schedule_invalid")
+        return _invalid_daily_loss("schedule_invalid")
     return MaxDailyLossResolution(status="valid", limit_usd=scheduled, reason="schedule")
 
 
@@ -388,8 +398,8 @@ def _equity_for_daily_loss_schedule(
         return None
     projection = _mapping_or_empty(portfolio.get("account_new_risk_snapshot"))
     for key in ("daily_loss_baseline_equity_usd", "equity_usd"):
-        equity = _coerce_optional_float(projection.get(key))
-        if equity is not None and equity > 0.0:
+        equity = _coerce_positive_float(projection.get(key))
+        if equity is not None:
             return equity
     return _resolve_equity_usd(portfolio, None)
 
@@ -397,7 +407,7 @@ def _equity_for_daily_loss_schedule(
 def _resolution_from_explicit_absolute(value: object) -> MaxDailyLossResolution:
     limit = _positive_limit_or_none(value)
     if limit is None:
-        return MaxDailyLossResolution(status="invalid", reason="absolute_limit_invalid")
+        return _invalid_daily_loss("absolute_limit_invalid")
     return MaxDailyLossResolution(status="valid", limit_usd=limit, reason="absolute")
 
 
@@ -423,20 +433,18 @@ def resolve_max_daily_loss_resolution(
                 return _resolution_from_explicit_absolute(source.get("max_daily_loss_usd"))
 
     policy = _runtime_risk_limits_policy()
-    if policy is not None and "max_daily_loss_usd" in policy:
-        return _resolution_from_explicit_absolute(policy.get("max_daily_loss_usd"))
+    if policy is not None:
+        if "max_daily_loss_usd" in policy:
+            return _resolution_from_explicit_absolute(policy.get("max_daily_loss_usd"))
+        equity = _equity_for_daily_loss_schedule(portfolio)
+        if "max_daily_loss_equity_formula" in policy:
+            return _classify_equity_formula(equity, policy.get("max_daily_loss_equity_formula"))
+        if "max_daily_loss_equity_schedule" in policy:
+            return _classify_equity_schedule(equity, policy.get("max_daily_loss_equity_schedule"))
 
-    equity = _equity_for_daily_loss_schedule(portfolio)
-    if policy is not None and "max_daily_loss_equity_formula" in policy:
-        return _classify_equity_formula(equity, policy.get("max_daily_loss_equity_formula"))
-    if policy is not None and "max_daily_loss_equity_schedule" in policy:
-        return _classify_equity_schedule(equity, policy.get("max_daily_loss_equity_schedule"))
-
-    for key in _MAX_DAILY_LOSS_ENV_KEYS:
-        raw = os.environ.get(key)
-        if raw is None or not str(raw).strip():
-            continue
-        return _resolution_from_explicit_absolute(raw)
+    env_raw = _first_env_nonempty(*_MAX_DAILY_LOSS_ENV_KEYS)
+    if env_raw:
+        return _resolution_from_explicit_absolute(env_raw)
     return MaxDailyLossResolution(status="absent")
 
 
@@ -448,9 +456,7 @@ def resolve_max_daily_loss_usd(
     Prefer ``resolve_max_daily_loss_resolution`` when absent/invalid must differ.
     """
     resolution = resolve_max_daily_loss_resolution(portfolio)
-    if resolution.status == "valid":
-        return resolution.limit_usd
-    return None
+    return resolution.limit_usd if resolution.status == "valid" else None
 
 
 def _admission_for_daily_loss_resolution(
@@ -462,10 +468,7 @@ def _admission_for_daily_loss_resolution(
     snapshot = build_snapshot_from_portfolio(portfolio, execution=execution)
     resolution = resolve_max_daily_loss_resolution(portfolio)
     if resolution.status == "invalid":
-        return NewRiskAdmissionResult(
-            disposition=NewRiskDisposition.NEW_RISK_PROHIBITED,
-            reason_codes=("DAILY_LOSS_UNKNOWN_FAIL_CLOSED",),
-        )
+        return _prohibited_admission("DAILY_LOSS_UNKNOWN_FAIL_CLOSED")
     limits = runtime_risk_limits_for_daily_loss_axis(resolution.limit_usd)
     return evaluate_new_risk_admission(snapshot, limits)
 
@@ -525,10 +528,7 @@ def evaluate_portfolio_new_risk_admission(
     try:
         return _admission_for_daily_loss_resolution(portfolio, execution=execution)
     except AccountNewRiskGateError:
-        return NewRiskAdmissionResult(
-            disposition=NewRiskDisposition.NEW_RISK_PROHIBITED,
-            reason_codes=("SNAPSHOT_VALIDATION_FAIL_CLOSED",),
-        )
+        return _prohibited_admission("SNAPSHOT_VALIDATION_FAIL_CLOSED")
 
 
 def new_risk_buy_prohibited(result: NewRiskAdmissionResult) -> bool:
@@ -550,7 +550,6 @@ def apply_combined_scale_to_allocation_targets(
     return allocation_out
 
 
-
 _ATTENTION_PLATFORM = "schwab"
 _OPERATIONAL_UNCERTAIN_REASONS = frozenset(
     {
@@ -566,11 +565,7 @@ _attention_sent_keys: set[str] = set()
 
 def _resolve_attention_strategy_profile(portfolio: Mapping[str, Any]) -> str:
     projection = _mapping_or_empty(portfolio.get("account_new_risk_snapshot"))
-    for source in (projection, portfolio, _mapping_or_empty(portfolio.get("metadata"))):
-        value = source.get("strategy_profile")
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return str(os.environ.get("STRATEGY_PROFILE") or "").strip() or _DEFAULT_STRATEGY_PROFILE
+    return _resolve_strategy_profile((projection, portfolio, _mapping_or_empty(portfolio.get("metadata"))))
 
 
 def _resolve_attention_account_alias(
@@ -578,22 +573,23 @@ def _resolve_attention_account_alias(
     execution: Mapping[str, Any] | None,
     plan: Mapping[str, Any] | None = None,
 ) -> str:
-    for source in (
+    sources = (
         portfolio,
         _mapping_or_empty(portfolio.get("metadata")),
         _mapping_or_empty(execution),
         _mapping_or_empty(plan),
-    ):
-        for key in ("account_alias", "account_hash", "account_id", "account"):
-            value = source.get(key)
-            if value is not None and str(value).strip():
-                text = str(value).strip()
-                return text[-8:] if len(text) > 8 else text
-    for env_key in ("SCHWAB_ACCOUNT_HASH", "ACCOUNT_ALIAS"):
-        env_alias = str(os.environ.get(env_key) or "").strip()
-        if env_alias:
-            return env_alias[-8:] if len(env_alias) > 8 else env_alias
-    return "unknown"
+    )
+    text = (
+        _first_nonempty_str(
+            sources,
+            ("account_alias", "account_hash", "account_id", "account"),
+            require_str=False,
+        )
+        or _first_env_nonempty("SCHWAB_ACCOUNT_HASH", "ACCOUNT_ALIAS")
+    )
+    if not text:
+        return "unknown"
+    return text[-8:] if len(text) > 8 else text
 
 
 def _resolve_attention_production_drift_status(
@@ -709,10 +705,7 @@ def account_new_risk_gate_cycle(portfolio: Mapping[str, Any], *, execution: Mapp
 
 def evaluate_cycle_new_risk_admission() -> NewRiskAdmissionResult:
     if _cycle_snapshot is None:
-        return NewRiskAdmissionResult(
-            disposition=NewRiskDisposition.NEW_RISK_PROHIBITED,
-            reason_codes=("EQUITY_UNKNOWN_FAIL_CLOSED",),
-        )
+        return _prohibited_admission("EQUITY_UNKNOWN_FAIL_CLOSED")
     try:
         # Reuse cycle equity so explicit formula/schedule stay valid; missing equity
         # with an explicit config remains invalid → fail closed.
@@ -723,14 +716,8 @@ def evaluate_cycle_new_risk_admission() -> NewRiskAdmissionResult:
         }
         resolution = resolve_max_daily_loss_resolution(portfolio_for_limit)
         if resolution.status == "invalid":
-            return NewRiskAdmissionResult(
-                disposition=NewRiskDisposition.NEW_RISK_PROHIBITED,
-                reason_codes=("DAILY_LOSS_UNKNOWN_FAIL_CLOSED",),
-            )
+            return _prohibited_admission("DAILY_LOSS_UNKNOWN_FAIL_CLOSED")
         limits = runtime_risk_limits_for_daily_loss_axis(resolution.limit_usd)
         return evaluate_new_risk_admission(_cycle_snapshot, limits)
     except AccountNewRiskGateError:
-        return NewRiskAdmissionResult(
-            disposition=NewRiskDisposition.NEW_RISK_PROHIBITED,
-            reason_codes=("SNAPSHOT_VALIDATION_FAIL_CLOSED",),
-        )
+        return _prohibited_admission("SNAPSHOT_VALIDATION_FAIL_CLOSED")

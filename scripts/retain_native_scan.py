@@ -23,6 +23,7 @@ import sys
 
 
 MAX_REPORT_BYTES = 1_000_000
+MAX_JSON_DEPTH = 16
 REVISION = re.compile(r"[0-9a-f]{40}\Z")
 
 
@@ -41,6 +42,30 @@ def _invalid_constant(_value):
     raise ValueError("nonfinite JSON constant")
 
 
+def _check_depth(text):
+    """Reject deeply nested JSON before json.loads regardless of C recursion limits."""
+    depth = 0
+    quoted = escaped = False
+    for character in text:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                quoted = False
+        elif character == '"':
+            quoted = True
+        elif character in "[{":
+            depth += 1
+            if depth > MAX_JSON_DEPTH:
+                raise ValueError("report JSON exceeds maximum nesting depth")
+        elif character in "]}":
+            depth -= 1
+            if depth < 0:
+                raise ValueError("report JSON has unbalanced delimiters")
+
+
 def _report_identity(path):
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(descriptor, "rb") as stream:
@@ -48,9 +73,11 @@ def _report_identity(path):
         if not stat.S_ISREG(details.st_mode) or details.st_size > MAX_REPORT_BYTES:
             raise ValueError("report is not a bounded regular file")
         raw = stream.read(MAX_REPORT_BYTES + 1)
-    document = None
-    if len(raw) <= MAX_REPORT_BYTES:
-        document = json.loads(raw, parse_float=_finite_float, parse_constant=_invalid_constant)
+    if len(raw) > MAX_REPORT_BYTES:
+        raise ValueError("report is not a bounded regular file")
+    text = raw.decode("utf-8")
+    _check_depth(text)
+    document = json.loads(text, parse_float=_finite_float, parse_constant=_invalid_constant)
     if type(document) is not list:
         raise ValueError("report is not a bounded JSON array")
     return {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest(), "findings": len(document)}
