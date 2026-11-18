@@ -18,6 +18,11 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
+
+_SRC_DIR = Path(__file__).resolve().parents[1] / "src"
+if _SRC_DIR.is_dir() and str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
 
 SAFE_ENV_VALUES = {"STRATEGY_PROFILE", "NOTIFY_LANG", "CASH_ONLY_EXECUTION", "IBKR_CASH_ONLY_EXECUTION",
                    "IBKR_DRY_RUN_ONLY", "RUNTIME_TARGET_ENABLED", "INCOME_LAYER_ENABLED",

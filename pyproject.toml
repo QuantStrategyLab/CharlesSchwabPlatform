@@ -31,7 +31,7 @@ test = [
 ]
 
 [project.scripts]
-schwab-d1-no-order-acceptance = "scripts.run_d1_no_order_acceptance:main"
+schwab-d1-no-order-acceptance = "charles_schwab_platform.entrypoints.d1_no_order_acceptance:main"
 
 [tool.coverage.run]
 branch = true

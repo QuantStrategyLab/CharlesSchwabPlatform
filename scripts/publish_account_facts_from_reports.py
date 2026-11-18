@@ -12,10 +12,15 @@ import sys
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
+
+_SRC_DIR = Path(__file__).resolve().parents[1] / "src"
+if _SRC_DIR.is_dir() and str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
 
 
 HISTORY_SCHEMA = "schwab_account_snapshot_history.v1"
