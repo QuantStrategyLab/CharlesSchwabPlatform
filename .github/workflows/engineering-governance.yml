@@ -19,7 +19,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Scan added commits with redacted findings
-        uses: Pigbibi/PrGovernance/pr-governance@ccda8de572d2893272b0137526ef3e2d45e5eee7
+        uses: Pigbibi/PrGovernance/pr-governance@7fe2ee20a3ee144ea944619e1c56f7ed5edc9152
         with:
           mode: scan
 

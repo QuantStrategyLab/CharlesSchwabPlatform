@@ -5,6 +5,9 @@ name: Auto Merge Dependabot PR
     workflows: ["CI"]
     types: [completed]
 
+permissions:
+  contents: read
+
 jobs:
   auto-merge:
     if: github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.head_branch, 'dependabot/')

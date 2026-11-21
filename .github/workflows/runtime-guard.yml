@@ -32,6 +32,9 @@ env:
   GCP_WORKLOAD_IDENTITY_PROVIDER: projects/401309731911/locations/global/workloadIdentityPools/github-actions/providers/github-main
   GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: schwab-platform-deploy@charlesschwabquant.iam.gserviceaccount.com
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
   cancel-in-progress: false
@@ -66,7 +69,7 @@ jobs:
       RUNTIME_GUARD_DEDUPE_STATE_PATH: .runtime-guard-dedupe/state.json
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
       - name: Set up uv
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
@@ -79,7 +82,7 @@ jobs:
       - name: Authenticate to Google Cloud
         id: gcp_auth_primary
         continue-on-error: true
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
           workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
@@ -90,16 +93,16 @@ jobs:
 
       - name: Retry Google Cloud authentication
         if: ${{ steps.gcp_auth_primary.outcome == 'failure' }}
-        uses: google-github-actions/auth@v3
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
         with:
           workload_identity_provider: ${{ env.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ env.GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT }}
 
       - name: Set up gcloud
-        uses: google-github-actions/setup-gcloud@v3
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
 
       - name: Restore runtime-guard alert dedupe state
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: .runtime-guard-dedupe
           key: runtime-guard-dedupe-${{ github.run_id }}-${{ github.run_attempt }}
@@ -111,7 +114,7 @@ jobs:
 
       - name: Save runtime-guard alert dedupe state
         if: ${{ always() && hashFiles('.runtime-guard-dedupe/state.json') != '' }}
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: .runtime-guard-dedupe
           key: runtime-guard-dedupe-${{ github.run_id }}-${{ github.run_attempt }}
