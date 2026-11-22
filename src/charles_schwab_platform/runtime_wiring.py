@@ -161,9 +161,9 @@ def _normalize_monitor_targets_strategy(raw_targets_json: str | None) -> str | N
         return raw_targets_json
     changed = False
     for entry in entries:
-        if not isinstance(item, dict):
+        if not isinstance(entry, dict):
             continue
-        old = item.get('strategy_profile')
+        old = entry.get('strategy_profile')
         if old and old != STRATEGY_PROFILE:
             entry['strategy_profile'] = STRATEGY_PROFILE
             changed = True
