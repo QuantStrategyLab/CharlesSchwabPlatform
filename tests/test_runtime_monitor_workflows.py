@@ -23,15 +23,15 @@ def test_runtime_monitor_workflows_retry_gcp_authentication() -> None:
     )[0]
     publisher_job = heartbeat_workflow.split("\n  account_facts:\n", 1)[1]
 
-    assert heartbeat_job.count("google-github-actions/auth@v3") == 2
+    assert heartbeat_job.count("google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093") == 2
     assert "id: gcp_auth_primary" in heartbeat_job
     assert "continue-on-error: true" in heartbeat_job
     assert "steps.gcp_auth_primary.outcome == 'failure'" in heartbeat_job
-    assert publisher_job.count("google-github-actions/auth@v3") == 1
+    assert publisher_job.count("google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093") == 1
     assert "needs:" not in publisher_job
 
     runtime_guard = (ROOT / ".github/workflows/runtime-guard.yml").read_text()
-    assert runtime_guard.count("google-github-actions/auth@v3") == 2
+    assert runtime_guard.count("google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093") == 2
     assert "id: gcp_auth_primary" in runtime_guard
     assert "continue-on-error: true" in runtime_guard
     assert "steps.gcp_auth_primary.outcome == 'failure'" in runtime_guard

@@ -851,7 +851,7 @@ def test_new_workflow_is_manual_main_only_and_preparation_has_no_token():
         "RUNTIME_TARGET_JSON: ${{ secrets.SCHWAB_RUNTIME_DAILY_TARGET_JSON || "
         "vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}"
     ) in workflow
-    assert "google-github-actions/auth@v3" in workflow
+    assert "google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093" in workflow
     assert "uv sync --frozen --no-dev" in workflow
     assert "!inputs.publish" in workflow and "inputs.publish" in workflow
     prepare = workflow.split("- name: Prepare runtime daily", 1)[1].split(
