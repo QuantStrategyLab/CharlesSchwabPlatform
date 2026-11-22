@@ -2,30 +2,26 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-
 import pandas_market_calendars as mcal
-import pytz
+from quant_platform_kit.markets import (
+    is_market_open_now as _qpk_is_market_open_now,
+    is_market_open_today as _qpk_is_market_open_today,
+)
 
 
 def is_market_open_now(*, calendar_name="NASDAQ", timezone_name="America/New_York"):
     """Return whether the US equity regular session is open right now."""
-    try:
-        calendar = mcal.get_calendar(calendar_name)
-        market_tz = pytz.timezone(timezone_name)
-        now_market = datetime.now(market_tz)
-        schedule = calendar.schedule(start_date=now_market.date(), end_date=now_market.date())
-        if schedule.empty:
-            return False, None
-        return calendar.open_at_time(schedule, now_market), None
-    except Exception as exc:
-        return False, exc
+    return _qpk_is_market_open_now(
+        calendar_name=calendar_name,
+        timezone_name=timezone_name,
+        calendar_factory=mcal.get_calendar,
+    )
 
 
 def is_market_open_today(*, calendar_name="NASDAQ", timezone_name="America/New_York") -> bool:
     """Return whether today is a US equity trading session (legacy helper)."""
-    tz_ny = pytz.timezone(timezone_name)
-    now_ny = datetime.now(tz_ny)
-    calendar = mcal.get_calendar(calendar_name)
-    schedule = calendar.schedule(start_date=now_ny.date(), end_date=now_ny.date())
-    return not schedule.empty
+    return _qpk_is_market_open_today(
+        calendar_name=calendar_name,
+        timezone_name=timezone_name,
+        calendar_factory=mcal.get_calendar,
+    )
