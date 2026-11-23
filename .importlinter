@@ -1,0 +1,11 @@
+[importlinter]
+root_package = charles_schwab_platform
+
+[importlinter:contract:application_no_entrypoints]
+name = Application must not import entrypoints or http_routes
+type = forbidden
+source_modules =
+    charles_schwab_platform.application
+forbidden_modules =
+    charles_schwab_platform.entrypoints
+    charles_schwab_platform.http_routes

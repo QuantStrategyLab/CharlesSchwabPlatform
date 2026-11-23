@@ -260,9 +260,9 @@ class WorkflowCommandBoundaryTests(unittest.TestCase):
 
     def test_workflow_delegates_scan_to_shared_action(self):
         workflow = (ROOT / ".github/workflows/engineering-governance.yml").read_text()
-        self.assertIn(
-            "uses: Pigbibi/PrGovernance/pr-governance@7fe2ee20a3ee144ea944619e1c56f7ed5edc9152",
+        self.assertRegex(
             workflow,
+            r"uses: Pigbibi/PrGovernance/pr-governance@[0-9a-f]{40}",
         )
         self.assertIn("mode: scan", workflow)
 
