@@ -1,0 +1,19 @@
+{
+  "include": [
+    "src/charles_schwab_platform/platform_entry.py",
+    "src/charles_schwab_platform/application/execution_event_accounting.py",
+    "src/charles_schwab_platform/application/forward_account_qualification.py",
+    "src/charles_schwab_platform/application/offline_execution_event_acceptance.py",
+    "src/charles_schwab_platform/application/signal_provenance.py",
+    "src/charles_schwab_platform/application/signal_snapshot.py"
+  ],
+  "extraPaths": [
+    "src",
+    "external/QuantPlatformKit/src",
+    "external/UsEquityStrategies/src"
+  ],
+  "pythonVersion": "3.11",
+  "venvPath": ".",
+  "venv": ".venv",
+  "typeCheckingMode": "basic"
+}

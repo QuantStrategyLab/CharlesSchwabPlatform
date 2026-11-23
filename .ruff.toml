@@ -1,7 +1,26 @@
 target-version = "py311"
 
-[lint.per-file-ignores]
-"tests/*.py" = ["E402", "E401"]
-
 [lint]
+extend-select = ["B", "C901"]
 ignore = ["E701", "E702", "E741", "F841", "B008", "F401", "E402", "E401"]
+
+[lint.mccabe]
+max-complexity = 15
+
+[lint.per-file-ignores]
+"tests/**/*.py" = ["E402", "E401", "B", "C901"]
+"scripts/**/*.py" = ["B", "C901"]
+"research/**/*.py" = ["B", "C901"]
+"release-overlays/**/*.py" = ["B", "C901"]
+"src/charles_schwab_platform/application/execution_intent_continuity.py" = ["C901"]
+"src/charles_schwab_platform/application/execution_service.py" = ["C901"]
+"src/charles_schwab_platform/application/external_flow_snapshot.py" = ["C901"]
+"src/charles_schwab_platform/application/paper_execution_command_consumer.py" = ["C901"]
+"src/charles_schwab_platform/application/rebalance_service.py" = ["C901"]
+"src/charles_schwab_platform/application/runtime_broker_adapters.py" = ["C901"]
+"src/charles_schwab_platform/application/stock_inventory.py" = ["C901"]
+"src/charles_schwab_platform/http_routes.py" = ["C901"]
+"src/charles_schwab_platform/notifications/digest_snapshot/digest_archive.py" = ["C901"]
+"src/charles_schwab_platform/notifications/digest_snapshot/digest_candidates.py" = ["C901"]
+"src/charles_schwab_platform/notifications/unified.py" = ["B", "C901"]
+"src/charles_schwab_platform/strategy_runtime.py" = ["B", "C901"]
