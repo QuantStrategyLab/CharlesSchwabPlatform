@@ -5,6 +5,9 @@ name: Notify Route Check
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   route-check:
     name: Telegram route identity (read-only)

@@ -147,7 +147,7 @@ def test_retry_step_is_addressable_for_the_auth_condition() -> None:
     heartbeat_job = _heartbeat_job(_workflow_text())
     assert "id: gcp_auth_primary" in heartbeat_job
     assert "id: gcp_auth_retry" in heartbeat_job
-    assert heartbeat_job.count("google-github-actions/auth@v3") == 2
+    assert heartbeat_job.count("google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093") == 2
     assert "steps.gcp_auth_primary.outcome == 'failure'" in heartbeat_job
 
 
