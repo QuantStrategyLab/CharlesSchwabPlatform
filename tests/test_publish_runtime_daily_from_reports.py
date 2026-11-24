@@ -21,6 +21,8 @@ PREFIX = (
 REVISION = "charles-schwab-quant-service-00001-test"
 HASH = "PRIVATE-ACCOUNT-hash-CaseSensitive"
 ACCOUNT = "synthetic-ui-account"
+SYNTHETIC_CONSOLE_BASE_URL = "https://console.example.test"
+SYNTHETIC_SYNC_URL = f"{SYNTHETIC_CONSOLE_BASE_URL}/api/runtime-daily/sync"
 
 
 def environment():
@@ -39,7 +41,8 @@ def environment():
                 "market_timezone": "America/New_York",
             }
         ),
-        "EXECUTION_EVIDENCE_SYNC_URL": caller.SYNC_URL,
+        "QSL_CONSOLE_BASE_URL": SYNTHETIC_CONSOLE_BASE_URL,
+        "EXECUTION_EVIDENCE_SYNC_URL": SYNTHETIC_SYNC_URL,
         "EXECUTION_EVIDENCE_SYNC_TOKEN": "PRIVATE-TOKEN",
     }
 
@@ -316,7 +319,7 @@ def test_default_publish_is_zero_posts_and_canonical_header_only_on_explicit_pub
     assert request.get_header("X-qsl-source-binding-id") == _binding_id(
         HASH, TARGET["service"]
     )
-    assert request.full_url == caller.SYNC_URL
+    assert request.full_url == SYNTHETIC_SYNC_URL
     assert request.get_header("Authorization") == "Bearer PRIVATE-TOKEN"
     assert json.loads(request.data) == prepared.projection
     opener.open.assert_called_once()
@@ -349,8 +352,8 @@ def test_wrong_ack_never_confirms_storage(key, value):
     [
         TimeoutError("PRIVATE-TIMEOUT"),
         OSError("PRIVATE-OS"),
-        HTTPError(caller.SYNC_URL, 302, "PRIVATE-REDIRECT", {}, None),
-        HTTPError(caller.SYNC_URL, 409, "PRIVATE-DRIFT", {}, None),
+        HTTPError(SYNTHETIC_SYNC_URL, 302, "PRIVATE-REDIRECT", {}, None),
+        HTTPError(SYNTHETIC_SYNC_URL, 409, "PRIVATE-DRIFT", {}, None),
     ],
 )
 def test_no_retry_on_any_ambiguous_transport(error):
@@ -371,7 +374,7 @@ def test_no_retry_on_any_ambiguous_transport(error):
 
 def test_header_drift_and_missing_token_are_preflight_failures():
     prepared = prepare([envelope()])
-    for change in ["hash", "token", "url"]:
+    for change in ["hash", "token", "url", "missing_origin", "invalid_origin", "mismatch_origin"]:
         env = environment()
         if change == "hash":
             env["RUNTIME_TARGET_JSON"] = env["RUNTIME_TARGET_JSON"].replace(
@@ -381,9 +384,15 @@ def test_header_drift_and_missing_token_are_preflight_failures():
             env.pop("EXECUTION_EVIDENCE_SYNC_TOKEN")
             env["SCHWAB_ACCOUNT_FACTS_SYNC_TOKEN"] = "PRIVATE-FALLBACK"
         if change == "url":
-            env["EXECUTION_EVIDENCE_SYNC_URL"] = caller.SYNC_URL.replace(
+            env["EXECUTION_EVIDENCE_SYNC_URL"] = SYNTHETIC_SYNC_URL.replace(
                 "https:", "http:"
             )
+        if change == "missing_origin":
+            env.pop("QSL_CONSOLE_BASE_URL")
+        if change == "invalid_origin":
+            env["QSL_CONSOLE_BASE_URL"] = "https://console.example.test/api/runtime-daily/sync"
+        if change == "mismatch_origin":
+            env["QSL_CONSOLE_BASE_URL"] = "https://other.example.test"
         result, opener = publish(prepared, environ=env)
         assert result["status"] == "skipped"
         opener.open.assert_not_called()

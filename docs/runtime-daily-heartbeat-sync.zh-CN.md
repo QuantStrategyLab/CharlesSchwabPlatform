@@ -44,8 +44,10 @@ GitHub默认条件语义：[官方表达式说明](https://docs.github.com/en/ac
 - step 级新增：`SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX`（`secrets`）、
   `GCP_REGION: us-central1`（与 `publish_account_facts_from_reports.REGION` 一致）。
 
-密钥边界：`EXECUTION_EVIDENCE_SYNC_TOKEN` 只在 publisher step 注入，不下放到 job；
-`EXECUTION_EVIDENCE_SYNC_URL` 由 runner 内部设为原 `SYNC_URL`，workflow 不提供。
+密钥边界：`EXECUTION_EVIDENCE_SYNC_TOKEN` 与 `QSL_CONSOLE_BASE_URL`
+（`vars.QSL_CONSOLE_BASE_URL || vars.EXECUTION_EVIDENCE_SYNC_URL`）只在 publisher
+step 注入，不下放到 job；runner 从该受保护 HTTPS origin 派生 `/api/runtime-daily/sync`
+作为 `EXECUTION_EVIDENCE_SYNC_URL`，缺失或格式异常时 fail closed。
 不猜造账户/报告 prefix，不扩 IAM，不新增依赖。
 
 ## ACK 语义

@@ -143,6 +143,7 @@ jobs:
         if: ${{ !cancelled() && steps.install_runtime_deps.outcome == 'success' && vars.RUNTIME_DAILY_SYNC_ENABLED == 'true' && (steps.gcp_auth_primary.outcome == 'success' || steps.gcp_auth_retry.outcome == 'success') }}
         env:
           EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
+          QSL_CONSOLE_BASE_URL: ${{ vars.QSL_CONSOLE_BASE_URL || vars.EXECUTION_EVIDENCE_SYNC_URL }}
           SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX: ${{ secrets.SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX }}
           GCP_REGION: us-central1
           SCHWAB_RUNTIME_DAILY_TARGET_JSON: ${{ secrets.SCHWAB_RUNTIME_DAILY_TARGET_JSON }}
@@ -160,6 +161,7 @@ jobs:
       id-token: write
     env:
       ACCOUNT_FACTS_SYNC_URL: ${{ vars.ACCOUNT_FACTS_SYNC_URL }}
+      QSL_CONSOLE_BASE_URL: ${{ vars.QSL_CONSOLE_BASE_URL || vars.EXECUTION_EVIDENCE_SYNC_URL }}
       SCHWAB_NET_ASSETS_CURRENCY: ${{ vars.SCHWAB_NET_ASSETS_CURRENCY }}
       SCHWAB_CASH_CURRENCY: ${{ vars.SCHWAB_CASH_CURRENCY }}
       SCHWAB_ACCOUNT_FACTS_INCLUDE_POSITIONS: ${{ vars.SCHWAB_ACCOUNT_FACTS_INCLUDE_POSITIONS || 'false' }}

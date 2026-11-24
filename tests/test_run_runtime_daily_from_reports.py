@@ -12,7 +12,13 @@ import pytest
 from scripts import publish_runtime_daily_from_reports as caller
 from scripts import run_runtime_daily_from_reports as runner
 from scripts import runtime_daily_source_facts as facts
-from test_publish_runtime_daily_from_reports import NOW, PREFIX, REVISION, envelope
+from test_publish_runtime_daily_from_reports import (
+    NOW,
+    PREFIX,
+    REVISION,
+    SYNTHETIC_SYNC_URL,
+    envelope,
+)
 from test_publish_runtime_daily_from_reports import Response as AckResponse
 from test_publish_runtime_daily_from_reports import ack
 from test_publish_runtime_daily_from_reports import environment as source_environment
@@ -445,6 +451,7 @@ def test_prepare_does_not_require_publication_credentials():
     env = environment()
     env.pop("EXECUTION_EVIDENCE_SYNC_TOKEN", None)
     env.pop("EXECUTION_EVIDENCE_SYNC_URL", None)
+    env.pop("QSL_CONSOLE_BASE_URL", None)
     assert run(environ=env)[0]["status"] == "prepared"
 
 
@@ -462,9 +469,25 @@ def test_explicit_publish_uses_same_sealed_caller_and_fixed_local_endpoint():
     assert prepared._preparation_digest
     assert prepared.projection["completeness"] == "incomplete"
     assert call.kwargs["publish"] is True
-    assert call.kwargs["environ"]["EXECUTION_EVIDENCE_SYNC_URL"] == caller.SYNC_URL
+    assert call.kwargs["environ"]["EXECUTION_EVIDENCE_SYNC_URL"] == SYNTHETIC_SYNC_URL
     assert env == original
     assert "private" not in json.dumps(result)
+
+
+@pytest.mark.parametrize(
+    "console_origin",
+    [None, "", "http://console.example.test", "https://console.example.test/api/runtime-daily/sync"],
+)
+def test_explicit_publish_fails_closed_when_console_origin_is_missing_or_invalid(console_origin):
+    env = environment()
+    if console_origin is None:
+        env.pop("QSL_CONSOLE_BASE_URL", None)
+    else:
+        env["QSL_CONSOLE_BASE_URL"] = console_origin
+    result, readers = run(environ=env, publish=True)
+    assert result["status"] == "skipped"
+    assert result["reason"] == "publish_configuration_unavailable"
+    readers["publisher"].assert_not_called()
 
 
 def test_runner_to_real_caller_uses_synthetic_transport_and_preserves_incomplete():
@@ -861,8 +884,13 @@ def test_new_workflow_is_manual_main_only_and_preparation_has_no_token():
         "- name:", 1
     )[0]
     assert "--publish" not in prepare and "SYNC_TOKEN" not in prepare
+    assert "QSL_CONSOLE_BASE_URL" not in prepare
     assert "SCHWAB_RUNTIME_DAILY_TARGET_JSON" not in prepare
     assert "SCHWAB_RUNTIME_DAILY_TARGET_JSON: ${{ secrets.SCHWAB_RUNTIME_DAILY_TARGET_JSON }}" in publish_step
+    assert (
+        "QSL_CONSOLE_BASE_URL: ${{ vars.QSL_CONSOLE_BASE_URL || vars.EXECUTION_EVIDENCE_SYNC_URL }}"
+        in publish_step
+    )
     assert workflow.count("secrets.EXECUTION_EVIDENCE_SYNC_TOKEN") == 1
     assert "run_runtime_daily_from_reports.py --publish" in workflow
     assert "run_runtime_daily_from_reports.py --verify-native-identity" in workflow

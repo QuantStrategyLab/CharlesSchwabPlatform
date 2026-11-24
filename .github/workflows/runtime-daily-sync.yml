@@ -295,6 +295,7 @@ jobs:
         if: ${{ !inputs.capture_transactions_once && inputs.publish && !inputs.diagnose_source_access && !inputs.verify_native_identity && !inputs.check_token_load && !inputs.renew_access_token_once }}
         env:
           EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}
+          QSL_CONSOLE_BASE_URL: ${{ vars.QSL_CONSOLE_BASE_URL || vars.EXECUTION_EVIDENCE_SYNC_URL }}
           SCHWAB_RUNTIME_DAILY_TARGET_JSON: ${{ secrets.SCHWAB_RUNTIME_DAILY_TARGET_JSON }}
         run: uv run --no-sync python scripts/run_runtime_daily_from_reports.py --publish
 
