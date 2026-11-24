@@ -56,7 +56,7 @@ TARGET = {
 }
 ZONE = ZoneInfo("America/New_York")
 SYNC_URL = (
-    "https://qsl-strategy-switch-console.pigbibi-e06.workers.dev/api/runtime-daily/sync"
+    "https://qsl-strategy-switch-console.quantstrategylab.workers.dev/api/runtime-daily/sync"
 )
 MAX_ITEMS = 20
 # Prefer recent archives when filling the bounded batch. Matching the account-facts

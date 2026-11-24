@@ -35,7 +35,7 @@ from charles_schwab_platform.notifications.report_projection_support import (  #
 HISTORY_SCHEMA = "schwab_account_snapshot_history.v1"
 SNAPSHOT_SCHEMA = "schwab_account_snapshot.v1"
 SOURCE_BINDING_KIND = "deployment_runtime_account"
-SYNC_URL = "https://qsl-strategy-switch-console.pigbibi-e06.workers.dev/api/account-facts/sync"
+SYNC_URL = "https://qsl-strategy-switch-console.quantstrategylab.workers.dev/api/account-facts/sync"
 USER_AGENT = "QSL-Schwab-AccountFacts/1.0"
 PROJECT_ID = "charlesschwabquant"
 REGION = "us-central1"
