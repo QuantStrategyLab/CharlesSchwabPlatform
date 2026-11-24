@@ -35,7 +35,15 @@ from charles_schwab_platform.notifications.report_projection_support import (  #
 HISTORY_SCHEMA = "schwab_account_snapshot_history.v1"
 SNAPSHOT_SCHEMA = "schwab_account_snapshot.v1"
 SOURCE_BINDING_KIND = "deployment_runtime_account"
-SYNC_URL = "https://qsl-strategy-switch-console.pigbibi-e06.workers.dev/api/account-facts/sync"
+ACCOUNT_FACTS_SYNC_PATH = "/api/account-facts/sync"
+APPROVED_CONSOLE_BASE_URL_ENV = "QSL_CONSOLE_BASE_URL"
+EXECUTION_EVIDENCE_SYNC_URL_ENV = "EXECUTION_EVIDENCE_SYNC_URL"
+_EXPLICIT_ORIGIN_PATHS = frozenset({""})
+_FALLBACK_EVIDENCE_PATHS = frozenset({"", "/", "/api/execution-evidence/sync"})
+_CONSOLE_HOST_RE = re.compile(
+    r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}\Z",
+    re.ASCII,
+)
 USER_AGENT = "QSL-Schwab-AccountFacts/1.0"
 PROJECT_ID = "charlesschwabquant"
 REGION = "us-central1"
@@ -375,11 +383,96 @@ class _NoRedirect(HTTPRedirectHandler):
         return None
 
 
-def _publish_once(body: Mapping[str, Any], *, sync_url: str, token: str) -> dict[str, Any]:
-    if sync_url != SYNC_URL or not token:
+def _parse_console_origin(raw: object, *, allowed_paths: frozenset[str]) -> str | None:
+    if not isinstance(raw, str) or not raw or raw != raw.strip():
+        return None
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in raw):
+        return None
+    try:
+        parsed = urlsplit(raw)
+        port = parsed.port
+    except ValueError:
+        return None
+    host = parsed.hostname or ""
+    if (
+        parsed.scheme != "https"
+        or not host
+        or parsed.netloc != host
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is not None
+        or parsed.path not in allowed_paths
+        or parsed.query
+        or parsed.fragment
+        or _CONSOLE_HOST_RE.fullmatch(host) is None
+    ):
+        return None
+    return f"https://{host}"
+
+
+def approved_console_origin(environ: Mapping[str, str] | None = None) -> str | None:
+    """Return the canonical HTTPS console origin from protected configuration."""
+    env = os.environ if environ is None else environ
+    raw_origin = env.get(APPROVED_CONSOLE_BASE_URL_ENV)
+    if raw_origin is not None and raw_origin != "":
+        return _parse_console_origin(raw_origin, allowed_paths=_EXPLICIT_ORIGIN_PATHS)
+    raw_fallback = env.get(EXECUTION_EVIDENCE_SYNC_URL_ENV)
+    if raw_fallback is not None and raw_fallback != "":
+        return _parse_console_origin(raw_fallback, allowed_paths=_FALLBACK_EVIDENCE_PATHS)
+    return None
+
+
+def approved_sync_url(environ: Mapping[str, str] | None = None) -> str | None:
+    """Return the exact approved account-facts sync URL, or None if unavailable."""
+    origin = approved_console_origin(environ)
+    if origin is None:
+        return None
+    return f"{origin}{ACCOUNT_FACTS_SYNC_PATH}"
+
+
+def _validated_approved_sync_url(url: object) -> str | None:
+    if not isinstance(url, str) or not url or url != url.strip():
+        return None
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in url):
+        return None
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except ValueError:
+        return None
+    host = parsed.hostname or ""
+    if (
+        parsed.scheme != "https"
+        or not host
+        or parsed.netloc != host
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is not None
+        or parsed.path != ACCOUNT_FACTS_SYNC_PATH
+        or parsed.query
+        or parsed.fragment
+        or _CONSOLE_HOST_RE.fullmatch(host) is None
+    ):
+        return None
+    return f"https://{host}{ACCOUNT_FACTS_SYNC_PATH}"
+
+
+def _publish_once(
+    body: Mapping[str, Any],
+    *,
+    sync_url: str,
+    token: str,
+    expected_sync_url: str | None = None,
+) -> dict[str, Any]:
+    approved = (
+        _validated_approved_sync_url(expected_sync_url)
+        if expected_sync_url is not None
+        else approved_sync_url()
+    )
+    if not approved or sync_url != approved or not token:
         return {"status": "skipped", "reason": "publish_configuration_unavailable"}
     request = Request(
-        SYNC_URL,
+        approved,
         data=json.dumps(body, ensure_ascii=True, separators=(",", ":")).encode("utf-8"),
         headers={
             "Authorization": f"Bearer {token}",
@@ -750,9 +843,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if inspected["status"] == "inspected" else 2
     token = os.getenv("SCHWAB_ACCOUNT_FACTS_SYNC_TOKEN", "")
     sync_url = os.getenv("ACCOUNT_FACTS_SYNC_URL", "")
+    expected_sync_url = approved_sync_url()
     report_prefix = os.getenv("SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX", "")
     service_name = os.getenv("SCHWAB_ACCOUNT_FACTS_SERVICE_NAME", "")
-    if not token or sync_url != SYNC_URL:
+    if not token or not expected_sync_url or sync_url != expected_sync_url:
         print("skipped:publish_configuration_unavailable")
         return 2
     if not report_prefix or not service_name:
@@ -823,6 +917,7 @@ def main(argv: list[str] | None = None) -> int:
         history,
         sync_url=sync_url,
         token=token,
+        expected_sync_url=expected_sync_url,
     )
     print(_safe_result_text(result))
     return 0 if result.get("status") in {"published", "unchanged"} else 2

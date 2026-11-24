@@ -7,6 +7,9 @@ import pytest
 
 from scripts import publish_account_facts_from_reports as publisher
 
+SYNTHETIC_CONSOLE_BASE_URL = "https://console.example.test"
+SYNTHETIC_SYNC_URL = f"{SYNTHETIC_CONSOLE_BASE_URL}/api/account-facts/sync"
+
 
 def _gcloud_result(items, *, returncode=0, stderr=""):
     return SimpleNamespace(
@@ -72,7 +75,8 @@ def test_scope_rejection_observability_keeps_only_produced_kind(scope, kind, cap
     env = {
         "GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": "schedule",
         "SCHWAB_ACCOUNT_FACTS_SYNC_TOKEN": "TOKEN_CANARY",
-        "ACCOUNT_FACTS_SYNC_URL": publisher.SYNC_URL,
+        "QSL_CONSOLE_BASE_URL": SYNTHETIC_CONSOLE_BASE_URL,
+        "ACCOUNT_FACTS_SYNC_URL": SYNTHETIC_SYNC_URL,
         "SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX": prefix,
         "SCHWAB_ACCOUNT_FACTS_SERVICE_NAME": "synthetic-service",
         "SCHWAB_NET_ASSETS_CURRENCY": "USD",
@@ -467,7 +471,8 @@ def test_manual_latest_verifies_current_source_and_publishes_once(capsys):
     env = {
         "GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": "workflow_dispatch",
         "SCHWAB_ACCOUNT_FACTS_SYNC_TOKEN": "TOKEN_CANARY",
-        "ACCOUNT_FACTS_SYNC_URL": publisher.SYNC_URL,
+        "QSL_CONSOLE_BASE_URL": SYNTHETIC_CONSOLE_BASE_URL,
+        "ACCOUNT_FACTS_SYNC_URL": SYNTHETIC_SYNC_URL,
         "SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX": prefix,
         "SCHWAB_ACCOUNT_FACTS_SERVICE_NAME": "synthetic-service",
         "SCHWAB_NET_ASSETS_CURRENCY": "USD",
@@ -511,7 +516,8 @@ def test_latest_invalid_report_is_not_replaced_by_an_older_report(capsys, mode, 
         "GITHUB_ACTIONS": "true",
         "GITHUB_EVENT_NAME": event,
         "SCHWAB_ACCOUNT_FACTS_SYNC_TOKEN": "synthetic-token",
-        "ACCOUNT_FACTS_SYNC_URL": publisher.SYNC_URL,
+        "QSL_CONSOLE_BASE_URL": SYNTHETIC_CONSOLE_BASE_URL,
+        "ACCOUNT_FACTS_SYNC_URL": SYNTHETIC_SYNC_URL,
         "SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX": prefix,
         "SCHWAB_ACCOUNT_FACTS_SERVICE_NAME": "synthetic-service",
         "SCHWAB_NET_ASSETS_CURRENCY": "USD",
@@ -560,9 +566,12 @@ def test_publish_once_distinguishes_new_and_unchanged_observations():
         ),
     ):
         opener = SimpleNamespace(open=lambda *_args, **_kwargs: _response(payload))
-        with patch.object(publisher, "build_opener", return_value=opener) as build:
+        with (
+            patch.dict("os.environ", {"QSL_CONSOLE_BASE_URL": SYNTHETIC_CONSOLE_BASE_URL}, clear=True),
+            patch.object(publisher, "build_opener", return_value=opener) as build,
+        ):
             result = publisher._publish_once(
-                {"synthetic": True}, sync_url=publisher.SYNC_URL, token="synthetic-token"
+                {"synthetic": True}, sync_url=SYNTHETIC_SYNC_URL, token="synthetic-token"
             )
         assert result == expected
         build.assert_called_once()
@@ -576,9 +585,12 @@ def test_publish_once_rejects_invalid_or_false_response_without_leaking_body():
         {"ok": True, "stored": True, "detail": sentinel},
     ):
         opener = SimpleNamespace(open=lambda *_args, **_kwargs: _response(payload))
-        with patch.object(publisher, "build_opener", return_value=opener) as build:
+        with (
+            patch.dict("os.environ", {"QSL_CONSOLE_BASE_URL": SYNTHETIC_CONSOLE_BASE_URL}, clear=True),
+            patch.object(publisher, "build_opener", return_value=opener) as build,
+        ):
             result = publisher._publish_once(
-                {"synthetic": True}, sync_url=publisher.SYNC_URL, token="synthetic-token"
+                {"synthetic": True}, sync_url=SYNTHETIC_SYNC_URL, token="synthetic-token"
             )
         assert result == {
             "status": "skipped",
@@ -601,7 +613,8 @@ def test_main_treats_unchanged_as_success_without_relabeling_observation(capsys)
         "GITHUB_ACTIONS": "true",
         "GITHUB_EVENT_NAME": "workflow_dispatch",
         "SCHWAB_ACCOUNT_FACTS_SYNC_TOKEN": "synthetic-token",
-        "ACCOUNT_FACTS_SYNC_URL": publisher.SYNC_URL,
+        "QSL_CONSOLE_BASE_URL": SYNTHETIC_CONSOLE_BASE_URL,
+        "ACCOUNT_FACTS_SYNC_URL": SYNTHETIC_SYNC_URL,
         "SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX": prefix,
         "SCHWAB_ACCOUNT_FACTS_SERVICE_NAME": "synthetic-service",
         "SCHWAB_NET_ASSETS_CURRENCY": "USD",
@@ -808,7 +821,8 @@ def test_main_uses_same_exact_opt_in_for_projection_and_prepare():
     prefix = "gs://example-bucket/execution-reports/charles_schwab/soxl_soxx_trend_income/"
     env = {
         "GITHUB_ACTIONS": "true", "SCHWAB_ACCOUNT_FACTS_SYNC_TOKEN": "synthetic-token",
-        "ACCOUNT_FACTS_SYNC_URL": publisher.SYNC_URL, "SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX": prefix,
+        "QSL_CONSOLE_BASE_URL": SYNTHETIC_CONSOLE_BASE_URL,
+        "ACCOUNT_FACTS_SYNC_URL": SYNTHETIC_SYNC_URL, "SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX": prefix,
         "SCHWAB_ACCOUNT_FACTS_SERVICE_NAME": "synthetic-service", "SCHWAB_NET_ASSETS_CURRENCY": "USD",
         "SCHWAB_ACCOUNT_FACTS_TARGET_ID": "synthetic-target",
     }
@@ -945,3 +959,135 @@ def test_risk_block_account_facts_keep_receipt_identity_currency_and_freshness_g
     if fault == "outside_report": source["summary"]["account_observation"]["observed_at"] = "2026-09-30T22:26:00Z"
     if fault == "invalid_net_assets": source["summary"]["account_observation"]["net_assets"] = "NaN"
     assert _project_completed_risk_block(source)["status"] == "skipped"
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        None,
+        "",
+        "http://console.example.test",
+        "https://console.example.test/api/account-facts/sync",
+        "https://console.example.test?next=other",
+        "https://console.example.test#frag",
+        "https://user@console.example.test",
+        "https://console.example.test:8443",
+        "https://127.0.0.1",
+        "https://localhost",
+        " https://console.example.test",
+    ],
+)
+def test_publish_once_fails_closed_when_console_origin_is_missing_or_invalid(base_url):
+    env = {} if base_url is None else {"QSL_CONSOLE_BASE_URL": base_url}
+    with (
+        patch.dict("os.environ", env, clear=True),
+        patch.object(publisher, "build_opener", side_effect=AssertionError("must not POST")),
+    ):
+        result = publisher._publish_once(
+            {"synthetic": True}, sync_url=SYNTHETIC_SYNC_URL, token="synthetic-token"
+        )
+    assert result == {"status": "skipped", "reason": "publish_configuration_unavailable"}
+
+
+@pytest.mark.parametrize(
+    "sync_url",
+    [
+        "",
+        "http://console.example.test/api/account-facts/sync",
+        "https://other.example.test/api/account-facts/sync",
+        "https://console.example.test/api/account-facts/sync?next=other",
+        "https://console.example.test/api/other/sync",
+    ],
+)
+def test_publish_once_rejects_mismatched_sync_url_against_configured_origin(sync_url):
+    with (
+        patch.dict("os.environ", {"QSL_CONSOLE_BASE_URL": SYNTHETIC_CONSOLE_BASE_URL}, clear=True),
+        patch.object(publisher, "build_opener", side_effect=AssertionError("must not POST")),
+    ):
+        result = publisher._publish_once(
+            {"synthetic": True}, sync_url=sync_url, token="synthetic-token"
+        )
+    assert result == {"status": "skipped", "reason": "publish_configuration_unavailable"}
+
+
+def test_main_fails_closed_when_console_origin_missing(capsys):
+    prefix = "gs://example-bucket/execution-reports/charles_schwab/soxl_soxx_trend_income/"
+    env = {
+        "GITHUB_ACTIONS": "true",
+        "GITHUB_EVENT_NAME": "workflow_dispatch",
+        "SCHWAB_ACCOUNT_FACTS_SYNC_TOKEN": "synthetic-token",
+        "ACCOUNT_FACTS_SYNC_URL": SYNTHETIC_SYNC_URL,
+        "SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX": prefix,
+        "SCHWAB_ACCOUNT_FACTS_SERVICE_NAME": "synthetic-service",
+        "SCHWAB_NET_ASSETS_CURRENCY": "USD",
+        "SCHWAB_ACCOUNT_FACTS_TARGET_ID": "synthetic-target",
+    }
+    with (
+        patch.dict("os.environ", env, clear=True),
+        patch.object(publisher.subprocess, "run", side_effect=AssertionError("must not run gcloud")),
+    ):
+        assert publisher.main(["--latest-report"]) == 2
+    assert capsys.readouterr().out == "skipped:publish_configuration_unavailable\n"
+
+
+@pytest.mark.parametrize(
+    "evidence_url",
+    [
+        "https://console.example.test",
+        "https://console.example.test/",
+        "https://console.example.test/api/execution-evidence/sync",
+    ],
+)
+def test_approved_console_origin_falls_back_safely_to_evidence_url(evidence_url):
+    env = {
+        "QSL_CONSOLE_BASE_URL": "",
+        "EXECUTION_EVIDENCE_SYNC_URL": evidence_url,
+    }
+    assert publisher.approved_console_origin(env) == SYNTHETIC_CONSOLE_BASE_URL
+    assert publisher.approved_sync_url(env) == SYNTHETIC_SYNC_URL
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {
+            "QSL_CONSOLE_BASE_URL": "https://console.example.test/extra",
+            "EXECUTION_EVIDENCE_SYNC_URL": "https://console.example.test/api/execution-evidence/sync",
+        },
+        {
+            "QSL_CONSOLE_BASE_URL": "https://console.example.test/api/execution-evidence/sync",
+            "EXECUTION_EVIDENCE_SYNC_URL": "https://console.example.test/api/execution-evidence/sync",
+        },
+        {
+            "QSL_CONSOLE_BASE_URL": "",
+            "EXECUTION_EVIDENCE_SYNC_URL": "https://console.example.test/unexpected",
+        },
+        {
+            "QSL_CONSOLE_BASE_URL": "",
+            "EXECUTION_EVIDENCE_SYNC_URL": "http://console.example.test/api/execution-evidence/sync",
+        },
+        {
+            "QSL_CONSOLE_BASE_URL": "",
+            "EXECUTION_EVIDENCE_SYNC_URL": "https://console.example.test/api/execution-evidence/sync?x=1",
+        },
+        {
+            "QSL_CONSOLE_BASE_URL": "",
+            "EXECUTION_EVIDENCE_SYNC_URL": "https://user@console.example.test/api/execution-evidence/sync",
+        },
+        {
+            "QSL_CONSOLE_BASE_URL": "",
+            "EXECUTION_EVIDENCE_SYNC_URL": "https://console.example.test:8443/api/execution-evidence/sync",
+        },
+    ],
+)
+def test_approved_console_origin_fails_closed_on_invalid_explicit_or_fallback_url(env):
+    assert publisher.approved_console_origin(env) is None
+    assert publisher.approved_sync_url(env) is None
+    with (
+        patch.dict("os.environ", env, clear=True),
+        patch.object(publisher, "build_opener", side_effect=AssertionError("must not POST")),
+    ):
+        result = publisher._publish_once(
+            {"synthetic": True}, sync_url=SYNTHETIC_SYNC_URL, token="synthetic-token"
+        )
+    assert result == {"status": "skipped", "reason": "publish_configuration_unavailable"}

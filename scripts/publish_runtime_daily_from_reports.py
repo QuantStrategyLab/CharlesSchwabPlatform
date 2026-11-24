@@ -35,6 +35,7 @@ from scripts.publish_account_facts_from_reports import (
     _instant,
     _report_uri_parts,
     _valid_report_prefix,
+    approved_console_origin,
 )
 from scripts.runtime_daily_report_projection import (
     SCOPE_DIAGNOSTIC_FIELDS,
@@ -55,9 +56,7 @@ TARGET = {
     "account_scope": "live",
 }
 ZONE = ZoneInfo("America/New_York")
-SYNC_URL = (
-    "https://qsl-strategy-switch-console.pigbibi-e06.workers.dev/api/runtime-daily/sync"
-)
+RUNTIME_DAILY_SYNC_PATH = "/api/runtime-daily/sync"
 MAX_ITEMS = 20
 # Prefer recent archives when filling the bounded batch. Matching the account-facts
 # observation window keeps digest/daily from latching onto ancient prefix objects
@@ -685,6 +684,14 @@ class _NoRedirect(HTTPRedirectHandler):
         return None
 
 
+def approved_sync_url(environ: Mapping[str, str] | None = None) -> str | None:
+    """Return the exact approved runtime-daily sync URL from protected config."""
+    origin = approved_console_origin(environ)
+    if origin is None:
+        return None
+    return f"{origin}{RUNTIME_DAILY_SYNC_PATH}"
+
+
 def publish_prepared(
     prepared: PreparedDaily,
     *,
@@ -703,14 +710,16 @@ def publish_prepared(
         return {"status": "prepared", "reason": "publication_not_requested"}
     if prepared.reason != "prepared" or prepared.projection is None:
         return {"status": "skipped", "reason": "projection_unavailable"}
+    expected_sync_url = approved_sync_url(environ)
     token = environ.get("EXECUTION_EVIDENCE_SYNC_TOKEN")
     if (
-        not isinstance(token, str)
+        not expected_sync_url
+        or not isinstance(token, str)
         or not token
         or token != token.strip()
         or "\r" in token
         or "\n" in token
-        or environ.get("EXECUTION_EVIDENCE_SYNC_URL") != SYNC_URL
+        or environ.get("EXECUTION_EVIDENCE_SYNC_URL") != expected_sync_url
     ):
         return {"status": "skipped", "reason": "publish_configuration_unavailable"}
     try:
@@ -743,7 +752,7 @@ def publish_prepared(
         return {"status": "skipped", "reason": "projection_invalid"}
     try:
         request = Request(
-            SYNC_URL,
+            expected_sync_url,
             method="POST",
             data=body_bytes,
             headers={

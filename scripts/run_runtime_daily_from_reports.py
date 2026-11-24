@@ -404,9 +404,20 @@ def run_daily(
                 )
             )
         if publish:
+            expected_origin = caller.approved_console_origin(environ)
+            expected_sync_url = (
+                f"{expected_origin}{caller.RUNTIME_DAILY_SYNC_PATH}"
+                if expected_origin
+                else None
+            )
+            if not expected_sync_url:
+                result["status"] = "skipped"
+                result["reason"] = "publish_configuration_unavailable"
+                return result
             publication_env = dict(environ)
+            publication_env["QSL_CONSOLE_BASE_URL"] = expected_origin
             # A step-local daily route, not a change to legacy execution evidence.
-            publication_env["EXECUTION_EVIDENCE_SYNC_URL"] = caller.SYNC_URL
+            publication_env["EXECUTION_EVIDENCE_SYNC_URL"] = expected_sync_url
             outcome = publisher(prepared, environ=publication_env, publish=True)
             if outcome.get("status") == "stored_acknowledged":
                 result["status"] = "stored_acknowledged"

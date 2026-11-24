@@ -56,11 +56,12 @@ Protected sources (reusing `runtime-daily-sync.yml` names):
 - Step-level additions: `SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX` (`secrets`),
   `GCP_REGION: us-central1` (matching `publish_account_facts_from_reports.REGION`).
 
-Secret boundary: `EXECUTION_EVIDENCE_SYNC_TOKEN` is injected at the publisher
-step only and never exposed at job scope; `EXECUTION_EVIDENCE_SYNC_URL` is
-resolved inside the runner from the existing `SYNC_URL` rather than passed by
-the workflow. Never invent account/report prefixes, widen IAM, or add
-dependencies.
+Secret boundary: `EXECUTION_EVIDENCE_SYNC_TOKEN`, `QSL_CONSOLE_BASE_URL`
+(`vars.QSL_CONSOLE_BASE_URL`), and fallback `EXECUTION_EVIDENCE_SYNC_URL`
+(`vars.EXECUTION_EVIDENCE_SYNC_URL`) are injected at the publisher step only
+and never exposed at job scope; the runner extracts and validates the canonical
+HTTPS origin to derive `/api/runtime-daily/sync` and fails closed when missing
+or invalid. Never invent account/report prefixes, widen IAM, or add dependencies.
 
 ## ACK semantics
 
