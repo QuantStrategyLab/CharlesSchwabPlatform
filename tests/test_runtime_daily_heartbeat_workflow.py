@@ -98,10 +98,8 @@ def test_true_switch_runs_the_existing_producer_cli() -> None:
 def test_step_scopes_the_sync_token_and_uses_protected_prefix_and_region() -> None:
     step = _step_block(_workflow_text(), STEP_NAME)
     assert "EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}" in step
-    assert (
-        "QSL_CONSOLE_BASE_URL: ${{ vars.QSL_CONSOLE_BASE_URL || vars.EXECUTION_EVIDENCE_SYNC_URL }}"
-        in step
-    )
+    assert "QSL_CONSOLE_BASE_URL: ${{ vars.QSL_CONSOLE_BASE_URL }}" in step
+    assert "EXECUTION_EVIDENCE_SYNC_URL: ${{ vars.EXECUTION_EVIDENCE_SYNC_URL }}" in step
     assert "SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX: ${{ secrets.SCHWAB_ACCOUNT_FACTS_REPORT_PREFIX }}" in step
     assert "GCP_REGION: us-central1" in step
     assert (
@@ -109,10 +107,8 @@ def test_step_scopes_the_sync_token_and_uses_protected_prefix_and_region() -> No
         "vars.RUNTIME_TARGET_JSON || secrets.RUNTIME_TARGET_JSON }}"
     ) in step
     account_facts_job = _workflow_text().split("\n  account_facts:\n", 1)[1]
-    assert (
-        "QSL_CONSOLE_BASE_URL: ${{ vars.QSL_CONSOLE_BASE_URL || vars.EXECUTION_EVIDENCE_SYNC_URL }}"
-        in account_facts_job
-    )
+    assert "QSL_CONSOLE_BASE_URL: ${{ vars.QSL_CONSOLE_BASE_URL }}" in account_facts_job
+    assert "EXECUTION_EVIDENCE_SYNC_URL: ${{ vars.EXECUTION_EVIDENCE_SYNC_URL }}" in account_facts_job
 
 
 def test_daily_target_override_is_step_scoped_and_preserves_other_heartbeat_steps() -> None:
@@ -138,6 +134,7 @@ def test_sync_token_is_not_exposed_job_wide() -> None:
     assert job_env is not None
     assert "EXECUTION_EVIDENCE_SYNC_TOKEN" not in job_env.group(1)
     assert "QSL_CONSOLE_BASE_URL" not in job_env.group(1)
+    assert "EXECUTION_EVIDENCE_SYNC_URL" not in job_env.group(1)
     # The token is injected only in the two existing step-level blocks.
     assert _workflow_text().count("EXECUTION_EVIDENCE_SYNC_TOKEN: ${{ secrets.EXECUTION_EVIDENCE_SYNC_TOKEN }}") == 2
 

@@ -165,4 +165,5 @@ def test_workflow_inspection_step_never_receives_sync_or_broker_token():
     publish = source.split('- name: Project and publish the selected archived report', 1)[1]
     assert 'if: ${{ !inputs.inspect_only }}' in publish
     assert 'SCHWAB_ACCOUNT_FACTS_SYNC_TOKEN' in publish
-    assert 'QSL_CONSOLE_BASE_URL: ${{ vars.QSL_CONSOLE_BASE_URL || vars.EXECUTION_EVIDENCE_SYNC_URL }}' in publish
+    assert 'QSL_CONSOLE_BASE_URL: ${{ vars.QSL_CONSOLE_BASE_URL }}' in publish
+    assert 'EXECUTION_EVIDENCE_SYNC_URL: ${{ vars.EXECUTION_EVIDENCE_SYNC_URL }}' in publish

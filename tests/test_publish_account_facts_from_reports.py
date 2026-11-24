@@ -1028,3 +1028,66 @@ def test_main_fails_closed_when_console_origin_missing(capsys):
     ):
         assert publisher.main(["--latest-report"]) == 2
     assert capsys.readouterr().out == "skipped:publish_configuration_unavailable\n"
+
+
+@pytest.mark.parametrize(
+    "evidence_url",
+    [
+        "https://console.example.test",
+        "https://console.example.test/",
+        "https://console.example.test/api/execution-evidence/sync",
+    ],
+)
+def test_approved_console_origin_falls_back_safely_to_evidence_url(evidence_url):
+    env = {
+        "QSL_CONSOLE_BASE_URL": "",
+        "EXECUTION_EVIDENCE_SYNC_URL": evidence_url,
+    }
+    assert publisher.approved_console_origin(env) == SYNTHETIC_CONSOLE_BASE_URL
+    assert publisher.approved_sync_url(env) == SYNTHETIC_SYNC_URL
+
+
+@pytest.mark.parametrize(
+    "env",
+    [
+        {
+            "QSL_CONSOLE_BASE_URL": "https://console.example.test/extra",
+            "EXECUTION_EVIDENCE_SYNC_URL": "https://console.example.test/api/execution-evidence/sync",
+        },
+        {
+            "QSL_CONSOLE_BASE_URL": "https://console.example.test/api/execution-evidence/sync",
+            "EXECUTION_EVIDENCE_SYNC_URL": "https://console.example.test/api/execution-evidence/sync",
+        },
+        {
+            "QSL_CONSOLE_BASE_URL": "",
+            "EXECUTION_EVIDENCE_SYNC_URL": "https://console.example.test/unexpected",
+        },
+        {
+            "QSL_CONSOLE_BASE_URL": "",
+            "EXECUTION_EVIDENCE_SYNC_URL": "http://console.example.test/api/execution-evidence/sync",
+        },
+        {
+            "QSL_CONSOLE_BASE_URL": "",
+            "EXECUTION_EVIDENCE_SYNC_URL": "https://console.example.test/api/execution-evidence/sync?x=1",
+        },
+        {
+            "QSL_CONSOLE_BASE_URL": "",
+            "EXECUTION_EVIDENCE_SYNC_URL": "https://user@console.example.test/api/execution-evidence/sync",
+        },
+        {
+            "QSL_CONSOLE_BASE_URL": "",
+            "EXECUTION_EVIDENCE_SYNC_URL": "https://console.example.test:8443/api/execution-evidence/sync",
+        },
+    ],
+)
+def test_approved_console_origin_fails_closed_on_invalid_explicit_or_fallback_url(env):
+    assert publisher.approved_console_origin(env) is None
+    assert publisher.approved_sync_url(env) is None
+    with (
+        patch.dict("os.environ", env, clear=True),
+        patch.object(publisher, "build_opener", side_effect=AssertionError("must not POST")),
+    ):
+        result = publisher._publish_once(
+            {"synthetic": True}, sync_url=SYNTHETIC_SYNC_URL, token="synthetic-token"
+        )
+    assert result == {"status": "skipped", "reason": "publish_configuration_unavailable"}
