@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Iterable, Mapping
 
+from charles_schwab_platform.application.account_new_risk_gate_support import copy_fuse_telemetry
 from charles_schwab_platform.notifications.block_reason import clean_block_reason
 
 
@@ -67,6 +68,7 @@ def summarize_execution_cycle_result(
         value = execution.get(field_name)
         if value is not None and value != "":
             summary[field_name] = value
+    copy_fuse_telemetry(summary, execution)
     notification_delivery_summary = _as_mapping(execution.get("notification_delivery_summary"))
     if notification_delivery_summary:
         summary["notification_delivery_summary"] = notification_delivery_summary

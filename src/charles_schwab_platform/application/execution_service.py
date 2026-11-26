@@ -2,24 +2,32 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from math import isfinite
+from typing import Any
 
 from charles_schwab_platform.application.account_new_risk_gate_support import (
     apply_combined_scale_to_allocation_targets,
     build_account_new_risk_snapshot,
     build_snapshot_from_portfolio,
+    copy_fuse_telemetry,
     evaluate_cycle_new_risk_admission,
     evaluate_portfolio_new_risk_admission,
-    is_account_new_risk_gate_enabled,
+    fuse_telemetry_from_admission,
+    get_cycle_snapshot,
+    is_effective_new_risk_gate_enabled,
     maybe_publish_attention_for_admission,
+    merge_fuse_telemetry,
     new_risk_buy_prohibited,
     set_cycle_snapshot,
 )
 from charles_schwab_platform.application.execution_intent_continuity import _IntentSession
+from charles_schwab_platform.application import daily_loss_fact_producer as _daily_loss_fact_producer
 from charles_schwab_platform.application.daily_loss_fact_producer import attach_daily_loss_fact_to_portfolio
 from charles_schwab_platform.application.execution_kernel_adapter import should_block_halted_resubmit
+
+_DEFAULT_ATTACH_DAILY_LOSS_FACT_TO_PORTFOLIO = attach_daily_loss_fact_to_portfolio
 from quant_platform_kit.common.order_status import compute_confirmed_sell_release_value
 
 from quant_platform_kit.common.cash_sweep import should_sell_cash_sweep_to_fund_whole_share_buy
@@ -534,28 +542,73 @@ def execute_rebalance_cycle(
             submitted_orders=(),
         )
 
+    cycle_daily_loss_reports_cache: dict[str, tuple[Mapping[str, Any], ...]] = {}
+
+    def _evaluate_cycle_new_risk(current_plan, current_portfolio, current_execution, *, require_fuse: bool = False):
+        updated_portfolio = dict(current_portfolio)
+        if require_fuse:
+            updated_portfolio["fuse_enabled"] = True
+            metadata = updated_portfolio.get("metadata")
+            if isinstance(metadata, Mapping) and "fuse_enabled" in metadata:
+                updated_metadata = dict(metadata)
+                updated_metadata["fuse_enabled"] = True
+                updated_portfolio["metadata"] = updated_metadata
+        expected_account_hash = str((current_plan or {}).get("account_hash") or "").strip() or None
+        if attach_daily_loss_fact_to_portfolio is _DEFAULT_ATTACH_DAILY_LOSS_FACT_TO_PORTFOLIO:
+            profile_key = _daily_loss_fact_producer._strategy_profile_from_portfolio(updated_portfolio)
+
+            def _cached_reports_loader():
+                cached = cycle_daily_loss_reports_cache.get(profile_key)
+                if cached is None:
+                    cached = tuple(
+                        _daily_loss_fact_producer.load_recent_runtime_reports_from_gcs(
+                            strategy_profile=profile_key
+                        )
+                    )
+                    cycle_daily_loss_reports_cache[profile_key] = cached
+                return cached
+
+            updated_portfolio = attach_daily_loss_fact_to_portfolio(
+                updated_portfolio,
+                client=client,
+                expected_account_hash=expected_account_hash,
+                reports_loader=_cached_reports_loader,
+            )
+        else:
+            updated_portfolio = attach_daily_loss_fact_to_portfolio(
+                updated_portfolio,
+                client=client,
+                expected_account_hash=expected_account_hash,
+            )
+        updated_portfolio["account_new_risk_snapshot"] = build_account_new_risk_snapshot(
+            updated_portfolio,
+            execution=current_execution,
+        )
+        admission = evaluate_portfolio_new_risk_admission(
+            updated_portfolio,
+            execution=current_execution,
+        )
+        snapshot = build_snapshot_from_portfolio(
+            updated_portfolio,
+            execution=current_execution,
+        )
+        set_cycle_snapshot(snapshot, portfolio=updated_portfolio, execution=current_execution)
+        return updated_portfolio, admission, snapshot
+
     account_new_risk_buy_blocked = False
     account_new_risk_reason_codes: tuple[str, ...] = ()
-    if is_account_new_risk_gate_enabled():
-        portfolio = dict(portfolio)
-        # Verified daily-loss fact when baseline+cashflow available; omit on failure.
-        # Bind transactions to the same plan account identity used for submit
-        # (decision_mapper: plan["account_hash"] = snapshot.metadata["account_hash"]).
-        expected_account_hash = str((plan or {}).get("account_hash") or "").strip() or None
-        portfolio = attach_daily_loss_fact_to_portfolio(
-            portfolio,
-            client=client,
-            expected_account_hash=expected_account_hash,
+    cycle_combined_scale: float | None = None
+    cycle_fuse_active = False
+    cycle_fuse_telemetry: dict[str, object] = {}
+    if is_effective_new_risk_gate_enabled(portfolio, execution=execution):
+        portfolio, admission, cycle_snapshot = _evaluate_cycle_new_risk(
+            plan, portfolio, execution,
         )
-        portfolio["account_new_risk_snapshot"] = build_account_new_risk_snapshot(
-            portfolio,
-            execution=execution,
-        )
-        admission = evaluate_portfolio_new_risk_admission(portfolio, execution=execution)
         account_new_risk_buy_blocked = new_risk_buy_prohibited(admission)
         account_new_risk_reason_codes = tuple(admission.reason_codes)
-        cycle_snapshot = build_snapshot_from_portfolio(portfolio, execution=execution)
-        set_cycle_snapshot(cycle_snapshot)
+        cycle_combined_scale = admission.combined_scale
+        cycle_fuse_active = bool(cycle_snapshot.fuse_enabled)
+        cycle_fuse_telemetry = fuse_telemetry_from_admission(admission)
         reasons = ", ".join(account_new_risk_reason_codes) or "-"
         gate_diagnostic_message = (
             "[Account new-risk gate] "
@@ -669,19 +722,42 @@ def execute_rebalance_cycle(
     submission_halted = False
     submission_outcome_unknown = False
     sell_resource_evidence_required = False
+    submit_time_buy_blocked = False
 
     def execute_fire_forget(symbol, action_type, quantity, price=None):
         nonlocal submission_halted, submission_outcome_unknown, sell_resource_evidence_required, notification_order_issue
+        nonlocal account_new_risk_buy_blocked, account_new_risk_reason_codes, cycle_fuse_telemetry, submit_time_buy_blocked
         if submission_halted:
             # N13: redundant T2/T3 consult; local halt always wins (no behavior change).
             should_block_halted_resubmit(
                 submission_outcome_unknown=submission_outcome_unknown,
             )
             return False
-        if is_account_new_risk_gate_enabled() and action_type != "SELL":
+        if action_type != "SELL" and (
+            account_new_risk_buy_blocked
+            or is_effective_new_risk_gate_enabled(snapshot=get_cycle_snapshot())
+        ):
+            if account_new_risk_buy_blocked:
+                submit_time_buy_blocked = True
+                return False
             admission = evaluate_cycle_new_risk_admission()
+            cycle_fuse_telemetry = merge_fuse_telemetry(
+                cycle_fuse_telemetry,
+                fuse_telemetry_from_admission(admission),
+            )
             if new_risk_buy_prohibited(admission):
-                record_submitted_order(symbol, action_type, quantity, price, status="rejected")
+                account_new_risk_buy_blocked = True
+                submit_time_buy_blocked = True
+                account_new_risk_reason_codes = tuple(
+                    dict.fromkeys((*account_new_risk_reason_codes, *admission.reason_codes))
+                )
+                reason_text = ", ".join(admission.reason_codes) or "NEW_RISK_PROHIBITED"
+                trade_logs.append(
+                    translator(
+                        "buy_deferred",
+                        detail=f"[Account new-risk gate] {reason_text}",
+                    )
+                )
                 return False
         if action_type == "BUY_NOTIONAL":
             if float(quantity or 0.0) < MIN_NOTIONAL_BUY_USD:
@@ -1032,10 +1108,49 @@ def execute_rebalance_cycle(
             best_refreshed_state = None
             best_buying_power = previous_buying_power
             projected_sell_release_value = 0.0
+            latest_refreshed_snapshot = None
+            latest_refreshed_portfolio = None
+            latest_refreshed_execution = None
             for attempt in range(refresh_attempts):
                 sleeper(sell_settle_delay_sec if attempt == 0 else refresh_interval)
                 snapshot = fetch_managed_snapshot(client)
                 refreshed_state = load_plan(snapshot)
+                refreshed_plan, refreshed_portfolio, refreshed_execution, refreshed_allocation = refreshed_state
+                if cycle_fuse_active or is_effective_new_risk_gate_enabled(
+                    refreshed_portfolio, execution=refreshed_execution
+                ):
+                    refreshed_portfolio, refreshed_admission, refreshed_snapshot = _evaluate_cycle_new_risk(
+                        refreshed_plan,
+                        refreshed_portfolio,
+                        refreshed_execution,
+                        require_fuse=cycle_fuse_active,
+                    )
+                    account_new_risk_buy_blocked = (
+                        account_new_risk_buy_blocked or new_risk_buy_prohibited(refreshed_admission)
+                    )
+                    account_new_risk_reason_codes = tuple(
+                        dict.fromkeys((*account_new_risk_reason_codes, *refreshed_admission.reason_codes))
+                    )
+                    cycle_fuse_active = cycle_fuse_active or bool(refreshed_snapshot.fuse_enabled)
+                    cycle_fuse_telemetry = merge_fuse_telemetry(
+                        cycle_fuse_telemetry,
+                        fuse_telemetry_from_admission(refreshed_admission),
+                    )
+                    if refreshed_admission.combined_scale is not None:
+                        cycle_combined_scale = (
+                            refreshed_admission.combined_scale
+                            if cycle_combined_scale is None
+                            else min(cycle_combined_scale, refreshed_admission.combined_scale)
+                        )
+                    latest_refreshed_snapshot = refreshed_snapshot
+                    latest_refreshed_portfolio = refreshed_portfolio
+                    latest_refreshed_execution = refreshed_execution
+                    refreshed_state = (
+                        refreshed_plan,
+                        refreshed_portfolio,
+                        refreshed_execution,
+                        refreshed_allocation,
+                    )
                 refreshed_buying_power = buying_power_from_plan(
                     refreshed_state[1],
                     refreshed_state[2],
@@ -1060,6 +1175,17 @@ def execute_rebalance_cycle(
                 best_buying_power > previous_buying_power or confirmed_sell_release_value > 0.0
             )
             plan, portfolio, execution, allocation = best_refreshed_state
+            if latest_refreshed_snapshot is not None:
+                set_cycle_snapshot(
+                    latest_refreshed_snapshot,
+                    portfolio=latest_refreshed_portfolio,
+                    execution=latest_refreshed_execution,
+                )
+            if cycle_combined_scale is not None:
+                allocation = apply_combined_scale_to_allocation_targets(
+                    allocation,
+                    cycle_combined_scale,
+                )
             if intent_continuity is not None:
                 intent_continuity.select_plan_source(plan)
             plan, allocation = _apply_safe_haven_cash_substitution(
@@ -1261,6 +1387,7 @@ def execute_rebalance_cycle(
     trade_logs.extend(format_small_account_allocation_drift_notes(drift_notes, translator=translator))
 
     result_execution = dict(execution or {})
+    copy_fuse_telemetry(result_execution, cycle_fuse_telemetry)
     # Notification evidence only: this point is reached after the cycle's
     # normal execution path completed; it does not establish a fill.
     result_execution["notification_cycle_completed"] = True
@@ -1272,8 +1399,12 @@ def execute_rebalance_cycle(
         result_execution.update(execution_status="blocked", broker_submission_done=False)
     if account_new_risk_buy_blocked:
         attention_reasons.append("account_new_risk_gate")
+    if submit_time_buy_blocked and not buys_blocked_reason:
+        buys_blocked_reason = "account_new_risk_gate"
     if buys_blocked_reason:
         attention_reasons.append(buys_blocked_reason)
+    if (submit_time_buy_blocked or buys_blocked_reason == "account_new_risk_gate") and not submitted_orders:
+        result_execution.update(execution_status="blocked", broker_submission_done=False, orders_pending_count=0)
     if attention_reasons:
         result_execution["notification_attention_reason_codes"] = tuple(dict.fromkeys(attention_reasons))
     if submitted_orders:
