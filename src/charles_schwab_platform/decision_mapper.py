@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from us_equity_strategies.catalog import resolve_canonical_profile
+from charles_schwab_platform.application.account_new_risk_gate_support import attach_snapshot_fuse_metadata
 from us_equity_strategies.cash_only_equity import (
     build_portfolio_inputs_from_snapshot,
     resolve_weight_translation_equity,
@@ -285,6 +286,7 @@ def map_strategy_decision_to_plan(
         ),
     )
     plan["account_hash"] = snapshot.metadata["account_hash"]
+    attach_snapshot_fuse_metadata(plan.setdefault("portfolio", {}), snapshot)
     execution = plan.setdefault("execution", {})
     execution.update(_strategy_risk_rejection_fields(decision))
     for field_name in (

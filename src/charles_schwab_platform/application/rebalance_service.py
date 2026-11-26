@@ -5,9 +5,14 @@ from __future__ import annotations
 import os
 import re
 import json
+from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime, timezone
 
+from charles_schwab_platform.application.account_new_risk_gate_support import (
+    attach_snapshot_fuse_metadata,
+    copy_fuse_telemetry,
+)
 from charles_schwab_platform.application.account_observation import build_account_observation
 from charles_schwab_platform.application.execution_intent_continuity import _IntentSession
 from charles_schwab_platform.application.execution_service import execute_rebalance_cycle, ExecutionCycleResult
@@ -89,21 +94,20 @@ def _record_platform_execution_telemetry(
         return
     execution = dict(execution_result.execution or {})
     portfolio = dict(execution_result.portfolio or {})
-    try_record_platform_execution(
-        profile,
-        {
-            "platform": "schwab",
-            "action_done": False,
-            "broker_submission_done": bool(execution.get("broker_submission_done")),
-            "execution_status": execution.get("execution_status"),
-            "orders_pending_count": int(execution.get("orders_pending_count") or 0),
-            "effective_date": execution.get("effective_date"),
-            "signal_date": execution.get("signal_date"),
-            "dry_run_only": bool(getattr(config, "dry_run_only", False)),
-            "trade_logs_count": len(getattr(execution_result, "trade_logs", ()) or ()),
-            "total_equity": portfolio.get("total_equity") or portfolio.get("equity"),
-        },
-    )
+    telemetry_payload = {
+        "platform": "schwab",
+        "action_done": False,
+        "broker_submission_done": bool(execution.get("broker_submission_done")),
+        "execution_status": execution.get("execution_status"),
+        "orders_pending_count": int(execution.get("orders_pending_count") or 0),
+        "effective_date": execution.get("effective_date"),
+        "signal_date": execution.get("signal_date"),
+        "dry_run_only": bool(getattr(config, "dry_run_only", False)),
+        "trade_logs_count": len(getattr(execution_result, "trade_logs", ()) or ()),
+        "total_equity": portfolio.get("total_equity") or portfolio.get("equity"),
+    }
+    copy_fuse_telemetry(telemetry_payload, execution)
+    try_record_platform_execution(profile, telemetry_payload)
 
 
 def _build_notification_delivery_summary(delivery_events: list[dict]) -> dict:
@@ -638,6 +642,7 @@ def run_strategy_core(
         if continuity is not None:
             continuity.register_plan_source(current_plan, current_snapshot)
         current_portfolio = _plan_portfolio(current_plan)
+        attach_snapshot_fuse_metadata(current_portfolio, current_snapshot)
         current_execution = _plan_execution(current_plan)
         current_allocation = _plan_allocation(current_plan)
         if current_allocation.get("target_mode") != "value":

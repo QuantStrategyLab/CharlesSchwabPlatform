@@ -55,6 +55,14 @@ class AccountNewRiskGateSupportTests(unittest.TestCase):
         os.environ.pop("SCHWAB_MAX_DAILY_LOSS_USD", None)
         os.environ.pop("MAX_DAILY_LOSS_USD", None)
         os.environ.pop("RUNTIME_TARGET_JSON", None)
+        os.environ.pop("QSL_RUNTIME_TARGET_JSON", None)
+        os.environ.pop("FUSE_READBACK_MODE", None)
+        os.environ.pop("FUSE_TRADE_DATE", None)
+        os.environ.pop("FUSE_OBSERVE_UNTIL", None)
+        os.environ.pop("SCHWAB_MARKET_TIMEZONE", None)
+        os.environ.pop("SCHWAB_MARKET", None)
+        os.environ.pop("MARKET_TIMEZONE", None)
+        os.environ.pop("MARKET", None)
 
     def test_missing_equity_prohibits_fail_closed(self) -> None:
         portfolio = {"market_values": {"SOXL": 0.0}, "liquid_cash": 100.0}
@@ -622,8 +630,16 @@ class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
         reset_attention_sent_keys_for_tests()
         os.environ.pop(ACCOUNT_NEW_RISK_GATE_ENV, None)
         os.environ.pop("RUNTIME_TARGET_JSON", None)
+        os.environ.pop("QSL_RUNTIME_TARGET_JSON", None)
         os.environ.pop("SCHWAB_MAX_DAILY_LOSS_USD", None)
         os.environ.pop("MAX_DAILY_LOSS_USD", None)
+        os.environ.pop("FUSE_READBACK_MODE", None)
+        os.environ.pop("FUSE_TRADE_DATE", None)
+        os.environ.pop("FUSE_OBSERVE_UNTIL", None)
+        os.environ.pop("SCHWAB_MARKET_TIMEZONE", None)
+        os.environ.pop("SCHWAB_MARKET", None)
+        os.environ.pop("MARKET_TIMEZONE", None)
+        os.environ.pop("MARKET", None)
 
     def _run_buy_cycle(self, *, portfolio_overrides=None):
         submitted_orders = []
@@ -1043,3 +1059,500 @@ class AccountNewRiskGateExecutionCycleTests(unittest.TestCase):
         )
         self.assertEqual(submitted_orders, [])
         self.assertTrue(any("Account hard brake observed" in line for line in result.trade_logs))
+
+
+def _clean_fuse_record(trade_date: str, *, fuse_latched: bool = False) -> dict:
+    return {
+        "trade_date": trade_date,
+        "session_allowed": True,
+        "session_state": "regular",
+        "fuse_latched": fuse_latched,
+        "fuse_level": "L1" if fuse_latched else "CLEAR",
+        "blocks_orders": fuse_latched,
+        "blocks_eligibility": fuse_latched,
+        "calendar_version": "synthetic-calendar-v1",
+        "spec_digest": "synthetic-spec-digest-001",
+    }
+
+
+class Fuse2ReadbackSchwabTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        set_cycle_snapshot(None)
+        reset_attention_sent_keys_for_tests()
+        for key in (
+            ACCOUNT_NEW_RISK_GATE_ENV,
+            "RUNTIME_TARGET_JSON",
+            "QSL_RUNTIME_TARGET_JSON",
+            "FUSE_READBACK_MODE",
+            "FUSE_TRADE_DATE",
+            "FUSE_OBSERVE_UNTIL",
+            "SCHWAB_MARKET_TIMEZONE",
+            "SCHWAB_MARKET",
+            "MARKET_TIMEZONE",
+            "MARKET",
+        ):
+            os.environ.pop(key, None)
+
+    def test_fuse2_enforce_observe_expired_and_legacy_gate_bypass(self) -> None:
+        from charles_schwab_platform.application import account_new_risk_gate_support as gate
+
+        base_portfolio = {
+            "total_equity": 50_000.0,
+            "peak_equity_usd": 50_000.0,
+            "metadata": {"total_equity_source": "broker_liquidation_value"},
+        }
+        with patch.object(gate, "resolve_production_drift_status_from_store", return_value=None):
+            with patch.object(gate, "_current_fuse_trade_date", return_value="2026-11-27"):
+                # Clean FUSE readback allows new risk.
+                clean = {**base_portfolio, "fuse_readback": _clean_fuse_record("2026-11-27")}
+                self.assertEqual(
+                    evaluate_portfolio_new_risk_admission(clean).disposition,
+                    NewRiskDisposition.ALLOW_NEW_RISK,
+                )
+                # Latched FUSE blocks even if ACCOUNT_NEW_RISK_GATE=0.
+                os.environ[ACCOUNT_NEW_RISK_GATE_ENV] = "0"
+                latched = {
+                    **base_portfolio,
+                    "fuse_readback": _clean_fuse_record("2026-11-27", fuse_latched=True),
+                }
+                self.assertTrue(gate.is_effective_new_risk_gate_enabled(latched))
+                res_latched = evaluate_portfolio_new_risk_admission(latched)
+                self.assertEqual(res_latched.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+                self.assertIn("FUSE_LATCHED_BLOCKED", res_latched.reason_codes)
+
+                # Stale FUSE readback under observe mode allows with telemetry.
+                os.environ[ACCOUNT_NEW_RISK_GATE_ENV] = "1"
+                os.environ["FUSE_READBACK_MODE"] = "observe"
+                os.environ["FUSE_OBSERVE_UNTIL"] = "2026-12-11"
+                stale = {**base_portfolio, "fuse_readback": _clean_fuse_record("2026-11-25")}
+                res_observe = evaluate_portfolio_new_risk_admission(stale)
+                self.assertEqual(res_observe.disposition, NewRiskDisposition.ALLOW_NEW_RISK)
+                telemetry = gate.fuse_telemetry_from_admission(res_observe)
+                self.assertEqual(telemetry["fuse_readback_effective_mode"], "observe")
+                self.assertTrue(telemetry["fuse_readback_would_block"])
+                self.assertIn("FUSE_READBACK_STALE_FAIL_CLOSED", telemetry["fuse_readback_reason_codes"])
+
+                # Disabling ACCOUNT_NEW_RISK_GATE=0 still blocks tighter even during observe mode.
+                os.environ[ACCOUNT_NEW_RISK_GATE_ENV] = "0"
+                res_observe_disabled = evaluate_portfolio_new_risk_admission(stale)
+                self.assertEqual(res_observe_disabled.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+                self.assertIn("LEGACY_NEW_RISK_SWITCH_DISABLED", res_observe_disabled.reason_codes)
+
+            # Expired observe window escalates to enforce.
+            os.environ[ACCOUNT_NEW_RISK_GATE_ENV] = "1"
+            with patch.object(gate, "_current_fuse_trade_date", return_value="2026-12-15"):
+                res_expired = evaluate_portfolio_new_risk_admission(stale)
+                self.assertEqual(res_expired.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+                self.assertEqual(res_expired.fuse_decision.effective_mode, "enforce")
+                self.assertTrue(res_expired.fuse_decision.observe_window_expired)
+                self.assertIn("FUSE_READBACK_STALE_FAIL_CLOSED", res_expired.reason_codes)
+
+    def test_fuse2_account_precedence_and_legacy_off_caller(self) -> None:
+        from charles_schwab_platform.application import account_new_risk_gate_support as gate
+
+        # Legacy FUSE-off + ACCOUNT_NEW_RISK_GATE=0 stays disabled even with FUSE_TRADE_DATE absent.
+        os.environ[ACCOUNT_NEW_RISK_GATE_ENV] = "0"
+        self.assertFalse(gate.is_effective_new_risk_gate_enabled({"total_equity": 50_000.0}))
+
+        os.environ[ACCOUNT_NEW_RISK_GATE_ENV] = "1"
+        with patch.object(gate, "resolve_production_drift_status_from_store", return_value=None):
+            with patch.object(gate, "_current_fuse_trade_date", return_value="2026-11-27"):
+                # Native None fuse_readback must override a clean projection cache and fail closed.
+                override_none = {
+                    "total_equity": 50_000.0,
+                    "peak_equity_usd": 50_000.0,
+                    "fuse_readback": None,
+                    "account_new_risk_snapshot": {
+                        "fuse_readback": _clean_fuse_record("2026-11-27"),
+                    },
+                }
+                res_none = evaluate_portfolio_new_risk_admission(override_none)
+                self.assertEqual(res_none.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+                self.assertIn("FUSE_READBACK_MISSING_FAIL_CLOSED", res_none.reason_codes)
+
+                # Native latched overrides clean projection cache.
+                override_latched = {
+                    "total_equity": 50_000.0,
+                    "peak_equity_usd": 50_000.0,
+                    "fuse_readback": _clean_fuse_record("2026-11-27", fuse_latched=True),
+                    "account_new_risk_snapshot": {
+                        "fuse_readback": _clean_fuse_record("2026-11-27"),
+                    },
+                }
+                res_latched = evaluate_portfolio_new_risk_admission(override_latched)
+                self.assertEqual(res_latched.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+                self.assertIn("FUSE_LATCHED_BLOCKED", res_latched.reason_codes)
+
+    def test_fuse2_cycle_timezone_midcycle_observe_removal_and_execution_cycle(self) -> None:
+        from charles_schwab_platform.application import account_new_risk_gate_support as gate
+
+        os.environ["QSL_RUNTIME_TARGET_JSON"] = '{"market": "HK"}'
+        self.assertEqual(gate._resolve_fuse_market_timezone(), "Asia/Hong_Kong")
+        os.environ["SCHWAB_MARKET"] = "US"
+        self.assertEqual(gate._resolve_fuse_market_timezone(), "America/New_York")
+        os.environ.pop("QSL_RUNTIME_TARGET_JSON", None)
+        os.environ.pop("SCHWAB_MARKET", None)
+
+        observed_tz: list[str | None] = []
+        orig_trade_date = gate._current_fuse_trade_date
+        with patch.object(gate, "resolve_production_drift_status_from_store", return_value=None):
+            with patch.object(
+                gate,
+                "_current_fuse_trade_date",
+                side_effect=lambda *a, **kw: observed_tz.append(kw.get("market_timezone")) or "2026-12-09",
+            ):
+                with gate.account_new_risk_gate_cycle(
+                    {
+                        "total_equity": 50_000.0,
+                        "peak_equity_usd": 50_000.0,
+                        "market_timezone": "Asia/Hong_Kong",
+                        "fuse_readback": _clean_fuse_record("2026-12-09"),
+                    }
+                ):
+                    gate.evaluate_cycle_new_risk_admission()
+        self.assertEqual(observed_tz[-1], "Asia/Hong_Kong")
+        self.assertIs(gate._current_fuse_trade_date, orig_trade_date)
+
+        # Removing observe mid-cycle promotes evaluate_cycle_new_risk_admission to enforce immediately.
+        os.environ[ACCOUNT_NEW_RISK_GATE_ENV] = "0"
+        os.environ["FUSE_READBACK_MODE"] = "observe"
+        os.environ["FUSE_OBSERVE_UNTIL"] = "2026-12-11"
+        with patch.object(gate, "resolve_production_drift_status_from_store", return_value=None):
+            with patch.object(gate, "_current_fuse_trade_date", return_value="2026-12-09"):
+                with gate.account_new_risk_gate_cycle(
+                    {
+                        "total_equity": 50_000.0,
+                        "peak_equity_usd": 50_000.0,
+                        "fuse_readback": _clean_fuse_record("2026-12-09", fuse_latched=True),
+                    }
+                ):
+                    os.environ.pop("FUSE_OBSERVE_UNTIL", None)
+                    os.environ.pop("FUSE_READBACK_MODE", None)
+                    res = gate.evaluate_cycle_new_risk_admission()
+                    self.assertEqual(res.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+                    self.assertIn("FUSE_LATCHED_BLOCKED", res.reason_codes)
+
+        # End-to-end execute_rebalance_cycle: observe telemetry + ACCOUNT_NEW_RISK_GATE=0 cannot bypass active FUSE.
+        os.environ[ACCOUNT_NEW_RISK_GATE_ENV] = "1"
+        os.environ["FUSE_READBACK_MODE"] = "observe"
+        os.environ["FUSE_OBSERVE_UNTIL"] = "2026-12-11"
+        helper = AccountNewRiskGateExecutionCycleTests()
+        with patch.object(gate, "resolve_production_drift_status_from_store", return_value=None):
+            with patch.object(gate, "_current_fuse_trade_date", return_value="2026-12-09"):
+                result_obs, orders_obs = helper._run_buy_cycle(
+                    portfolio_overrides={
+                        "fuse_readback": _clean_fuse_record("2026-12-08"),
+                    }
+                )
+        self.assertEqual(len(orders_obs), 1)
+        self.assertEqual(result_obs.execution["fuse_readback_effective_mode"], "observe")
+        self.assertTrue(result_obs.execution["fuse_readback_would_block"])
+        self.assertIn("FUSE_READBACK_STALE_FAIL_CLOSED", result_obs.execution["fuse_readback_reason_codes"])
+
+        os.environ[ACCOUNT_NEW_RISK_GATE_ENV] = "0"
+        os.environ["FUSE_READBACK_MODE"] = "enforce"
+        os.environ.pop("FUSE_OBSERVE_UNTIL", None)
+        with patch.object(gate, "resolve_production_drift_status_from_store", return_value=None):
+            with patch.object(gate, "_current_fuse_trade_date", return_value="2026-12-09"):
+                result_enf, orders_enf = helper._run_buy_cycle(
+                    portfolio_overrides={
+                        "fuse_readback": _clean_fuse_record("2026-12-09", fuse_latched=True),
+                    }
+                )
+        self.assertEqual(orders_enf, [])
+        self.assertTrue(any("FUSE_LATCHED_BLOCKED" in log for log in result_enf.trade_logs))
+
+    def test_fuse2_snapshot_metadata_transport_and_telemetry(self) -> None:
+        from charles_schwab_platform.application import rebalance_service
+        from charles_schwab_platform.application import account_new_risk_gate_support as gate
+
+        os.environ[ACCOUNT_NEW_RISK_GATE_ENV] = "0"
+        plan = {
+            "account_hash": "demo",
+            "allocation": {
+                "target_mode": "value",
+                "strategy_symbols": ("SOXL",),
+                "risk_symbols": ("SOXL",),
+                "income_symbols": (),
+                "safe_haven_symbols": (),
+                "targets": {"SOXL": 400.0},
+            },
+            "portfolio": {
+                "market_values": {"SOXL": 0.0},
+                "quantities": {},
+                "portfolio_rows": (("SOXL",),),
+                "total_equity": 50_000.0,
+                "liquid_cash": 500.0,
+                "cash_sweep_symbol": None,
+            },
+            "execution": {
+                "trade_threshold_value": 10.0,
+                "reserved_cash": 0.0,
+                "signal_display": "Buy SOXL",
+                "dashboard_text": "dashboard",
+                "separator": "---",
+                "signal_date": "2026-12-09",
+                "effective_date": "2026-12-09",
+            },
+        }
+        snapshot = PortfolioSnapshot(
+            as_of="2026-12-09",
+            total_equity=50_000.0,
+            buying_power=500.0,
+            positions=(),
+            metadata={
+                "account_hash": "demo",
+                "fuse_readback": _clean_fuse_record("2026-12-09", fuse_latched=True),
+            },
+        )
+        submitted = []
+        recorded: list[dict[str, object]] = []
+        attention_calls: list[dict[str, object]] = []
+        with (
+            patch.object(gate, "resolve_production_drift_status_from_store", return_value=None),
+            patch.object(gate, "_current_fuse_trade_date", return_value="2026-12-09"),
+            patch.object(
+                rebalance_service,
+                "try_record_platform_execution",
+                side_effect=lambda _p, payload, **_kw: recorded.append(payload),
+            ),
+            patch.object(
+                gate,
+                "maybe_publish_attention_for_admission",
+                side_effect=lambda *_a, **_kw: attention_calls.append(_kw) or {"sent": 0, "skipped": 1, "failed": 0},
+            ),
+            patch(
+                "charles_schwab_platform.application.execution_service.maybe_publish_attention_for_admission",
+                side_effect=lambda *_a, **_kw: attention_calls.append(_kw) or {"sent": 0, "skipped": 1, "failed": 0},
+            ),
+        ):
+            result = run_strategy_core(
+                runtime=SchwabRebalanceRuntime(
+                    fetch_reference_history=lambda: [],
+                    portfolio_port=CallablePortfolioPort(lambda: snapshot),
+                    market_data_port=CallableMarketDataPort(
+                        quote_loader=lambda symbol: QuoteSnapshot(
+                            symbol=symbol, as_of="2026-12-09", last_price=100.0, ask_price=100.0
+                        )
+                    ),
+                    resolve_rebalance_plan=lambda **_kwargs: plan,
+                    notifications=CallableNotificationPort(lambda _message: None),
+                    execution_port_factory=lambda _account_hash: CallableExecutionPort(submitted.append),
+                ),
+                config=SchwabRebalanceConfig(
+                    translator=build_translator("en"),
+                    strategy_display_name="Demo",
+                    limit_buy_premium=1.0,
+                    sell_settle_delay_sec=0.0,
+                    strategy_profile="demo_profile",
+                ),
+            )
+        self.assertEqual(submitted, [])
+        self.assertEqual(result.execution.get("execution_status"), "blocked")
+        self.assertIn("FUSE_LATCHED_BLOCKED", result.execution["fuse_readback_reason_codes"])
+        self.assertEqual(len(recorded), 1)
+        self.assertEqual(recorded[0]["execution_status"], "blocked")
+        self.assertIn("FUSE_LATCHED_BLOCKED", recorded[0]["fuse_readback_reason_codes"])
+
+    def test_fuse2_invalid_timezone_and_post_sell_refresh_hardening(self) -> None:
+        from tempfile import TemporaryDirectory
+        from quant_platform_kit.common.models import ExecutionReport, OrderIntent
+        from test_rebalance_service import synthetic_sell_session
+        from charles_schwab_platform.application import account_new_risk_gate_support as gate
+
+        # 1. Invalid market_timezone must fail closed even when FUSE_TRADE_DATE env matches stale record.
+        os.environ["FUSE_TRADE_DATE"] = "2026-11-25"
+        os.environ[ACCOUNT_NEW_RISK_GATE_ENV] = "1"
+        with patch.object(gate, "resolve_production_drift_status_from_store", return_value=None):
+            res_bad_tz = evaluate_portfolio_new_risk_admission(
+                {
+                    "total_equity": 50_000.0,
+                    "peak_equity_usd": 50_000.0,
+                    "market_timezone": "Mars/Olympus_Mons",
+                    "fuse_readback": _clean_fuse_record("2026-11-25"),
+                }
+            )
+        self.assertEqual(res_bad_tz.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+        self.assertIn("FUSE_READBACK_STALE_FAIL_CLOSED", res_bad_tz.reason_codes)
+        os.environ.pop("FUSE_TRADE_DATE", None)
+
+        # 2. Post-sell refresh: attempt 1 healthy & attempt 2 latched (same buying power) still blocks buys + retains reasons.
+        submitted = []
+        plan_template = {
+            "account_hash": "demo",
+            "allocation": {
+                "target_mode": "value",
+                "strategy_symbols": ("SOXL", "BOXX"),
+                "risk_symbols": ("SOXL",),
+                "income_symbols": (),
+                "safe_haven_symbols": ("BOXX",),
+                "targets": {"SOXL": 0.0, "BOXX": 1000.0},
+            },
+            "portfolio": {
+                "market_values": {"SOXL": 400.0, "BOXX": 0.0},
+                "quantities": {"SOXL": 4, "BOXX": 0},
+                "total_equity": 50_000.0,
+                "peak_equity_usd": 50_000.0,
+                "liquid_cash": 100.0,
+                "cash_sweep_symbol": "BOXX",
+                "fuse_readback": _clean_fuse_record("2026-12-09"),
+            },
+            "execution": {
+                "trade_threshold_value": 10.0,
+                "reserved_cash": 0.0,
+            },
+        }
+        root = Path(self.enterContext(TemporaryDirectory()))
+        _native, session = synthetic_sell_session(root, plan_template, OrderIntent("SOXL", "sell", 4))
+        refresh_portfolios = [
+            {**plan_template["portfolio"], "market_values": {"SOXL": 0.0, "BOXX": 0.0}, "quantities": {"SOXL": 0, "BOXX": 0}, "liquid_cash": 2000.0, "fuse_readback": _clean_fuse_record("2026-12-09")},
+            {**plan_template["portfolio"], "market_values": {"SOXL": 0.0, "BOXX": 0.0}, "quantities": {"SOXL": 0, "BOXX": 0}, "liquid_cash": 2000.0, "fuse_readback": _clean_fuse_record("2026-12-09", fuse_latched=True)},
+        ]
+        # Make first refresh not break loop early (lower buying power than previous), second equal.
+        refresh_portfolios[0]["liquid_cash"] = 50.0
+        refresh_portfolios[1]["liquid_cash"] = 50.0
+        load_calls = {"n": 0}
+
+        def _load_refreshed(_snap):
+            idx = min(load_calls["n"], len(refresh_portfolios) - 1)
+            load_calls["n"] += 1
+            p_next = {**plan_template, "portfolio": dict(refresh_portfolios[idx])}
+            return p_next, p_next["portfolio"], dict(p_next["execution"]), dict(p_next["allocation"])
+
+        def _submit_ok(orders_list):
+            def _fn(order_intent):
+                orders_list.append(order_intent)
+                return ExecutionReport(
+                    symbol=order_intent.symbol,
+                    side=order_intent.side,
+                    quantity=order_intent.quantity,
+                    status="accepted",
+                    broker_order_id="oid-1",
+                    raw_payload={},
+                )
+            return _fn
+
+        with patch.object(gate, "resolve_production_drift_status_from_store", return_value=None):
+            with patch.object(gate, "_current_fuse_trade_date", return_value="2026-12-09"):
+                result_refresh = execute_rebalance_cycle(
+                    client=object(),
+                    plan=plan_template,
+                    portfolio=dict(plan_template["portfolio"]),
+                    execution=dict(plan_template["execution"]),
+                    allocation=dict(plan_template["allocation"]),
+                    fetch_managed_snapshot=lambda _c: None,
+                    market_data_port=CallableMarketDataPort(
+                        quote_loader=lambda s: QuoteSnapshot(symbol=s, as_of="2026-12-09", last_price=100.0, ask_price=100.0)
+                    ),
+                    load_plan=_load_refreshed,
+                    execution_port=CallableExecutionPort(_submit_ok(submitted)),
+                    translator=build_translator("en"),
+                    limit_buy_premium=1.0,
+                    sell_settle_delay_sec=0,
+                    post_sell_refresh_attempts=2,
+                    post_sell_refresh_interval_sec=0.0,
+                    publish_order_issue=lambda _m: None,
+                    intent_continuity=session,
+                )
+        self.assertEqual([o.side for o in submitted], ["sell"])
+        self.assertTrue(result_refresh.execution["fuse_readback_would_block"])
+        self.assertIn("FUSE_LATCHED_BLOCKED", result_refresh.execution["fuse_readback_reason_codes"])
+
+        # 3. Refreshed snapshot dropping fuse_readback or setting fuse_enabled=False keeps cycle fuse active and fails closed;
+        #    and GCS runtime reports are loaded at most once across initial + post-sell polling retries.
+        from charles_schwab_platform.application import daily_loss_fact_producer
+
+        load_calls["n"] = 0
+        _native2, session2 = synthetic_sell_session(Path(self.enterContext(TemporaryDirectory())), plan_template, OrderIntent("SOXL", "sell", 4))
+        dropped_port = {
+            **{k: v for k, v in plan_template["portfolio"].items() if k != "fuse_readback"},
+            "fuse_enabled": False,
+        }
+        submitted2 = []
+        gcs_calls = {"n": 0}
+        with (
+            patch.object(gate, "resolve_production_drift_status_from_store", return_value=None),
+            patch.object(gate, "_current_fuse_trade_date", return_value="2026-12-09"),
+            patch.object(
+                daily_loss_fact_producer,
+                "load_recent_runtime_reports_from_gcs",
+                side_effect=lambda **_kw: gcs_calls.__setitem__("n", gcs_calls["n"] + 1) or (),
+            ),
+        ):
+            result_drop = execute_rebalance_cycle(
+                client=object(),
+                plan=plan_template,
+                portfolio=dict(plan_template["portfolio"]),
+                execution=dict(plan_template["execution"]),
+                allocation=dict(plan_template["allocation"]),
+                fetch_managed_snapshot=lambda _c: None,
+                market_data_port=CallableMarketDataPort(
+                    quote_loader=lambda s: QuoteSnapshot(symbol=s, as_of="2026-12-09", last_price=100.0, ask_price=100.0)
+                ),
+                load_plan=lambda _s: ({**plan_template, "portfolio": dict(dropped_port)}, dict(dropped_port), dict(plan_template["execution"]), dict(plan_template["allocation"])),
+                execution_port=CallableExecutionPort(_submit_ok(submitted2)),
+                translator=build_translator("en"),
+                limit_buy_premium=1.0,
+                sell_settle_delay_sec=0,
+                post_sell_refresh_attempts=3,
+                post_sell_refresh_interval_sec=0.0,
+                publish_order_issue=lambda _m: None,
+                intent_continuity=session2,
+            )
+        self.assertEqual([o.side for o in submitted2], ["sell"])
+        self.assertEqual(gcs_calls["n"], 1)
+        self.assertIn("FUSE_READBACK_MISSING_FAIL_CLOSED", result_drop.execution["fuse_readback_reason_codes"])
+
+        # 4. Pre-submit FUSE rollover block records zero submitted orders (no pending_reconciliation).
+        os.environ["FUSE_READBACK_MODE"] = "enforce"
+        day_calls = {"n": 0}
+        def _rollover_day(*_a, **_kw):
+            day_calls["n"] += 1
+            return "2026-12-09" if day_calls["n"] <= 2 else "2026-12-10"
+
+        with patch.object(gate, "resolve_production_drift_status_from_store", return_value=None):
+            with patch.object(gate, "_current_fuse_trade_date", side_effect=_rollover_day):
+                res_submit_blk, submitted_blk = AccountNewRiskGateExecutionCycleTests()._run_buy_cycle(
+                    portfolio_overrides={
+                        "total_equity": 50_000.0,
+                        "peak_equity_usd": 50_000.0,
+                        "fuse_readback": _clean_fuse_record("2026-12-09"),
+                    }
+                )
+        self.assertEqual(submitted_blk, [])
+        self.assertEqual(res_submit_blk.submitted_orders, ())
+        self.assertEqual(res_submit_blk.execution.get("execution_status"), "blocked")
+        self.assertFalse(res_submit_blk.execution.get("broker_submission_done"))
+        self.assertEqual(res_submit_blk.execution.get("orders_pending_count"), 0)
+        self.assertIn("FUSE_READBACK_STALE_FAIL_CLOSED", res_submit_blk.execution["fuse_readback_reason_codes"])
+
+        # 5. Directly injected snapshot (without portfolio) preserves explicit observe controls when env unset.
+        from dataclasses import replace as _dc_replace
+
+        snap_obs = _dc_replace(
+            build_snapshot_from_portfolio(
+                {
+                    "total_equity": 50_000.0,
+                    "peak_equity_usd": 50_000.0,
+                    "account_new_risk_snapshot": {
+                        "observation_status": "COMPLETE",
+                        "reconciliation_status": "VERIFIED",
+                        "circuit_breaker_state": "CLOSED",
+                    },
+                    "fuse_readback": _clean_fuse_record("2026-12-08"),
+                }
+            ),
+            fuse_mode="observe",
+            fuse_observe_until="2026-12-10",
+        )
+        os.environ.pop("FUSE_READBACK_MODE", None)
+        os.environ.pop("FUSE_OBSERVE_UNTIL", None)
+        set_cycle_snapshot(snap_obs, market_timezone="America/New_York")
+        with (
+            patch.object(gate, "resolve_production_drift_status_from_store", return_value=None),
+            patch.object(gate, "_current_fuse_trade_date", return_value="2026-12-09"),
+        ):
+            obs_submit_res = gate.evaluate_cycle_new_risk_admission()
+        self.assertEqual(obs_submit_res.disposition, NewRiskDisposition.ALLOW_NEW_RISK)
+        self.assertEqual(obs_submit_res.fuse_decision.effective_mode, "observe")
+        self.assertTrue(obs_submit_res.fuse_decision.would_block)

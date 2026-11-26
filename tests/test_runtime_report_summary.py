@@ -113,3 +113,24 @@ def test_summarize_execution_cycle_result_preserves_notification_delivery_summar
     summary = summarize_execution_cycle_result(result, dry_run=False)
 
     assert summary["notification_delivery_summary"] == delivery_summary
+
+
+def test_summarize_execution_cycle_result_preserves_fuse_observe_telemetry() -> None:
+    result = SimpleNamespace(
+        execution={
+            "execution_status": "completed",
+            "fuse_readback_effective_mode": "observe",
+            "fuse_readback_would_block": True,
+            "fuse_readback_reason_codes": ["FUSE_READBACK_STALE_FAIL_CLOSED"],
+            "fuse_readback_observe_window_expired": False,
+        },
+        submitted_orders=(),
+        trade_logs=(),
+    )
+
+    summary = summarize_execution_cycle_result(result, dry_run=True)
+
+    assert summary["fuse_readback_effective_mode"] == "observe"
+    assert summary["fuse_readback_would_block"] is True
+    assert summary["fuse_readback_reason_codes"] == ["FUSE_READBACK_STALE_FAIL_CLOSED"]
+    assert summary["fuse_readback_observe_window_expired"] is False

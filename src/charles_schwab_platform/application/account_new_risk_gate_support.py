@@ -7,9 +7,14 @@ import math
 import os
 from collections.abc import Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
+from quant_platform_kit.common.broker_new_risk_gate_helpers import (
+    resolve_fuse_readback_inputs,
+)
 from quant_platform_kit.risk.account_new_risk_gate import (
     AccountNewRiskGateError,
     InjectedReconciliationSnapshot,
@@ -27,6 +32,7 @@ from quant_platform_kit.risk.production_drift_new_risk import (
 )
 
 ACCOUNT_NEW_RISK_GATE_ENV = "ACCOUNT_NEW_RISK_GATE"
+_FUSE_CONTROL_ENV_KEYS = ("FUSE_READBACK_MODE", "FUSE_TRADE_DATE", "FUSE_OBSERVE_UNTIL")
 _MAX_DAILY_LOSS_ENV_KEYS = ("SCHWAB_MAX_DAILY_LOSS_USD", "MAX_DAILY_LOSS_USD")
 
 _DEFAULT_STRATEGY_PROFILE = "soxl_soxx_trend_income"
@@ -36,6 +42,22 @@ _DEFAULT_DOMAIN = "us_equity"
 _DAILY_LOSS_LIMIT_CARRIER_SYMBOL = "SPY"
 
 _cycle_snapshot: InjectedReconciliationSnapshot | None = None
+_cycle_market_timezone: str | None = None
+_cycle_snapshot_controls_from_env: bool = False
+
+_FUSE_TELEMETRY_KEYS = (
+    "fuse_readback_effective_mode",
+    "fuse_readback_would_block",
+    "fuse_readback_reason_codes",
+    "fuse_readback_observe_window_expired",
+)
+
+_MARKET_DEFAULT_TIMEZONES = {
+    "US": "America/New_York",
+    "US_EQUITY": "America/New_York",
+    "HK": "Asia/Hong_Kong",
+    "HK_EQUITY": "Asia/Hong_Kong",
+}
 
 
 @dataclass(frozen=True)
@@ -50,6 +72,226 @@ class MaxDailyLossResolution:
 def is_account_new_risk_gate_enabled() -> bool:
     """Production default on; set ACCOUNT_NEW_RISK_GATE=0 only for tests."""
     return str(os.environ.get(ACCOUNT_NEW_RISK_GATE_ENV, "") or "").strip() != "0"
+
+
+def _market_to_timezone(market: object) -> str | None:
+    normalized = str(market or "").strip().upper()
+    if not normalized:
+        return None
+    return _MARKET_DEFAULT_TIMEZONES.get(normalized)
+
+
+def _timezone_from_mapping(source: Mapping[str, Any] | None) -> str | None:
+    if not isinstance(source, Mapping):
+        return None
+    explicit_tz = str(source.get("market_timezone") or "").strip()
+    if explicit_tz:
+        return explicit_tz
+    return _market_to_timezone(source.get("market"))
+
+
+def _resolve_runtime_target_timezone_or_market() -> tuple[str | None, str]:
+    raw_target = str(
+        os.environ.get("QSL_RUNTIME_TARGET_JSON") or os.environ.get("RUNTIME_TARGET_JSON") or ""
+    ).strip()
+    if not raw_target:
+        return None, ""
+    try:
+        payload = json.loads(raw_target)
+    except ValueError:
+        return None, ""
+    if not isinstance(payload, Mapping):
+        return None, ""
+    return str(payload.get("market_timezone") or "").strip() or None, str(
+        payload.get("market") or ""
+    ).strip()
+
+
+def _resolve_fuse_market_timezone(
+    portfolio: Mapping[str, Any] | None = None,
+    *,
+    execution: Mapping[str, Any] | None = None,
+) -> str:
+    """Resolve authoritative market timezone from explicit metadata or runtime config."""
+    metadata = _mapping_or_empty(portfolio.get("metadata")) if portfolio is not None else {}
+    for source in (portfolio, metadata, execution):
+        resolved = _timezone_from_mapping(source)
+        if resolved:
+            return resolved
+    for env_key in ("SCHWAB_MARKET_TIMEZONE", "MARKET_TIMEZONE"):
+        env_tz = str(os.environ.get(env_key) or "").strip()
+        if env_tz:
+            return env_tz
+    target_tz, target_market = _resolve_runtime_target_timezone_or_market()
+    if target_tz:
+        return target_tz
+    for candidate in (os.environ.get("SCHWAB_MARKET"), target_market, os.environ.get("MARKET")):
+        tz = _market_to_timezone(candidate)
+        if tz:
+            return tz
+    return "America/New_York"
+
+
+def _current_fuse_trade_date(
+    portfolio: Mapping[str, Any] | None = None,
+    *,
+    execution: Mapping[str, Any] | None = None,
+    market_timezone: str | None = None,
+) -> str:
+    """Return current trading date in the configured market timezone (fail-closed if invalid)."""
+    tz_name = str(market_timezone or "").strip() or _resolve_fuse_market_timezone(
+        portfolio, execution=execution
+    )
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        # Non-empty sentinel prevents resolve_fuse_readback_inputs from falling back to FUSE_TRADE_DATE.
+        return "__INVALID_MARKET_TIMEZONE__"
+    return datetime.now(tz).date().isoformat()
+
+
+def attach_snapshot_fuse_metadata(portfolio: dict[str, Any], snapshot: Any) -> None:
+    """Forward FUSE readback and market timezone from ``PortfolioSnapshot.metadata``.
+
+    Decision controls (``fuse_mode``, ``fuse_observe_until``, ``fuse_trade_date``)
+    are intentionally excluded because QPK ``resolve_fuse_readback_inputs`` reads
+    them strictly from runtime environment / explicit controls.
+    """
+    snapshot_metadata = getattr(snapshot, "metadata", None)
+    if not isinstance(snapshot_metadata, Mapping):
+        return
+    for key in ("fuse_enabled", "fuse_readback"):
+        if key in snapshot_metadata:
+            portfolio[key] = snapshot_metadata[key]
+    for key in ("market_timezone", "market"):
+        if key in snapshot_metadata and key not in portfolio:
+            portfolio[key] = snapshot_metadata[key]
+
+
+def fuse_telemetry_from_admission(admission: NewRiskAdmissionResult) -> dict[str, Any]:
+    """Extract redacted FUSE-2 decision fields (including non-blocking observe telemetry)."""
+    fuse_decision = getattr(admission, "fuse_decision", None)
+    if fuse_decision is None:
+        return {}
+    return {
+        "fuse_readback_effective_mode": fuse_decision.effective_mode,
+        "fuse_readback_would_block": bool(fuse_decision.would_block),
+        "fuse_readback_reason_codes": list(fuse_decision.reason_codes),
+        "fuse_readback_observe_window_expired": bool(fuse_decision.observe_window_expired),
+    }
+
+
+def copy_fuse_telemetry(target: dict[str, Any], source: Mapping[str, Any] | None) -> None:
+    """Copy non-blocking FUSE-2 telemetry fields when present."""
+    if not isinstance(source, Mapping):
+        return
+    for key in _FUSE_TELEMETRY_KEYS:
+        if key in source:
+            target[key] = source[key]
+
+
+def merge_fuse_telemetry(
+    existing: Mapping[str, Any] | None,
+    incoming: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    """Merge FUSE telemetry across cycle checks without losing blocking evidence."""
+    base = dict(existing or {})
+    added = dict(incoming or {})
+    if not added:
+        return base
+    if not base:
+        return added
+    merged_mode = (
+        "enforce"
+        if "enforce" in (base.get("fuse_readback_effective_mode"), added.get("fuse_readback_effective_mode"))
+        else (added.get("fuse_readback_effective_mode") or base.get("fuse_readback_effective_mode"))
+    )
+    merged_reasons = list(
+        dict.fromkeys(
+            (
+                *(base.get("fuse_readback_reason_codes") or ()),
+                *(added.get("fuse_readback_reason_codes") or ()),
+            )
+        )
+    )
+    return {
+        "fuse_readback_effective_mode": merged_mode,
+        "fuse_readback_would_block": bool(
+            base.get("fuse_readback_would_block") or added.get("fuse_readback_would_block")
+        ),
+        "fuse_readback_reason_codes": merged_reasons,
+        "fuse_readback_observe_window_expired": bool(
+            base.get("fuse_readback_observe_window_expired")
+            or added.get("fuse_readback_observe_window_expired")
+        ),
+    }
+
+
+def _snapshot_has_fuse_signal(snapshot: InjectedReconciliationSnapshot) -> bool:
+    return (
+        bool(snapshot.fuse_enabled)
+        or snapshot.fuse_readback is not None
+        or snapshot.fuse_trade_date is not None
+        or snapshot.fuse_observe_until is not None
+        or snapshot.fuse_mode != "enforce"
+    )
+
+
+def _resolve_fuse_inputs_for_portfolio(
+    portfolio: Mapping[str, Any],
+    projection: Mapping[str, Any],
+    *,
+    execution: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Resolve FUSE-2 inputs with native/account readback precedence and market trade date."""
+    metadata = _mapping_or_empty(portfolio.get("metadata"))
+    projection_for_fuse = (
+        {key: value for key, value in projection.items() if key != "fuse_readback"}
+        if ("fuse_readback" in portfolio or "fuse_readback" in metadata)
+        else projection
+    )
+    explicit_fuse_enabled = bool(
+        portfolio.get("fuse_enabled") or metadata.get("fuse_enabled") or projection.get("fuse_enabled")
+    )
+    base = resolve_fuse_readback_inputs(portfolio, projection_for_fuse)
+    if not base.get("fuse_enabled") and not explicit_fuse_enabled:
+        return base
+    resolved = resolve_fuse_readback_inputs(
+        portfolio,
+        projection_for_fuse,
+        current_trade_date=_current_fuse_trade_date(portfolio, execution=execution),
+    )
+    if explicit_fuse_enabled:
+        resolved["fuse_enabled"] = True
+    return resolved
+
+
+def is_fuse_readback_active(
+    portfolio: Mapping[str, Any] | None = None,
+    *,
+    execution: Mapping[str, Any] | None = None,
+    snapshot: InjectedReconciliationSnapshot | None = None,
+) -> bool:
+    """Return True when runtime FUSE controls or any FUSE readback input/signal is active."""
+    if snapshot is not None and _snapshot_has_fuse_signal(snapshot):
+        return True
+    if portfolio is not None:
+        projection = _mapping_or_empty(portfolio.get("account_new_risk_snapshot"))
+        if _resolve_fuse_inputs_for_portfolio(portfolio, projection, execution=execution).get("fuse_enabled"):
+            return True
+    return any(str(os.environ.get(key) or "").strip() for key in _FUSE_CONTROL_ENV_KEYS)
+
+
+def is_effective_new_risk_gate_enabled(
+    portfolio: Mapping[str, Any] | None = None,
+    *,
+    execution: Mapping[str, Any] | None = None,
+    snapshot: InjectedReconciliationSnapshot | None = None,
+) -> bool:
+    """ACCOUNT_NEW_RISK_GATE=0 cannot disable active FUSE-2 readback enforcement."""
+    return is_account_new_risk_gate_enabled() or is_fuse_readback_active(
+        portfolio, execution=execution, snapshot=snapshot
+    )
 
 
 def _coerce_optional_float(value: object) -> float | None:
@@ -502,6 +744,7 @@ def build_snapshot_from_portfolio(
 ) -> InjectedReconciliationSnapshot:
     """Project an injected reconciliation snapshot from an existing portfolio read."""
     projection = build_account_new_risk_snapshot(portfolio, execution=execution)
+    fuse_inputs = _resolve_fuse_inputs_for_portfolio(portfolio, projection, execution=execution)
     equity_usd = _coerce_optional_float(projection.get("equity_usd"))
     if equity_usd is None:
         equity_usd = _resolve_equity_usd(portfolio, execution)
@@ -517,6 +760,12 @@ def build_snapshot_from_portfolio(
         realized_vol=_risk_input(projection.get("realized_vol")),
         production_drift_status=_resolve_production_drift_status(portfolio, projection),
         daily_loss_usd=_resolve_explicit_daily_loss_usd(projection, portfolio, execution),
+        fuse_enabled=bool(fuse_inputs["fuse_enabled"]),
+        fuse_readback=fuse_inputs["fuse_readback"],
+        fuse_trade_date=fuse_inputs["fuse_trade_date"],
+        fuse_mode=fuse_inputs["fuse_mode"],
+        fuse_observe_until=fuse_inputs["fuse_observe_until"],
+        legacy_new_risk_switch_enabled=is_account_new_risk_gate_enabled(),
     )
 
 
@@ -558,6 +807,11 @@ _OPERATIONAL_UNCERTAIN_REASONS = frozenset(
         "RECONCILIATION_NOT_VERIFIED",
         "CIRCUIT_BREAKER_OPEN",
         "UNKNOWN_PENDING_ORDERS",
+        "FUSE_READBACK_MISSING_FAIL_CLOSED",
+        "FUSE_READBACK_STALE_FAIL_CLOSED",
+        "FUSE_READBACK_INVALID_FAIL_CLOSED",
+        "FUSE_READBACK_MODE_INVALID_FAIL_CLOSED",
+        "FUSE_OBSERVE_WINDOW_INVALID_FAIL_CLOSED",
     }
 )
 _attention_sent_keys: set[str] = set()
@@ -687,37 +941,97 @@ def get_cycle_snapshot() -> InjectedReconciliationSnapshot | None:
     return _cycle_snapshot
 
 
-def set_cycle_snapshot(snapshot: InjectedReconciliationSnapshot | None) -> None:
-    global _cycle_snapshot
+def set_cycle_snapshot(
+    snapshot: InjectedReconciliationSnapshot | None,
+    *,
+    portfolio: Mapping[str, Any] | None = None,
+    execution: Mapping[str, Any] | None = None,
+    market_timezone: str | None = None,
+    controls_from_env: bool | None = None,
+) -> None:
+    global _cycle_snapshot, _cycle_market_timezone, _cycle_snapshot_controls_from_env
     _cycle_snapshot = snapshot
+    if snapshot is None:
+        _cycle_market_timezone = None
+        _cycle_snapshot_controls_from_env = False
+        return
+    _cycle_snapshot_controls_from_env = (
+        bool(controls_from_env)
+        if controls_from_env is not None
+        else (portfolio is not None or execution is not None)
+    )
+    if market_timezone is not None:
+        _cycle_market_timezone = market_timezone
+    elif portfolio is not None or execution is not None:
+        _cycle_market_timezone = _resolve_fuse_market_timezone(portfolio, execution=execution)
+    else:
+        _cycle_market_timezone = None
 
 
 @contextmanager
 def account_new_risk_gate_cycle(portfolio: Mapping[str, Any], *, execution: Mapping[str, Any] | None = None):
     """Bind one portfolio projection for the current execution cycle."""
     previous = _cycle_snapshot
-    set_cycle_snapshot(build_snapshot_from_portfolio(portfolio, execution=execution))
+    previous_tz = _cycle_market_timezone
+    previous_controls_from_env = _cycle_snapshot_controls_from_env
+    set_cycle_snapshot(
+        build_snapshot_from_portfolio(portfolio, execution=execution),
+        portfolio=portfolio,
+        execution=execution,
+        controls_from_env=True,
+    )
     try:
         yield
     finally:
-        set_cycle_snapshot(previous)
+        set_cycle_snapshot(
+            previous,
+            market_timezone=previous_tz,
+            controls_from_env=previous_controls_from_env,
+        )
 
 
 def evaluate_cycle_new_risk_admission() -> NewRiskAdmissionResult:
     if _cycle_snapshot is None:
         return _prohibited_admission("EQUITY_UNKNOWN_FAIL_CLOSED")
+    snapshot = _cycle_snapshot
+    runtime_inputs = resolve_fuse_readback_inputs(
+        {}, {}, current_trade_date=_current_fuse_trade_date(market_timezone=_cycle_market_timezone)
+    )
+    env_fuse_active = any(str(os.environ.get(key) or "").strip() for key in _FUSE_CONTROL_ENV_KEYS)
+    legacy_enabled = snapshot.legacy_new_risk_switch_enabled if is_account_new_risk_gate_enabled() else False
+    if env_fuse_active or _snapshot_has_fuse_signal(snapshot):
+        if _cycle_snapshot_controls_from_env:
+            fuse_mode = runtime_inputs["fuse_mode"]
+            fuse_observe_until = runtime_inputs["fuse_observe_until"]
+        else:
+            env_mode = str(os.environ.get("FUSE_READBACK_MODE") or "").strip()
+            env_observe_until = str(os.environ.get("FUSE_OBSERVE_UNTIL") or "").strip()
+            fuse_mode = runtime_inputs["fuse_mode"] if env_mode else snapshot.fuse_mode
+            fuse_observe_until = (
+                runtime_inputs["fuse_observe_until"] if env_observe_until else snapshot.fuse_observe_until
+            )
+        snapshot = replace(
+            snapshot,
+            fuse_enabled=True,
+            fuse_trade_date=runtime_inputs["fuse_trade_date"],
+            fuse_mode=fuse_mode,
+            fuse_observe_until=fuse_observe_until,
+            legacy_new_risk_switch_enabled=legacy_enabled,
+        )
+    elif legacy_enabled != snapshot.legacy_new_risk_switch_enabled:
+        snapshot = replace(snapshot, legacy_new_risk_switch_enabled=legacy_enabled)
     try:
         # Reuse cycle equity so explicit formula/schedule stay valid; missing equity
         # with an explicit config remains invalid → fail closed.
         portfolio_for_limit = {
             "account_new_risk_snapshot": {
-                "equity_usd": _cycle_snapshot.equity_usd,
+                "equity_usd": snapshot.equity_usd,
             }
         }
         resolution = resolve_max_daily_loss_resolution(portfolio_for_limit)
         if resolution.status == "invalid":
             return _prohibited_admission("DAILY_LOSS_UNKNOWN_FAIL_CLOSED")
         limits = runtime_risk_limits_for_daily_loss_axis(resolution.limit_usd)
-        return evaluate_new_risk_admission(_cycle_snapshot, limits)
+        return evaluate_new_risk_admission(snapshot, limits)
     except AccountNewRiskGateError:
         return _prohibited_admission("SNAPSHOT_VALIDATION_FAIL_CLOSED")
