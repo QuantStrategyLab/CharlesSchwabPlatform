@@ -17,7 +17,7 @@ jobs:
     timeout-minutes: 5
     env:
       GCP_PROJECT_ID: charlesschwabquant
-      GCP_WORKLOAD_IDENTITY_PROVIDER: projects/401309731911/locations/global/workloadIdentityPools/github-actions/providers/github-main
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
       GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: schwab-platform-deploy@charlesschwabquant.iam.gserviceaccount.com
       DIGEST_STORE_BUCKET: qsl-runtime-logs-shared
       DIGEST_STORE_PREFIX: digest-candidates/

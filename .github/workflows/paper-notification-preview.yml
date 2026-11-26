@@ -26,7 +26,7 @@ jobs:
       id-token: write
     env:
       GCP_PROJECT_ID: charlesschwabquant
-      GCP_WORKLOAD_IDENTITY_PROVIDER: projects/401309731911/locations/global/workloadIdentityPools/github-actions/providers/github-main
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
       GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: schwab-platform-deploy@charlesschwabquant.iam.gserviceaccount.com
       # Production runtime target stays fail-closed for this manual preview path.
       RUNTIME_TARGET_ENABLED: "false"

@@ -1671,7 +1671,7 @@ def capture_workflow_ports(tmp_path, monkeypatch, capsys):
     class Secrets:
         def access_secret_version(self, **options):
             state.key_requests.append(options)
-            assert options == {"request": {"name": "projects/401309731911/secrets/charles-schwab-api-key/versions/1"},
+            assert options == {"request": {"name": "projects/charlesschwabquant/secrets/charles-schwab-api-key/versions/1"},
                                "retry": None, "timeout": 15}
             state.events.append("key_secret")
             if state.fault == "key_secret":
@@ -1912,7 +1912,7 @@ def test_capture_continuation_keeps_old_claim_and_has_one_new_fixed_claim(captur
     assert ports.events.index("predecessor_reload") < ports.events.index(_CAPTURE_CONTINUATION_MARKER)
     assert ports.events.index(_CAPTURE_CONTINUATION_MARKER) < ports.events.index("key_secret")
     assert ports.key_requests == [{"request": {
-        "name": "projects/401309731911/secrets/charles-schwab-api-key/versions/1"},
+        "name": "projects/charlesschwabquant/secrets/charles-schwab-api-key/versions/1"},
         "timeout": 15, "retry": None}]
     code, receipt = ports.execute()
     assert code == 2 and receipt["request_attempts"] == 0
@@ -2029,8 +2029,9 @@ def test_renewal_job_rejects_conflicts_without_loading_private_inventory(conflic
             conditions.append(eval(condition.replace("&&", " and ").replace("||", " or ").replace("!", "not ")))
         assert conditions == [not enabled, enabled]
     # This job must not load inventory, account references, login credentials or artifacts.
-    assert not any(x in renewal for x in ("vars.", "secrets.", "upload-artifact", "RUNTIME_TARGET_JSON",
-                                         "CLOUD_RUN_SERVICE", "ACCOUNT_FACTS", "TOTP", "PASSWORD"))
+    renewal_without_wif = renewal.replace("secrets.GCP_WORKLOAD_IDENTITY_PROVIDER", "")
+    assert not any(x in renewal_without_wif for x in ("vars.", "secrets.", "upload-artifact", "RUNTIME_TARGET_JSON",
+                                                      "CLOUD_RUN_SERVICE", "ACCOUNT_FACTS", "TOTP", "PASSWORD"))
     assert renewal.index("Reject renewal with other operation inputs") < renewal.index("Authenticate to Google Cloud")
     guard = renewal.split("        run: |\n", 1)[1].split("      - name:", 1)[0]
     script = "\n".join(line[10:] for line in guard.splitlines())

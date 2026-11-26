@@ -29,7 +29,7 @@ def standard_refresh_ports(monkeypatch, capsys):
 
     state = SimpleNamespace(events=[], writes=[], requests=[], fault=None, denials=[],
                             rotated=True, fresh=False, bad_input=False, now=NOW, http_status=200)
-    parent = "projects/401309731911/secrets/"
+    parent = "projects/charlesschwabquant/secrets/"
     original = "SYNTHETIC_REFRESH_SECRET"
 
     def deny(*_args, **_kwargs):
@@ -149,9 +149,54 @@ def test_readonly_renewal_credentials_never_reads_token_or_consumes_grant(standa
         environ={**ENV, "SCHWAB_CHECK_RENEWAL_CREDENTIALS": "true"}, secret_client=state.secret_factory())
     assert result == {"status": "ready", "reason": "credentials_ready", "api_key_status": "ready",
                       "app_secret_status": "ready", "refresh_attempts": 0, "secret_write_attempts": 0}
-    assert state.events == [("read", "projects/401309731911/secrets/" + name + "/versions/1")
+    assert state.events == [("read", "projects/charlesschwabquant/secrets/" + name + "/versions/1")
                             for name in ("charles-schwab-api-key", "charles-schwab-app-secret")]
     assert state.writes == state.requests == state.denials == []
+
+
+def test_secret_project_resolves_numeric_project_from_wif_and_accepts_canonical_response(standard_refresh_ports, monkeypatch):
+    monkeypatch.setenv(
+        "GCP_WORKLOAD_IDENTITY_PROVIDER",
+        "projects/123456789012/locations/global/workloadIdentityPools/github-actions/providers/github-main",
+    )
+    assert identity._secret_project() == "123456789012"
+    monkeypatch.delenv("GCP_WORKLOAD_IDENTITY_PROVIDER", raising=False)
+    state = standard_refresh_ports
+    state.credential_references = {
+        "projects/charlesschwabquant/secrets/charles-schwab-api-key/versions/1": "projects/123456789012/secrets/charles-schwab-api-key/versions/1",
+    }
+    result = identity.check_renewal_credentials(
+        environ={**ENV, "SCHWAB_CHECK_RENEWAL_CREDENTIALS": "true"}, secret_client=state.secret_factory())
+    assert result["status"] == "ready"
+    assert result["api_key_status"] == "ready"
+
+
+def test_check_renewal_credentials_forwards_injected_environ_to_secret_project():
+    from types import SimpleNamespace
+
+    seen = []
+
+    class NumericProjectSecrets:
+        def access_secret_version(self, *, request, retry, timeout):
+            assert retry is None and timeout == 15
+            seen.append(request["name"])
+            return SimpleNamespace(
+                name=request["name"],
+                payload=SimpleNamespace(data=b"SYNTHETIC_APP_CREDENTIAL"),
+            )
+
+    injected_env = {
+        **ENV,
+        "SCHWAB_CHECK_RENEWAL_CREDENTIALS": "true",
+        "SCHWAB_SECRET_PROJECT": "   ",
+        "GCP_WORKLOAD_IDENTITY_PROVIDER": "projects/123456789012/locations/global/workloadIdentityPools/p/providers/g",
+    }
+    result = identity.check_renewal_credentials(environ=injected_env, secret_client=NumericProjectSecrets())
+    assert result["status"] == "ready"
+    assert seen == [
+        "projects/123456789012/secrets/" + name + "/versions/1"
+        for name in ("charles-schwab-api-key", "charles-schwab-app-secret")
+    ]
 
 
 @pytest.mark.parametrize("environ", [ENV, {**ENV, "SCHWAB_CHECK_RENEWAL_CREDENTIALS": "false"},
@@ -171,7 +216,7 @@ def test_renewal_credential_failures_are_specific_and_readonly(standard_refresh_
     from google.api_core.exceptions import FailedPrecondition, NotFound, PermissionDenied
 
     state = standard_refresh_ports
-    ref = "projects/401309731911/secrets/" + name + "/versions/1"
+    ref = "projects/charlesschwabquant/secrets/" + name + "/versions/1"
     if fault == "reference":
         state.credential_references = {ref: ref[:-1] + "2"}
     else:
@@ -209,7 +254,7 @@ def test_renewal_uses_same_credential_diagnosis_before_any_post(standard_refresh
     from google.api_core.exceptions import PermissionDenied
 
     state = standard_refresh_ports
-    state.credential_faults = {"projects/401309731911/secrets/charles-schwab-app-secret/versions/1":
+    state.credential_faults = {"projects/charlesschwabquant/secrets/charles-schwab-app-secret/versions/1":
                               PermissionDenied("SYNTHETIC_PRIVATE_ERROR")}
     result = state.run()
     assert result["reason"] == "app_secret_permission_denied"
