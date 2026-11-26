@@ -9,7 +9,10 @@ from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime, timezone
 
-from charles_schwab_platform.application.account_new_risk_gate_support import copy_fuse_telemetry
+from charles_schwab_platform.application.account_new_risk_gate_support import (
+    attach_snapshot_fuse_metadata,
+    copy_fuse_telemetry,
+)
 from charles_schwab_platform.application.account_observation import build_account_observation
 from charles_schwab_platform.application.execution_intent_continuity import _IntentSession
 from charles_schwab_platform.application.execution_service import execute_rebalance_cycle, ExecutionCycleResult
@@ -639,20 +642,7 @@ def run_strategy_core(
         if continuity is not None:
             continuity.register_plan_source(current_plan, current_snapshot)
         current_portfolio = _plan_portfolio(current_plan)
-        snapshot_metadata = getattr(current_snapshot, "metadata", None)
-        if isinstance(snapshot_metadata, Mapping):
-            for key in ("fuse_enabled", "fuse_readback"):
-                if key in snapshot_metadata:
-                    current_portfolio[key] = snapshot_metadata[key]
-            for key in (
-                "fuse_trade_date",
-                "fuse_mode",
-                "fuse_observe_until",
-                "market_timezone",
-                "market",
-            ):
-                if key in snapshot_metadata and key not in current_portfolio:
-                    current_portfolio[key] = snapshot_metadata[key]
+        attach_snapshot_fuse_metadata(current_portfolio, current_snapshot)
         current_execution = _plan_execution(current_plan)
         current_allocation = _plan_allocation(current_plan)
         if current_allocation.get("target_mode") != "value":

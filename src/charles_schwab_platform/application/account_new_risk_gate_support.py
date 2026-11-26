@@ -43,6 +43,7 @@ _DAILY_LOSS_LIMIT_CARRIER_SYMBOL = "SPY"
 
 _cycle_snapshot: InjectedReconciliationSnapshot | None = None
 _cycle_market_timezone: str | None = None
+_cycle_snapshot_controls_from_env: bool = False
 
 _FUSE_TELEMETRY_KEYS = (
     "fuse_readback_effective_mode",
@@ -147,6 +148,24 @@ def _current_fuse_trade_date(
         # Non-empty sentinel prevents resolve_fuse_readback_inputs from falling back to FUSE_TRADE_DATE.
         return "__INVALID_MARKET_TIMEZONE__"
     return datetime.now(tz).date().isoformat()
+
+
+def attach_snapshot_fuse_metadata(portfolio: dict[str, Any], snapshot: Any) -> None:
+    """Forward FUSE readback and market timezone from ``PortfolioSnapshot.metadata``.
+
+    Decision controls (``fuse_mode``, ``fuse_observe_until``, ``fuse_trade_date``)
+    are intentionally excluded because QPK ``resolve_fuse_readback_inputs`` reads
+    them strictly from runtime environment / explicit controls.
+    """
+    snapshot_metadata = getattr(snapshot, "metadata", None)
+    if not isinstance(snapshot_metadata, Mapping):
+        return
+    for key in ("fuse_enabled", "fuse_readback"):
+        if key in snapshot_metadata:
+            portfolio[key] = snapshot_metadata[key]
+    for key in ("market_timezone", "market"):
+        if key in snapshot_metadata and key not in portfolio:
+            portfolio[key] = snapshot_metadata[key]
 
 
 def fuse_telemetry_from_admission(admission: NewRiskAdmissionResult) -> dict[str, Any]:
@@ -928,12 +947,20 @@ def set_cycle_snapshot(
     portfolio: Mapping[str, Any] | None = None,
     execution: Mapping[str, Any] | None = None,
     market_timezone: str | None = None,
+    controls_from_env: bool | None = None,
 ) -> None:
-    global _cycle_snapshot, _cycle_market_timezone
+    global _cycle_snapshot, _cycle_market_timezone, _cycle_snapshot_controls_from_env
     _cycle_snapshot = snapshot
     if snapshot is None:
         _cycle_market_timezone = None
-    elif market_timezone is not None:
+        _cycle_snapshot_controls_from_env = False
+        return
+    _cycle_snapshot_controls_from_env = (
+        bool(controls_from_env)
+        if controls_from_env is not None
+        else (portfolio is not None or execution is not None)
+    )
+    if market_timezone is not None:
         _cycle_market_timezone = market_timezone
     elif portfolio is not None or execution is not None:
         _cycle_market_timezone = _resolve_fuse_market_timezone(portfolio, execution=execution)
@@ -946,15 +973,21 @@ def account_new_risk_gate_cycle(portfolio: Mapping[str, Any], *, execution: Mapp
     """Bind one portfolio projection for the current execution cycle."""
     previous = _cycle_snapshot
     previous_tz = _cycle_market_timezone
+    previous_controls_from_env = _cycle_snapshot_controls_from_env
     set_cycle_snapshot(
         build_snapshot_from_portfolio(portfolio, execution=execution),
         portfolio=portfolio,
         execution=execution,
+        controls_from_env=True,
     )
     try:
         yield
     finally:
-        set_cycle_snapshot(previous, market_timezone=previous_tz)
+        set_cycle_snapshot(
+            previous,
+            market_timezone=previous_tz,
+            controls_from_env=previous_controls_from_env,
+        )
 
 
 def evaluate_cycle_new_risk_admission() -> NewRiskAdmissionResult:
@@ -967,12 +1000,22 @@ def evaluate_cycle_new_risk_admission() -> NewRiskAdmissionResult:
     env_fuse_active = any(str(os.environ.get(key) or "").strip() for key in _FUSE_CONTROL_ENV_KEYS)
     legacy_enabled = snapshot.legacy_new_risk_switch_enabled if is_account_new_risk_gate_enabled() else False
     if env_fuse_active or _snapshot_has_fuse_signal(snapshot):
+        if _cycle_snapshot_controls_from_env:
+            fuse_mode = runtime_inputs["fuse_mode"]
+            fuse_observe_until = runtime_inputs["fuse_observe_until"]
+        else:
+            env_mode = str(os.environ.get("FUSE_READBACK_MODE") or "").strip()
+            env_observe_until = str(os.environ.get("FUSE_OBSERVE_UNTIL") or "").strip()
+            fuse_mode = runtime_inputs["fuse_mode"] if env_mode else snapshot.fuse_mode
+            fuse_observe_until = (
+                runtime_inputs["fuse_observe_until"] if env_observe_until else snapshot.fuse_observe_until
+            )
         snapshot = replace(
             snapshot,
             fuse_enabled=True,
             fuse_trade_date=runtime_inputs["fuse_trade_date"],
-            fuse_mode=runtime_inputs["fuse_mode"],
-            fuse_observe_until=runtime_inputs["fuse_observe_until"],
+            fuse_mode=fuse_mode,
+            fuse_observe_until=fuse_observe_until,
             legacy_new_risk_switch_enabled=legacy_enabled,
         )
     elif legacy_enabled != snapshot.legacy_new_risk_switch_enabled:

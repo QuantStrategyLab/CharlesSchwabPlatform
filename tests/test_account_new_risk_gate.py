@@ -1525,3 +1525,34 @@ class Fuse2ReadbackSchwabTests(unittest.TestCase):
         self.assertFalse(res_submit_blk.execution.get("broker_submission_done"))
         self.assertEqual(res_submit_blk.execution.get("orders_pending_count"), 0)
         self.assertIn("FUSE_READBACK_STALE_FAIL_CLOSED", res_submit_blk.execution["fuse_readback_reason_codes"])
+
+        # 5. Directly injected snapshot (without portfolio) preserves explicit observe controls when env unset.
+        from dataclasses import replace as _dc_replace
+
+        snap_obs = _dc_replace(
+            build_snapshot_from_portfolio(
+                {
+                    "total_equity": 50_000.0,
+                    "peak_equity_usd": 50_000.0,
+                    "account_new_risk_snapshot": {
+                        "observation_status": "COMPLETE",
+                        "reconciliation_status": "VERIFIED",
+                        "circuit_breaker_state": "CLOSED",
+                    },
+                    "fuse_readback": _clean_fuse_record("2026-12-08"),
+                }
+            ),
+            fuse_mode="observe",
+            fuse_observe_until="2026-12-10",
+        )
+        os.environ.pop("FUSE_READBACK_MODE", None)
+        os.environ.pop("FUSE_OBSERVE_UNTIL", None)
+        set_cycle_snapshot(snap_obs, market_timezone="America/New_York")
+        with (
+            patch.object(gate, "resolve_production_drift_status_from_store", return_value=None),
+            patch.object(gate, "_current_fuse_trade_date", return_value="2026-12-09"),
+        ):
+            obs_submit_res = gate.evaluate_cycle_new_risk_admission()
+        self.assertEqual(obs_submit_res.disposition, NewRiskDisposition.ALLOW_NEW_RISK)
+        self.assertEqual(obs_submit_res.fuse_decision.effective_mode, "observe")
+        self.assertTrue(obs_submit_res.fuse_decision.would_block)
