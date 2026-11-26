@@ -154,6 +154,51 @@ def test_readonly_renewal_credentials_never_reads_token_or_consumes_grant(standa
     assert state.writes == state.requests == state.denials == []
 
 
+def test_secret_project_resolves_numeric_project_from_wif_and_accepts_canonical_response(standard_refresh_ports, monkeypatch):
+    monkeypatch.setenv(
+        "GCP_WORKLOAD_IDENTITY_PROVIDER",
+        "projects/123456789012/locations/global/workloadIdentityPools/github-actions/providers/github-main",
+    )
+    assert identity._secret_project() == "123456789012"
+    monkeypatch.delenv("GCP_WORKLOAD_IDENTITY_PROVIDER", raising=False)
+    state = standard_refresh_ports
+    state.credential_references = {
+        "projects/charlesschwabquant/secrets/charles-schwab-api-key/versions/1": "projects/123456789012/secrets/charles-schwab-api-key/versions/1",
+    }
+    result = identity.check_renewal_credentials(
+        environ={**ENV, "SCHWAB_CHECK_RENEWAL_CREDENTIALS": "true"}, secret_client=state.secret_factory())
+    assert result["status"] == "ready"
+    assert result["api_key_status"] == "ready"
+
+
+def test_check_renewal_credentials_forwards_injected_environ_to_secret_project():
+    from types import SimpleNamespace
+
+    seen = []
+
+    class NumericProjectSecrets:
+        def access_secret_version(self, *, request, retry, timeout):
+            assert retry is None and timeout == 15
+            seen.append(request["name"])
+            return SimpleNamespace(
+                name=request["name"],
+                payload=SimpleNamespace(data=b"SYNTHETIC_APP_CREDENTIAL"),
+            )
+
+    injected_env = {
+        **ENV,
+        "SCHWAB_CHECK_RENEWAL_CREDENTIALS": "true",
+        "SCHWAB_SECRET_PROJECT": "   ",
+        "GCP_WORKLOAD_IDENTITY_PROVIDER": "projects/123456789012/locations/global/workloadIdentityPools/p/providers/g",
+    }
+    result = identity.check_renewal_credentials(environ=injected_env, secret_client=NumericProjectSecrets())
+    assert result["status"] == "ready"
+    assert seen == [
+        "projects/123456789012/secrets/" + name + "/versions/1"
+        for name in ("charles-schwab-api-key", "charles-schwab-app-secret")
+    ]
+
+
 @pytest.mark.parametrize("environ", [ENV, {**ENV, "SCHWAB_CHECK_RENEWAL_CREDENTIALS": "false"},
                                       {"GCP_PROJECT_ID": "wrong", "SCHWAB_CHECK_RENEWAL_CREDENTIALS": "true"}])
 def test_renewal_credential_check_is_default_off_and_configuration_bound(standard_refresh_ports, environ):

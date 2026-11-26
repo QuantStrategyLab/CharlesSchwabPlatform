@@ -376,6 +376,7 @@ jobs:
         if: ${{ inputs.check_renewal_credentials && !inputs.renew_access_token_once }}
         env:
           SCHWAB_CHECK_RENEWAL_CREDENTIALS: "true"
+          GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: uv run --no-sync python -m scripts.schwab_native_identity --check-renewal-credentials
 
@@ -383,6 +384,7 @@ jobs:
         if: ${{ inputs.renew_access_token_once && !inputs.check_renewal_credentials }}
         env:
           SCHWAB_RENEW_ACCESS_TOKEN_ONCE: "true"
+          GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: uv run --no-sync python -m scripts.schwab_native_identity --renew-access-token-once
 
