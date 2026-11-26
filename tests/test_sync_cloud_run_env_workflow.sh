@@ -13,7 +13,7 @@ if grep -Fq 'workflow_run:' "$workflow_file"; then
 fi
 grep -Fq "if: github.event_name == 'workflow_dispatch'" "$workflow_file"
 
-grep -Fq 'GCP_WORKLOAD_IDENTITY_PROVIDER: projects/401309731911/locations/global/workloadIdentityPools/github-actions/providers/github-main' "$workflow_file"
+grep -Fq 'workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}' "$workflow_file"
 grep -Fq 'GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: schwab-platform-deploy@charlesschwabquant.iam.gserviceaccount.com' "$workflow_file"
 grep -Fq 'permissions:' "$workflow_file"
 grep -Fq 'id-token: write' "$workflow_file"

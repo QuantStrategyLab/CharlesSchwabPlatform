@@ -29,7 +29,7 @@ def standard_refresh_ports(monkeypatch, capsys):
 
     state = SimpleNamespace(events=[], writes=[], requests=[], fault=None, denials=[],
                             rotated=True, fresh=False, bad_input=False, now=NOW, http_status=200)
-    parent = "projects/401309731911/secrets/"
+    parent = "projects/charlesschwabquant/secrets/"
     original = "SYNTHETIC_REFRESH_SECRET"
 
     def deny(*_args, **_kwargs):
@@ -149,7 +149,7 @@ def test_readonly_renewal_credentials_never_reads_token_or_consumes_grant(standa
         environ={**ENV, "SCHWAB_CHECK_RENEWAL_CREDENTIALS": "true"}, secret_client=state.secret_factory())
     assert result == {"status": "ready", "reason": "credentials_ready", "api_key_status": "ready",
                       "app_secret_status": "ready", "refresh_attempts": 0, "secret_write_attempts": 0}
-    assert state.events == [("read", "projects/401309731911/secrets/" + name + "/versions/1")
+    assert state.events == [("read", "projects/charlesschwabquant/secrets/" + name + "/versions/1")
                             for name in ("charles-schwab-api-key", "charles-schwab-app-secret")]
     assert state.writes == state.requests == state.denials == []
 
@@ -171,7 +171,7 @@ def test_renewal_credential_failures_are_specific_and_readonly(standard_refresh_
     from google.api_core.exceptions import FailedPrecondition, NotFound, PermissionDenied
 
     state = standard_refresh_ports
-    ref = "projects/401309731911/secrets/" + name + "/versions/1"
+    ref = "projects/charlesschwabquant/secrets/" + name + "/versions/1"
     if fault == "reference":
         state.credential_references = {ref: ref[:-1] + "2"}
     else:
@@ -209,7 +209,7 @@ def test_renewal_uses_same_credential_diagnosis_before_any_post(standard_refresh
     from google.api_core.exceptions import PermissionDenied
 
     state = standard_refresh_ports
-    state.credential_faults = {"projects/401309731911/secrets/charles-schwab-app-secret/versions/1":
+    state.credential_faults = {"projects/charlesschwabquant/secrets/charles-schwab-app-secret/versions/1":
                               PermissionDenied("SYNTHETIC_PRIVATE_ERROR")}
     result = state.run()
     assert result["reason"] == "app_secret_permission_denied"

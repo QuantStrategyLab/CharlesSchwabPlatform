@@ -21,7 +21,14 @@ MAX_ACCOUNTS = 100
 REQUEST_TIMEOUT = (5, 15)
 SECRET_READ_TIMEOUT = 15
 _CLOCK_SKEW_SECONDS = 30
-_RENEWAL_APP_PREFIX = "projects/401309731911/secrets/"
+def _secret_project(environ: Mapping[str, str] | None = None) -> str:
+    env = os.environ if environ is None else environ
+    return (
+        env.get("SCHWAB_SECRET_PROJECT")
+        or env.get("GCP_PROJECT_NUMBER")
+        or env.get("GCP_PROJECT_ID")
+        or PROJECT_ID
+    ).strip()
 _RENEWAL_APP_SECRETS = (("api_key", "charles-schwab-api-key"), ("app_secret", "charles-schwab-app-secret"))
 
 
@@ -145,7 +152,7 @@ from charles_schwab_platform.notifications.report_projection_support import (
 
 def _read_renewal_app_credential(client, name):
     """Return a fixed diagnosis plus an in-memory value, never an exception body."""
-    ref = _RENEWAL_APP_PREFIX + name + "/versions/1"
+    ref = f"projects/{_secret_project()}/secrets/{name}/versions/1"
     try:
         response = client.access_secret_version(request={"name": ref}, retry=None, timeout=15)
     except Exception as error:
@@ -289,7 +296,7 @@ def _renew_access_token(result, observed_at, secret_client, http_transport):
     from google.cloud import secretmanager_v1
     from schwab.auth import TOKEN_ENDPOINT, TokenMetadata
 
-    prefix = "projects/401309731911/secrets/"
+    prefix = f"projects/{_secret_project()}/secrets/"
     parent = prefix + SECRET_ID
     owned = secret_client is None
     client = secretmanager_v1.SecretManagerServiceClient() if owned else secret_client

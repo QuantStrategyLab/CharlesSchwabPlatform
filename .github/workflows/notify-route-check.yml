@@ -18,7 +18,7 @@ jobs:
     uses: ./.github/workflows/notify-route-check-protected.yml
     secrets:
       GCP_PROJECT_ID: ${{ 'charlesschwabquant' }}
-      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ 'projects/401309731911/locations/global/workloadIdentityPools/github-actions/providers/github-main' }}
+      GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
       GCP_WORKLOAD_IDENTITY_SERVICE_ACCOUNT: ${{ 'schwab-platform-deploy@charlesschwabquant.iam.gserviceaccount.com' }}
       RUNTIME_GUARD_CLOUD_RUN_SERVICES: ${{ vars.RUNTIME_GUARD_CLOUD_RUN_SERVICES }}
       CLOUD_RUN_SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
