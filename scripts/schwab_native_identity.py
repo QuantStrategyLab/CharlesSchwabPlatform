@@ -7,6 +7,7 @@ import importlib
 import json
 import math
 import os
+import re
 import time
 from collections.abc import Mapping
 from typing import Any, Callable
@@ -21,7 +22,17 @@ MAX_ACCOUNTS = 100
 REQUEST_TIMEOUT = (5, 15)
 SECRET_READ_TIMEOUT = 15
 _CLOCK_SKEW_SECONDS = 30
-_RENEWAL_APP_PREFIX = "projects/401309731911/secrets/"
+def _secret_project(environ: Mapping[str, str] | None = None) -> str:
+    env = os.environ if environ is None else environ
+    for key in ("SCHWAB_SECRET_PROJECT", "GCP_PROJECT_NUMBER"):
+        explicit = (env.get(key) or "").strip()
+        if explicit:
+            return explicit
+    wif = env.get("GCP_WORKLOAD_IDENTITY_PROVIDER", "").strip()
+    wif_match = re.match(r"^projects/(\d+)/", wif)
+    if wif_match:
+        return wif_match.group(1)
+    return (env.get("GCP_PROJECT_ID") or PROJECT_ID).strip()
 _RENEWAL_APP_SECRETS = (("api_key", "charles-schwab-api-key"), ("app_secret", "charles-schwab-app-secret"))
 
 
@@ -143,15 +154,21 @@ from charles_schwab_platform.notifications.report_projection_support import (
 )
 
 
-def _read_renewal_app_credential(client, name):
+def _read_renewal_app_credential(client, name, environ=None):
     """Return a fixed diagnosis plus an in-memory value, never an exception body."""
-    ref = _RENEWAL_APP_PREFIX + name + "/versions/1"
+    project = _secret_project(environ)
+    ref = f"projects/{project}/secrets/{name}/versions/1"
     try:
         response = client.access_secret_version(request={"name": ref}, retry=None, timeout=15)
     except Exception as error:
         reason = _classify_token_load_error(error).removeprefix("token_")
         return reason, None
-    if response.name != ref:
+    expected_pattern = (
+        rf"^projects/(?:{re.escape(project)}|\d+)/secrets/{re.escape(name)}/versions/1$"
+        if not project.isdigit()
+        else rf"^projects/{re.escape(project)}/secrets/{re.escape(name)}/versions/1$"
+    )
+    if not isinstance(response.name, str) or not re.fullmatch(expected_pattern, response.name):
         return "reference_mismatch", None
     data = response.payload.data
     if not isinstance(data, bytes) or not 0 < len(data) <= 8192:
@@ -188,7 +205,7 @@ def check_renewal_credentials(*, environ, secret_client=None):
                 from google.cloud import secretmanager_v1
                 secret_client = secretmanager_v1.SecretManagerServiceClient()
             for label, name in _RENEWAL_APP_SECRETS:
-                status, _value = _read_renewal_app_credential(secret_client, name)
+                status, _value = _read_renewal_app_credential(secret_client, name, environ=environ)
                 result[label + "_status"] = status
             ready = all(result[label + "_status"] == "ready" for label, _ in _RENEWAL_APP_SECRETS)
             result.update(status="ready" if ready else "blocked",
@@ -271,7 +288,7 @@ def renew_access_token_once(*, environ, observed_at, secret_client=None, http_tr
                 result["reason"] = "configuration_invalid"
                 return result
             result["reason"] = "renewal_dependency_unavailable"
-            _renew_access_token(result, observed_at, secret_client, http_transport)
+            _renew_access_token(result, observed_at, secret_client, http_transport, environ=environ)
         except BaseException:
             if result["reason"] == "refresh_outcome_unknown" and not result["refresh_attempts"]:
                 result["reason"] = "refresh_not_attempted"
@@ -280,16 +297,15 @@ def renew_access_token_once(*, environ, observed_at, secret_client=None, http_tr
     return result
 
 
-def _renew_access_token(result, observed_at, secret_client, http_transport):
-    import re
-
+def _renew_access_token(result, observed_at, secret_client, http_transport, environ=None):
     import httpx
     from authlib.integrations.base_client.errors import OAuthError
     from authlib.integrations.httpx_client import OAuth2Client
     from google.cloud import secretmanager_v1
     from schwab.auth import TOKEN_ENDPOINT, TokenMetadata
 
-    prefix = "projects/401309731911/secrets/"
+    project = _secret_project(environ)
+    prefix = f"projects/{project}/secrets/"
     parent = prefix + SECRET_ID
     owned = secret_client is None
     client = secretmanager_v1.SecretManagerServiceClient() if owned else secret_client
@@ -302,7 +318,11 @@ def _renew_access_token(result, observed_at, secret_client, http_transport):
         return observed + time.monotonic() - started
 
     def version_number(name):
-        match = re.fullmatch(re.escape(parent) + r"/versions/([1-9][0-9]{0,18})", name or "")
+        proj_pat = rf"(?:{re.escape(project)}|\d+)" if not project.isdigit() else re.escape(project)
+        match = re.fullmatch(
+            rf"projects/{proj_pat}/secrets/{re.escape(SECRET_ID)}/versions/([1-9][0-9]{{0,18}})",
+            name or "",
+        )
         if match is None:
             raise ValueError
         return int(match[1])
@@ -351,7 +371,7 @@ def _renew_access_token(result, observed_at, secret_client, http_transport):
         for label, name in _RENEWAL_APP_SECRETS:
             now()
             result["reason"] = label + "_load_failed"
-            status, value = _read_renewal_app_credential(client, name)
+            status, value = _read_renewal_app_credential(client, name, environ=environ)
             if status != "ready":
                 result["reason"] = label + "_" + status
                 return
