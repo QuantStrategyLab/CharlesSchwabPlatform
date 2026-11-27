@@ -1556,3 +1556,31 @@ class Fuse2ReadbackSchwabTests(unittest.TestCase):
         self.assertEqual(obs_submit_res.disposition, NewRiskDisposition.ALLOW_NEW_RISK)
         self.assertEqual(obs_submit_res.fuse_decision.effective_mode, "observe")
         self.assertTrue(obs_submit_res.fuse_decision.would_block)
+
+    def test_fuse3_state_path_readback_allow_and_fail_closed(self) -> None:
+        import tempfile
+        from charles_schwab_platform.application import account_new_risk_gate_support as gate
+
+        base_portfolio = {
+            "total_equity": 50_000.0,
+            "peak_equity_usd": 50_000.0,
+            "metadata": {"total_equity_source": "broker_liquidation_value"},
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            state_file = Path(tmpdir) / "fuse_readback.json"
+            state_file.write_text(json.dumps(_clean_fuse_record("2026-12-09")), encoding="utf-8")
+            with (
+                patch.dict(os.environ, {"FUSE_READBACK_STATE_PATH": str(state_file)}, clear=False),
+                patch.object(gate, "resolve_production_drift_status_from_store", return_value=None),
+                patch.object(gate, "_current_fuse_trade_date", return_value="2026-12-09"),
+            ):
+                os.environ.pop("FUSE_READBACK_MODE", None)
+                os.environ.pop("FUSE_TRADE_DATE", None)
+                allowed = evaluate_portfolio_new_risk_admission(base_portfolio)
+                self.assertEqual(allowed.disposition, NewRiskDisposition.ALLOW_NEW_RISK)
+
+                state_file.unlink()
+                os.environ[ACCOUNT_NEW_RISK_GATE_ENV] = "0"
+                blocked = evaluate_portfolio_new_risk_admission(base_portfolio)
+                self.assertEqual(blocked.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+                self.assertIn("FUSE_READBACK_MISSING_FAIL_CLOSED", blocked.reason_codes)
