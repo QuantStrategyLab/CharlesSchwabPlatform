@@ -1086,6 +1086,8 @@ class Fuse2ReadbackSchwabTests(unittest.TestCase):
             "FUSE_READBACK_MODE",
             "FUSE_TRADE_DATE",
             "FUSE_OBSERVE_UNTIL",
+            "FUSE_READBACK_STATE_PATH",
+            "FUSE_READBACK_STATE_URI",
             "SCHWAB_MARKET_TIMEZONE",
             "SCHWAB_MARKET",
             "MARKET_TIMEZONE",
@@ -1581,6 +1583,36 @@ class Fuse2ReadbackSchwabTests(unittest.TestCase):
 
                 state_file.unlink()
                 os.environ[ACCOUNT_NEW_RISK_GATE_ENV] = "0"
+                self.assertTrue(gate.is_effective_new_risk_gate_enabled(snapshot=None))
                 blocked = evaluate_portfolio_new_risk_admission(base_portfolio)
                 self.assertEqual(blocked.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
                 self.assertIn("FUSE_READBACK_MISSING_FAIL_CLOSED", blocked.reason_codes)
+
+                # Mid-cycle external state update / deletion must refresh at evaluate_cycle_new_risk_admission().
+                os.environ.pop(ACCOUNT_NEW_RISK_GATE_ENV, None)
+                state_file.write_text(json.dumps(_clean_fuse_record("2026-12-09")), encoding="utf-8")
+                with gate.account_new_risk_gate_cycle(base_portfolio):
+                    self.assertEqual(
+                        gate.evaluate_cycle_new_risk_admission().disposition,
+                        NewRiskDisposition.ALLOW_NEW_RISK,
+                    )
+                    state_file.write_text(
+                        json.dumps(_clean_fuse_record("2026-12-09", fuse_latched=True)),
+                        encoding="utf-8",
+                    )
+                    latched_res = gate.evaluate_cycle_new_risk_admission()
+                    self.assertEqual(latched_res.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+                    self.assertIn("FUSE_LATCHED_BLOCKED", latched_res.reason_codes)
+                    state_file.unlink()
+                    missing_res = gate.evaluate_cycle_new_risk_admission()
+                    self.assertEqual(missing_res.disposition, NewRiskDisposition.NEW_RISK_PROHIBITED)
+                    self.assertIn("FUSE_READBACK_MISSING_FAIL_CLOSED", missing_res.reason_codes)
+
+                # Explicit payload takes precedence over FUSE_READBACK_STATE_PATH throughout the cycle.
+                with gate.account_new_risk_gate_cycle(
+                    {**base_portfolio, "fuse_readback": _clean_fuse_record("2026-12-09")}
+                ):
+                    self.assertEqual(
+                        gate.evaluate_cycle_new_risk_admission().disposition,
+                        NewRiskDisposition.ALLOW_NEW_RISK,
+                    )

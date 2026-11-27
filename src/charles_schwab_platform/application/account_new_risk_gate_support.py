@@ -32,7 +32,13 @@ from quant_platform_kit.risk.production_drift_new_risk import (
 )
 
 ACCOUNT_NEW_RISK_GATE_ENV = "ACCOUNT_NEW_RISK_GATE"
-_FUSE_CONTROL_ENV_KEYS = ("FUSE_READBACK_MODE", "FUSE_TRADE_DATE", "FUSE_OBSERVE_UNTIL")
+_FUSE_STATE_SOURCE_ENV_KEYS = ("FUSE_READBACK_STATE_PATH", "FUSE_READBACK_STATE_URI")
+_FUSE_CONTROL_ENV_KEYS = (
+    "FUSE_READBACK_MODE",
+    "FUSE_TRADE_DATE",
+    "FUSE_OBSERVE_UNTIL",
+    *_FUSE_STATE_SOURCE_ENV_KEYS,
+)
 _MAX_DAILY_LOSS_ENV_KEYS = ("SCHWAB_MAX_DAILY_LOSS_USD", "MAX_DAILY_LOSS_USD")
 
 _DEFAULT_STRATEGY_PROFILE = "soxl_soxx_trend_income"
@@ -44,6 +50,7 @@ _DAILY_LOSS_LIMIT_CARRIER_SYMBOL = "SPY"
 _cycle_snapshot: InjectedReconciliationSnapshot | None = None
 _cycle_market_timezone: str | None = None
 _cycle_snapshot_controls_from_env: bool = False
+_cycle_has_explicit_fuse_readback: bool = False
 
 _FUSE_TELEMETRY_KEYS = (
     "fuse_readback_effective_mode",
@@ -941,6 +948,18 @@ def get_cycle_snapshot() -> InjectedReconciliationSnapshot | None:
     return _cycle_snapshot
 
 
+def _portfolio_has_explicit_fuse_readback(portfolio: Mapping[str, Any] | None) -> bool:
+    if not isinstance(portfolio, Mapping):
+        return False
+    if "fuse_readback" in portfolio:
+        return True
+    for nested_key in ("metadata", "account_new_risk_snapshot"):
+        nested = portfolio.get(nested_key)
+        if isinstance(nested, Mapping) and "fuse_readback" in nested:
+            return True
+    return False
+
+
 def set_cycle_snapshot(
     snapshot: InjectedReconciliationSnapshot | None,
     *,
@@ -948,18 +967,26 @@ def set_cycle_snapshot(
     execution: Mapping[str, Any] | None = None,
     market_timezone: str | None = None,
     controls_from_env: bool | None = None,
+    has_explicit_fuse_readback: bool | None = None,
 ) -> None:
-    global _cycle_snapshot, _cycle_market_timezone, _cycle_snapshot_controls_from_env
+    global _cycle_snapshot, _cycle_market_timezone, _cycle_snapshot_controls_from_env, _cycle_has_explicit_fuse_readback
     _cycle_snapshot = snapshot
     if snapshot is None:
         _cycle_market_timezone = None
         _cycle_snapshot_controls_from_env = False
+        _cycle_has_explicit_fuse_readback = False
         return
     _cycle_snapshot_controls_from_env = (
         bool(controls_from_env)
         if controls_from_env is not None
         else (portfolio is not None or execution is not None)
     )
+    if has_explicit_fuse_readback is not None:
+        _cycle_has_explicit_fuse_readback = bool(has_explicit_fuse_readback)
+    elif portfolio is not None:
+        _cycle_has_explicit_fuse_readback = _portfolio_has_explicit_fuse_readback(portfolio)
+    else:
+        _cycle_has_explicit_fuse_readback = snapshot.fuse_readback is not None
     if market_timezone is not None:
         _cycle_market_timezone = market_timezone
     elif portfolio is not None or execution is not None:
@@ -974,11 +1001,13 @@ def account_new_risk_gate_cycle(portfolio: Mapping[str, Any], *, execution: Mapp
     previous = _cycle_snapshot
     previous_tz = _cycle_market_timezone
     previous_controls_from_env = _cycle_snapshot_controls_from_env
+    previous_explicit = _cycle_has_explicit_fuse_readback
     set_cycle_snapshot(
         build_snapshot_from_portfolio(portfolio, execution=execution),
         portfolio=portfolio,
         execution=execution,
         controls_from_env=True,
+        has_explicit_fuse_readback=_portfolio_has_explicit_fuse_readback(portfolio),
     )
     try:
         yield
@@ -987,6 +1016,7 @@ def account_new_risk_gate_cycle(portfolio: Mapping[str, Any], *, execution: Mapp
             previous,
             market_timezone=previous_tz,
             controls_from_env=previous_controls_from_env,
+            has_explicit_fuse_readback=previous_explicit,
         )
 
 
@@ -998,6 +1028,9 @@ def evaluate_cycle_new_risk_admission() -> NewRiskAdmissionResult:
         {}, {}, current_trade_date=_current_fuse_trade_date(market_timezone=_cycle_market_timezone)
     )
     env_fuse_active = any(str(os.environ.get(key) or "").strip() for key in _FUSE_CONTROL_ENV_KEYS)
+    env_state_source_active = any(
+        str(os.environ.get(key) or "").strip() for key in _FUSE_STATE_SOURCE_ENV_KEYS
+    )
     legacy_enabled = snapshot.legacy_new_risk_switch_enabled if is_account_new_risk_gate_enabled() else False
     if env_fuse_active or _snapshot_has_fuse_signal(snapshot):
         if _cycle_snapshot_controls_from_env:
@@ -1010,9 +1043,15 @@ def evaluate_cycle_new_risk_admission() -> NewRiskAdmissionResult:
             fuse_observe_until = (
                 runtime_inputs["fuse_observe_until"] if env_observe_until else snapshot.fuse_observe_until
             )
+        fuse_readback = (
+            runtime_inputs["fuse_readback"]
+            if (env_state_source_active and not _cycle_has_explicit_fuse_readback)
+            else snapshot.fuse_readback
+        )
         snapshot = replace(
             snapshot,
             fuse_enabled=True,
+            fuse_readback=fuse_readback,
             fuse_trade_date=runtime_inputs["fuse_trade_date"],
             fuse_mode=fuse_mode,
             fuse_observe_until=fuse_observe_until,
