@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   policy:
-    uses: QuantStrategyLab/.github/.github/workflows/docs-acceptance.yml@b4966bdd8780cad3ae5154ae50d8b98259a16dc6
+    uses: QuantStrategyLab/.github/.github/workflows/docs-acceptance.yml@f6f93fa9a096cefcffe4194b28bdeefd16937df0
     with:
       policy-revision: b4966bdd8780cad3ae5154ae50d8b98259a16dc6
       mode: enforce
