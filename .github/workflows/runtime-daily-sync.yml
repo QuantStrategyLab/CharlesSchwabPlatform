@@ -86,10 +86,10 @@ jobs:
         env:
           CAPTURE_TRANSACTIONS_ONCE: ${{ inputs.capture_transactions_once }}
           CAPTURE_ARTIFACT: ${{ inputs.capture_digest_candidates_artifact }}
-          CAPTURE_BUCKET: ${{ vars.SCHWAB_CAPTURE_BUCKET }}
-          CAPTURE_BINDING_URI: ${{ vars.SCHWAB_CAPTURE_BINDING_URI }}
+          CAPTURE_BUCKET: ${{ secrets.SCHWAB_CAPTURE_BUCKET }}
+          CAPTURE_BINDING_URI: ${{ secrets.SCHWAB_CAPTURE_BINDING_URI }}
           CAPTURE_BINDING_GENERATION: ${{ vars.SCHWAB_CAPTURE_BINDING_GENERATION }}
-          CAPTURE_OUTPUT_PREFIX: ${{ vars.SCHWAB_CAPTURE_OUTPUT_PREFIX }}
+          CAPTURE_OUTPUT_PREFIX: ${{ secrets.SCHWAB_CAPTURE_OUTPUT_PREFIX }}
           PUBLISH: ${{ inputs.publish }}
           DIAGNOSE_SOURCE_ACCESS: ${{ inputs.diagnose_source_access }}
           VERIFY_NATIVE_IDENTITY: ${{ inputs.verify_native_identity }}
@@ -141,10 +141,10 @@ jobs:
       - name: Capture fixed Schwab transactions once
         if: ${{ inputs.capture_transactions_once && !inputs.publish && !inputs.diagnose_source_access && !inputs.verify_native_identity && !inputs.check_token_load && !inputs.emit_digest_candidates && !inputs.capture_digest_candidates_artifact }}
         env:
-          CAPTURE_BUCKET: ${{ vars.SCHWAB_CAPTURE_BUCKET }}
-          CAPTURE_BINDING_URI: ${{ vars.SCHWAB_CAPTURE_BINDING_URI }}
+          CAPTURE_BUCKET: ${{ secrets.SCHWAB_CAPTURE_BUCKET }}
+          CAPTURE_BINDING_URI: ${{ secrets.SCHWAB_CAPTURE_BINDING_URI }}
           CAPTURE_BINDING_GENERATION: ${{ vars.SCHWAB_CAPTURE_BINDING_GENERATION }}
-          CAPTURE_OUTPUT_PREFIX: ${{ vars.SCHWAB_CAPTURE_OUTPUT_PREFIX }}
+          CAPTURE_OUTPUT_PREFIX: ${{ secrets.SCHWAB_CAPTURE_OUTPUT_PREFIX }}
           SCHWAB_ACCOUNT_FACTS_TARGET_ID: ${{ secrets.SCHWAB_ACCOUNT_FACTS_TARGET_ID }}
           SCHWAB_API_KEY: ${{ secrets.SCHWAB_API_KEY }}
           SCHWAB_API_KEY_SECRET_NAME: ${{ vars.SCHWAB_API_KEY_SECRET_NAME }}
