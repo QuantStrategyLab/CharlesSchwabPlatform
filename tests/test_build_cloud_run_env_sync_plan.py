@@ -21,7 +21,7 @@ SYNC_PLAN_SCRIPT_PATH = ROOT / "scripts" / "build_cloud_run_env_sync_plan.py"
 
 def test_workflow_exports_lifecycle_store_settings():
     workflow = (ROOT / ".github/workflows/sync-cloud-run-env.yml").read_text()
-    assert "      LIFECYCLE_PERFORMANCE_BUCKET: ${{ vars.LIFECYCLE_PERFORMANCE_BUCKET }}" in workflow
+    assert "      LIFECYCLE_PERFORMANCE_BUCKET: ${{ secrets.LIFECYCLE_PERFORMANCE_BUCKET }}" in workflow
 
 
 @pytest.mark.parametrize("source", ["missing", "shared", "defaults", "target"])
