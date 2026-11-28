@@ -50,7 +50,7 @@ def test_object_uri_rejects_unsafe_input(tmp_path):
 
 def test_workflow_is_dry_run_without_store_variable():
     wf = (Path(__file__).resolve().parents[1] / ".github/workflows/digest-candidates-daily.yml").read_text(encoding="utf-8")
-    assert "DIGEST_CANDIDATES_GCS_URI: ${{ vars.DIGEST_CANDIDATES_GCS_URI || '' }}" in wf
-    assert "dry_run: vars.DIGEST_CANDIDATES_GCS_URI is unset" in wf
+    assert "DIGEST_CANDIDATES_GCS_URI: ${{ secrets.DIGEST_CANDIDATES_GCS_URI || '' }}" in wf
+    assert "dry_run: secrets.DIGEST_CANDIDATES_GCS_URI is unset" in wf
     assert "upload-artifact" not in wf
     assert "--publish" not in wf

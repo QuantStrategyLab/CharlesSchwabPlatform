@@ -4,7 +4,7 @@ name: Digest Candidates Daily
 # the US close, from the same read-only prepare path as runtime-daily-sync
 # (archive + metadata; no publish, no broker or QRS writes).
 #
-# Dry-run by default: without vars.DIGEST_CANDIDATES_GCS_URI the JSON stays in
+# Dry-run by default: without secrets.DIGEST_CANDIDATES_GCS_URI the JSON stays in
 # runner temp and only a redacted summary is printed. Production value:
 # DIGEST_CANDIDATES_GCS_URI=gs://qsl-runtime-logs-shared/digest-candidates
 # (shared bucket; deploy SA has prefix-conditioned objectUser on
@@ -49,7 +49,7 @@ jobs:
       RUNTIME_HEARTBEAT_PUBLICATION_GRACE_MINUTES: ${{ vars.RUNTIME_HEARTBEAT_PUBLICATION_GRACE_MINUTES || '30' }}
       RUNTIME_HEARTBEAT_SCHEDULER_LOCATION: ${{ vars.RUNTIME_HEARTBEAT_SCHEDULER_LOCATION || vars.CLOUD_RUN_REGION || 'us-central1' }}
       CLOUD_SCHEDULER_MAIN_TIME: ${{ vars.CLOUD_SCHEDULER_MAIN_TIME }}
-      DIGEST_CANDIDATES_GCS_URI: ${{ vars.DIGEST_CANDIDATES_GCS_URI || '' }}
+      DIGEST_CANDIDATES_GCS_URI: ${{ secrets.DIGEST_CANDIDATES_GCS_URI || '' }}
       SCHWAB_UNIFIED_NOTIFICATION_ENABLED: ${{ vars.SCHWAB_UNIFIED_NOTIFICATION_ENABLED || 'false' }}
     steps:
       - name: Checkout repository
@@ -105,7 +105,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "${DIGEST_CANDIDATES_GCS_URI}" ]]; then
-            echo "dry_run: vars.DIGEST_CANDIDATES_GCS_URI is unset; candidates stay in runner temp (not uploaded)."
+            echo "dry_run: secrets.DIGEST_CANDIDATES_GCS_URI is unset; candidates stay in runner temp (not uploaded)."
             exit 0
           fi
           object="$(uv run --no-sync python scripts/digest_candidates_store.py object-uri --path "$CANDIDATES_PATH" --platform schwab --target live --uri "$DIGEST_CANDIDATES_GCS_URI")"
